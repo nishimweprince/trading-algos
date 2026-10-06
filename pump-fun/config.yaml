@@ -12,9 +12,11 @@
 # live again is WALLET_FLOOR, STREAM_DOWN and KILL_SWITCH. Untracked wallet
 # tokens are now auto-sold (execution.orphanSweepSec).
 # Hot-reload is NOT supported — restart to apply changes.
-# 2026-10-04 (feat/fra-lean): dry-run in Frankfurt until the pool replay and
-# a dry-run window show an edge after fees. Going live is an operator call.
-mode: dry-run # paper | dry-run | live
+# 2026-10-06 (operator): LIVE. Wallet 0.214 SOL at cutover; every entry is
+# exactly 15 % of the current in-memory balance (fees/headroom aside — see
+# entry + wallet.gasHeadroomSol). DB wiped after backup to
+# data/backup/pre-live-20261006-0918/.
+mode: live # paper | dry-run | live
 
 # Verify pinned program IDs exist on-chain at startup. Needs a reachable RPC;
 # set false for offline boots / CI.
@@ -186,27 +188,25 @@ entry:
   # dry-run showed a ~0.003 SOL round-trip fee, so fee drag at base size
   # is ~7%.
   # Rungs are explicit percents (LIVE_RISK_WALLET_PCT is no longer read here),
-  # resolved against the live wallet with a minAbsoluteSol clamp:
-  #   min 5%  = 0.0120 SOL -> clamps to 0.04 — momentum floor effectively flat
-  #   base 19% = 0.0456 SOL — score 1.0 × full inflow
-  #   max 22%  = 0.0528 SOL — hard cap per position
-  # Absolute sizes match the tuned 0.04-0.054 band; re-derive the percents if
-  # the wallet is re-funded to a materially different balance.
-  # COMPOUNDING (2026-10-04, operator): every entry is exactly 20 % of the
+  # resolved against the live wallet with a minAbsoluteSol clamp. At the
+  # 0.214 SOL cutover wallet, 15 % = 0.0321 SOL per entry.
+  # COMPOUNDING (2026-10-06, operator): every entry is exactly 15 % of the
   # available in-memory balance. min = base = max, so the score / momentum /
-  # decision multipliers are all clamped back to 20 %. The balance moves with
+  # decision multipliers are all clamped back to 15 %. The balance moves with
   # every trade (reserved at send, reconciled from on-chain actuals), so each
   # trade compounds the last. (Relaxed-risk keeps its own 5 % cap.)
-  minSizeWalletPct: 20
-  baseSizeWalletPct: 20
-  maxSizeWalletPct: 20
+  # Fees are aside: the 15 % is buy notional; priority fees / tips / ATA rent
+  # come on top, and canFundEntry requires gasHeadroomSol left after the trade.
+  minSizeWalletPct: 15
+  baseSizeWalletPct: 15
+  maxSizeWalletPct: 15
   # 0.03 -> 0.04 (work plan 2026-09-25 P2.4, F12): fixed tx cost ~0.0004 SOL
   # per round trip must stay <= 1 % of notional. Sizes that would land below
   # this are now SKIPPED (SIZE_BELOW_FLOOR), never shrunk under it.
-  # 0.04 -> 0.006 (2026-10-04): 20 % of the $4 floor, so compounding can run
-  # down to the floor. Fixed costs (~0.0004 SOL/round trip) are ~6 % of
-  # notional at this size — accepted by the operator.
-  minAbsoluteSol: 0.006
+  # 0.006 -> 0.005 (2026-10-06): 15 % of the $4 floor (0.033 SOL), so
+  # compounding stays exact down to the floor. Fixed costs (~0.0004 SOL/round
+  # trip) are ~8 % of notional at this size — accepted by the operator.
+  minAbsoluteSol: 0.005
   # 5 (+8 retry) -> ONE 20% tier (2026-09-28). Every dry-run entry after the
   # fast-path reset failed: fresh graduations moved +9 / +12.5 / +18 / +19 %
   # in the ~1 s confirm window, past the 8% bound (sim) and 6004 in the buy
@@ -767,8 +767,8 @@ risk:
   # entries. KILL_SWITCH is what an unresolved exit or an unsellable orphan
   # engages — it latches until /resume.
   disableAllBreakers: false
-  # 2 concurrent positions. With 20 % compounding the second open is 20 % of
-  # the remaining 80 %, so at most 36 % of the wallet is deployed at once.
+  # 2 concurrent positions. With 15 % compounding the second open is 15 % of
+  # the remaining 85 %, so at most 27.75 % of the wallet is deployed at once.
   # WALLET_FLOOR = balanceFloorSol (0.033 SOL ≈ $4); each open also needs
   # wallet - size >= wallet.gasHeadroomSol.
   # Re-tightened 3 -> 2 (2026-09-28 live reload; 3 was dry-run stats only).
