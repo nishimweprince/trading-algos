@@ -323,25 +323,27 @@ exits:
   tp0Pct: 22 # inert while tp0Enabled is false
   tp0SellFraction: 0.5
   tp0MoveStopToPct: 8
-  # 2026-10-06 (operator): TP 15 -> 30, hard stop 15 -> 25. Racer replay
-  # (122 verified S+1 tracks, pools <= 100 SOL, live costs, 0.03 SOL):
-  # TP15/SL15/trail12/8 -11.3 %/trade; TP30/SL25 no trail -9.7 %; every
-  # variant's 95 % CI is below zero. Trailing arms at 30 (= TP), so it
-  # never pre-empts the TP.
-  tp1Pct: 30 # full exit
+  # 2026-10-06 (operator): TP 50, NO stop loss (hardStopPct 100 -> stop
+  # price 0, never fires), trailing arms at 50 (= TP, so effectively off).
+  # Exits left: TP 50, time stop, emergency (LP drain / creator dump /
+  # large sell). Racer replay (227 verified S+1 tracks, pools <= 100 SOL,
+  # live costs, 0.03 SOL, 300 s paths): -4.7 %/trade (CI -11.9..+2.5) with
+  # emergency exits off, -10.2 % with the LP-drain rule on; 53 % of trades
+  # miss +50 % in 5 min and those median -52 %. Earlier today: TP15/SL15
+  # (-11.3 %), TP30/SL25 (-8.1 %).
+  tp1Pct: 50 # full exit
   tp1SellFraction: 1
   tp2Pct: 100
   # Trailing arms earlier (20->12) and tighter (12->8; high-vol 10->6) to capture
   # the fast roll-overs instead of surrendering 20-30 points from the high.
-  # 2026-10-06 (operator): no trailing stop below +30 %. Arming at 30 =
-  # tp1Pct means the full TP1 exit fires first, so the trail is effectively
-  # off while TP1 is a full exit; it only matters if tp1SellFraction < 1.
-  trailingArmPct: 30
+  # 2026-10-06 (operator): trailing off — arming at tp1Pct means the full
+  # TP1 exit fires first; it only matters if tp1SellFraction < 1.
+  trailingArmPct: 50
   trailingGapPct: 8
   trailingGapHighVolPct: 6
   # Hard stop tightened 20->15. VALID ONLY WITH WS7 fast exits — a tight stop over
   # slow (3.9-9s) exits just realizes the slippage more often.
-  hardStopPct: 25 # 2026-10-06 operator: 15 -> 25
+  hardStopPct: 100 # 2026-10-06 operator: no stop loss (stop price 0)
   tp1MoveStopToPct: 20 # after TP1, move remainder stop to +20%
   timeStopMinutes: 10 # winners resolve fast; the lone TIME_STOP loss held 15m
   # Dead-money exit (LIVE_PILOT_PLAN §4 S1): close a position with no partial
