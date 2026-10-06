@@ -14,11 +14,19 @@ import { entrySizeLadder } from '../../config/sizing.ts';
  */
 
 /**
- * H7 — liquidity floor + buy price impact. For a constant-product pool the price
+ * H7 — liquidity band + buy price impact. For a constant-product pool the price
  * impact of buying `dy` SOL is exactly dy / quoteReserve, so the intended buy
- * must stay under the configured cap and the pool must clear the SOL floor.
- * The floor is real liquidity (vault SOL); impact uses the effective reserve
+ * must stay under the configured cap and the pool must sit inside the SOL band.
+ * The band is real liquidity (vault SOL); impact uses the effective reserve
  * (vault + virtual) the program prices against.
+ *
+ * The ceiling catches pools pumped inside the migrate slot. A canonical
+ * migration opens at ~68 SOL real (~85 effective incl. virtual); price scales
+ * with the square of the effective reserve, so a 230 SOL real pool at our
+ * read is ~8x the open price. Live 2026-10-06: three such
+ * entries (224 / 233 / 1275 SOL, creator-called migrates with a bundled buy)
+ * all ended in EMERGENCY_EXIT; the 2026-10-04/05 dry run had 113 entries over
+ * 200 SOL at a 19 % win rate, 101 of them emergency exits.
  */
 export function checkLiquidityFloor(ctx: CheckContext): CheckResult {
   const pool = ctx.candidate.enrichment.pool;
@@ -26,6 +34,7 @@ export function checkLiquidityFloor(ctx: CheckContext): CheckResult {
 
   const reserveSol = quoteReserveSol(pool);
   const minSol = ctx.config.guardrails.minPoolSol;
+  const maxSol = ctx.config.guardrails.maxPoolSol;
   const sizeSol = entrySizeLadder(ctx.config, ctx.walletSol).baseSol;
   const pricedSol = effectiveQuoteSol(pool);
   const impactPct = pricedSol > 0 ? (sizeSol / pricedSol) * 100 : 100;
@@ -33,6 +42,9 @@ export function checkLiquidityFloor(ctx: CheckContext): CheckResult {
 
   if (reserveSol < minSol) {
     return fail('H7', 'Liquidity floor + buy impact', `reserve ${reserveSol.toFixed(1)} SOL < ${minSol}`);
+  }
+  if (reserveSol > maxSol) {
+    return fail('H7', 'Liquidity floor + buy impact', `reserve ${reserveSol.toFixed(1)} SOL > ${maxSol} (pumped in the migrate slot)`);
   }
   if (impactPct > maxImpact) {
     return fail('H7', 'Liquidity floor + buy impact', `buy impact ${impactPct.toFixed(2)}% > ${maxImpact}%`);

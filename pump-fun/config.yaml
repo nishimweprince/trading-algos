@@ -251,6 +251,12 @@ guardrails:
   # knobs, the minEntryScore gate and RugCheck. See guardrails/engine.ts.
   # H6 (creator holdings) and H13 (creator funding cluster) removed 2026-10-04.
   minPoolSol: 25 # H7
+  # H7 ceiling (2026-10-06), on real vault SOL: a canonical migration opens
+  # at ~68 SOL real (~85 effective incl. virtual). Pools read above this were
+  # pumped inside the migrate slot by a bundled (usually creator-called)
+  # buy — S+1 entries paid 8-230x the open and every one ended in
+  # EMERGENCY_EXIT. 100 SOL real ≈ 1.9x the open price.
+  maxPoolSol: 100 # H7
   maxBuyImpactPct: 3 # H7
   # The fast read retries while the RPC node lags the gRPC feed (<= 1 slot).
   fastReadRetryDelaysMs: [0, 50, 100, 200]

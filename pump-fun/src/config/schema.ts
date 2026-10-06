@@ -296,6 +296,10 @@ const GuardrailsConfig = z
     // checks that needed indexers or simulations (H1-H5, H9, H11, the soft
     // score gate, RugCheck) were removed — see engine.ts for why each went.
     minPoolSol: nonNeg.default(25),
+    // Ceiling on the same read: a canonical migration opens at ~68 SOL real, so a
+    // pool far above it was pumped inside the migrate slot (creator-bundled
+    // buy) and an S+1 entry pays that premium. Infinity disables it.
+    maxPoolSol: positive.default(Number.POSITIVE_INFINITY),
     maxBuyImpactPct: pct.default(3),
     // Fast read retry schedule (ms before each attempt) for a pool the RPC
     // node has not seen yet (it lags the gRPC feed by a slot at most).

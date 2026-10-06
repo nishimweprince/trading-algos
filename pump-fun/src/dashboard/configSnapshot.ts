@@ -23,6 +23,7 @@ export function sanitizeConfigForAnalytics(config: Config): Record<string, unkno
     },
     guardrails: {
       minPoolSol: config.guardrails.minPoolSol,
+      maxPoolSol: config.guardrails.maxPoolSol,
       maxBuyImpactPct: config.guardrails.maxBuyImpactPct,
       enrichmentBudgetMs: config.guardrails.enrichmentBudgetMs,
       momentumWindowMs: config.guardrails.momentumWindowMs,
