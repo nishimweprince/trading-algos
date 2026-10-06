@@ -68,12 +68,16 @@ def decide(
 ) -> Decision:
     if already_traded:
         return _none("traded")
-    if not kalshi_yes.valid or not poly_yes.valid:
-        return _none("invalid_leg")
+    # Timing before book validity. It changes no decision, only the reason: near
+    # expiry the books go one-sided because the outcome is all but decided, and
+    # that is "too late", not a data fault. ``invalid_leg`` then counts book
+    # problems inside the entry window only.
     if sec_into < params.entry_early_s:
         return _none("too_early")
     if sec_into > WINDOW_S - params.entry_late_s:
         return _none("too_late")
+    if not kalshi_yes.valid or not poly_yes.valid:
+        return _none("invalid_leg")
 
     k_mid, p_mid = kalshi_yes.mid, poly_yes.mid
     if k_mid is None or p_mid is None:

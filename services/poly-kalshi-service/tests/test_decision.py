@@ -91,3 +91,10 @@ def test_fee_curve_matches_the_venue_schedule() -> None:
     assert taker_fee(0.30, 100) == pytest.approx(taker_fee(0.70, 100))
     assert taker_fee(0.0, 100) == 0.0
     assert taker_fee(0.5, 100, rate=0.0) == 0.0
+
+
+def test_timing_is_reported_before_book_validity() -> None:
+    """Near expiry the books go one-sided; that is "too late", not a data fault."""
+    assert decide(BAD, BAD, BAD, P, 887, False).reason == "too_late"
+    assert decide(BAD, BAD, BAD, P, 5, False).reason == "too_early"
+    assert decide(BAD, Y_MID, N_MID, P, 100, False).reason == "invalid_leg"
