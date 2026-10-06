@@ -323,7 +323,12 @@ exits:
   tp0Pct: 22 # inert while tp0Enabled is false
   tp0SellFraction: 0.5
   tp0MoveStopToPct: 8
-  tp1Pct: 15 # full exit — see replay table above
+  # 2026-10-06 (operator): TP 15 -> 30, hard stop 15 -> 25. Racer replay
+  # (122 verified S+1 tracks, pools <= 100 SOL, live costs, 0.03 SOL):
+  # TP15/SL15/trail12/8 -11.3 %/trade; TP30/SL25 no trail -9.7 %; every
+  # variant's 95 % CI is below zero. With trail 12/8 still on, the trail
+  # (not TP) closes most trades.
+  tp1Pct: 30 # full exit
   tp1SellFraction: 1
   tp2Pct: 100
   # Trailing arms earlier (20->12) and tighter (12->8; high-vol 10->6) to capture
@@ -333,7 +338,7 @@ exits:
   trailingGapHighVolPct: 6
   # Hard stop tightened 20->15. VALID ONLY WITH WS7 fast exits — a tight stop over
   # slow (3.9-9s) exits just realizes the slippage more often.
-  hardStopPct: 15
+  hardStopPct: 25 # 2026-10-06 operator: 15 -> 25
   tp1MoveStopToPct: 20 # after TP1, move remainder stop to +20%
   timeStopMinutes: 10 # winners resolve fast; the lone TIME_STOP loss held 15m
   # Dead-money exit (LIVE_PILOT_PLAN §4 S1): close a position with no partial
