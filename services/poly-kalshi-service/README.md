@@ -28,12 +28,18 @@ pk-status --profile dev                # 127.0.0.1:8051, read-only page
 
 Telegram `/kill` and `/status` run on a bot of its own (`PK_TELEGRAM_BOT_TOKEN`).
 
-**Monitoring.** `pk-status` shows:
-- **market state**, refreshed every 5 s: per asset, Kalshi and Polymarket bid/ask/mid, Δ = Kalshi − Polymarket against the threshold, what the rule would do now (enter, skip above cap, or why not), each book's age, the largest |Δ| this window, and this window's decision;
-- **market data:** per asset, each second of the current or previous window, with Kalshi's YES mid against Polymarket's, the gap against ±threshold, and decision markers;
-- **latency:** feed latency per venue, engine time per message, event-loop lag, each leg's book age at decision, and how long each venue takes to report a result;
-- **paper results:** a signal check (win rate vs Kalshi-implied vs price paid), breakdowns by asset and by second, execution stats, the equity curve, a daily P&L table and the last 50 trades;
-- progress against the gates.
+**Monitoring.** `pk-status` reads top to bottom:
+1. **Alerts strip:** feeds down or stale, halts, crossed or missing books, unidentified windows, balance rejects, a paused recorder, stale data. Otherwise "all clear".
+2. **Performance:**
+   - *Capital & risk:* initial capital, cash, equity, realised and equity return %, capital in use, largest open exposure, max and current drawdown.
+   - *Trade quality:* average win and loss, profit factor, expectancy, largest win and loss, longest losing streak, gross P&L and fees.
+   - *Gates.*
+3. **Live market:** the market state table (per asset bid/ask/mid, Δ against the threshold, what the rule would do now, book ages, this window's decision) and per-second Kalshi vs Polymarket charts.
+4. **Edge:** the signal check (win rate vs Kalshi-implied vs price paid), the opportunity funnel (windows → crossings → skips → blocked → orders → fills → settled, total and today), and breakdowns by asset, by second and by entry band.
+5. **History:** equity curve, daily results, the last 50 trades, recent engine events.
+6. **System:** feeds, latency, execution, and data quality (invalid legs by cause, seq gaps, reconnects, unidentified windows, engine errors, positions awaiting settlement).
+
+Results come from the journal on disk; live state comes from one cached read of the trader every 5 s, so viewers add no load. It runs at lower CPU priority behind a Cloudflare Tunnel with Access (see `infra/cloudflare/README.md`).
 
 **Export all data (.zip)** downloads one file for offline analysis: journal, events log, ledger, metrics summary, recording manifests and the chart data. It contains no secrets. See `export.py` for the layout.
 - Results come from the journal on disk.

@@ -63,10 +63,49 @@ def _group(rows: list[dict[str, Any]]) -> dict[str, Any]:
 SEC_BUCKETS = ((0, 60), (60, 180), (180, 420), (420, 900))
 
 
+def _quality(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Trade quality over settled trades in time order."""
+    pnl = [r["pnl"] for r in rows]
+    wins = [p for p in pnl if p > 0]
+    losses = [p for p in pnl if p <= 0]
+    streak = longest = 0
+    for p in pnl:
+        streak = streak + 1 if p <= 0 else 0
+        longest = max(longest, streak)
+    fees = sum(r["fee"] for r in rows)
+    gross = sum(pnl) + fees
+    return {
+        "n": len(pnl),
+        "wins": len(wins),
+        "losses": len(losses),
+        "avg_win": statistics.fmean(wins) if wins else None,
+        "avg_loss": statistics.fmean(losses) if losses else None,
+        "profit_factor": sum(wins) / -sum(losses) if losses and sum(losses) < 0 else None,
+        "expectancy": statistics.fmean(pnl) if pnl else None,
+        "largest_win": max(wins) if wins else None,
+        "largest_loss": min(losses) if losses else None,
+        "longest_losing_streak": longest,
+        "gross_pnl": round(gross, 2),
+        "fees": round(fees, 2),
+        "fees_pct_of_gross": 100 * fees / gross if gross > 0 else None,
+    }
+
+
+def _drawdown(pnl: list[float]) -> dict[str, float]:
+    """Max and current drawdown ($) of cumulative settled P&L, from a zero start."""
+    peak = running = worst = 0.0
+    for p in pnl:
+        running += p
+        peak = max(peak, running)
+        worst = max(worst, peak - running)
+    return {"max": round(worst, 2), "current": round(peak - running, 2)}
+
+
 def paper_results(records: Iterable[dict[str, Any]], trades_limit: int = 50) -> dict[str, Any]:
     decisions: dict[tuple[str, int], dict[str, Any]] = {}
     fills: dict[tuple[str, int], dict[str, Any]] = {}
     settles: dict[tuple[str, int], dict[str, Any]] = {}
+    windows: list[dict[str, Any]] = []
     for r in records:
         key = (r.get("asset"), r.get("open_unix"))
         kind = r.get("type")
@@ -76,11 +115,15 @@ def paper_results(records: Iterable[dict[str, Any]], trades_limit: int = 50) -> 
             fills[key] = r
         elif kind == "settle":
             settles[key] = r
+        elif kind == "window":
+            windows.append(r)
 
     days: dict[str, dict[str, Any]] = defaultdict(
-        lambda: {"enter": 0, "skip": 0, "blocked": 0, "filled": 0, "no_fill": 0, "settled": 0,
-                 "wins": 0, "vwaps": [], "cents": [], "pnl": 0.0, "fees": 0.0}
+        lambda: {"windows": 0, "enter": 0, "skip": 0, "blocked": 0, "filled": 0, "no_fill": 0,
+                 "settled": 0, "wins": 0, "vwaps": [], "cents": [], "pnl": 0.0, "fees": 0.0}
     )  # fmt: skip
+    for w in windows:
+        days[_day(w["open_unix"] * 1_000_000_000)]["windows"] += 1
     for key, d in decisions.items():
         day = days[_day(d["t_ns"])]
         if d["action"] == "skip":
@@ -113,6 +156,7 @@ def paper_results(records: Iterable[dict[str, Any]], trades_limit: int = 50) -> 
         daily.append(
             {
                 "day": name,
+                "windows": d["windows"],
                 "enter": d["enter"],
                 "skip": d["skip"],
                 "blocked": d["blocked"],
@@ -176,8 +220,11 @@ def paper_results(records: Iterable[dict[str, Any]], trades_limit: int = 50) -> 
                 "implied": _kalshi_implied(d, f["side"]),
                 "cents": 100 * (s["payout"] - f["cost"] - f["fee"]) / f["shares"],
                 "pnl": s["pnl"],
+                "fee": f["fee"],
+                "t": f["t_ns"],
             }
         )
+    settled_rows.sort(key=lambda r: r["t"])
     by_asset = {
         asset: _group([r for r in settled_rows if r["asset"] == asset])
         for asset in sorted({r["asset"] for r in settled_rows})
@@ -208,7 +255,28 @@ def paper_results(records: Iterable[dict[str, Any]], trades_limit: int = 50) -> 
         "kalshi_age_ms_p50": _pct(ages_k, 0.5),
         "kalshi_age_ms_p90": _pct(ages_k, 0.9),
     }
+    evals = sum(w.get("evals", 0) for w in windows)
+    invalid = sum((w.get("reasons") or {}).get("invalid_leg", 0) for w in windows)
     return {
+        "quality": _quality(settled_rows),
+        "drawdown": _drawdown([r["pnl"] for r in settled_rows]),
+        "funnel": {
+            "windows": len(windows),
+            "crossings": len(decisions),
+            "skipped_above_cap": sum(1 for d in decisions.values() if d["action"] == "skip"),
+            "blocked": sum(
+                1 for d in decisions.values() if d["action"] == "enter" and d.get("blocked")
+            ),
+            "orders": len(fills),
+            "filled": sum(1 for f in fills.values() if f["shares"] > 0),
+            "settled": len(settled_rows),
+        },
+        "data_quality": {
+            "windows": len(windows),
+            "unidentified_windows": sum(1 for w in windows if not w.get("identified", True)),
+            "evals": evals,
+            "invalid_leg_share": invalid / evals if evals else None,
+        },
         "daily": daily[::-1],
         "curve": curve,
         "trades": trades[::-1][:trades_limit],

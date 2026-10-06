@@ -90,3 +90,63 @@ def test_viewers_do_not_add_load_on_the_trader(tmp_path: Path) -> None:
     assert body["gates"]["fills"] == 1
     assert response.headers["cache-control"] == "no-store"
     assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
+
+
+def test_trade_quality_drawdown_and_funnel_by_hand() -> None:
+    # P&L in time order: +60-f, -50-f, +55-f, -45-f, -50-f, +60-f (f = fee at that price).
+    plan = [(0.40, True), (0.50, False), (0.45, True), (0.45, False), (0.50, False), (0.40, True)]
+    records: list[dict[str, Any]] = []
+    for i, (px, win) in enumerate(plan):
+        records += _trade(OPEN + 900 * i, px, win)
+        window_row = {
+            "type": "window",
+            "asset": "BTC",
+            "open_unix": OPEN + 900 * i,
+            "identified": i != 5,
+            "evals": 100,
+            "reasons": {"invalid_leg": 10},
+        }
+        records.append(window_row)  # fmt: skip
+    records.append({"type": "decision", "asset": "ETH", "open_unix": OPEN, "t_ns": OPEN * NS,
+                    "action": "skip", "blocked": None})  # fmt: skip
+    out = paper_results(records)
+    fee = {0.40: 1.68, 0.45: 1.7325, 0.50: 1.75}
+    pnl = [(100 - 100 * p if w else -100 * p) - fee[p] for p, w in plan]
+    q = out["quality"]
+    assert (q["n"], q["wins"], q["losses"]) == (6, 3, 3)
+    assert q["avg_win"] == pytest.approx(sum(p for p in pnl if p > 0) / 3, abs=0.01)
+    assert q["profit_factor"] == pytest.approx(
+        sum(p for p in pnl if p > 0) / -sum(p for p in pnl if p <= 0), abs=1e-3
+    )
+    assert q["expectancy"] == pytest.approx(sum(pnl) / 6, abs=0.01)
+    assert q["longest_losing_streak"] == 2
+    assert q["largest_loss"] == pytest.approx(min(pnl), abs=0.01)
+    assert q["fees"] == pytest.approx(sum(fee[p] for p, _ in plan), abs=0.01)
+    assert q["gross_pnl"] == pytest.approx(sum(pnl) + q["fees"], abs=0.01)
+    # The peak is after trade 3; trades 4 and 5 lose, so max drawdown is that run.
+    cum, peak, worst = 0.0, 0.0, 0.0
+    for p in pnl:
+        cum += p
+        peak = max(peak, cum)
+        worst = max(worst, peak - cum)
+    assert out["drawdown"]["max"] == pytest.approx(worst, abs=0.01)
+    assert out["drawdown"]["current"] == pytest.approx(peak - cum, abs=0.01)
+    f = out["funnel"]
+    assert (f["windows"], f["crossings"], f["skipped_above_cap"], f["orders"], f["filled"],
+            f["settled"]) == (6, 7, 1, 6, 6, 6)  # fmt: skip
+    dq = out["data_quality"]
+    assert dq["unidentified_windows"] == 1
+    assert dq["invalid_leg_share"] == pytest.approx(0.1)
+    assert out["daily"][0]["windows"] == 6
+
+
+def test_ledger_snapshot_reports_exposure_and_settlement_wait() -> None:
+    from poly_kalshi_service.ledger import Ledger, Position
+
+    ledger = Ledger.open(None, 1000.0)
+    ledger.buy(Position("BTC", OPEN, "yes", 100, 40.0, 1.68, 0))
+    ledger.buy(Position("ETH", OPEN + 900, "no", 50, 25.0, 0.9, 0))
+    snap = ledger.snapshot((OPEN + 900 + 900 + 30) * NS)
+    assert snap["start_cash"] == 1000.0
+    assert snap["largest_open_cost"] == pytest.approx(41.68)
+    assert snap["oldest_open_age_s"] == 930  # BTC's window closed at OPEN + 900

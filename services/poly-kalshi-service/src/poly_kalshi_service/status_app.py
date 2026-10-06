@@ -124,7 +124,18 @@ def pick(status: dict[str, Any] | None) -> dict[str, Any] | None:
             k: v
             for k, v in (engine.get("counters") or {}).items()
             if k.startswith(
-                ("fills", "no_fills", "settled", "blocked_", "bbo_", "resync", "reconnect")
+                (
+                    "fills",
+                    "no_fills",
+                    "settled",
+                    "blocked_",
+                    "bbo_",
+                    "resync",
+                    "reconnect",
+                    "invalid_",
+                    "windows_unidentified",
+                    "engine_errors",
+                )  # fmt: skip
             )
         },
         "recent": [_keep(r, RECENT_FIELDS) for r in (status.get("recent") or [])[:30]],

@@ -19,6 +19,7 @@ main { max-width:1320px; margin:0 auto; padding:16px; }
 h1 { font-size:18px; margin:0 0 4px; } h2 { font-size:14px; margin:0 0 8px; color:var(--muted); font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
 .sub { color:var(--muted); margin-bottom:16px; }
 .grid { display:grid; gap:12px; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); margin-bottom:12px; }
+.grid.wide { grid-template-columns:repeat(auto-fit, minmax(min(100%, 470px), 1fr)); }
 .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; overflow-x:auto; }
 .kv { display:flex; justify-content:space-between; gap:8px; } .kv span:first-child { color:var(--muted); }
 table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
@@ -45,6 +46,10 @@ svg.mkt .thr { stroke:var(--warn); stroke-dasharray:4 3; } svg.mkt polyline { fi
 .dbar .mid { background:var(--muted); width:1px; top:0; bottom:0; }
 .pill { display:inline-block; padding:1px 7px; border-radius:10px; font-size:12px; border:1px solid var(--line); }
 .pill.enter { border-color:var(--good); color:var(--good); } .pill.skip { border-color:var(--warn); color:var(--warn); }
+h3.section { font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:22px 0 8px; font-weight:600; border-bottom:1px solid var(--line); padding-bottom:4px; }
+.alerts { border:1px solid var(--line); border-radius:8px; padding:8px 12px; margin:4px 0 4px; background:var(--panel); }
+.alerts.ok { color:var(--good); } .alerts.bad { border-color:var(--bad); }
+.alerts ul { margin:0; padding-left:18px; } .alerts li { color:var(--bad); }
 .good { color:var(--good); } .bad { color:var(--bad); } .warn { color:var(--warn); } .muted { color:var(--muted); }
 </style>
 </head>
@@ -52,11 +57,16 @@ svg.mkt .thr { stroke:var(--warn); stroke-dasharray:4 3; } svg.mkt polyline { fi
 <main>
 <div class="head"><div><h1>poly-kalshi</h1><div class="sub" id="sub">loading…</div></div>
   <a class="btn" href="api/export" download title="journal, events log, ledger, metrics, recording manifests and chart data in one zip">Export all data (.zip)</a></div>
+<div class="alerts" id="alerts" role="status">checking…</div>
+
+<h3 class="section">Performance</h3>
 <div class="grid">
-  <div class="card"><h2>Ledger</h2><div id="ledger"></div></div>
-  <div class="card"><h2>Feeds</h2><div id="feeds"></div></div>
+  <div class="card"><h2>Capital &amp; risk</h2><div id="capital"></div></div>
+  <div class="card"><h2>Trade quality (settled)</h2><div id="quality"></div></div>
   <div class="card"><h2>Gates</h2><div id="gates"></div></div>
 </div>
+
+<h3 class="section">Live market</h3>
 <div class="card" style="margin-bottom:12px">
   <div class="head"><h2>Market state · Δ = Kalshi YES mid − Polymarket YES mid</h2><span class="muted" id="state-age"></span></div>
   <table class="mkstate" id="mkstate"><tr><td class="muted">loading…</td></tr></table>
@@ -68,20 +78,31 @@ svg.mkt .thr { stroke:var(--warn); stroke-dasharray:4 3; } svg.mkt polyline { fi
     <span><i class="sw" style="background:var(--ink)"></i>gap = Kalshi − Polymarket</span><span><i class="sw" style="background:var(--warn)"></i>± threshold</span><span><i class="sw" style="background:var(--shade);height:10px"></i>no-entry seconds</span></div>
   <div class="charts" id="charts"><div class="muted">waiting for market data…</div></div>
 </div>
+
+<h3 class="section">Edge</h3>
 <div class="grid">
-  <div class="card"><h2>Latency</h2><div id="latency"></div></div>
   <div class="card"><h2>Signal check (settled)</h2><div id="signal"></div></div>
-  <div class="card"><h2>Execution</h2><div id="execution"></div></div>
+  <div class="card"><h2>Opportunity funnel · total (today)</h2><div id="funnel"></div></div>
 </div>
-<div class="grid">
+<div class="grid wide">
   <div class="card"><h2>By asset</h2><table id="by-asset"></table></div>
   <div class="card"><h2>By seconds into window</h2><table id="by-sec"></table></div>
+  <div class="card"><h2>By entry price band</h2><table id="bands"></table></div>
 </div>
+
+<h3 class="section">History</h3>
 <div class="card" style="margin-bottom:12px"><h2>Paper equity (cumulative P&amp;L, settled trades)</h2><div id="curve" class="muted">no settled trades yet</div></div>
 <div class="card" style="margin-bottom:12px"><h2>Daily paper results (UTC)</h2><table id="daily"></table></div>
 <div class="card" style="margin-bottom:12px"><h2>Paper trades (last 50)</h2><table id="trades"></table></div>
-<div class="card" style="margin-bottom:12px"><h2>Fill price and net ¢/share by band</h2><table id="bands"></table></div>
-<div class="card"><h2>Recent engine events</h2><table id="recent"></table></div>
+<div class="card" style="margin-bottom:12px"><h2>Recent engine events</h2><table id="recent"></table></div>
+
+<h3 class="section">System</h3>
+<div class="grid">
+  <div class="card"><h2>Feeds</h2><div id="feeds"></div></div>
+  <div class="card"><h2>Latency</h2><div id="latency"></div></div>
+  <div class="card"><h2>Execution</h2><div id="execution"></div></div>
+  <div class="card"><h2>Data quality</h2><div id="dataq"></div></div>
+</div>
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
@@ -99,10 +120,66 @@ async function tick() {
   $("sub").innerHTML = live
     ? `<b>${esc(live.mode)}</b> · ${esc(live.host)} · gap ≥ ${f(live.params.gap_threshold)} · cap ${f(live.params.max_entry_px)} · $${f(live.params.notional_usd, 0)} · ${live.risk && live.risk.halted ? '<span class="bad">HALTED</span>' : '<span class="good">running</span>'} · <span class="${dataAge > 30 ? "bad" : "muted"}">data ${dataAge}s old</span>`
     : '<span class="bad">service unreachable</span>';
-  const L = (live && live.ledger) || {};
-  $("ledger").innerHTML = kv([["cash", "$" + f(L.cash)], ["open positions", L.open_positions], ["open notional", "$" + f(L.open_notional)],
-    ["realised today", "$" + f(L.realised_today), (L.realised_today || 0) < 0 ? "bad" : "good"], ["realised total", "$" + f(L.realised_total), (L.realised_total || 0) < 0 ? "bad" : "good"],
-    ["balance rejects", L.rejects, L.rejects ? "bad" : ""]]);
+  const money = (v) => v == null ? "–" : (v < 0 ? "−$" : "$") + f(Math.abs(v));
+  const L = (live && live.ledger) || {}, cap = L.start_cash, dd = res.drawdown || {};
+  const pctOf = (v) => cap && v != null ? f((100 * v) / cap, 2) + "%" : "–";
+  const sign = (v) => v == null || Math.abs(v) < 0.005 ? "" : v < 0 ? "bad" : "good";
+  const equity = L.equity_at_cost;
+  $("capital").innerHTML = kv([["initial capital", money(cap)], ["cash", money(L.cash)], ["equity (open at cost)", money(equity)],
+    ["realised P&L · return", `${money(L.realised_total)} · ${pctOf(L.realised_total)}`, sign(L.realised_total)],
+    ["equity return", cap && equity != null ? pctOf(equity - cap) : "–", cap && equity != null ? sign(equity - cap) : ""],
+    ["realised today", money(L.realised_today), sign(L.realised_today)],
+    ["open positions · capital in use", `${L.open_positions ?? 0} · ${equity ? f((100 * (L.open_notional || 0)) / equity, 1) + "%" : "–"}`],
+    ["largest open exposure", money(L.largest_open_cost)],
+    ["max drawdown", `${money(dd.max)} · ${pctOf(dd.max)}`, dd.max > 0 ? "bad" : ""], ["current drawdown", `${money(dd.current)} · ${pctOf(dd.current)}`, dd.current > 0 ? "warn" : ""]]);
+  const Q = res.quality || {};
+  $("quality").innerHTML = kv([["trades · wins · losses", `${Q.n ?? 0} · ${Q.wins ?? 0} · ${Q.losses ?? 0}`],
+    ["avg win · avg loss", `${money(Q.avg_win)} · ${money(Q.avg_loss)}`], ["profit factor", f(Q.profit_factor), Q.profit_factor == null ? "" : Q.profit_factor >= 1 ? "good" : "bad"],
+    ["expectancy / trade", money(Q.expectancy), sign(Q.expectancy)], ["largest win · loss", `${money(Q.largest_win)} · ${money(Q.largest_loss)}`],
+    ["longest losing streak", Q.longest_losing_streak ?? 0], ["gross P&L (before fees)", money(Q.gross_pnl), sign(Q.gross_pnl)],
+    ["fees · % of gross", `${money(Q.fees)} · ${Q.fees_pct_of_gross == null ? "–" : f(Q.fees_pct_of_gross, 1) + "%"}`]]);
+  const FN = res.funnel || {}, today = (res.daily || [])[0] || {};
+  // Numbers only, so the "(today)" span can be built as HTML without escaping.
+  const tdy = (v) => ` <span class="muted">(${Number(v ?? 0)})</span>`;
+  const kvRaw = (rows) => rows.map(([k, v]) => `<div class="kv"><span>${esc(k)}</span><span>${v}</span></div>`).join("");
+  $("funnel").innerHTML = kvRaw([["windows seen", Number(FN.windows ?? 0) + tdy(today.windows)], ["crossings (|Δ| ≥ threshold)", Number(FN.crossings ?? 0) + tdy((today.enter || 0) + (today.skip || 0) + (today.blocked || 0))],
+    ["skipped (above cap)", Number(FN.skipped_above_cap ?? 0) + tdy(today.skip)], ["blocked (risk / mode)", Number(FN.blocked ?? 0) + tdy(today.blocked)],
+    ["orders", Number(FN.orders ?? 0) + tdy((today.filled || 0) + (today.no_fill || 0))], ["filled", Number(FN.filled ?? 0) + tdy(today.filled)], ["settled", Number(FN.settled ?? 0) + tdy(today.settled)]]);
+  const cnt = (live && live.counters) || {}, DQ = res.data_quality || {}, fk = ((live && live.feeds) || {}).kalshi || {};
+  const sumBy = (pred) => Object.entries(cnt).filter(([k]) => pred(k)).reduce((t, [, v]) => t + v, 0);
+  const assetsNow = Object.values((live && live.assets) || {});
+  const crossedNow = assetsNow.filter((a) => Object.values(a.legs || {}).some((l) => l && l.state === "crossed")).length;
+  $("dataq").innerHTML = kv([["legs crossed now", crossedNow, crossedNow ? "bad" : ""], ["crossed (evaluations)", sumBy((k) => k.endsWith("_crossed")), sumBy((k) => k.endsWith("_crossed")) ? "bad" : ""],
+    ["one-sided · not updated · no snapshot", `${sumBy((k) => k.endsWith("_one_sided"))} · ${sumBy((k) => k.endsWith("_not_updated"))} · ${sumBy((k) => k.endsWith("_no_snapshot"))}`],
+    ["invalid-leg share of evaluations", DQ.invalid_leg_share == null ? "–" : f(DQ.invalid_leg_share * 100, 2) + "%"],
+    ["Kalshi seq gaps · reconnects", `${fk.seq_gaps ?? "–"} · ${fk.connects ?? "–"}`], ["Polymarket reconnects", (((live && live.feeds) || {}).poly || {}).connects ?? "–"],
+    ["unidentified windows", (DQ.unidentified_windows ?? 0) + (cnt.windows_unidentified ? ` · ${cnt.windows_unidentified} live` : ""), DQ.unidentified_windows ? "warn" : ""],
+    ["engine errors", cnt.engine_errors ?? 0, cnt.engine_errors ? "bad" : ""],
+    ["awaiting settlement · oldest", `${L.open_positions ?? 0} · ${L.oldest_open_age_s == null ? "–" : f(L.oldest_open_age_s, 0) + "s"}`, L.oldest_open_age_s > 600 ? "warn" : ""]]);
+  const issues = [];
+  if (!live) issues.push("service unreachable");
+  else {
+    for (const [name, key] of [["Kalshi", "kalshi"], ["Polymarket", "poly"]]) {
+      const fd = (live.feeds || {})[key] || {}, ag = (live.feed_age_s || {})[key === "kalshi" ? "k" : "p"];
+      if (!fd.connected) issues.push(`${name} feed down`); else if (ag > 10) issues.push(`${name} feed stale (${f(ag, 0)}s)`);
+    }
+    if (live.risk && live.risk.halted) issues.push("HALTED: new paper entries blocked");
+    if (live.risk && live.risk.kill_file_present) issues.push("kill file present");
+    if (crossedNow) issues.push(`${crossedNow} asset(s) with a crossed book`);
+    const LEG = { kalshi: "Kalshi", poly_yes: "Poly YES", poly_no: "Poly NO" };
+    for (const [name, a] of Object.entries(live.assets || {})) {
+      if (!a.identified || a.sec_into == null || a.sec_into < 20) continue;  // books arrive after the roll
+      for (const [leg, l] of Object.entries(a.legs || {})) {
+        if (l && ["no_snapshot", "no_book", "not_updated"].includes(l.state)) issues.push(`${name}: ${LEG[leg] || leg} ${WHY[l.state] || l.state}`);
+      }
+    }
+    const unid = assetsNow.filter((a) => !a.identified).length; if (unid) issues.push(`${unid} asset(s) without an identified window`);
+    if (L.rejects) issues.push(`${L.rejects} balance reject(s)`);
+    if (live.recorder && live.recorder.disk_paused) issues.push("recorder paused: disk low");
+    if (dataAge > 30) issues.push(`data ${dataAge}s old`);
+  }
+  $("alerts").className = "alerts " + (issues.length ? "bad" : "ok");
+  $("alerts").innerHTML = issues.length ? "<ul>" + issues.map((i) => `<li>${esc(i)}</li>`).join("") + "</ul>" : "✓ all clear: feeds up, books sane, no halts or rejects";
   const feeds = (live && live.feeds) || {}, age = (live && live.feed_age_s) || {};
   $("feeds").innerHTML = kv([["Kalshi", (feeds.kalshi && feeds.kalshi.connected ? "up" : "DOWN") + ` · ${f(age.k, 1)}s`, feeds.kalshi && feeds.kalshi.connected ? "good" : "bad"],
     ["Polymarket", (feeds.poly && feeds.poly.connected ? "up" : "DOWN") + ` · ${f(age.p, 1)}s`, feeds.poly && feeds.poly.connected ? "good" : "bad"],
@@ -147,8 +224,8 @@ async function tick() {
       <div class="kv"><span>${C.length} settled · since ${new Date(C[0][0] * 1000).toISOString().slice(0, 16).replace("T", " ")}</span><span class="${last < 0 ? "bad" : "good"}">$${f(last)}</span></div>`;
   }
   const D = res.daily || [];
-  $("daily").innerHTML = "<tr><th>day</th><th>entries</th><th>skips</th><th>blocked</th><th>filled</th><th>no fill</th><th>avg fill</th><th>win %</th><th>net ¢/sh</th><th>fees</th><th>P&amp;L</th><th>cum.</th></tr>" +
-    (D.length ? D.map((d) => `<tr><td>${esc(d.day)}</td><td>${d.enter}</td><td>${d.skip}</td><td class="${d.blocked ? "warn" : ""}">${d.blocked}</td><td>${d.filled}</td><td>${d.no_fill}</td>
+  $("daily").innerHTML = "<tr><th>day</th><th>windows</th><th>entries</th><th>skips</th><th>blocked</th><th>filled</th><th>no fill</th><th>avg fill</th><th>win %</th><th>net ¢/sh</th><th>fees</th><th>P&amp;L</th><th>cum.</th></tr>" +
+    (D.length ? D.map((d) => `<tr><td>${esc(d.day)}</td><td>${d.windows ?? 0}</td><td>${d.enter}</td><td>${d.skip}</td><td class="${d.blocked ? "warn" : ""}">${d.blocked}</td><td>${d.filled}</td><td>${d.no_fill}</td>
       <td class="${d.avg_vwap > 0.6 ? "bad" : ""}">${f(d.avg_vwap, 3)}</td><td>${d.win_rate == null ? "–" : f(d.win_rate * 100, 1)}</td><td>${f(d.net_cents)}</td><td>${f(d.fees)}</td>
       <td class="${d.pnl < 0 ? "bad" : "good"}">${f(d.pnl)}</td><td class="${d.cumulative < 0 ? "bad" : "good"}">${f(d.cumulative)}</td></tr>`).join("") : '<tr><td class="muted">no decisions yet</td></tr>');
   const T = res.trades || [];

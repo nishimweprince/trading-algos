@@ -161,14 +161,14 @@ def test_status_pick_is_an_allowlist() -> None:
         "recorder": {"root": "/home/x", "lines_written": 5},
         "engine": {
             "assets": {"BTC": {"traded": True, "internal": 1}},
-            "counters": {"fills": 1, "engine_errors": 2},
+            "counters": {"fills": 1, "debug_internal": 2},
             "risk": {"halted": False, "halt_reason": "telegram: user 123"},
         },
         "recent": [{"type": "fill", "vwap": 0.5, "t_ns": 1, "debug": "x"}],
     }
     picked = pick(status)
     text = json.dumps(picked)
-    for leak in ("leak", "last_error", "/home/x", "internal", "engine_errors", "user 123", "debug"):
+    for leak in ("leak", "last_error", "/home/x", "internal", "user 123", "debug"):
         assert leak not in text
     assert picked["assets"]["BTC"]["traded"] is True
     assert picked["counters"] == {"fills": 1}

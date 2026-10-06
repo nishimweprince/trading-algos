@@ -141,6 +141,8 @@ class Ledger:
 
     def snapshot(self, t_ns: int) -> dict[str, Any]:
         settled = [p for p in self.positions.values() if p.status == "settled"]
+        open_ = self.open_positions()
+        oldest = min((p.open_unix for p in open_), default=None)
         return {
             "cash": round(self.cash, 2),
             "start_cash": self.start_cash,
@@ -151,4 +153,7 @@ class Ledger:
             "realised_total": round(sum(p.pnl or 0.0 for p in settled), 2),
             "settled": len(settled),
             "rejects": self.rejects,
+            "largest_open_cost": round(max((p.cost + p.fee for p in open_), default=0.0), 2),
+            # Seconds the oldest unsettled position has waited since its window closed.
+            "oldest_open_age_s": None if oldest is None else round(t_ns / 1e9 - (oldest + 900)),
         }

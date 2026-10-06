@@ -372,6 +372,8 @@ class Engine:
         decision = decide(k, y, n, self.params, sec_into, st.traded)
         st.evals += 1
         st.reasons[decision.reason or decision.action.value] += 1
+        if decision.reason == "invalid_leg":
+            self._count_invalid_legs(st.window)
         if decision.gap is not None:
             st.last_gap = decision.gap
             st.max_abs_gap = max(st.max_abs_gap, abs(decision.gap))
@@ -419,6 +421,16 @@ class Engine:
             record["blocked"] = self._submit(st.window, decision, recv_ns)
         st.decision = record
         self._write(recv_ns, record)
+
+    def _count_invalid_legs(self, window: Window) -> None:
+        """Why legs were invalid at evaluation: ``invalid_kalshi_crossed`` and the like.
+        Only runs on the invalid path, so it costs nothing while the books are good."""
+        since = window.open_unix * NS
+        for leg, book_id in zip(("kalshi", "poly_yes", "poly_no"), window.ids, strict=True):
+            book = self.books.get(book_id)
+            state = "no_book" if book is None else book.state(since)
+            if state != "ok":
+                self.counters[f"invalid_{leg}_{state}"] += 1
 
     def _submit(self, window: Window, decision: Decision, recv_ns: int) -> str | None:
         if self.venue is None:

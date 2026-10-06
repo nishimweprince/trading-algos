@@ -302,3 +302,13 @@ def test_leg_state_explains_an_invalid_quote(engine: Engine) -> None:
     assert legs["kalshi"]["state"] == "ok"
     engine.handle_line(at(OPEN, 4), "c", ctl({"type": "reconnect", "venue": "k"}))
     assert engine.status()["assets"]["BTC"]["legs"]["kalshi"]["state"] == "no_snapshot"
+
+
+def test_invalid_leg_states_are_counted(engine: Engine) -> None:
+    w = window()
+    setup_window(engine, w)
+    book = engine.books[w.kalshi_ticker]
+    book.set_level("bid", 0.80, 5, at(OPEN, 21))  # crosses the 0.72 ask
+    engine.handle_line(at(OPEN, 22), "p", poly_change(w.yes_token, 0.43, 5, "BUY"))
+    assert engine.counters["invalid_kalshi_crossed"] == 1
+    assert not engine.state["BTC"].traded
