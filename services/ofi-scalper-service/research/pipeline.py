@@ -24,7 +24,7 @@ from .backtest import Latency, days_between, job_settings
 from .cv import load_or_create_split
 from .dataset import HORIZONS_S
 from .gates import evaluate
-from .replay import _write_rows, find_session, hour_files, replay_files
+from .replay import _write_rows, find_session, hour_files, replay_rows
 from .selection import select
 from .train import Candidate, train_candidate
 
@@ -66,13 +66,13 @@ def _features_day(args: tuple[str, str, str, dict[str, Any]]) -> str:
     logging.disable(logging.WARNING)
     start = datetime.fromisoformat(day).replace(tzinfo=UTC)
     end_ns = int((start + timedelta(days=1)).timestamp() * 1e9)
-    rows, _ = replay_files(
+    rows, _ = replay_rows(
         hour_files(Path(record_dir), start, 24),
         session=find_session(Path(record_dir), start),
         keep=lambda r: r["t_ns"] < end_ns,
         **overrides,
     )
-    return str(_write_rows(rows, Path(out_dir) / f"{day}.parquet"))
+    return str(_write_rows(rows, Path(out_dir) / f"{day}.parquet")[0])
 
 
 def ensure_features(

@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from ta_plugin_binance_futures.testing import (
     FakeFuturesStream,
     agg_trade_frame,
@@ -264,3 +265,18 @@ async def test_shadow_replay_is_deterministic(build, tmp_path: Path) -> None:
     assert (trades, signals) == again
     assert {s["action"].split(":")[0] for s in signals} <= {"enter", "skip"}
     assert all(t["mode"] == "shadow" and t["model_version"] == "v1" for t in trades)
+
+
+def test_write_rows_streams_batches_and_types_late_columns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pq = pytest.importorskip("pyarrow.parquet")
+    import research.replay as replay
+
+    monkeypatch.setattr(replay, "WRITE_BATCH", 2)
+    # ret_600s_bp is None until ten minutes of history exist: null in the first batch.
+    rows = [{"t_ns": i, "ret_600s_bp": None if i < 3 else 1.5} for i in range(5)]
+    path, count = replay._write_rows(iter(rows), tmp_path / "day.parquet")
+    table = pq.read_table(path)
+    assert count == 5 and table.num_rows == 5
+    assert table.column("ret_600s_bp").to_pylist() == [None, None, None, 1.5, 1.5]

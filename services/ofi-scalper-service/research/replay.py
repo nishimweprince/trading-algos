@@ -67,6 +67,7 @@ __all__ = [
     "merged_lines",
     "read_lines",
     "replay_files",
+    "replay_rows",
 ]
 
 # Used only when a recording has no _control@session line (older recordings).
@@ -374,8 +375,24 @@ def replay_files(
     shadow: ShadowConfig | None = None,
     **overrides: Any,
 ) -> tuple[list[dict[str, Any]], Replayer]:
+    rows, replayer = replay_rows(
+        paths, session=session, keep=keep, model=model, shadow=shadow, **overrides
+    )
+    return list(rows), replayer
+
+
+def replay_rows(
+    paths: list[Path],
+    *,
+    session: dict[str, Any] | None = None,
+    keep: Callable[[dict[str, Any]], bool] | None = None,
+    model: LoadedModel | None = None,
+    shadow: ShadowConfig | None = None,
+    **overrides: Any,
+) -> tuple[Iterator[dict[str, Any]], Replayer]:
+    """``replay_files`` without holding the rows: a day is ~1.7 M rows, ~10 GB as dicts."""
     replayer = Replayer(ReplayConfig.from_session(session, **overrides), model=model, shadow=shadow)
-    rows = [row for row in replayer.run(merged_lines(paths)) if keep is None or keep(row)]
+    rows = (row for row in replayer.run(merged_lines(paths)) if keep is None or keep(row))
     return rows, replayer
 
 
@@ -444,19 +461,58 @@ def load_samples(path: Path) -> list[dict[str, Any]]:
 # --- CLI -----------------------------------------------------------------------
 
 
-def _write_rows(rows: list[dict[str, Any]], out: Path) -> Path:
+WRITE_BATCH = 100_000
+
+
+def _write_rows(rows: Iterable[dict[str, Any]], out: Path) -> tuple[Path, int]:
+    """Stream rows to parquet in batches; returns the path and the row count.
+
+    The schema comes from the first batch, with all-null columns (long-window
+    returns early in a day) typed float64 so later batches fit it.
+    """
     out.parent.mkdir(parents=True, exist_ok=True)
     try:
         import pyarrow as pa
         import pyarrow.parquet as pq
     except ImportError:
         path = out.with_suffix(".jsonl.gz")
+        count = 0
         with gzip.open(path, "wt", encoding="utf-8") as handle:
             for row in rows:
                 handle.write(json.dumps(row, separators=(",", ":")) + "\n")
-        return path
-    pq.write_table(pa.Table.from_pylist(rows), out)
-    return out
+                count += 1
+        return path, count
+    writer: Any = None
+    schema: Any = None
+    count = 0
+    batch: list[dict[str, Any]] = []
+
+    def flush() -> None:
+        nonlocal writer, schema
+        if schema is None:
+            inferred = pa.Table.from_pylist(batch).schema
+            schema = pa.schema(
+                [f.with_type(pa.float64()) if pa.types.is_null(f.type) else f for f in inferred]
+            )
+            writer = pq.ParquetWriter(out, schema)
+        writer.write_table(pa.Table.from_pylist(batch, schema=schema))
+        batch.clear()
+
+    try:
+        for row in rows:
+            batch.append(row)
+            count += 1
+            if len(batch) >= WRITE_BATCH:
+                flush()
+        if batch or schema is None:
+            if batch:
+                flush()
+            else:
+                pq.write_table(pa.table({}), out)
+    finally:
+        if writer is not None:
+            writer.close()
+    return out, count
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -518,7 +574,7 @@ def main(argv: list[str] | None = None) -> int:
             book=book,
         )
         paths = hour_files(record_dir, start, 24)
-        for _ in replay_files(
+        for _ in replay_rows(
             paths,
             session=session_for(start + timedelta(hours=23)),
             keep=lambda r: r["t_ns"] < end_ns,
@@ -538,7 +594,7 @@ def main(argv: list[str] | None = None) -> int:
         start = datetime(day.year, day.month, day.day, tzinfo=UTC)
         paths = hour_files(record_dir, start, 24)
         end_ns = int((start + timedelta(days=1)).timestamp() * 1e9)
-        rows, replayer = replay_files(
+        rows, replayer = replay_rows(
             paths,
             session=session_for(start + timedelta(hours=23)),
             keep=lambda r: r["t_ns"] < end_ns,
@@ -546,19 +602,19 @@ def main(argv: list[str] | None = None) -> int:
             **overrides,
         )
         out = args.out or Path(f"research/data/features/{settings.profile or 'default'}")
-        written = _write_rows(rows, out / f"{day.isoformat()}.parquet")
+        written, count = _write_rows(rows, out / f"{day.isoformat()}.parquet")
         print(
             json.dumps(
                 {
                     "date": day.isoformat(),
                     "files": len(paths),
-                    "rows": len(rows),
+                    "rows": count,
                     "written": str(written),
                     "checkpoints": replayer.checkpoint_report,
                 }
             )
         )
-        return 0 if rows else 1
+        return 0 if count else 1
 
     if not args.hour:
         parser.error("compare needs --hour")
