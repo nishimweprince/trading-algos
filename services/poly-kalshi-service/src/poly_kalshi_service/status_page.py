@@ -1,4 +1,4 @@
-"""The status page: one static document; it polls ``/api/summary`` every 10 s."""
+"""The status page: one static document (no libraries); it polls ``/api/summary`` every 10 s."""
 
 STATUS_HTML = """<!doctype html>
 <html lang="en">
@@ -20,6 +20,8 @@ h1 { font-size:18px; margin:0 0 4px; } h2 { font-size:14px; margin:0 0 8px; colo
 table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
 th, td { text-align:right; padding:4px 6px; border-bottom:1px solid var(--line); white-space:nowrap; }
 th:first-child, td:first-child { text-align:left; } th { color:var(--muted); font-weight:500; }
+svg.curve { width:100%; height:140px; display:block; }
+svg.curve .zero { stroke:var(--line); stroke-dasharray:3 3; } svg.curve .line { fill:none; stroke-width:1.5; }
 .good { color:var(--good); } .bad { color:var(--bad); } .warn { color:var(--warn); } .muted { color:var(--muted); }
 </style>
 </head>
@@ -32,9 +34,12 @@ th:first-child, td:first-child { text-align:left; } th { color:var(--muted); fon
   <div class="card"><h2>Feeds</h2><div id="feeds"></div></div>
   <div class="card"><h2>Gates</h2><div id="gates"></div></div>
 </div>
+<div class="card" style="margin-bottom:12px"><h2>Paper equity (cumulative P&amp;L, settled trades)</h2><div id="curve" class="muted">no settled trades yet</div></div>
+<div class="card" style="margin-bottom:12px"><h2>Daily paper results (UTC)</h2><table id="daily"></table></div>
+<div class="card" style="margin-bottom:12px"><h2>Paper trades (last 50)</h2><table id="trades"></table></div>
 <div class="card" style="margin-bottom:12px"><h2>Windows</h2><table id="assets"></table></div>
 <div class="card" style="margin-bottom:12px"><h2>Fill price and net ¢/share by band</h2><table id="bands"></table></div>
-<div class="card"><h2>Recent</h2><table id="recent"></table></div>
+<div class="card"><h2>Recent engine events</h2><table id="recent"></table></div>
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
@@ -47,9 +52,10 @@ const mid = (q) => q && q.valid && q.bid !== null && q.ask !== null ? (q.bid + q
 async function tick() {
   let body;
   try { body = await (await fetch("api/summary")).json(); } catch (e) { $("sub").textContent = "status page cannot reach its API"; return; }
-  const live = body.live, g = body.gates || {};
+  const live = body.live, g = body.gates || {}, res = body.results || {};
+  const dataAge = body.fetched_at ? Math.round(Date.now() / 1000 - body.fetched_at) : null;
   $("sub").innerHTML = live
-    ? `mode <b>${esc(live.mode)}</b> · host ${esc(live.host)} · gap ≥ ${f(live.params.gap_threshold)} · cap ${f(live.params.max_entry_px)} · $${f(live.params.notional_usd, 0)}/entry · ${live.risk && live.risk.halted ? '<span class="bad">HALTED</span>' : '<span class="good">running</span>'}`
+    ? `mode <b>${esc(live.mode)}</b> · host ${esc(live.host)} · gap ≥ ${f(live.params.gap_threshold)} · cap ${f(live.params.max_entry_px)} · $${f(live.params.notional_usd, 0)}/entry · ${live.risk && live.risk.halted ? '<span class="bad">HALTED</span>' : '<span class="good">running</span>'} · <span class="${dataAge > 30 ? "bad" : "muted"}">data ${dataAge}s old</span>`
     : '<span class="bad">service unreachable</span>';
   const L = (live && live.ledger) || {};
   $("ledger").innerHTML = kv([["cash", "$" + f(L.cash)], ["open positions", L.open_positions], ["open notional", "$" + f(L.open_notional)],
@@ -64,6 +70,25 @@ async function tick() {
   $("gates").innerHTML = kv([["entries (≤ cap)", `${g.in_band_n ?? 0} / ${g.gate_min_n ?? 300}`], ["avg / p90 fill", `${f(v.avg, 3)} / ${f(v.p90, 3)}`, verdict(gg.fill_price)[1]],
     ["fill rate", f((g.fill_rate ?? 0) * 100, 1) + "%"], ["net ¢/share", f(g.net_cents_per_share)], ["$ / entry", f(g.dollars_per_entry)],
     ["day-t (" + (g.days ?? 0) + "d, " + (g.days_positive ?? 0) + " +)", f(g.day_t), verdict(gg.day_t)[1]], ["venue disagreement", g.venue_disagreement == null ? "–" : f(g.venue_disagreement * 100, 1) + "%"]]);
+  const C = res.curve || [];
+  if (C.length > 1) {
+    const W = 1000, H = 140, P = 6, vals = C.map((c) => c[1]), lo = Math.min(0, ...vals), hi = Math.max(0, ...vals), span = hi - lo || 1;
+    const x = (i) => P + (i / (C.length - 1)) * (W - 2 * P), y = (v) => H - P - ((v - lo) / span) * (H - 2 * P);
+    const pts = C.map((c, i) => `${x(i).toFixed(1)},${y(c[1]).toFixed(1)}`).join(" "), last = vals[vals.length - 1];
+    $("curve").innerHTML = `<svg class="curve" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="cumulative paper P&L">
+      <line class="zero" x1="0" x2="${W}" y1="${y(0)}" y2="${y(0)}"/><polyline class="line" points="${pts}" stroke="${last < 0 ? "var(--bad)" : "var(--good)"}"/></svg>
+      <div class="kv"><span>${C.length} settled · since ${new Date(C[0][0] * 1000).toISOString().slice(0, 16).replace("T", " ")}</span><span class="${last < 0 ? "bad" : "good"}">$${f(last)}</span></div>`;
+  }
+  const D = res.daily || [];
+  $("daily").innerHTML = "<tr><th>day</th><th>entries</th><th>skips</th><th>blocked</th><th>filled</th><th>no fill</th><th>avg fill</th><th>win %</th><th>net ¢/sh</th><th>fees</th><th>P&amp;L</th><th>cum.</th></tr>" +
+    (D.length ? D.map((d) => `<tr><td>${esc(d.day)}</td><td>${d.enter}</td><td>${d.skip}</td><td class="${d.blocked ? "warn" : ""}">${d.blocked}</td><td>${d.filled}</td><td>${d.no_fill}</td>
+      <td class="${d.avg_vwap > 0.6 ? "bad" : ""}">${f(d.avg_vwap, 3)}</td><td>${d.win_rate == null ? "–" : f(d.win_rate * 100, 1)}</td><td>${f(d.net_cents)}</td><td>${f(d.fees)}</td>
+      <td class="${d.pnl < 0 ? "bad" : "good"}">${f(d.pnl)}</td><td class="${d.cumulative < 0 ? "bad" : "good"}">${f(d.cumulative)}</td></tr>`).join("") : '<tr><td class="muted">no decisions yet</td></tr>');
+  const T = res.trades || [];
+  $("trades").innerHTML = "<tr><th>time (UTC)</th><th>asset</th><th>side</th><th>gap</th><th>sec</th><th>touch</th><th>fill</th><th>shares</th><th>fee</th><th>outcome</th><th>P&amp;L</th></tr>" +
+    (T.length ? T.map((t) => `<tr><td>${new Date(t.t_ns / 1e6).toISOString().slice(5, 19).replace("T", " ")}</td><td>${esc(t.asset)}</td><td>${esc(t.side)}</td><td>${f(t.gap, 3)}</td><td>${f(t.sec_into, 0)}</td>
+      <td>${f(t.touch_px, 2)}</td><td>${f(t.vwap, 3)}</td><td>${f(t.shares, 0)}/${f(t.ordered, 0)}</td><td>${f(t.fee)}</td><td>${esc(t.outcome ?? "open")}</td>
+      <td class="${t.pnl == null ? "muted" : t.pnl < 0 ? "bad" : "good"}">${t.pnl == null ? "–" : f(t.pnl)}</td></tr>`).join("") : '<tr><td class="muted">no fills yet</td></tr>');
   const A = (live && live.assets) || {};
   $("assets").innerHTML = "<tr><th>asset</th><th>sec</th><th>Kalshi mid</th><th>Poly YES</th><th>Poly NO</th><th>gap</th><th>max |gap|</th><th>state</th></tr>" +
     Object.entries(A).map(([n, a]) => `<tr><td>${esc(n)}</td><td>${f(a.sec_into, 0)}</td><td>${f(mid(a.kalshi), 3)}</td>

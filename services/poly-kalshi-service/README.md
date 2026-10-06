@@ -28,6 +28,11 @@ pk-status --profile dev                # 127.0.0.1:8051, read-only page
 
 Telegram `/kill` and `/status` run on a bot of its own (`PK_TELEGRAM_BOT_TOKEN`).
 
+**Monitoring.** `pk-status` shows the paper equity curve, a daily P&L table, the last 50 paper trades with their outcomes, progress against the gates, and live window state.
+- Results come from the journal on disk.
+- Live state comes from one cached read of `/v1/status` every 5 s, so viewers add no load on the trader.
+- It runs at lower CPU priority and is published through a Cloudflare Tunnel with Access in front. See the poly-kalshi section of `infra/cloudflare/README.md`.
+
 ## How it works
 
 ```
