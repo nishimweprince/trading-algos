@@ -1,0 +1,14 @@
+name: poly-kalshi-service
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    uses: ./.github/workflows/_python-service.yml
+    with:
+      package: poly-kalshi-service
+      working-directory: services/poly-kalshi-service
+      # Replay, null battery and read-out tests need pandas and pyarrow.
+      extras: research
