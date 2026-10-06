@@ -157,14 +157,15 @@ detector:
 heliusSender:
   enabled: true
   url: http://fra-sender.helius-rpc.com/fast
-  # 2026-10-04: BUYS go out on Sender Max (staked + Jito auction) to compete
-  # for the migration slot. Tip = Jito landed-tip p75 x 1.1, clamped to
-  # [0.001, 0.003] SOL — 2.3-7 % of a 0.043 SOL buy; the pool replay must
-  # clear it before going live. EXITS stay staked-only at the 5,000-lamport
-  # minimum (exitSwqosOnly) so stops and TPs don't pay the Max tip too.
-  swqosOnly: false
+  # 2026-10-06 (operator): BUYS staked-only (SWQoS) at the 5,000-lamport
+  # minimum, like exits. The Sender Max tip (>= 0.001 SOL) was ~4 % of a
+  # 0.026 SOL buy to compete for S+0, which is worth ~1 % at the median
+  # (racer, n=406: S+1 mid vs open p50 +1.0 %, p75 +3.6 %); we already
+  # landed S+0 in 6/13 live buys, the same rate as outside buyers. Watch
+  # the S+0 share and failed buys; revert = swqosOnly false + min 1000000.
+  swqosOnly: true
   exitSwqosOnly: true
-  minTipLamports: 1000000
+  minTipLamports: 5000
   tipCapLamports: 3000000
   tipPercentile: 75
   tipBufferPct: 10
@@ -636,10 +637,10 @@ execution:
   # time-to-fill.
   buyConfirmTimeoutMs: 4000
   buyConfirmPollMs: 250
-  # Simulate every buy slippage tier concurrently and send only the tightest
   # 2026-10-06: a buy counts as landed at 'processed' (poll or wallet push),
   # as exits do — every live buy so far waited ~290-560 ms for 'confirmed'.
   buyLandAtProcessed: true
+  # Simulate every buy slippage tier concurrently and send only the tightest
   # that passed, instead of discovering a 6004 one serial round at a time (each
   # round = fresh state read + assemble + simulate, inside the moving window).
   # Deliberately NOT send-before-simulate: each tier is an independently valid
@@ -684,9 +685,9 @@ fees:
   # Jito tip per tx. 0 while the `jito` block above is commented out; set it
   # (e.g. 0.0001) in the same change that re-enables Jito.
   jitoTipSolPerTx: 0
-  # Sender Max buy tip (entry only), ~Jito landed p75 x 1.1 clamped to
-  # [0.001, 0.003] SOL — modelled at its 0.001 floor in dry-run PnL.
-  buyTipSol: 0.0011
+  # Buy tip (entry only), modelled in dry-run PnL: the SWQoS-only minimum
+  # since 2026-10-06 (was 0.0011, the Sender Max floor).
+  buyTipSol: 0.000005
   # Charge constant-product impact on paper / twin fills (buy impact at entry,
   # sell impact per exit fill from the tick's reserves). Recorded separately as
   # slippage_sol; net PnL subtracts it. Without it the twin fills at the mid
@@ -700,7 +701,7 @@ fees:
   planCacheMs: 3000
   # Priority-fee floor/cap (µLamports per CU). Floor raised from the old 50k so
   # exits don't sit for slots waiting on a cheap tx while price crashes.
-  priorityFloorMicroLamports: 500000 # ~0.000125 SOL at 250k CU (raised 2026-10-04 for slot competition)
+  priorityFloorMicroLamports: 100000 # ~0.000025 SOL at 250k CU (2026-10-06: 500k -> 100k; S+0 is worth ~1 % median)
   # Helius estimate scoped to PumpSwap + WSOL (our contention), 'veryHigh' ≈ p95;
   # p90 when falling back to getRecentPrioritizationFees.
   priorityLevel: veryHigh
