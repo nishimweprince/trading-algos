@@ -40,8 +40,25 @@ python -m research.collect.tardis download --start 2026-09-01 --end 2026-09-10
 ```
 
 Files land in `research/data/tardis/<data_type>/<SYMBOL>/<date>.csv.gz`.
-Still to build: a converter into our diff-mode recording format, so these
-days go through `replay.py` like our own recordings.
+The CSVs drop Binance's depth update ids (`U`/`u`/`pu`), so they are a
+cross-check only.
+
+**Replayable days** come from Tardis's raw API instead:
+`research/collect/tardis_feed.py` fetches the exact frames Binance sent
+Tardis's collector (`depth@0ms` with its ids, `depthSnapshot`, `bookTicker`,
+`aggTrade`, `markPrice@1s`, `forceOrder`), a minute per request, and writes
+them unchanged in the recorder's layout with a diff-mode `_control@session`
+per day. Replay then treats them as our own recordings:
+
+```sh
+PYTHONPATH=src python -m research.collect.tardis_feed --start 2026-09-01 --end 2026-09-10
+OFI_RECORD_DIR=data/raw/tardis python -m research.replay features --profile dev --date 2026-09-01
+```
+
+About 1 GB per symbol-day and ~10–25 minutes per day to convert. Receive
+times are Tardis's collector's, not Tokyo's, so manifests say `host: tardis`
+and `pipeline.eligible_days` keeps these days out of the gates: they answer
+"is there a signal at all", not "does it pass".
 
 ## Replay (built)
 
