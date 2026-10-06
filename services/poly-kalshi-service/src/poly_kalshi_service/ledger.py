@@ -61,11 +61,18 @@ class Ledger:
     realised_by_day: dict[str, float] = field(default_factory=dict)
     rejects: int = 0
     path: Path | None = None
+    epoch: str | None = None
 
     @classmethod
-    def open(cls, path: Path | None, start_cash: float) -> Ledger:
+    def open(cls, path: Path | None, start_cash: float, epoch: str | None = None) -> Ledger:
+        """Load the ledger; a different results epoch archives it and starts fresh."""
         if path is not None and path.is_file():
             body = json.loads(path.read_text())
+            if epoch is not None and body.get("epoch") != epoch:
+                archive = path.with_name(f"ledger.epoch-{body.get('epoch') or 'legacy'}.json")
+                os.replace(path, archive)
+                log_event("ledger_archived", archive=str(archive), new_epoch=epoch)
+                return cls(start_cash=start_cash, cash=start_cash, path=path, epoch=epoch)
             ledger = cls(
                 start_cash=body["start_cash"],
                 cash=body["cash"],
@@ -73,6 +80,7 @@ class Ledger:
                 realised_by_day=body.get("realised_by_day", {}),
                 rejects=body.get("rejects", 0),
                 path=path,
+                epoch=body.get("epoch"),
             )
             log_event(
                 "ledger_loaded",
@@ -80,7 +88,7 @@ class Ledger:
                 open_positions=len(ledger.open_positions()),
             )
             return ledger
-        return cls(start_cash=start_cash, cash=start_cash, path=path)
+        return cls(start_cash=start_cash, cash=start_cash, path=path, epoch=epoch)
 
     def save(self) -> None:
         if self.path is None:
@@ -91,6 +99,7 @@ class Ledger:
             "positions": {k: asdict(v) for k, v in self.positions.items()},
             "realised_by_day": self.realised_by_day,
             "rejects": self.rejects,
+            "epoch": self.epoch,
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")

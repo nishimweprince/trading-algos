@@ -67,6 +67,16 @@ class Settings(BaseServiceSettings, NotificationSettings):
     host_tag: str = Field(default="mac", min_length=1, validation_alias="PK_HOST_TAG")
     min_free_disk_gb: float = Field(default=5.0, ge=0, validation_alias="PK_MIN_FREE_DISK_GB")
     state_dir: Path = Field(default=Path("data/state"), validation_alias="PK_STATE_DIR")
+    # Results are read per epoch. Bump it when a fix invalidates earlier paper
+    # results: the page, read-out and export then start clean, and the ledger
+    # starts again from PK_PAPER_START_CASH_USD (the old one is archived).
+    results_epoch: str = Field(
+        default="1", min_length=1, max_length=32, validation_alias="PK_RESULTS_EPOCH"
+    )
+    # Frames buffered per socket before the client stops reading. Polymarket
+    # closes a connection whose reader falls behind (1013 "slow consumer"), so
+    # bursts need room here; ~1 KB a frame.
+    ws_max_queue: int = Field(default=32768, ge=1024, validation_alias="PK_WS_MAX_QUEUE")
     # One summary log line this often (0 disables): silence then means a stall.
     heartbeat_seconds: float = Field(default=60.0, ge=0, validation_alias="PK_HEARTBEAT_SECONDS")
     # A venue with no message for this long is reported stale and alerted.

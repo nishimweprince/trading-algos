@@ -23,6 +23,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import time
 from collections.abc import Callable, Coroutine
 from typing import Any
@@ -76,6 +77,9 @@ class Runtime:
         self._resolution_given_up: set[tuple[str, int, str]] = set()
         self.started_ns: int | None = None
         self.lines = 0
+        self.cpu_pct: float | None = None
+        self.telegram: Any = None  # set by the app when the command bot runs
+        self._cpu_mark = (time.monotonic(), time.process_time())
 
     # --- the one entry point ----------------------------------------------------
 
@@ -307,7 +311,23 @@ class Runtime:
 
     # --- health -----------------------------------------------------------------
 
+    def _sample_cpu(self) -> None:
+        """Process CPU % since the last sample (all threads; 100 = one full core)."""
+        wall, cpu = time.monotonic(), time.process_time()
+        last_wall, last_cpu = self._cpu_mark
+        if wall - last_wall > 0.5:
+            self.cpu_pct = round(100 * (cpu - last_cpu) / (wall - last_wall), 1)
+        self._cpu_mark = (wall, cpu)
+
+    def host(self) -> dict[str, Any]:
+        try:
+            load1 = round(os.getloadavg()[0], 2)
+        except OSError:
+            load1 = None
+        return {"cpu_pct": self.cpu_pct, "load1": load1, "cpus": os.cpu_count()}
+
     async def health_tick(self) -> None:
+        self._sample_cpu()
         now_ns = self._clock()
         stale = self.settings.stale_feed_seconds
         for venue, feed in (("k", self.kalshi), ("p", self.poly)):
@@ -329,6 +349,7 @@ class Runtime:
                 lines=self.lines,
                 books=len(self.engine.books),
                 counters=dict(self.engine.counters),
+                **self.host(),
                 cash=ledger["cash"],
                 open_positions=ledger["open_positions"],
             )
@@ -356,6 +377,9 @@ class Runtime:
         return {
             "profile": self.settings.profile,
             "execution_mode": self.settings.execution_mode.value,
+            "epoch": self.settings.results_epoch,
+            "build": self.engine.stamp.get("build"),
+            "config": self.engine.stamp.get("config"),
             "host": self.settings.host_tag,
             "assets": list(self.settings.assets),
             "params": {
@@ -367,6 +391,8 @@ class Runtime:
                 "paper_latency_ms": self.settings.paper_latency_ms,
             },
             "started_ns": self.started_ns,
+            "host_load": self.host(),
+            "telegram": self.telegram.stats() if self.telegram is not None else None,
             "lines": self.lines,
             "feeds": {
                 "kalshi": self.kalshi.stats() if self.kalshi else None,

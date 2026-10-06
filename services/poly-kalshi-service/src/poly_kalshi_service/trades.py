@@ -23,7 +23,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-__all__ = ["JsonlDaily", "read_journal"]
+__all__ = ["JsonlDaily", "in_epoch", "read_journal"]
 
 
 class JsonlDaily:
@@ -43,6 +43,21 @@ class JsonlDaily:
                 handle.write(json.dumps(record, separators=(",", ":"), default=str) + "\n")
         except OSError:
             self.errors += 1  # a record must never stop the engine
+
+
+def in_epoch(records: list[dict[str, Any]], epoch: str | None) -> tuple[list[dict[str, Any]], int]:
+    """Records of one results epoch, and how many others were set aside.
+
+    ``epoch=None`` picks the latest epoch present; a journal with no epochs at
+    all (a replay) is returned whole.
+    """
+    if epoch is None:
+        stamped = [r["epoch"] for r in records if r.get("epoch") is not None]
+        if not stamped:
+            return records, 0
+        epoch = stamped[-1]
+    kept = [r for r in records if r.get("epoch") == epoch]
+    return kept, len(records) - len(kept)
 
 
 def read_journal(directory: Path) -> Iterator[dict[str, Any]]:

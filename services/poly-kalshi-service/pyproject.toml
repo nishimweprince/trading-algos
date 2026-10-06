@@ -14,6 +14,8 @@ dependencies = [
   "httpx>=0.27,<1",
   "pydantic-settings>=2.6,<3",
   "websockets>=13",
+  # ~2,000 frames a second across both venues: parsing is the hot path.
+  "orjson>=3.10",
   # Kalshi signs every request and the WS upgrade with RSA-PSS.
   "cryptography>=42",
   "ta-core[web]",

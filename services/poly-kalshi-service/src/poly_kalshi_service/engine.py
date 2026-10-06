@@ -21,13 +21,13 @@ asset's current window, not on a one-second sample.
 
 from __future__ import annotations
 
-import json
 import logging
 from collections import Counter, deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+import orjson
 from ta_core.logging_config import log_event
 
 from .book import Book, Quote, px
@@ -82,9 +82,12 @@ class Engine:
         venue: Venue | None,
         journal: JsonlDaily | None = None,
         alert: Alert | None = None,
+        stamp: dict[str, str] | None = None,
     ) -> None:
         self.params = params
         self.assets = assets
+        # epoch / build / config, added to every journal record.
+        self.stamp = stamp or {}
         self.ledger = ledger
         self.risk = risk
         self.venue = venue
@@ -126,7 +129,7 @@ class Engine:
         if self.pending:
             self._resolve_pending(recv_ns)
         try:
-            body = json.loads(text)
+            body = orjson.loads(text)
         except ValueError:
             self.counters["bad_json"] += 1
             return
@@ -565,6 +568,8 @@ class Engine:
     # --- output -----------------------------------------------------------------
 
     def _write(self, recv_ns: int, record: dict[str, Any], *, keep: bool = True) -> None:
+        if self.stamp:
+            record = record | self.stamp
         self.journal.write(recv_ns, record)
         if keep:
             self.recent.append(record)

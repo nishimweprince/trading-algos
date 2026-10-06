@@ -81,6 +81,14 @@ control lines (windows,      │                             └▶ Engine.handl
   - Kalshi's result is recorded too, to measure venue disagreement.
 - **Journal**: `data/state/<profile>/journal/YYYY-MM-DD.jsonl` holds every decision, fill, settlement, resolution and window summary.
 
+## Results epochs
+
+Every journal record carries `epoch` (`PK_RESULTS_EPOCH`), `build` (the git commit) and `config` (a hash of the strategy parameters).
+- The status page, `research.readout` and the export use only the current epoch, and the page header shows how many older records were set aside.
+- Changing the epoch archives the paper ledger (`ledger.epoch-<old>.json`) and starts a fresh one.
+- Bump the epoch whenever a fix invalidates earlier results.
+- Records from before epochs existed, i.e. the ghost-level period, are always excluded.
+
 ## Research
 
 ```bash

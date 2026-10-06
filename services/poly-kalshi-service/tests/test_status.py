@@ -30,6 +30,8 @@ def _trade(open_unix: int, vwap: float, win: bool, *, settled: bool = True) -> l
             {"type": "settle", "asset": "BTC", "open_unix": open_unix, "outcome": "yes" if win
              else "no", "payout": payout, "pnl": payout - vwap * shares - fee}
         )  # fmt: skip
+    for row in rows:
+        row["epoch"] = "1"  # as the trader stamps them (PK_RESULTS_EPOCH default)
     return rows
 
 

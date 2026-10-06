@@ -13,6 +13,8 @@
 
 from __future__ import annotations
 
+import ipaddress
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -25,6 +27,7 @@ from ta_core.logging_config import configure_file_logs, configure_logging, log_e
 from ta_notify import Notifier
 
 from .alerts import Alerts
+from .build import build_id, config_hash
 from .config import ExecutionMode, Settings, load_settings
 from .engine import Engine
 from .feeds import KalshiFeed, KalshiSigner, PolyFeed
@@ -37,9 +40,18 @@ from .trades import JsonlDaily
 from .venue import PaperVenue
 from .windows import Discovery
 
-__all__ = ["LOGGER_NAME", "build_runtime", "create_app"]
+__all__ = ["LOGGER_NAME", "build_runtime", "create_app", "is_loopback"]
 
 LOGGER_NAME = "poly_kalshi_service.events"
+
+
+def is_loopback(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 class KillRequest(BaseModel):
@@ -48,7 +60,11 @@ class KillRequest(BaseModel):
 
 def build_runtime(settings: Settings, notifier: Any | None, http: httpx.AsyncClient) -> Runtime:
     alerts = Alerts(notifier)
-    ledger = Ledger.open(settings.state_dir / "ledger.json", settings.paper_start_cash_usd)
+    ledger = Ledger.open(
+        settings.state_dir / "ledger.json",
+        settings.paper_start_cash_usd,
+        epoch=settings.results_epoch,
+    )
     risk = RiskState(
         RiskLimits(
             max_open_notional_usd=settings.max_open_notional_usd,
@@ -69,6 +85,11 @@ def build_runtime(settings: Settings, notifier: Any | None, http: httpx.AsyncCli
         venue=venue,
         journal=JsonlDaily(settings.state_dir / "journal"),
         alert=alerts.send,
+        stamp={
+            "epoch": settings.results_epoch,
+            "build": build_id(),
+            "config": config_hash(settings.params, settings.paper_latency_ms),
+        },
     )
     recorder = (
         Recorder(
@@ -94,8 +115,8 @@ def build_runtime(settings: Settings, notifier: Any | None, http: httpx.AsyncCli
         discovery=Discovery(
             http, gamma_url=settings.poly_gamma_url, kalshi_rest_url=settings.kalshi_rest_url
         ),
-        kalshi=KalshiFeed(settings.kalshi_ws_url, emit, signer),
-        poly=PolyFeed(settings.poly_ws_url, emit),
+        kalshi=KalshiFeed(settings.kalshi_ws_url, emit, signer, max_queue=settings.ws_max_queue),
+        poly=PolyFeed(settings.poly_ws_url, emit, max_queue=settings.ws_max_queue),
         alerts=alerts,
         recorder=recorder,
         http=http,
@@ -130,12 +151,38 @@ def create_app(settings: Settings | None = None, runtime: Runtime | None = None)
             state["runtime"] = build_runtime(settings, notifier, http)
         current: Runtime = state["runtime"]
         log_event("pk_starting", profile=settings.profile, mode=settings.execution_mode.value)
+        if not is_loopback(settings.host):
+            # The kill switch lives on this API: it should be reachable only
+            # from the host (SSH tunnel), never from the internet.
+            log_event("api_exposed", level=logging.ERROR, host=settings.host, port=settings.port)
+            current.alerts.send(
+                "api_exposed",
+                "poly-kalshi: API bound to a non-loopback address",
+                [
+                    f"HOST={settings.host} port {settings.port}: reachable beyond this host.",
+                    "Set HOST=127.0.0.1 and reach it over SSH; check the firewall too.",
+                ],
+                always=True,
+            )
         await current.start()
         telegram = None
         if settings.telegram_bot_token is not None:
             telegram = TelegramCommands(
-                settings.telegram_bot_token, settings.telegram_admin_user_ids, telegram_handler
+                settings.telegram_bot_token,
+                settings.telegram_admin_user_ids,
+                telegram_handler,
+                on_conflict=lambda error: current.alerts.send(
+                    "telegram_conflict",
+                    "poly-kalshi: Telegram /kill is not reaching this service",
+                    [
+                        "Another process polls the same bot token (getUpdates Conflict).",
+                        "Give PK_TELEGRAM_BOT_TOKEN a bot of its own; until then use "
+                        "POST /v1/kill or the kill file.",
+                    ],
+                    always=True,
+                ),
             )
+            current.telegram = telegram
             current.spawn(telegram.run(), "pk-telegram")
         current.alerts.send(
             "start",

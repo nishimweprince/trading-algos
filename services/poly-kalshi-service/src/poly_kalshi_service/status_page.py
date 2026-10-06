@@ -146,7 +146,7 @@ async function tick() {
   FETCHED.summary = body.fetched_at;
   const dataAge = body.fetched_at ? Math.round(Date.now() / 1000 - body.fetched_at) : null;
   put("sub", live
-    ? `<b>${esc(live.mode)}</b> · ${esc(live.host)} · gap ≥ ${f(live.params.gap_threshold)} · cap ${f(live.params.max_entry_px)} · $${f(live.params.notional_usd, 0)} · ${live.risk && live.risk.halted ? '<span class="bad">HALTED</span>' : '<span class="good">running</span>'}`
+    ? `<b>${esc(live.mode)}</b> · ${esc(live.host)} · gap ≥ ${f(live.params.gap_threshold)} · cap ${f(live.params.max_entry_px)} · $${f(live.params.notional_usd, 0)} · ${live.risk && live.risk.halted ? '<span class="bad">HALTED</span>' : '<span class="good">running</span>'} · <span class="muted" title="results epoch (PK_RESULTS_EPOCH) and code build; results shown are this epoch only">epoch ${esc(live.epoch)} · ${esc((live.build || "").slice(0, 8))}${body.excluded_records ? ` · ${body.excluded_records} older records excluded` : ""}</span>`
     : '<span class="bad">service unreachable</span>');
   const money = (v) => v == null ? "–" : (v < 0 ? "−$" : "$") + f(Math.abs(v));
   const L = (live && live.ledger) || {}, cap = L.start_cash, dd = res.drawdown || {};
@@ -205,14 +205,20 @@ async function tick() {
     if (L.rejects) issues.push(`${L.rejects} balance reject(s)`);
     if (live.recorder && live.recorder.disk_paused) issues.push("recorder paused: disk low");
     if (dataAge > 30) issues.push(`data ${dataAge}s old`);
+    if (live.telegram && live.telegram.conflicts) issues.push("Telegram /kill not reaching this service: another process polls the same bot token");
+    const hostLoad = live.host_load || {};
+    if (hostLoad.cpu_pct > 85) issues.push(`trader CPU at ${f(hostLoad.cpu_pct, 0)}%: the host may be too small for the feeds`);
   }
   $("alerts").className = "alerts " + (issues.length ? "bad" : "ok");
   put("alerts", issues.length ? "<ul>" + issues.map((i) => `<li>${esc(i)}</li>`).join("") + "</ul>" : "✓ all clear: feeds up, books sane, no halts or rejects");
   const feeds = (live && live.feeds) || {}, age = (live && live.feed_age_s) || {};
+  const hl = (live && live.host_load) || {};
   put("feeds", kv([["Kalshi", (feeds.kalshi && feeds.kalshi.connected ? "up" : "DOWN") + ` · ${f(age.k, 1)}s`, feeds.kalshi && feeds.kalshi.connected ? "good" : "bad"],
     ["Polymarket", (feeds.poly && feeds.poly.connected ? "up" : "DOWN") + ` · ${f(age.p, 1)}s`, feeds.poly && feeds.poly.connected ? "good" : "bad"],
     ["Kalshi seq gaps", feeds.kalshi ? feeds.kalshi.seq_gaps : "–"], ["recorder lines", live && live.recorder ? live.recorder.lines_written : "–"],
-    ["disk free", live && live.recorder ? f(live.recorder.disk_free_gb, 1) + " GB" : "–"]]));
+    ["disk free", live && live.recorder ? f(live.recorder.disk_free_gb, 1) + " GB" : "–"],
+    ["process CPU · load (cores)", hl.cpu_pct == null ? "–" : `${f(hl.cpu_pct, 0)}% · ${f(hl.load1, 2)} (${hl.cpus ?? "–"})`, hl.cpu_pct > 85 ? "bad" : hl.cpu_pct > 60 ? "warn" : ""],
+    ["slow-consumer drops (Poly · Kalshi)", `${(feeds.poly || {}).slow_consumer ?? 0} · ${(feeds.kalshi || {}).slow_consumer ?? 0}`, ((feeds.poly || {}).slow_consumer || (feeds.kalshi || {}).slow_consumer) ? "warn" : ""]]));
   const gg = g.gates || {}, v = g.vwap || {};
   put("gates", kv([["entries (≤ cap)", `${g.in_band_n ?? 0} / ${g.gate_min_n ?? 300}`], ["avg / p90 fill", `${f(v.avg, 3)} / ${f(v.p90, 3)}`, verdict(gg.fill_price)[1]],
     ["fill rate", f((g.fill_rate ?? 0) * 100, 1) + "%"], ["net ¢/share", f(g.net_cents_per_share)], ["$ / entry", f(g.dollars_per_entry)],

@@ -28,6 +28,7 @@ __all__ = ["COMMANDS", "TelegramCommands", "parse_command"]
 
 COMMANDS = frozenset({"kill", "status"})
 POLL_SECONDS = 25
+CONFLICT_BACKOFF_SECONDS = 300.0
 
 Handler = Callable[[str, int], Awaitable[str]]
 
@@ -51,6 +52,7 @@ class TelegramCommands:
         http: httpx.AsyncClient | None = None,
         base_url: str = "https://api.telegram.org",
         sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
+        on_conflict: Callable[[str], None] | None = None,
     ) -> None:
         self._token = token
         self._admins = admins
@@ -63,6 +65,8 @@ class TelegramCommands:
         self.handled = 0
         self.ignored = 0
         self.errors = 0
+        self.conflicts = 0
+        self._on_conflict = on_conflict
 
     def _url(self, method: str) -> str:
         return f"{self._base}/bot{self._token.get_secret_value()}/{method}"
@@ -126,13 +130,36 @@ class TelegramCommands:
                 raise
             except Exception as exc:  # noqa: BLE001 - keep polling
                 self.errors += 1
+                if "Conflict" in str(exc):
+                    await self._conflict(str(exc))
+                    continue
                 log_event("telegram_poll_failed", level=logging.WARNING, error=str(exc)[:200])
                 await self._sleep(backoff)
                 backoff = min(backoff * 2, 60.0)
+
+    async def _conflict(self, error: str) -> None:
+        """Another process polls this token: /kill would reach it, not us.
+
+        Alert once, log every tenth, and back off: hammering getUpdates only
+        keeps stealing updates from whichever poller is the right one.
+        """
+        self.conflicts += 1
+        if self.conflicts == 1:
+            if self._on_conflict is not None:
+                self._on_conflict(error)
+            log_event("telegram_conflict", level=logging.ERROR, error=error[:200])
+        elif self.conflicts % 10 == 0:
+            log_event("telegram_conflict", level=logging.WARNING, repeats=self.conflicts)
+        await self._sleep(CONFLICT_BACKOFF_SECONDS)
 
     async def aclose(self) -> None:
         if self._owns_http:
             await self._http.aclose()
 
     def stats(self) -> dict[str, Any]:
-        return {"handled": self.handled, "ignored": self.ignored, "errors": self.errors}
+        return {
+            "handled": self.handled,
+            "ignored": self.ignored,
+            "errors": self.errors,
+            "conflicts": self.conflicts,
+        }

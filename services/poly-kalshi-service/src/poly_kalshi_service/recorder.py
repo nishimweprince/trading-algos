@@ -49,6 +49,11 @@ __all__ = ["Recorder", "hour_path"]
 
 FLUSH_SECONDS = 10.0
 DISK_CHECK_SECONDS = 10.0
+# Lines drained from the queue per batch and written as one string: one small
+# gzip write per frame held the GIL ~2,000 times a second, and level 1 costs a
+# fraction of level 6 for somewhat larger files.
+BATCH = 4096
+COMPRESS_LEVEL = 1
 RESUME_HEADROOM = 1.2  # resume at 120% of the floor, so it does not flap
 _STOP = object()
 _FILE = "pk"  # the one open file's key
@@ -71,6 +76,12 @@ class _Open:
     first_ns: int | None = None
     last_ns: int | None = None
     gaps: int = 0
+    pending: list[str] = field(default_factory=list)
+
+    def flush_pending(self) -> None:
+        if self.pending:
+            self.handle.write("".join(self.pending))
+            self.pending.clear()
 
 
 class Recorder:
@@ -175,17 +186,25 @@ class Recorder:
         last_disk = 0.0
         while True:
             try:
-                item = self._queue.get(timeout=1.0)
+                batch = [self._queue.get(timeout=1.0)]
             except queue.Empty:
-                item = None
-            if item is _STOP:
-                break
+                batch = []
+            while batch and len(batch) < BATCH:
+                try:
+                    batch.append(self._queue.get_nowait())
+                except queue.Empty:
+                    break
+            stop = _STOP in batch
             try:
-                if item is not None and item[0] == "line":
-                    self._write_line(item[1], item[2], item[3])
-                elif item is not None and item[0] == "gap":
-                    if item[1] in self._open:
+                for item in batch:
+                    if item is _STOP:
+                        break
+                    if item[0] == "line":
+                        self._write_line(item[1], item[2], item[3])
+                    elif item[0] == "gap" and item[1] in self._open:
                         self._open[item[1]].gaps += 1
+                for current in self._open.values():
+                    current.flush_pending()
                 if time.monotonic() - last_disk >= DISK_CHECK_SECONDS:
                     self.check_disk()
                     last_disk = time.monotonic()
@@ -197,6 +216,8 @@ class Recorder:
                 self.errors += 1
                 self.last_error = f"{type(exc).__name__}: {exc}"[:200]
                 log_event("recorder_error", level=logging.ERROR, error=self.last_error)
+            if stop:
+                break
         for symbol in list(self._open):
             self._close(symbol)
 
@@ -213,10 +234,10 @@ class Recorder:
         if current is None:
             path.parent.mkdir(parents=True, exist_ok=True)
             # "at": the same session re-opens its own file after a disk pause.
-            handle = gzip.open(path, "at", encoding="utf-8", compresslevel=6)
+            handle = gzip.open(path, "at", encoding="utf-8", compresslevel=COMPRESS_LEVEL)
             current = _Open(path, hour, handle)
             self._open[symbol] = current
-        current.handle.write(f"{recv_ns} {venue} {text}\n")
+        current.pending.append(f"{recv_ns} {venue} {text}\n")
         current.lines += 1
         current.streams[stream] += 1
         current.first_ns = current.first_ns if current.first_ns is not None else recv_ns
@@ -225,6 +246,7 @@ class Recorder:
 
     def _close(self, symbol: str) -> None:
         current = self._open.pop(symbol)
+        current.flush_pending()
         current.handle.close()
         manifest = current.path.with_name(current.path.name + ".json")
         previous: dict[str, Any] = {}

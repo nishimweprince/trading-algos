@@ -30,6 +30,7 @@ from collections.abc import AsyncIterator, Callable
 from typing import Any
 from urllib.parse import urlparse
 
+import orjson
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from ta_core.logging_config import log_event
@@ -41,16 +42,20 @@ WsConnect = Callable[..., contextlib.AbstractAsyncContextManager[Any]]
 
 
 @contextlib.asynccontextmanager
-async def _websocket(url: str, headers: dict[str, str] | None = None) -> AsyncIterator[Any]:
+async def _websocket(
+    url: str, headers: dict[str, str] | None = None, max_queue: int = 32768
+) -> AsyncIterator[Any]:
     from websockets.asyncio.client import connect
 
     # max_size: a Polymarket book frame for several tokens can pass the 1 MiB default.
+    # max_queue: once this many frames wait, the client stops reading the socket and
+    # Polymarket drops a reader that falls behind (1013 "slow consumer").
     async with connect(
         url,
         additional_headers=headers,
         ping_interval=20,
         ping_timeout=20,
-        max_queue=8192,
+        max_queue=max_queue,
         max_size=8 * 2**20,
     ) as socket:
         yield socket
@@ -91,10 +96,13 @@ class _WsFeed:
         *,
         ws_connect: WsConnect | None = None,
         max_backoff: float = 30.0,
+        max_queue: int = 32768,
     ) -> None:
         self.url = url
         self._emit = emit
         self._connect = ws_connect or _websocket
+        self._max_queue = max_queue
+        self.slow_consumer = 0  # closes for falling behind (1013)
         self._max_backoff = max_backoff
         self.wanted: set[str] = set()
         self.subscribed: set[str] = set()
@@ -109,6 +117,11 @@ class _WsFeed:
     def _headers(self) -> dict[str, str] | None:
         return None
 
+    def _open(self) -> contextlib.AbstractAsyncContextManager[Any]:
+        if self._connect is _websocket:
+            return _websocket(self.url, self._headers(), self._max_queue)
+        return self._connect(self.url, self._headers())
+
     def _control(self, kind: str, **fields: Any) -> None:
         self._emit("c", json.dumps({"type": kind, "venue": self.venue, **fields}))
 
@@ -116,7 +129,7 @@ class _WsFeed:
         backoff = 1.0
         while True:
             try:
-                async with self._connect(self.url, self._headers()) as ws:
+                async with self._open() as ws:
                     self._ws = ws
                     self.connected = True
                     self.connects += 1
@@ -136,6 +149,8 @@ class _WsFeed:
             except Exception as exc:  # noqa: BLE001 - reconnect on anything
                 self.errors += 1
                 self.last_error = f"{type(exc).__name__}: {exc}"[:200]
+                if "1013" in self.last_error:
+                    self.slow_consumer += 1
                 log_event(
                     "feed_error", level=logging.WARNING, venue=self.venue, error=self.last_error
                 )
@@ -194,6 +209,7 @@ class _WsFeed:
             "last_error": self.last_error,
             "subscribed": len(self.subscribed),
             "wanted": len(self.wanted),
+            "slow_consumer": self.slow_consumer,
         }
 
 
@@ -250,7 +266,7 @@ class KalshiFeed(_WsFeed):
 
     async def _on_message(self, text: str) -> bool:
         try:
-            body = json.loads(text)
+            body = orjson.loads(text)
         except ValueError:
             self._emit(self.venue, text)
             return True
@@ -265,16 +281,21 @@ class KalshiFeed(_WsFeed):
             self._emit(self.venue, text)
             # A refused update leaves the subscription unknown: start over.
             return False
-        elif kind in ("orderbook_snapshot", "orderbook_delta"):
-            seq, sid = body.get("seq"), body.get("sid")
-            if isinstance(seq, int):
-                last = self._seq.get(sid)
-                if last is not None and seq != last + 1:
-                    self.seq_gaps += 1
-                    self._control("resync", sid=sid, expected=last + 1, got=seq)
-                    log_event("kalshi_seq_gap", level=logging.WARNING, expected=last + 1, got=seq)
-                    return False
-                self._seq[sid] = seq
+        # Every frame carrying a seq advances it, not only orderbook frames: the
+        # acknowledgement of an update_subscription takes a number too. Counting
+        # only orderbook frames read each add/delete as a one-off gap and forced
+        # a reconnect twice per window (production, 2026-10-06).
+        seq, sid = body.get("seq"), body.get("sid")
+        if isinstance(seq, int) and sid is not None:
+            last = self._seq.get(sid)
+            if last is not None and seq != last + 1:
+                self.seq_gaps += 1
+                self._control("resync", sid=sid, expected=last + 1, got=seq, frame=kind)
+                log_event(
+                    "kalshi_seq_gap", level=logging.WARNING, expected=last + 1, got=seq, frame=kind
+                )
+                return False
+            self._seq[sid] = seq
         self._emit(self.venue, text)
         return True
 

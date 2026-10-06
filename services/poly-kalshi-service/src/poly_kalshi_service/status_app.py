@@ -48,7 +48,7 @@ from .export import build_export, export_name
 from .gates import evaluate
 from .results import paper_results
 from .status_page import STATUS_HTML
-from .trades import read_journal
+from .trades import in_epoch, read_journal
 
 __all__ = ["LOGGER_NAME", "create_status_app", "pick", "run"]
 
@@ -83,6 +83,9 @@ def pick(status: dict[str, Any] | None) -> dict[str, Any] | None:
     recorder = status.get("recorder") or {}
     return {
         "mode": status.get("execution_mode"),
+        "epoch": status.get("epoch"),
+        "build": status.get("build"),
+        "config": status.get("config"),
         "host": status.get("host"),
         "params": status.get("params"),
         "assets": {
@@ -109,7 +112,9 @@ def pick(status: dict[str, Any] | None) -> dict[str, Any] | None:
             for name, a in (engine.get("assets") or {}).items()
         },
         "feeds": {
-            name: _keep(f, ("connected", "connects", "messages", "errors", "seq_gaps"))
+            name: _keep(
+                f, ("connected", "connects", "messages", "errors", "seq_gaps", "slow_consumer")
+            )
             for name, f in feeds.items()
         },
         "feed_age_s": engine.get("feed_age_s"),
@@ -118,6 +123,8 @@ def pick(status: dict[str, Any] | None) -> dict[str, Any] | None:
             ("enabled", "lines_written", "dropped", "errors", "disk_free_gb", "disk_paused"),
         ),
         "latency": engine.get("latency"),
+        "host_load": status.get("host_load"),
+        "telegram": _keep(status.get("telegram"), ("handled", "errors", "conflicts")),
         "ledger": engine.get("ledger"),
         "risk": _keep(engine.get("risk"), ("halted", "kill_file_present")),
         "counters": {
@@ -184,9 +191,13 @@ def create_status_app(
 
     def read_results() -> dict[str, Any]:
         records = list(read_journal(journal_dir)) if journal_dir.is_dir() else []
+        # Only the current results epoch: earlier epochs were invalidated by a fix.
+        kept, excluded = in_epoch(records, settings.results_epoch)
         return {
-            "gates": evaluate(records, settings.max_entry_px),
-            "results": paper_results(records),
+            "epoch": settings.results_epoch,
+            "excluded_records": excluded,
+            "gates": evaluate(kept, settings.max_entry_px),
+            "results": paper_results(kept),
         }
 
     def note_rates(live: dict[str, Any] | None, now: float) -> None:
@@ -279,6 +290,8 @@ def create_status_app(
             "service_up": state["live"] is not None,
             "live": state["live"],
             "rates": state["rates"],
+            "epoch": journal.get("epoch"),
+            "excluded_records": journal.get("excluded_records"),
             "gates": journal.get("gates"),
             "results": journal.get("results"),
         }
