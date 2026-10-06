@@ -181,7 +181,15 @@ function dbar(gap, thr) {
   return `<span class="dbar"><i class="mid" style="left:50%"></i>${fill}<b style="left:${pos(thr)}%"></b><b style="left:${pos(-thr)}%"></b></span>`;
 }
 const px = (v) => v == null ? "–" : String(Number(v.toFixed(3)));
-const ba = (q) => q && q.valid ? `${px(q.bid)}–${px(q.ask)} <span class="muted">(${px((q.bid + q.ask) / 2)})</span>` : '<span class="bad">invalid</span>';
+const WHY = { one_sided: "one-sided", crossed: "CROSSED", not_updated: "no update this window", no_snapshot: "no snapshot", no_book: "not subscribed" };
+// A valid leg shows bid–ask (mid). An invalid one shows why, with the side(s) it has:
+// near expiry a book at 0.99 is legitimately one-sided; "crossed" is a fault.
+const ba = (q, leg, showMid = true) => {
+  if (q && q.valid) return `${px(q.bid)}–${px(q.ask)}` + (showMid ? ` <span class="muted">(${px((q.bid + q.ask) / 2)})</span>` : "");
+  const L = leg || {}, why = WHY[L.state] || "invalid";
+  const sides = L.bid != null || L.ask != null ? `${L.bid == null ? "—" : px(L.bid)}–${L.ask == null ? "—" : px(L.ask)} ` : "";
+  return `<span class="${L.state === "one_sided" ? "muted" : "bad"}" title="leg invalid: ${esc(why)}">${sides}${esc(why)}</span>`;
+};
 const ms = (v) => v == null ? "–" : v >= 10000 ? f(v / 1000, 0) + "s" : f(v, 0);
 async function stateTick() {
   let body;
@@ -200,8 +208,8 @@ async function stateTick() {
         : `<span class="muted">${esc((pv.reason || "–").replace(/_/g, " "))}</span>`;
       const done = d ? `<span class="pill ${esc(d.action)}">${esc(d.action)} ${esc(d.side)} ${f(d.entry_px, 2)} @${f(d.sec_into, 0)}s${d.blocked ? " · " + esc(d.blocked) : ""}</span>` : '<span class="muted">none yet</span>';
       const stale = (v) => v != null && v > 5000 ? "bad" : "";
-      return `<tr><td><b>${esc(n)}</b></td><td class="${phc}">${ph}</td><td class="num">${ba(a.kalshi)}</td>
-        <td class="num">${ba(a.poly_yes)}</td><td class="num">${a.poly_no && a.poly_no.valid ? px(a.poly_no.bid) + "–" + px(a.poly_no.ask) : '<span class="bad">invalid</span>'}</td>
+      return `<tr><td><b>${esc(n)}</b></td><td class="${phc}">${ph}</td><td class="num">${ba(a.kalshi, (a.legs || {}).kalshi)}</td>
+        <td class="num">${ba(a.poly_yes, (a.legs || {}).poly_yes)}</td><td class="num">${ba(a.poly_no, (a.legs || {}).poly_no, false)}</td>
         <td class="num ${g == null ? "" : Math.abs(g) >= thr ? "good" : ""}"><b>${g == null ? "–" : (g >= 0 ? "+" : "") + f(g, 3)}</b></td><td>${dbar(g, thr)}</td><td class="num">${to}</td><td>${rule}</td>
         <td class="num"><span class="${stale(ag.kalshi)}">${ms(ag.kalshi)}</span> · <span class="${stale(ag.poly_yes)}">${ms(ag.poly_yes)}</span> · <span class="${stale(ag.poly_no)}">${ms(ag.poly_no)}</span></td>
         <td class="num">${f(a.max_abs_gap, 3)}</td><td>${done}</td></tr>`;

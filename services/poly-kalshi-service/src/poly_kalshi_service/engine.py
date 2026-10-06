@@ -569,6 +569,7 @@ class Engine:
             sec_into = None if st.open_unix is None else now / NS - st.open_unix
             gap = preview = None
             ages: dict[str, float | None] = {}
+            legs: dict[str, dict[str, Any]] = {}
             if quotes is not None and st.window is not None and sec_into is not None:
                 k, y, n = quotes
                 if k.mid is not None and y.mid is not None:
@@ -582,6 +583,7 @@ class Engine:
                     "side": None if d.buy_yes is None else ("yes" if d.buy_yes else "no"),
                     "entry_px": d.entry_px,
                 }
+                since = st.window.open_unix * NS
                 for leg, book_id in zip(
                     ("kalshi", "poly_yes", "poly_no"), st.window.ids, strict=True
                 ):
@@ -590,6 +592,16 @@ class Engine:
                         None
                         if book is None or book.last_update_ns is None
                         else round((now - book.last_update_ns) / 1e6, 0)
+                    )
+                    # Why a leg is invalid, with whatever prices it does have.
+                    legs[leg] = (
+                        {"state": "no_book", "bid": None, "ask": None}
+                        if book is None
+                        else {
+                            "state": book.state(since),
+                            "bid": book.best_bid(),
+                            "ask": book.best_ask(),
+                        }
                     )
             decided = st.decision or {}
             assets[asset] = {
@@ -610,6 +622,7 @@ class Engine:
                 "evals": st.evals,
                 "preview": preview,
                 "age_ms": ages,
+                "legs": legs,
                 "kalshi": quotes[0].as_dict() if quotes else None,
                 "poly_yes": quotes[1].as_dict() if quotes else None,
                 "poly_no": quotes[2].as_dict() if quotes else None,

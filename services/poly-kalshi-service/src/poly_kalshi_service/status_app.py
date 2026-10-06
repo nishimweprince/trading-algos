@@ -100,6 +100,7 @@ def pick(status: dict[str, Any] | None) -> dict[str, Any] | None:
                     "preview",
                     "decision",
                     "age_ms",
+                    "legs",
                     "kalshi",
                     "poly_yes",
                     "poly_no",

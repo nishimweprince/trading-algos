@@ -264,3 +264,41 @@ def test_unknown_tokens_are_ignored(engine: Engine) -> None:
     setup_window(engine, w)
     engine.handle_line(at(OPEN, 1), "p", poly_book("someone-else", [(0.1, 1)], [(0.9, 1)]))
     assert "someone-else" not in engine.books
+
+
+def test_cancelled_kalshi_level_leaves_no_ghost(engine: Engine) -> None:
+    """Float sums of fractional deltas left ~1e-14 ghosts that crossed the book in production."""
+    w = window()
+    setup_window(engine, w)  # YES bid 0.70, NO bid 0.28 (YES ask 0.72)
+    seq = 2
+    # A YES bid at 0.999 built from fractional deltas, then fully cancelled out of order.
+    sizes = [300.33, 54.37, 12.1, 0.07]
+    for d in sizes + [-s for s in reversed(sizes)][::-1]:
+        engine.handle_line(
+            at(OPEN, 1), "k", kalshi_delta(w.kalshi_ticker, "yes", 0.999, d, seq=seq)
+        )
+        seq += 1
+    book = engine.books[w.kalshi_ticker]
+    assert 0.999 not in book.bids
+    assert engine.quotes("BTC")[0].bid == 0.70
+
+
+def test_crossed_book_is_invalid_not_quoted(engine: Engine) -> None:
+    w = window()
+    setup_window(engine, w)
+    book = engine.books[w.kalshi_ticker]
+    book.set_level("bid", 0.80, 5, at(OPEN, 2))  # above the 0.72 ask
+    assert book.state() == "crossed"
+    assert not engine.quotes("BTC")[0].valid
+
+
+def test_leg_state_explains_an_invalid_quote(engine: Engine) -> None:
+    w = window()
+    setup_window(engine, w)
+    engine.handle_line(at(OPEN, 3), "p", poly_change(w.yes_token, 0.46, 0, "SELL"))
+    engine.handle_line(at(OPEN, 3.1), "p", poly_change(w.yes_token, 0.47, 0, "SELL"))
+    legs = engine.status()["assets"]["BTC"]["legs"]
+    assert legs["poly_yes"] == {"state": "one_sided", "bid": 0.44, "ask": None}
+    assert legs["kalshi"]["state"] == "ok"
+    engine.handle_line(at(OPEN, 4), "c", ctl({"type": "reconnect", "venue": "k"}))
+    assert engine.status()["assets"]["BTC"]["legs"]["kalshi"]["state"] == "no_snapshot"
