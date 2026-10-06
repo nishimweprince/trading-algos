@@ -26,6 +26,23 @@ recent data needs weeks of recording first; a walk-forward-by-month design
 needs several months. The alternative is Tardis.dev (paid), which was declined
 for now.
 
+## Tardis.dev history (trial, 2026-10-06)
+
+`research/collect/tardis.py` downloads `binance-futures` days with
+`TARDIS_API_KEY` (in `.env.dev`). The trial key covers 2026-09-01 to
+2026-09-10 for every data type: `incremental_book_L2` (the full diff book,
+a snapshot at each day's start; ~0.7 GB per symbol-day), `book_snapshot_25`,
+`trades`, `derivative_ticker` and `liquidations`.
+
+```sh
+python -m research.collect.tardis info                                  # what the key may fetch
+python -m research.collect.tardis download --start 2026-09-01 --end 2026-09-10
+```
+
+Files land in `research/data/tardis/<data_type>/<SYMBOL>/<date>.csv.gz`.
+Still to build: a converter into our diff-mode recording format, so these
+days go through `replay.py` like our own recordings.
+
 ## Replay (built)
 
 `research/replay.py` turns recordings into the exact feature rows the live
