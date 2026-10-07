@@ -226,3 +226,19 @@ def test_ledger_snapshot_reports_exposure_and_settlement_wait() -> None:
     assert snap["start_cash"] == 1000.0
     assert snap["largest_open_cost"] == pytest.approx(41.68)
     assert snap["oldest_open_age_s"] == 930  # BTC's window closed at OPEN + 900
+
+
+def test_page_script_has_no_double_quotes_inside_double_quoted_html() -> None:
+    """A ``title="..."`` inside a ``put("id", "<...>")`` string ends the string early:
+    the whole script then fails to parse and the page sticks on "connecting…"
+    (2026-10-07). Attributes in those strings use single quotes."""
+    import re
+
+    from poly_kalshi_service import status_page
+
+    page = next(v for v in vars(status_page).values() if isinstance(v, str) and "<script" in v)
+    script = "\n".join(re.findall(r"<script[^>]*>(.*?)</script>", page, re.S))
+    for line in script.splitlines():
+        for literal in re.findall(r'put\("[^"]+", "((?:[^"\\]|\\.)*)"', line):
+            assert "=" not in literal or "='" in literal or '="' not in literal, line[:120]
+        assert not re.search(r'put\("[^"]+", "[^"]*<[^>"]*\w="', line), line[:120]
