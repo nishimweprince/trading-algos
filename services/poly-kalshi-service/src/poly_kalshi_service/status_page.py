@@ -253,10 +253,12 @@ async function tick() {
       <td>${r.kalshi_implied == null ? "–" : f(r.kalshi_implied * 100, 1)}</td><td>${r.avg_price == null ? "–" : f(r.avg_price * 100, 1)}</td>
       <td class="${r.net_cents == null ? "" : r.net_cents < 0 ? "bad" : "good"}">${f(r.net_cents)}</td><td class="${r.pnl < 0 ? "bad" : "good"}">${f(r.pnl)}</td></tr>`).join("") : '<tr><td class="muted">no settled trades yet</td></tr>');
   const SH = res.shadow || {};
-  put("shadow", "<tr><th>variant</th><th>windows</th><th>crossings</th><th>settled entries</th><th>win %</th><th>avg paid ¢</th><th>net ¢/sh (touch)</th><th>± s.e.</th></tr>" +
+  put("shadow", "<tr><th>variant</th><th>windows</th><th>crossings</th><th>settled entries</th><th>win %</th><th>avg paid ¢</th><th>net ¢/sh (touch)</th><th>± s.e.</th><th title="distinct window starts the entries came from; the assets move together inside a window">windows</th><th title="standard error with entries clustered by window: the honest one">± s.e. by window</th><th title="05:00-10:59 UTC">US night n · net</th><th>US day n · net</th></tr>" +
     (Object.keys(SH).length ? Object.entries(SH).map(([k, r]) => `<tr><td>${k === "live" ? "<b>live</b>" : esc(k)}</td><td>${r.windows}</td><td>${r.crossings}</td><td>${r.n}</td>
       <td>${r.win_rate == null ? "–" : f(r.win_rate * 100, 1)}</td><td>${r.avg_px == null ? "–" : f(r.avg_px * 100, 1)}</td>
-      <td class="${r.net_cents == null ? "" : r.net_cents < 0 ? "bad" : "good"}">${f(r.net_cents)}</td><td class="muted">${f(r.se_cents)}</td></tr>`).join("")
+      <td class="${r.net_cents == null ? "" : r.net_cents < 0 ? "bad" : "good"}">${f(r.net_cents)}</td><td class="muted">${f(r.se_cents)}</td>
+      <td>${r.entry_windows ?? "–"}</td><td class="muted">${f(r.se_cluster_cents)}</td>
+      ${[r.us_night, r.us_day].map((x) => `<td>${(x || {}).n ?? 0} · <span class="${x && x.net_cents != null ? (x.net_cents < 0 ? "bad" : "good") : ""}">${f((x || {}).net_cents)}</span></td>`).join("")}</tr>`).join("")
       : '<tr><td class="muted">no shadow records yet (PK_SHADOW_VARIANTS)</td></tr>'));
   const MK = E.markouts || {}, mrow = (name, m) => `<tr><td>${name}</td><td>${(m || {}).n ?? 0}</td>` +
     ["1s", "5s", "30s"].map((h) => { const x = (m || {})[h] || {}; return `<td class="${x.mean == null ? "" : x.mean < -3 ? "bad" : x.mean < 0 ? "warn" : "good"}">${f(x.mean)} / ${f(x.median)}</td>`; }).join("") + "</tr>";

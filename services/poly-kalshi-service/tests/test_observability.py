@@ -115,7 +115,7 @@ def test_parse_variants_keeps_live_values_and_rejects_bad_names() -> None:
 
 
 def test_settings_validate_shadow_variants(tmp_path: Path) -> None:
-    assert len(make_settings(tmp_path).shadow_variants) == 9
+    assert len(make_settings(tmp_path).shadow_variants) == 13
     with pytest.raises(ValidationError, match="PK_SHADOW_VARIANTS"):
         make_settings(tmp_path, PK_SHADOW_VARIANTS='{"not": "a list"}')
 
@@ -191,13 +191,16 @@ def test_depth_at_limit_and_markouts_for_fills_and_no_fills(tmp_path: Path) -> N
     engine.handle_line(t + 1_300_000_000, "k", kalshi_delta(w.kalshi_ticker, "no", 0.05, 1))
     engine.handle_line(t + 4_000_000_000, "p", poly_book(w.yes_token, [(0.40, 10)], [(0.42, 10)]))
     engine.handle_line(t + 5_300_000_000, "k", kalshi_delta(w.kalshi_ticker, "no", 0.05, 1))
-    assert not _journal(tmp_path, "markout")  # not before +30 s
     engine.handle_line(t + 30_300_000_000, "k", kalshi_delta(w.kalshi_ticker, "no", 0.05, 1))
+    assert not _journal(tmp_path, "markout")  # not before the last exit horizon, +120 s
+    engine.handle_line(t + 120_300_000_000, "k", kalshi_delta(w.kalshi_ticker, "no", 0.05, 1))
     (m,) = _journal(tmp_path, "markout")
     assert m["filled"] is True and m["ref_px"] == 0.46
     assert (m["mid_1s"], m["markout_1s"]) == (0.51, 5.0)
     assert (m["mid_5s"], m["markout_5s"]) == (0.41, -5.0)
     assert m["ask_30s"] == 0.42
+    assert (m["bid_5s"], m["bid_size_5s"], m["bid_120s"]) == (0.40, 10, 0.40)
+    assert m["exit_gap_s"] is None  # Kalshi mid 0.71 against 0.41: never closed
     res = paper_results(read_journal(tmp_path / "journal"))
     assert res["execution"]["markouts"]["fills"]["5s"]["median"] == -5.0
     assert res["execution"]["markouts"]["no_fills"]["n"] == 0
@@ -211,10 +214,51 @@ def test_a_no_fill_is_marked_out_against_its_limit(tmp_path: Path) -> None:
     t = at(OPEN, 20)
     engine.handle_line(t, "k", kalshi_delta(w.kalshi_ticker, "no", 0.05, 1))
     engine.handle_line(t + 50_000_000, "p", poly_book(w.yes_token, [(0.50, 10)], [(0.52, 10)]))
-    for dt in (0.2, 1.3, 5.3, 30.3):
+    for dt in (0.2, 1.3, 5.3, 30.3, 60.3, 120.3):
         engine.handle_line(t + int(dt * 1e9), "k", kalshi_delta(w.kalshi_ticker, "no", 0.05, 1))
     (m,) = _journal(tmp_path, "markout")
     assert m["filled"] is False and m["ref_px"] == 0.46 and m["markout_1s"] == 5.0
+
+
+def test_markout_records_when_the_gap_closes_and_the_bid_then(tmp_path: Path) -> None:
+    engine = make_engine(tmp_path)
+    w = window()
+    setup_window(engine, w)  # Kalshi mid 0.71, Polymarket YES 0.44 / 0.46
+    t = at(OPEN, 20)
+    engine.handle_line(t, "k", kalshi_delta(w.kalshi_ticker, "no", 0.05, 1))
+    engine.handle_line(t + 200_000_000, "k", kalshi_delta(w.kalshi_ticker, "no", 0.05, 1))
+    # Polymarket converges up to 0.60 / 0.62: still a gap of 0.10.
+    engine.handle_line(t + 1_000_000_000, "p", poly_book(w.yes_token, [(0.60, 30)], [(0.62, 30)]))
+    # Kalshi comes down to mid 0.63 at +3 s: the gap is 0.02. Like the horizons, the
+    # close is read on the next event (an unrelated NO-book tick), as the books stood.
+    _kalshi_mid(engine, w, 23.2, 0.62, 2)
+    engine.handle_line(t + 3_250_000_000, "p", poly_book(w.no_token, [(0.38, 10)], [(0.40, 10)]))
+    for dt in (5.3, 30.3, 60.3, 120.3):
+        engine.handle_line(t + int(dt * 1e9), "p", poly_book(w.yes_token, [(0.55, 5)], [(0.57, 5)]))
+    (m,) = _journal(tmp_path, "markout")
+    assert m["exit_gap_s"] == pytest.approx(3.05, abs=0.01)
+    assert (m["exit_gap_bid"], m["exit_gap_bid_size"]) == (0.60, 30)
+    # +5 s is read on the 5.3 s event, before it lands; +30 s after it.
+    assert (m["bid_5s"], m["bid_size_5s"], m["bid_30s"], m["bid_size_30s"]) == (0.60, 30, 0.55, 5)
+
+
+def test_shadow_table_clusters_by_window_and_splits_us_night() -> None:
+    night = 1791357300  # 07:15 UTC
+    day = night + 12 * 3600  # 19:15 UTC
+    rows = [
+        {"type": "shadow", "variant": "live", "action": "enter", "open_unix": o}
+        for o in (night, night, day)
+    ] + [
+        {"type": "shadow_settle", "variant": "live", "action": "enter", "open_unix": o,
+         "win": w, "entry_px": 0.4, "net_cents_touch": n}
+        for o, w, n in ((night, 0.0, -40.0), (night, 0.0, -40.0), (day, 1.0, 58.0))
+    ]  # fmt: skip
+    t = shadow_table(rows)["live"]
+    assert t["n"] == 3 and t["entry_windows"] == 2
+    # Two identical losses in one window are one observation, not two.
+    assert t["se_cluster_cents"] > t["se_cents"]
+    assert t["us_night"] == {"n": 2, "win_rate": 0.0, "net_cents": -40.0}
+    assert t["us_day"] == {"n": 1, "win_rate": 1.0, "net_cents": 58.0}
 
 
 # --- 1.4 small fixes --------------------------------------------------------------

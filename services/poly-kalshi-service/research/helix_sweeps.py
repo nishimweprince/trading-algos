@@ -22,6 +22,16 @@ tick-level slices. Sizes on this tape are the touch size only.
   (a buy at or through our ask between the crossing and the order).
 - ``spreads``: net by the Polymarket and Kalshi spread at the crossing.
 - ``sizing``: daily P&L s.d. for $50 notional, 100 shares and min($50, touch).
+- ``regime``: the questions epoch 4 raised (0 wins in 16, 07:15-08:15 UTC; PLAN
+  after epoch 4, A1-A3 and A5), on the base rule:
+  - ``bad_hours``: per clock hour with ≥ 10 entries, how often none won and how
+    often the hour's net was as bad as epoch 4's −31¢ (A1);
+  - ``by_hour_utc``: net, win rate and median Kalshi spread per UTC hour, and
+    the US night (``shadow.US_NIGHT_UTC``) against the day (A2);
+  - ``kalshi_extreme``: entries where Kalshi's mid is further from 0.5 than
+    Polymarket's, against the rest (A3), and the floor at 0.15;
+  - ``clustering``: entries per window, the window-clustered s.e., and one
+    entry per window (the largest |gap|) against all (A5).
 """
 
 from __future__ import annotations
@@ -38,6 +48,7 @@ import numpy as np
 import pandas as pd
 
 from poly_kalshi_service.fees import taker_fee
+from poly_kalshi_service.shadow import US_NIGHT_UTC
 from research.nulls import arms, summarise
 
 LATENCIES_MS = (0, 25, 50, 100, 150, 250, 400)
@@ -335,6 +346,74 @@ def sizing(entries: pd.DataFrame) -> dict[str, Any]:
     return out
 
 
+EPOCH4_NET_CENTS = -31.0  # the live shadow over epoch 4's first hour
+
+
+def _cluster_se(df: pd.DataFrame) -> float | None:
+    """S.e. of the mean net with entries clustered by window start (all assets)."""
+    c = df["open_unix"].nunique()
+    if c < 2:
+        return None
+    sums = (df["net"] - df["net"].mean()).groupby(df["open_unix"]).sum()
+    return float(math.sqrt(c / (c - 1) * float((sums**2).sum())) / len(df))
+
+
+def regime(entries: pd.DataFrame, days: int) -> dict[str, Any]:
+    base = entries[entries["variant"] == "base"].copy()
+    if base.empty:
+        return {}
+    base["hour"] = base["open_unix"] // 3600
+    base["hour_utc"] = base["hour"] % 24
+    hours = base.groupby("hour").agg(n=("net", "size"), wins=("win", "sum"), net=("net", "mean"))
+    busy = hours[hours["n"] >= 10]
+    bad_hours = {
+        "hours_with_10_plus": int(len(busy)),
+        "share_zero_wins": None if busy.empty else round(float((busy["wins"] == 0).mean()), 4),
+        "share_net_at_or_below_epoch4": None
+        if busy.empty
+        else round(float((busy["net"] <= EPOCH4_NET_CENTS).mean()), 4),
+        "hour_net_quantiles": {
+            f"p{q}": round(float(busy["net"].quantile(q / 100)), 1) for q in (1, 5, 10, 50)
+        }
+        if not busy.empty
+        else {},
+    }
+    by_hour = {
+        int(h): {
+            "n": int(len(g)),
+            "win_rate": round(float(g["win"].mean()), 3),
+            "net_cents": round(float(g["net"].mean()), 2),
+            "k_spread_median": round(float((g["k_ask"] - g["k_bid"]).median()), 3),
+        }
+        for h, g in base.groupby("hour_utc")
+    }
+    night = base["hour_utc"].isin(US_NIGHT_UTC)
+    k_ext = (((base["k_bid"] + base["k_ask"]) / 2 - 0.5).abs()
+             > ((base["y_bid"] + base["y_ask"]) / 2 - 0.5).abs())  # fmt: skip
+    first = base.loc[base.assign(a=base["gap"].abs()).groupby("open_unix")["a"].idxmax()]
+    per_window = base.groupby("open_unix").size()
+    return {
+        "bad_hours": bad_hours,
+        "by_hour_utc": by_hour,
+        "us_night": _stats(base[night], days),
+        "us_day": _stats(base[~night], days),
+        "kalshi_extreme": {
+            "kalshi_more_extreme": _stats(base[k_ext], days),
+            "kalshi_less_extreme": _stats(base[~k_ext], days),
+            "floor_0_15": _stats(base[base["entry_px"] >= 0.15], days),
+            "kext_and_floor": _stats(base[k_ext & (base["entry_px"] >= 0.15)], days),
+        },
+        "clustering": {
+            "windows": int(len(per_window)),
+            "entries_per_window_mean": round(float(per_window.mean()), 2),
+            "share_windows_3_plus": round(float((per_window >= 3).mean()), 4),
+            "se_entry": _stats(base, days).get("se"),
+            "se_window_clustered": None if (se := _cluster_se(base)) is None else round(se, 2),
+            "one_per_window_max_gap": _stats(first, days),
+        },
+    }
+
+
 def _main() -> None:
     parser = argparse.ArgumentParser(prog="research.helix_sweeps")
     parser.add_argument("--split", choices=("discovery", "holdout", "earlier"), required=True)
@@ -364,6 +443,7 @@ def _main() -> None:
         "thresholds": thresholds(frames["windows"]),
         "spreads": spreads(entries),
         "sizing": sizing(entries),
+        "regime": regime(entries, len(days)),
         "nulls": nulls(args.data, days, cross, res),
     }
     if not args.skip_slices:

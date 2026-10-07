@@ -29,6 +29,10 @@ asset's current window, not on a one-second sample.
   below the limit; every fill and no-fill records it again at fill time, and
   the cheap leg's ask and mid 1, 5 and 30 s later (``markout`` records): the
   direct measure of adverse selection.
+- The same ``markout`` record carries what an exit would have got: the held
+  leg's best bid and its size at each of ``EXIT_S``, and the first time
+  (``exit_gap_s``) the gap closed to ``EXIT_GAP`` or less, with the bid then.
+  The record is written at the last horizon, 120 s after the fill.
 """
 
 from __future__ import annotations
@@ -64,6 +68,9 @@ FULL_THRESHOLDS = (0.08, 0.10, 0.12, 0.15, 0.20)
 # names and are both sampled, so mismatch / checks is still the rate.
 BBO_CHECK_EVERY = 50
 MARKOUT_S = (1, 5, 30)
+# Exit telemetry (PREREG part 3, P4): the bid a sell would hit, and gap closure.
+EXIT_S = (5, 30, 60, 120)
+EXIT_GAP = 0.03
 
 Alert = Callable[[str, str, list[str]], None]
 
@@ -101,7 +108,9 @@ class _Markout:
     token: str
     ref_px: float
     record: dict[str, Any]
-    horizons: list[int] = field(default_factory=lambda: list(MARKOUT_S))
+    window: Window | None = None
+    horizons: list[int] = field(default_factory=lambda: sorted({*MARKOUT_S, *EXIT_S}))
+    gap_closed: bool = False
 
 
 class Engine:
@@ -630,7 +639,11 @@ class Engine:
                     "side": order.side,
                     "filled": result.shares > 0,
                     "ref_px": round(result.vwap, 4) if result.vwap is not None else limit,
+                    "exit_gap_s": None,
+                    "exit_gap_bid": None,
+                    "exit_gap_bid_size": None,
                 },
+                window,
             )
         )
         if result.shares > 0:
@@ -655,25 +668,55 @@ class Engine:
 
         Markout (¢/share) = 100 x (mid - price paid): positive when the market
         moved our way after the fill. For a no-fill the price is the limit.
+        At each of ``EXIT_S`` the held leg's best bid and size; on every event
+        until it happens, whether the gap has closed to ``EXIT_GAP``. Both are
+        read before the event is applied, so a close is seen on the next event.
         """
         keep = []
         for m in self.markouts:
+            if not m.gap_closed and m.window is not None:
+                self._check_gap_close(m, recv_ns)
             while m.horizons and recv_ns >= m.fill_ns + m.horizons[0] * NS:
                 h = m.horizons.pop(0)
                 book = self.books.get(m.token)
                 q = book.quote() if book is not None else None
-                ask = q.ask if q is not None and q.valid else None
-                mid = q.mid if q is not None else None
-                m.record[f"ask_{h}s"] = ask
-                m.record[f"mid_{h}s"] = None if mid is None else round(mid, 4)
-                m.record[f"markout_{h}s"] = (
-                    None if mid is None else round(100 * (mid - m.ref_px), 2)
-                )
+                if h in MARKOUT_S:
+                    ask = q.ask if q is not None and q.valid else None
+                    mid = q.mid if q is not None else None
+                    m.record[f"ask_{h}s"] = ask
+                    m.record[f"mid_{h}s"] = None if mid is None else round(mid, 4)
+                    m.record[f"markout_{h}s"] = (
+                        None if mid is None else round(100 * (mid - m.ref_px), 2)
+                    )
+                if h in EXIT_S:
+                    bid = q.bid if q is not None and q.valid else None
+                    m.record[f"bid_{h}s"] = bid
+                    m.record[f"bid_size_{h}s"] = (
+                        None if bid is None or book is None else book.bids.get(bid)
+                    )
             if m.horizons:
                 keep.append(m)
             else:
                 self._write(recv_ns, m.record, keep=False)
         self.markouts = keep
+
+    def _check_gap_close(self, m: _Markout, recv_ns: int) -> None:
+        window = m.window
+        assert window is not None
+        since = window.open_unix * NS
+        kb, yb = self.books.get(window.kalshi_ticker), self.books.get(window.yes_token)
+        if kb is None or yb is None:
+            return
+        k_mid, y_mid = kb.quote(since).mid, yb.quote(since).mid
+        if k_mid is None or y_mid is None or abs(k_mid - y_mid) > EXIT_GAP + 1e-9:
+            return
+        m.gap_closed = True
+        book = self.books.get(m.token)
+        q = book.quote() if book is not None else None
+        bid = q.bid if q is not None and q.valid else None
+        m.record["exit_gap_s"] = round((recv_ns - m.fill_ns) / NS, 3)
+        m.record["exit_gap_bid"] = bid
+        m.record["exit_gap_bid_size"] = None if bid is None or book is None else book.bids.get(bid)
 
     # --- settlement -------------------------------------------------------------
 

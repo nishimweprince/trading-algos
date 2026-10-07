@@ -118,3 +118,24 @@ At the touch:
     `research/data/acceptance/acceptance_<start>.json`.
   - `pk-netprobe`.
   - `pk-fills-t15`: P2's size side on the epoch-3 tape, into `research/data/fills_dublin_t15`.
+
+## Epoch 4's first hour: 0 wins (2026-10-07, export 08:27 UTC)
+
+Read from the export journal. It is not a test; the hypotheses are in PREREG part 3.
+
+| | |
+|---|---|
+| Sample | 07:15–08:15 UTC (03:15–04:15 ET), 4 windows × 7 assets. 5 settled fills, 0 won, −$73.02. `live` shadow 0/16, −31.0¢ (s.e. 3.8 per entry, **7.2 clustered by window**: 16 entries, 4 windows). |
+| Direction | Polymarket was right in 16 of 16; the two venues never disagreed. In 15 of 16, Kalshi's mid was closer to 0.5 than Polymarket's: the gap was Kalshi trailing a move. |
+| The same split on epoch 3 | Kalshi more extreme: 26 entries, 77% won, +26¢. Kalshi less extreme: 87, 38% won, +9¢. `decide(kalshi_extreme=True)` on the recorded quotes keeps exactly those 26 (20 wins). |
+| Markouts | 5 s median +4.9¢; ETH, DOGE and XRP were +20¢ at 30 s, then lost at settlement. Polymarket moved toward Kalshi, and the window then finished the other way. |
+| Fills | Still adversely selected: epoch 3's filled decisions won 40% (+6.9¢), its unfilled ones 55% (+20¢). |
+| Not the cause | A sign error (`decide` buys YES on k_mid − p_mid > 0, and epoch 3 replays decision for decision), or the code change (`c4466dd83b` changes only the +2¢ limit). |
+
+**Shipped (shadow only, live config unchanged):**
+- the `kext`, `kext_t15`, `floor15` and `usnight` variants;
+- exit telemetry on every markout (bid and size at 5/30/60/120 s, first gap ≤ 0.03), with `research.readout` → `exits`;
+- the window-clustered s.e. and the US night/day split on the shadow table;
+- `helix_sweeps` → `regime` (A1–A3, A5).
+
+**Not yet run:** `helix_sweeps --split discovery` on the research server.

@@ -98,3 +98,38 @@ def test_timing_is_reported_before_book_validity() -> None:
     assert decide(BAD, BAD, BAD, P, 887, False).reason == "too_late"
     assert decide(BAD, BAD, BAD, P, 5, False).reason == "too_early"
     assert decide(BAD, Y_MID, N_MID, P, 100, False).reason == "invalid_leg"
+
+
+# --- research filters added after epoch 4 (PREREG part 3) -----------------------
+
+
+def test_new_filters_are_off_by_default_and_leave_the_rule_unchanged() -> None:
+    for k in (K_HIGH, K_LOW):
+        assert decide(k, Y_MID, N_MID, P, 100, False) == decide(k, Y_MID, N_MID, P, 100, False, 7)
+
+
+def test_floor_skips_and_consumes_below_the_minimum_price() -> None:
+    k, y, n = Quote(True, 0.30, 0.32), Quote(True, 0.08, 0.10), Quote(True, 0.90, 0.92)
+    d = decide(k, y, n, StrategyParams(min_entry_px=0.15), 100, False)
+    assert (d.action, d.reason, d.entry_px) == (Action.SKIP, "below_floor", 0.10)
+    assert d.consumes_window
+    assert decide(k, y, n, P, 100, False).action is Action.ENTER
+
+
+def test_kalshi_extreme_skips_when_kalshi_trails_polymarket() -> None:
+    kext = StrategyParams(kalshi_extreme=True)
+    # Kalshi 0.71 is further from 0.5 than Polymarket 0.45: Kalshi leads, enter.
+    assert decide(K_HIGH, Y_MID, N_MID, kext, 100, False).action is Action.ENTER
+    # Kalshi 0.38 against Polymarket 0.15: Kalshi trails a move down. Epoch 4's case.
+    k, y, n = Quote(True, 0.37, 0.39), Quote(True, 0.14, 0.16), Quote(True, 0.84, 0.86)
+    d = decide(k, y, n, kext, 100, False)
+    assert (d.action, d.reason, d.buy_yes) == (Action.SKIP, "kalshi_lags", True)
+    assert decide(k, y, n, P, 100, False).action is Action.ENTER
+
+
+def test_skip_hours_needs_the_hour_and_never_consumes() -> None:
+    night = StrategyParams(skip_hours_utc=(5, 6, 7))
+    d = decide(K_HIGH, Y_MID, N_MID, night, 100, False, 7)
+    assert (d.action, d.reason, d.consumes_window) == (Action.NONE, "hours", False)
+    assert decide(K_HIGH, Y_MID, N_MID, night, 100, False, 19).action is Action.ENTER
+    assert decide(K_HIGH, Y_MID, N_MID, night, 100, False).action is Action.ENTER

@@ -27,7 +27,17 @@ from .book import Quote
 from .decision import Decision, StrategyParams, decide
 from .fees import taker_fee
 
-__all__ = ["DEFAULT_VARIANTS", "Shadow", "Variant", "parse_variants", "shadow_table"]
+__all__ = [
+    "DEFAULT_VARIANTS",
+    "US_NIGHT_UTC",
+    "Shadow",
+    "Variant",
+    "parse_variants",
+    "shadow_table",
+]
+
+# 01:00-04:59 ET, Kalshi's thinnest hours (EDT; one hour later in winter).
+US_NIGHT_UTC = [5, 6, 7, 8, 9, 10]
 
 # PLAN 1.2's starting set.
 DEFAULT_VARIANTS = json.dumps(
@@ -42,6 +52,11 @@ DEFAULT_VARIANTS = json.dumps(
         # Pre-registered for the live holdout (research/PREREG.md, part 2).
         {"name": "pspread05", "max_poly_spread": 0.05},
         {"name": "pspread10", "max_poly_spread": 0.10},
+        # After epoch 4 (0 wins in 16): pre-registered in research/PREREG.md, part 3.
+        {"name": "kext", "kalshi_extreme": True},
+        {"name": "kext_t15", "kalshi_extreme": True, "gap": 0.15},
+        {"name": "floor15", "min_px": 0.15},
+        {"name": "usnight", "skip_hours_utc": US_NIGHT_UTC},
     ]
 )
 _FIELDS = {
@@ -51,6 +66,9 @@ _FIELDS = {
     "late": "entry_late_s",
     "max_kalshi_spread": "max_kalshi_spread",
     "max_poly_spread": "max_poly_spread",
+    "min_px": "min_entry_px",
+    "kalshi_extreme": "kalshi_extreme",
+    "skip_hours_utc": "skip_hours_utc",
 }
 
 
@@ -61,7 +79,8 @@ class Variant:
 
 
 def parse_variants(text: str, base: StrategyParams) -> tuple[Variant, ...]:
-    """``[{name, gap, cap, early, late, max_kalshi_spread}, ...]``; a missing key
+    """``[{name, gap, cap, early, late, max_kalshi_spread, max_poly_spread, min_px,
+    kalshi_extreme, skip_hours_utc}, ...]``; a missing key
     keeps the live value. An empty string means no variants."""
     if not text.strip():
         return ()
@@ -77,6 +96,8 @@ def parse_variants(text: str, base: StrategyParams) -> tuple[Variant, ...]:
         if unknown:
             raise ValueError(f"shadow variant {name}: unknown keys {sorted(unknown)}")
         changes = {_FIELDS[k]: v for k, v in item.items() if k in _FIELDS}
+        if "skip_hours_utc" in changes:
+            changes["skip_hours_utc"] = tuple(int(h) for h in changes["skip_hours_utc"])
         names.add(name)
         out.append(Variant(name, replace(base, **changes)))
     return tuple(out)
@@ -114,10 +135,11 @@ class Shadow:
         if len(done) == len(self.variants):
             return
         k, y, n = quotes
+        utc_hour = int(key[1] + sec_into) // 3600 % 24
         for variant in self.variants:
             if variant.name in done:
                 continue
-            d: Decision = decide(k, y, n, variant.params, sec_into, False)
+            d: Decision = decide(k, y, n, variant.params, sec_into, False, utc_hour)
             if not d.consumes_window:
                 continue
             done.add(variant.name)
@@ -190,10 +212,38 @@ class Shadow:
             self._done.pop(key, None)
 
 
+def _cluster_se(rows: list[dict[str, Any]], mean: float) -> float | None:
+    """Standard error of the mean net with entries clustered by window start.
+
+    The assets move together inside a window, so entries in one window are not
+    independent: epoch 4's 16 losses came from 4 windows. With one cluster per
+    ``open_unix`` this is the usual sandwich estimator with the C/(C-1) factor.
+    """
+    sums: dict[int, float] = {}
+    for r in rows:
+        sums[r["open_unix"]] = sums.get(r["open_unix"], 0.0) + r["net_cents_touch"] - mean
+    c, n = len(sums), len(rows)
+    if c < 2:
+        return None
+    return (c / (c - 1) * sum(v * v for v in sums.values())) ** 0.5 / n
+
+
+def _session_stats(rows: list[dict[str, Any]], night: bool) -> dict[str, Any]:
+    part = [r for r in rows if (r["open_unix"] // 3600 % 24 in US_NIGHT_UTC) == night]
+    n = len(part)
+    return {
+        "n": n,
+        "win_rate": None if not n else sum(r["win"] for r in part) / n,
+        "net_cents": None if not n else sum(r["net_cents_touch"] for r in part) / n,
+    }
+
+
 def shadow_table(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """Per variant: windows, crossings, entries, settled n, win rate, average
-    price, net ¢/share at the touch and its standard error. Entries only (a
-    skip above the cap is a crossing, not a trade)."""
+    price, net ¢/share at the touch and its standard error, the number of
+    distinct windows the entries came from with the window-clustered s.e., and
+    the same n, win rate and net split by US night (``US_NIGHT_UTC``) and day.
+    Entries only (a skip above the cap is a crossing, not a trade)."""
     windows: dict[str, int] = {}
     crossings: dict[str, int] = {}
     settled: dict[str, list[dict[str, Any]]] = {}
@@ -211,11 +261,12 @@ def shadow_table(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         rows = settled.get(v, [])
         nets = [r["net_cents_touch"] for r in rows]
         n = len(rows)
-        se = None
+        se = se_cluster = None
         if n > 1:
             mean = sum(nets) / n
             var = sum((x - mean) ** 2 for x in nets) / (n - 1)
             se = (var / n) ** 0.5
+            se_cluster = _cluster_se(rows, mean)
         out[v] = {
             "windows": windows.get(v, 0),
             "crossings": crossings.get(v, 0),
@@ -224,5 +275,9 @@ def shadow_table(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
             "avg_px": None if not n else sum(r["entry_px"] for r in rows) / n,
             "net_cents": None if not n else sum(nets) / n,
             "se_cents": se,
+            "entry_windows": len({r["open_unix"] for r in rows}),
+            "se_cluster_cents": se_cluster,
+            "us_night": _session_stats(rows, True),
+            "us_day": _session_stats(rows, False),
         }
     return out

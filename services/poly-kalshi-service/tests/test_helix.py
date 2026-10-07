@@ -143,3 +143,49 @@ def test_scan_window_takes_decides_first_consuming_tick() -> None:
         *(np.array([], dtype=d) for d in (np.int64, np.int16, np.int16, np.float32, np.float32))
     )
     assert scan_window(empty, y, n, OPEN, variants)[0] == []  # a leg with no rows never fires
+
+
+def test_regime_flags_bad_hours_kalshi_extremeness_and_clusters() -> None:
+    pd = pytest.importorskip("pandas")
+    from research.helix_sweeps import regime
+
+    night, day = 1791357300 - 15 * 60, 1791357300 + 12 * 3600  # 07:00 and 19:15 UTC
+    rows = []
+    # A US-night hour: 12 entries in 4 windows, Kalshi trailing (closer to 0.5), all lost.
+    for i in range(12):
+        rows.append(
+            {
+                "open_unix": night + 900 * (i % 4),
+                "k_bid": 0.39,
+                "k_ask": 0.41,
+                "y_bid": 0.29,
+                "y_ask": 0.31,
+                "entry_px": 0.31,
+                "win": 0.0,
+                "gap": 0.1,
+            }
+        )
+    # A US-day window: Kalshi leading (further from 0.5), won.
+    for _ in range(3):
+        rows.append(
+            {
+                "open_unix": day,
+                "k_bid": 0.79,
+                "k_ask": 0.81,
+                "y_bid": 0.69,
+                "y_ask": 0.71,
+                "entry_px": 0.71,
+                "win": 1.0,
+                "gap": 0.1,
+            }
+        )
+    df = pd.DataFrame(rows).assign(variant="base", asset="BTC", day="d", touch_size=10.0)
+    df["net"] = 100 * (df["win"] - df["entry_px"])
+    r = regime(df, 1)
+    assert r["bad_hours"]["hours_with_10_plus"] == 1
+    assert r["bad_hours"]["share_zero_wins"] == 1.0
+    assert r["us_night"]["n"] == 12 and r["us_day"]["n"] == 3
+    assert r["kalshi_extreme"]["kalshi_more_extreme"]["win_rate"] == 1.0
+    assert r["kalshi_extreme"]["kalshi_less_extreme"]["win_rate"] == 0.0
+    assert r["clustering"]["windows"] == 5 and r["clustering"]["one_per_window_max_gap"]["n"] == 5
+    assert r["clustering"]["se_window_clustered"] > r["clustering"]["se_entry"]

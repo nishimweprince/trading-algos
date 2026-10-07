@@ -18,6 +18,21 @@ does **not** consume the window, since a gap on a wide mid is not yet a signal.
 On the Helix discovery days, crossings with a Polymarket spread over 0.10 lost
 2.3¢/share and those at 1¢ made 9.1¢ (research/RESULTS.md). With both unset the
 rule is exactly the above.
+
+Three more research filters (default off; PLAN after epoch 4, PREREG part 3):
+
+- ``min_entry_px``: a crossing whose entry price is below the floor returns
+  ``SKIP`` (reason ``below_floor``) and consumes the window, like the cap.
+- ``kalshi_extreme``: when true, a crossing where Kalshi's mid is no further
+  from 0.5 than Polymarket's returns ``SKIP`` (reason ``kalshi_lags``) and
+  consumes the window. Such a gap is Kalshi trailing a move Polymarket already
+  priced, not Kalshi leading. Epoch 3: 77% wins when Kalshi was the more extreme
+  venue (n=26) and 38% when it was not (n=87); in epoch 4, 15 of 16 entries were
+  of the second kind and all lost.
+- ``skip_hours_utc``: no decision (``NONE``, reason ``hours``) while the UTC hour,
+  passed as ``utc_hour``, is in the set. Windows are aligned to the quarter
+  hour, so a window never spans two hours. It applies only when the caller
+  passes ``utc_hour``.
 """
 
 from __future__ import annotations
@@ -42,6 +57,9 @@ class StrategyParams:
     entry_late_s: int = 60
     max_kalshi_spread: float | None = None
     max_poly_spread: float | None = None
+    min_entry_px: float | None = None
+    kalshi_extreme: bool | None = None
+    skip_hours_utc: tuple[int, ...] | None = None
 
 
 class Action(StrEnum):
@@ -75,9 +93,12 @@ def decide(
     params: StrategyParams,
     sec_into: float,
     already_traded: bool,
+    utc_hour: int | None = None,
 ) -> Decision:
     if already_traded:
         return _none("traded")
+    if params.skip_hours_utc and utc_hour is not None and utc_hour in params.skip_hours_utc:
+        return _none("hours")
     # Timing before book validity. It changes no decision, only the reason: near
     # expiry the books go one-sided because the outcome is all but decided, and
     # that is "too late", not a data fault. ``invalid_leg`` then counts book
@@ -113,6 +134,10 @@ def decide(
         return _none("bad_price", gap)
     if entry_px > params.max_entry_px:
         return Decision(Action.SKIP, "above_cap", gap, buy_yes, entry_px)
+    if params.min_entry_px is not None and entry_px < params.min_entry_px - 1e-9:
+        return Decision(Action.SKIP, "below_floor", gap, buy_yes, entry_px)
+    if params.kalshi_extreme and abs(k_mid - 0.5) <= abs(p_mid - 0.5):
+        return Decision(Action.SKIP, "kalshi_lags", gap, buy_yes, entry_px)
 
     contracts = math.floor(params.notional_usd / entry_px)
     if contracts < 1:

@@ -85,3 +85,36 @@ Settings deployed: gap 0.10, cap 0.60, 20/60 s, 150 ms paper latency,
   the numbers. It is never applied automatically.
 - **Gates unchanged** (README §Gates). The markout gate (median 5 s on fills
   ≥ −3¢) is read on the same data.
+
+---
+
+# Part 3: after epoch 4's first hour (registered 2026-10-07, before deploy)
+
+**What has been read.** The first ~75 minutes of epoch 4, exported at 08:27 UTC, have been read: 4 windows from 07:15 to 08:15 UTC; 5 settled fills, 0 won; the `live` shadow had 16 entries, 0 won, −31¢/share. All of epoch 3 has also been read. The hypotheses below come from those reads, so neither can test them. The count for this part starts at the deploy of the commit that adds this text. Epoch 4 continues, and its live parameters are unchanged (`config` `c4466dd83b`), so part 2 is unaffected.
+
+What the reads showed:
+
+- In all 16 entries Polymarket was right and Kalshi wrong; both venues resolved the same way.
+- In 15 of the 16, Kalshi's mid was closer to 0.5 than Polymarket's. Kalshi was trailing a move, not leading one. On epoch 3's recorded quotes, `decide(kalshi_extreme=True)` keeps 26 of 110 entries, and 20 of the 26 won (77%), against 38% for the rest.
+- The hour was 03:15–04:15 ET.
+- The 5 s markout median was +4.9¢, and every position was then held to a losing settlement.
+
+Variants (`shadow.DEFAULT_VARIANTS`) and telemetry (`engine.EXIT_S`, `EXIT_GAP`) deployed:
+
+- **P3. Kalshi leads, not trails.** Variant `kext`: a crossing where Kalshi's mid is no further from 0.5 than Polymarket's is skipped and the window is consumed.
+  - Test: `kext` net ¢/share at the touch minus `live`'s, per day, on ≥ 300 settled `live` entries counted from this deploy.
+  - A day-t of the daily difference ≥ 2 sends it to the owner.
+  - `kext_t15` is reported, not tested.
+- **P4. Exit on convergence instead of holding.** The rule `exit_gap` sells at the held leg's best bid the first time |Kalshi mid − Polymarket YES mid| ≤ 0.03 within 120 s of the order, and otherwise holds. It applies to every live order (fills and no-fills), with the price paid as `ref_px`, taker fee on both legs (`research.readout` → `exits.all`).
+  - Test: `exit_gap` minus `hold`, per day, on the same orders and the same count.
+  - A day-t ≥ 2 sends it to the owner. Exits mean live sell orders, so this is never automatic.
+  - The fixed horizons `exit_5s` … `exit_120s` are reported, not tested.
+  - Caveat: the bid size at the exit is recorded. If the median $ at the bid is below the median $ filled, the result is reported as capacity-bound.
+- **P5. No trading in the US night.** Variant `usnight` takes no decision in UTC hours 5–10.
+  - Test: `usnight` minus `live`, **sum** of net ¢/share at the touch per day, because it trades less by design. Same count; day-t ≥ 2 to the owner.
+  - The shadow table's `us_night`/`us_day` split is reported.
+- `floor15` (skip below 0.15) is reported, not tested.
+
+Every comparison uses the window-clustered s.e. shown next to the per-entry s.e. Entries in one window move together: epoch 4's 16 came from 4 windows. The day-t tests above already treat a day as the unit.
+
+**Discovery on Helix.** `research.helix_sweeps --split discovery` → `regime`. It runs the base rate of a bad hour, P(0 wins in an hour with ≥ 10 entries); net by UTC hour; the Kalshi-extremeness split; and clustering. The results go into RESULTS.md before any part-3 data is read. They can retire a hypothesis, which is then reported and not tested. They cannot add one to this part.
