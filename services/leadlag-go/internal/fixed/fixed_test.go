@@ -21,8 +21,18 @@ func TestParseE8(t *testing.T) {
 		{".", 0, true},
 		{"1.2.3", 0, true},
 		{"-1", 0, true},
-		{"1e5", 0, true},
 		{"99999999999999999999", 0, true},
+		// Binance archive CSVs: large quantities in scientific notation.
+		{"1.6711908E7", 1_671_190_800_000_000, false},
+		{"2.0007964E7", 2_000_796_400_000_000, false},
+		{"1e3", 100_000_000_000, false},
+		{"1.5e-3", 150_000, false},
+		{"1.5E+2", 15_000_000_000, false},
+		{"1.5e-9", 0, true},
+		{"1e", 0, true},
+		{"1e+", 0, true},
+		{"1e99", 0, true},
+		{"e5", 0, true},
 	}
 	for _, c := range cases {
 		got, err := ParseE8String(c.in)

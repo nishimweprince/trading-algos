@@ -13,44 +13,77 @@ var ErrSyntax = errors.New("fixed: invalid decimal")
 
 var pow10 = [9]int64{1, 10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000, 100_000_000}
 
-// ParseE8 parses an unsigned decimal ("142.35", "0.00001234", "7") into E8.
-// Trailing fractional zeros beyond 8 digits are accepted; non-zero digits there
-// are an error, since they cannot be represented exactly.
+// ParseE8 parses an unsigned decimal ("142.35", "0.00001234", "7") or one in
+// scientific notation ("1.6711908E7", which Binance's archive CSVs use for large
+// quantities) into E8. The result must be exact: digits that E8 cannot hold
+// (non-zero beyond the 8th decimal) are an error, never rounded.
 func ParseE8(b []byte) (int64, error) {
-	if len(b) == 0 {
-		return 0, ErrSyntax
-	}
-	var ip, fp int64
-	i, frac, digits := 0, -1, 0
+	const maxI = 1<<63 - 1
+	var m int64
+	i, digits, frac, dot := 0, 0, 0, false
 	for ; i < len(b); i++ {
 		c := b[i]
 		switch {
 		case c >= '0' && c <= '9':
 			digits++
-			if frac < 0 {
-				if ip > (1<<63-1)/10/100_000_000 {
-					return 0, ErrSyntax
-				}
-				ip = ip*10 + int64(c-'0')
-			} else if frac < 8 {
-				fp = fp*10 + int64(c-'0')
+			if dot {
 				frac++
-			} else if c != '0' {
+			}
+			if m > (maxI-9)/10 {
 				return 0, ErrSyntax
 			}
-		case c == '.' && frac < 0:
-			frac = 0
+			m = m*10 + int64(c-'0')
+			continue
+		case c == '.' && !dot:
+			dot = true
+			continue
+		case c == 'e' || c == 'E':
 		default:
 			return 0, ErrSyntax
 		}
+		break
 	}
 	if digits == 0 {
 		return 0, ErrSyntax
 	}
-	if frac < 0 {
-		frac = 0
+	exp := 0
+	if i < len(b) { // exponent
+		i++
+		neg := false
+		if i < len(b) && (b[i] == '+' || b[i] == '-') {
+			neg = b[i] == '-'
+			i++
+		}
+		if i == len(b) {
+			return 0, ErrSyntax
+		}
+		for ; i < len(b); i++ {
+			c := b[i]
+			if c < '0' || c > '9' || exp > 100 {
+				return 0, ErrSyntax
+			}
+			exp = exp*10 + int(c-'0')
+		}
+		if neg {
+			exp = -exp
+		}
 	}
-	return ip*pow10[8] + fp*pow10[8-frac], nil
+	for p := exp - frac + 8; p != 0; {
+		if p > 0 {
+			if m > maxI/10 {
+				return 0, ErrSyntax
+			}
+			m *= 10
+			p--
+		} else {
+			if m%10 != 0 {
+				return 0, ErrSyntax
+			}
+			m /= 10
+			p++
+		}
+	}
+	return m, nil
 }
 
 // ParseE8String is ParseE8 for a string.
