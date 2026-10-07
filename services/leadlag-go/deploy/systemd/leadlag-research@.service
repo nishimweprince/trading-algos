@@ -1,0 +1,19 @@
+# One-off research or archive jobs at idle priority on CPUs 0-1, e.g.
+#   sudo systemctl start leadlag-research@fetch-screen
+# runs /home/ll/leadlag/jobs/fetch-screen.sh. Output: journalctl -u leadlag-research@fetch-screen
+[Unit]
+Description=leadlag research job %i
+RequiresMountsFor=/data
+
+[Service]
+Type=oneshot
+User=ll
+Group=ll
+EnvironmentFile=/home/ll/leadlag/.env
+ExecStart=/bin/bash /home/ll/leadlag/jobs/%i.sh
+CPUAffinity=0 1
+Nice=19
+CPUWeight=10
+IOSchedulingClass=idle
+NoNewPrivileges=true
+PrivateTmp=true

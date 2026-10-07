@@ -1,0 +1,26 @@
+# Read-only status page on 127.0.0.1:8062, the only thing published through
+# cloudflared. It polls the trader and the observer every 5 s and answers every
+# viewer from that cache: viewer traffic never reaches the trader.
+[Unit]
+Description=leadlag status page (read-only)
+Wants=network-online.target
+After=network-online.target leadlag.service leadlag-observer.service
+
+[Service]
+Type=simple
+User=ll
+Group=ll
+EnvironmentFile=/home/ll/leadlag/.env
+ExecStart=/home/ll/leadlag/current/leadlag-status
+Restart=always
+RestartSec=5
+CPUAffinity=0 1
+Nice=10
+CPUWeight=20
+MemoryMax=256M
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

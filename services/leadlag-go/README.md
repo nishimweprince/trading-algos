@@ -17,7 +17,7 @@ mainnet book produce P&L. A separate, read-only stats page is published through 
 | Milestone | Scope | State |
 |---|---|---|
 | M1 | Archive fetch, verify and pack (`llfetch`), deterministic multi-symbol merger | done |
-| M2 | Live ingest + recorder, observer, status page, `llprobe`, EC2 deploy | — |
+| M2 | Live ingest + recorder, observer, status page, `llprobe`, EC2 deploy kit | built; deploy pending the host |
 | M3 | Flow features, screen, event study, placebo → gate G1 | — |
 | M4 | Policy, fill model, backtest, prereg freeze, validation, held-out → G2–G4 | — |
 | M5 | Live shadow with the frozen parameters → G5 | — |
@@ -25,7 +25,18 @@ mainnet book produce P&L. A separate, read-only stats page is published through 
 ## Layout
 
 ```
+cmd/leadlag            trader: feeds → hub (tape ring → parse → engine); admin :8060; --replay for parity
+cmd/leadlag-observer   tape writer + feed statistics; unix socket in, loopback :8061
+cmd/leadlag-status     read-only page :8062 (the only thing behind cloudflared)
+cmd/llprobe            latency probe: REST RTT, cold connects, feed lag, aggTrade publish delay
 cmd/llfetch            archive downloader: plan | fetch | verify | candidates
+internal/live          Hub (one lock; dedupe; digest), record engine, tape replay
+internal/ws            reconnecting combined-stream client (receive stamp at frame completion)
+internal/parse         zero-allocation aggTrade / bookTicker decoder
+internal/ipc           SPSC byte ring + record protocol + producer (never blocks the hot path)
+internal/observe       observer core: tape, aggregates, disk guard
+internal/tape          hourly .jsonl.zst tape + manifest; reader
+internal/stats         allocation-free log-linear histograms
 internal/model         Event (E8 fixed-point prices and quantities)
 internal/fixed         allocation-free decimal parsing
 internal/archive       data.binance.vision client, sha256 check, CSV → .llp packer, day manifests
@@ -65,6 +76,40 @@ bin/llfetch verify --symbols BTCUSDT,ETHUSDT --from 2025-10-01 --to 2026-01-31
 
 Measured on the Mac, 2026-10-05: SOLUSDT has 268,975 trades and ETHUSDT 889,112; neither has gaps.
 Download speed from the Mac is about 0.3 MB/s, so bulk fetches belong on the EC2 host.
+
+## Live recording (M2)
+
+Three processes, with stats kept off the trading loop:
+
+1. **`leadlag`** (the trader) copies each frame into a 64 MB ring and parses it. The engine runs under
+   one lock.
+2. **`leadlag-observer`** drains the ring over a unix socket, writes the hourly tape and keeps the
+   statistics.
+3. **`leadlag-status`** serves a cached page.
+
+The trader never writes to disk and never serves a viewer. `deploy/DEPLOY.md` is the AWS Tokyo runbook:
+AZ probe, host setup, systemd units with CPU pinning, push/rollback, cloudflared + Access, and
+acceptance checks.
+
+**Parity.** The hub folds every dispatched event into a digest. `leadlag --replay <tape dir>` re-runs
+the tape through the same hub, so the digest a run logs at shutdown must equal its replay's digest.
+`internal/live/e2e_test.go` checks this end to end through the socket and observer.
+
+On the Mac it passed against mainnet: 91,681 events, digest `39e1aa7be89e60aa` both live and replayed.
+
+**Measured on the Mac, 2026-10-07** (Mac numbers don't count toward gates):
+- Parse: about 650 ns per frame, 0 allocations.
+- Engine p50: 2–5 µs.
+- Tape: about 18 KB/s for 7 symbols.
+
+**Finding: aggTrade is not real time.**
+- An aggregate trade is published late. On BTC/ETH, `E − T` has p90 ≈ 150 ms, and `E` equals the next
+  trade's `T` in about 60% of cases.
+- bookTicker has `E == T`.
+
+So the archive (which has only `T`) must treat a trade as observable after the measured publish delay,
+not at `T`. The live leader signal may need bookTicker. The recorder measures both per symbol (status
+page, "agg E−T" and "E = next T"); M3 freezes them in PREREG.
 
 ## Development
 

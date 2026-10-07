@@ -1,0 +1,37 @@
+# leadlag observer: receives the trader's frames over /run/leadlag/observer.sock,
+# writes the hourly tape to /data and serves feed statistics on 127.0.0.1:8061.
+# Runs on CPUs 0-1 at lower priority, so disk I/O and statistics never compete
+# with the trader (CPUs 2-3).
+[Unit]
+Description=leadlag observer (tape + statistics)
+Wants=network-online.target
+After=network-online.target time-sync.target
+# Never tape to the root disk because /data failed to mount.
+RequiresMountsFor=/data
+
+[Service]
+Type=simple
+User=ll
+Group=ll
+EnvironmentFile=/home/ll/leadlag/.env
+ExecStart=/home/ll/leadlag/current/leadlag-observer
+# Owns /run/leadlag (the socket directory); kept across restarts so the
+# trader's reconnect finds the path.
+RuntimeDirectory=leadlag
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
+Restart=always
+RestartSec=2
+# Time to drain the trader's last records and close the hour file + manifest.
+TimeoutStopSec=30
+CPUAffinity=0 1
+Nice=5
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
