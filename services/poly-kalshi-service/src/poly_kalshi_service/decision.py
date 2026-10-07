@@ -11,10 +11,13 @@ Three semantics are load-bearing and must not be "improved" here:
    caller consumes the window: no retry at a later, cheaper tick.
 3. Nothing here exits. Positions are held to settlement.
 
-``max_kalshi_spread`` (default off) is a filter for research variants: a
-crossing measured on a Kalshi book wider than this returns ``NONE`` with reason
-``kalshi_spread`` and does **not** consume the window, since a gap on a wide
-Kalshi mid is not yet a signal. With it unset the rule is exactly the above.
+``max_kalshi_spread`` and ``max_poly_spread`` (default off) are filters for
+research variants: a crossing measured on a Kalshi (Polymarket YES) book wider
+than this returns ``NONE`` with reason ``kalshi_spread`` (``poly_spread``) and
+does **not** consume the window, since a gap on a wide mid is not yet a signal.
+On the Helix discovery days, crossings with a Polymarket spread over 0.10 lost
+2.3¢/share and those at 1¢ made 9.1¢ (research/RESULTS.md). With both unset the
+rule is exactly the above.
 """
 
 from __future__ import annotations
@@ -38,6 +41,7 @@ class StrategyParams:
     entry_early_s: int = 20
     entry_late_s: int = 60
     max_kalshi_spread: float | None = None
+    max_poly_spread: float | None = None
 
 
 class Action(StrEnum):
@@ -96,6 +100,10 @@ def decide(
         spread = (kalshi_yes.ask or 0.0) - (kalshi_yes.bid or 0.0)
         if spread > params.max_kalshi_spread + 1e-9:
             return _none("kalshi_spread", gap)
+    if params.max_poly_spread is not None:
+        spread = (poly_yes.ask or 0.0) - (poly_yes.bid or 0.0)
+        if spread > params.max_poly_spread + 1e-9:
+            return _none("poly_spread", gap)
 
     buy_yes = gap > 0
     if not buy_yes and not poly_no.valid:

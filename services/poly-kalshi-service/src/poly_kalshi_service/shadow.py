@@ -39,6 +39,9 @@ DEFAULT_VARIANTS = json.dumps(
         {"name": "early120", "early": 120},
         {"name": "kspread05", "max_kalshi_spread": 0.05},
         {"name": "cap50", "cap": 0.50},
+        # Pre-registered for the live holdout (research/PREREG.md, part 2).
+        {"name": "pspread05", "max_poly_spread": 0.05},
+        {"name": "pspread10", "max_poly_spread": 0.10},
     ]
 )
 _FIELDS = {
@@ -47,6 +50,7 @@ _FIELDS = {
     "early": "entry_early_s",
     "late": "entry_late_s",
     "max_kalshi_spread": "max_kalshi_spread",
+    "max_poly_spread": "max_poly_spread",
 }
 
 

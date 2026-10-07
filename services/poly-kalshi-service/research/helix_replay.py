@@ -93,6 +93,8 @@ VARIANTS = (
     _v("kspread05", max_kalshi_spread=0.05),
     _v("kspread10", max_kalshi_spread=0.10),
     _v("cap50", max_entry_px=0.50),
+    _v("pspread05", max_poly_spread=0.05),
+    _v("pspread10", max_poly_spread=0.10),
 )
 
 

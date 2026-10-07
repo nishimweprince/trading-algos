@@ -115,7 +115,7 @@ def test_parse_variants_keeps_live_values_and_rejects_bad_names() -> None:
 
 
 def test_settings_validate_shadow_variants(tmp_path: Path) -> None:
-    assert len(make_settings(tmp_path).shadow_variants) == 7
+    assert len(make_settings(tmp_path).shadow_variants) == 9
     with pytest.raises(ValidationError, match="PK_SHADOW_VARIANTS"):
         make_settings(tmp_path, PK_SHADOW_VARIANTS='{"not": "a list"}')
 
@@ -358,3 +358,14 @@ def test_limit_offset_raises_the_order_limit_not_the_decision(tmp_path: Path) ->
     assert fill["limit_px"] == 0.48 and fill["shares"] == 108  # 60 at 0.46, 48 at 0.47
     assert fill["depth_at_limit"] == 140
     assert engine.limit_px(0.59) == 0.60  # never above the cap
+
+
+def test_poly_spread_filter_waits_without_consuming() -> None:
+    k = Quote(True, 0.70, 0.72)
+    wide = Quote(True, 0.30, 0.46)  # mid 0.38, spread 0.16
+    n = Quote(True, 0.54, 0.70)
+    params = StrategyParams(gap_threshold=0.10, max_poly_spread=0.10)
+    d = decide(k, wide, n, params, 100, False)
+    assert (d.action, d.reason, d.consumes_window) == (Action.NONE, "poly_spread", False)
+    tight = Quote(True, 0.44, 0.46)
+    assert decide(k, tight, n, params, 100, False).action is Action.ENTER

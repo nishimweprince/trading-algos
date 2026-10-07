@@ -57,3 +57,31 @@ from this holdout. They were not chosen in advance.
 - Size at the real fill: needs our tape's depth (`research.fills`), on Dublin hours
   after phase 1.
 - Markouts (gate: median 5 s ≥ −3¢): needs the live `markout` records.
+
+---
+
+# Part 2: the live Dublin holdout (registered 2026-10-07, before deploy)
+
+The Helix holdout is spent. The next one is the paper run on Dublin from the
+deploy of this commit on, **results epoch 4**, read with `research.readout` (shadow
+table) and `research.fills` (depth) once both counts below are reached. Nothing
+from epoch 4 has been read when this is written.
+
+Settings deployed: gap 0.10, cap 0.60, 20/60 s, 150 ms paper latency,
+`PK_LIMIT_OFFSET=0.02` (C1 held on Helix), shadow variants as in
+`shadow.DEFAULT_VARIANTS`, including the two below.
+
+- **P1. Polymarket spread filter.** Discovery (Helix, 39 d): a crossing with a
+  Polymarket YES spread over 0.10 lost 2.3¢/share at the touch. Variants
+  `pspread10` (skip while the spread is over 0.10, not consuming) and `pspread05`.
+  Test: `pspread10` net ¢/share at the touch minus `live`'s, per day, on ≥ 300 settled
+  `live` entries. Promote if the day-t of the daily difference is ≥ 2.
+  `pspread05` is reported, not tested.
+- **P2. Threshold revisit (0.15 vs 0.10).** C2 held on price-side fills. What
+  Helix could not measure is size. Test: the `t15` shadow variant against `live`,
+  **$ net per window at the real fill**. `research.fills run --gap 0.15` and
+  `--gap 0.10` are both run on the same epoch-4 tape, at 150 ms and +2¢, with full
+  depth. A day-t of the daily difference ≥ 2 sends the change to the owner with
+  the numbers. It is never applied automatically.
+- **Gates unchanged** (README §Gates). The markout gate (median 5 s on fills
+  ≥ −3¢) is read on the same data.

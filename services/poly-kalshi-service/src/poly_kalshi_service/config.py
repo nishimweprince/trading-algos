@@ -49,7 +49,7 @@ class Settings(BaseServiceSettings, NotificationSettings):
     entry_early_s: int = Field(default=20, ge=0, le=900, validation_alias="PK_ENTRY_EARLY_S")
     entry_late_s: int = Field(default=60, ge=0, le=900, validation_alias="PK_ENTRY_LATE_S")
     # Variants decided alongside the live rule, never ordered (shadow.py). JSON list of
-    # {name, gap, cap, early, late, max_kalshi_spread}; empty disables them.
+    # {name, gap, cap, early, late, max_kalshi_spread, max_poly_spread}; empty disables them.
     shadow_variants_json: str = Field(
         default=DEFAULT_VARIANTS, validation_alias="PK_SHADOW_VARIANTS"
     )
