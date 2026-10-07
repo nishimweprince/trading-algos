@@ -1,5 +1,5 @@
 # One-off research or archive jobs at idle priority on CPUs 0-1, e.g.
-#   sudo systemctl start leadlag-research@fetch-screen
+#   sudo systemctl start leadlag-research@fetch-screen.service
 # runs /home/ll/leadlag/jobs/fetch-screen.sh. Output: journalctl -u leadlag-research@fetch-screen
 [Unit]
 Description=leadlag research job %i

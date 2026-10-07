@@ -3,7 +3,7 @@
 # and the 30 screen candidates. Candidates are drawn by `llfetch candidates`
 # (30-day median volume, listed before 2025) and saved next to the archive so
 # the screen is reproducible.
-#   sudo systemctl start leadlag-research@fetch-screen
+#   sudo systemctl start leadlag-research@fetch-screen.service
 set -euo pipefail
 bin=/home/ll/leadlag/current
 root="${LL_ARCHIVE_ROOT:-/data/leadlag/archive}"

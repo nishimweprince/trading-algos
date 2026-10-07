@@ -54,7 +54,7 @@ Binance runs in AWS ap-northeast-1, but which AZ it sits in isn't public, so mea
 | Item | Value |
 |---|---|
 | Type | **c7i.xlarge** (4 vCPU, 8 GiB) in the chosen AZ |
-| Image | Ubuntu 24.04 LTS x86_64 |
+| Image | Ubuntu 24.04 or 26.04 LTS x86_64 |
 | Root volume | 30 GB gp3 |
 | Data volume | **500 GB gp3** (3000 IOPS, 125 MB/s), a separate volume |
 | Network | Elastic IP; security group: inbound SSH from your IP only |
@@ -70,8 +70,11 @@ lasts about 4 months. EBS volumes can be grown online (`growpart` + `resize2fs`)
 sudo adduser --disabled-password --gecos "" ll
 sudo mkdir -p /home/ll/.ssh && sudo cp ~/.ssh/authorized_keys /home/ll/.ssh/ && sudo chown -R ll:ll /home/ll/.ssh
 # ll may restart only its own units (used by deploy/push.sh)
-echo 'll ALL=(root) NOPASSWD: /usr/bin/systemctl restart leadlag-observer leadlag leadlag-status, /usr/bin/systemctl start leadlag-research@*' \
-  | sudo tee /etc/sudoers.d/leadlag && sudo chmod 440 /etc/sudoers.d/leadlag
+# Ubuntu 26.04 ships sudo-rs, which rejects wildcards and can lock sudo on a bad
+# file: validate a temp copy first, and list each research job explicitly.
+T=$(mktemp)
+echo 'll ALL=(root) NOPASSWD: /usr/bin/systemctl restart leadlag-observer leadlag leadlag-status, /usr/bin/systemctl start leadlag-research@fetch-screen.service' > $T
+sudo visudo -cf $T && sudo install -m 440 -o root -g root $T /etc/sudoers.d/leadlag; rm -f $T
 
 # data volume: check the device name, because mkfs erases it
 lsblk
@@ -87,10 +90,21 @@ ls /dev/ptp* 2>/dev/null && echo "PTP clock present: add 'refclock PHC /dev/ptp0
 
 # keep everything except the trader off CPUs 2-3
 sudo sed -i 's/^#\?CPUAffinity=.*/CPUAffinity=0 1/' /etc/systemd/system.conf
-sudo systemctl daemon-reexec
+sudo systemctl daemon-reexec   # applies to units started from now on; reboot once so every daemon moves to 0-1
 
 # directories
 sudo -u ll mkdir -p /home/ll/leadlag/releases /home/ll/leadlag/jobs
+```
+
+**Without `push.sh`.** Build on the host from a checkout (Go from go.dev, sha256-checked):
+
+```sh
+cd ~/trading-algos/services/leadlag-go && REV=$(git rev-parse --short HEAD) && OUT=$(mktemp -d)
+CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$REV" -o $OUT/ ./cmd/...
+sudo install -d -o ll -g ll /home/ll/leadlag/releases/$REV && sudo install -o ll -g ll -m 755 $OUT/* /home/ll/leadlag/releases/$REV/
+sudo -u ll ln -sfn /home/ll/leadlag/releases/$REV /home/ll/leadlag/current
+sudo install -o ll -g ll -m 755 deploy/jobs/*.sh /home/ll/leadlag/jobs/
+sudo systemctl restart leadlag-observer leadlag leadlag-status
 ```
 
 **Config.** Create `/home/ll/leadlag/.env` from `deploy/env/.env.example`, owned by `ll` with mode 600.
@@ -159,7 +173,7 @@ Then open the page in a private browser window. It must ask for the email code f
 ## 6. Finish M1 on the host: the screen-window archive
 
 ```sh
-sudo systemctl start leadlag-research@fetch-screen      # runs /home/ll/leadlag/jobs/fetch-screen.sh
+sudo systemctl start leadlag-research@fetch-screen.service   # runs /home/ll/leadlag/jobs/fetch-screen.sh
 journalctl -u leadlag-research@fetch-screen -f
 ```
 
