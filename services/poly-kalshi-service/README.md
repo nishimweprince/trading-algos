@@ -2,8 +2,14 @@
 
 The kpc convergence trade, rebuilt to measure its one untested repair. On 15-minute
 crypto up/down binaries, when Kalshi's YES mid and Polymarket's differ by at least
-0.20, buy the cheap Polymarket leg as a taker, at or below 0.60, and hold to
+0.10, buy the cheap Polymarket leg as a taker, at or below 0.60, and hold to
 settlement. Kalshi is the signal only.
+
+The threshold is 0.10, not the manual's 0.20 (decided 2026-10-07): at 0.20 there
+were almost no fills. Because the first crossing decides, the threshold defines
+the trade, so this is a different strategy from the manual's, with its own gates
+(below). Paper runs in Dublin, the closest location allowed to trade on
+Polymarket; London is close-only and records only.
 
 **Phases 1–2 only: record, replay, paper.** Nothing here can place a real order.
 `PK_EXECUTION_MODE=live` is refused at startup until the paper gates pass and a host
@@ -101,21 +107,44 @@ python -m research.readout --journal data/state/dev/journal
 - `replay run` re-runs the tape through the live engine. It writes a journal and a per-second `grid.parquet`.
 - `replay compare` must show 100% agreement with live on the same tape.
 - `nulls` is the manual's null battery. Expect `signal` ≈ +5 pp and `random_same_rule` ≈ 0 pp.
-- `readout` reports the gates below.
+- `readout` reports the gates below, the shadow-variant table, markouts and capacity.
 
-## Gates (pre-registered, before any Phase 3 work)
+### The Helix tape (`~/kpc/raw`, 73 days of best bid/ask)
 
-- Average and p90 paper fill ≤ 0.60.
-- Net ¢/share by band keeps the manual's monotone shape.
-- **Day-t ≥ 2 at n ≥ 300 entries ≤ 0.60. Kill if not.**
-- Null battery: signal about +5 pp, random-second null about 0 pp.
-- $/entry in +$4.4 to +$6.9.
-- Balance rejects alarm before P&L goes flat.
+```bash
+export HELIX_TAPE_DIR=~/kpc/raw
+python -m research.helix.validate --day 20260920          # decoder checks (PLAN 0.1a)
+python -m research.helix.resolutions                      # venue outcomes, regime, fee
+python -m research.helix_replay run --jobs 3              # decide() over every window
+python -m research.helix_sweeps --split discovery         # sweeps, nulls, latency (3.3)
+```
+
+`research/helix/README.md` documents the format, the clocks and what the
+validation found. Only derived outputs are written (`research/data/helix/<day>/`);
+the tape is never copied.
+
+## Gates (re-registered 2026-10-07 for the 0.10 strategy, before any new result was read)
+
+The manual's magnitudes ($/entry +4.4 to +6.9, a +5 pp signal, the band shape)
+were measured at 0.20 and do not apply to 0.10. They are still reported, never
+gated. `gates.py` computes these; the status page and `research.readout` show them.
+
+- **Primary: day-t ≥ 2 at n ≥ 300 *filled* entries at or below 0.60, net of fees,
+  at the real fill (VWAP), not the touch. Kill if not met.**
+- **Adverse selection:** the median 5 s markout on fills is no worse than −3¢.
+  If it is worse, the edge belongs to faster traders and we are their exit.
+- **Capacity:** the median $ filled per entry is reported per asset. An asset
+  under $10 at the touch can't carry live size, whatever its edge.
+- **Null battery:** `signal` beats `random_same_rule` by the margin fixed in
+  `research/PREREG.md`, derived from the Helix discovery days of the TWAP
+  regime and written down before the holdout ran.
+- Average and p90 fill ≤ 0.60; balance rejects alarm before P&L goes flat.
 
 ## What changed since the kpc manual (checked 2026-10-06)
 
 - **Polymarket now settles on a Chainlink 60 s TWAP** (`btc-usd-twap-60s-streams`), and Kalshi on a 60 s average of the CF Benchmarks RTI.
-  - The manual's 5.6–6.8% venue disagreement was measured when Polymarket settled on the last tick. It may now be lower.
+  - The switch was on **2026-08-07** (Gamma's `resolutionSource` per window: the spot stream through 08-06, the TWAP stream from 08-07).
+  - Venue disagreement over the Helix days: 6.8% before the switch (the manual's 5.6–6.8%), **1.6% after it**.
   - The edge itself may have moved with it, so re-measure before trusting the manual's magnitudes.
 - Polymarket's YES and NO books mirror each other: one `price_change` updates both tokens. Both books are still kept.
 - Polymarket sent about 270 `price_change` frames a second for one BTC window, far above the manual's 159/s across everything. Every `price_change` carries the venue's best bid/ask, and the engine counts disagreements with its own book (`bbo_mismatch_pc`). On the first tape (1.07M checks), ours matched 99.86%; the misses were the venue's field lagging its own deltas. The separate `best_bid_ask` event is one update stale (97% disagreement), so never price off it.

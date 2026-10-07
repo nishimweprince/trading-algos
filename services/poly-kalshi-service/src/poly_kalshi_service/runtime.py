@@ -35,7 +35,7 @@ from .alerts import Alerts
 from .config import Settings
 from .decision import WINDOW_S
 from .engine import Engine
-from .feeds import KalshiFeed, PolyFeed
+from .feeds import KalshiFeed, PolyFeed, PolyShards
 from .recorder import Recorder
 from .windows import Discovery, Window, window_open
 
@@ -46,6 +46,9 @@ TICK_SECONDS = 2.0
 RESOLUTION_POLL_SECONDS = 15.0
 RESOLUTION_GIVE_UP_S = 3600
 RECYCLE_POLY_AFTER_REMOVED = 60  # ~6 windows of 5 assets x 2 tokens
+# Kalshi answered 429 to a burst of per-asset discovery queries at restart:
+# assets are discovered this far apart.
+DISCOVER_STAGGER_S = 0.25
 
 
 class Runtime:
@@ -56,7 +59,7 @@ class Runtime:
         engine: Engine,
         discovery: Discovery,
         kalshi: KalshiFeed | None,
-        poly: PolyFeed | None,
+        poly: PolyFeed | PolyShards | None,
         alerts: Alerts,
         recorder: Recorder | None = None,
         http: httpx.AsyncClient | None = None,
@@ -217,9 +220,18 @@ class Runtime:
     async def window_tick(self) -> None:
         now = self._clock() / NS
         targets = self._targets(now)
-        await asyncio.gather(
-            *(self._discover(a, o, now) for a in self.settings.assets for o in targets)
-        )
+        todo = [
+            a for a in self.settings.assets
+            if any(o not in self.engine.windows.get(a, {}) for o in targets)
+        ]  # fmt: skip
+
+        async def discover_asset(i: int, asset: str) -> None:
+            if i:
+                await asyncio.sleep(i * DISCOVER_STAGGER_S)
+            for open_unix in targets:
+                await self._discover(asset, open_unix, now)
+
+        await asyncio.gather(*(discover_asset(i, a) for i, a in enumerate(todo)))
         live = [
             w
             for a in self.settings.assets
@@ -229,12 +241,21 @@ class Runtime:
         if self.kalshi is not None:
             await self.kalshi.set_wanted({w.kalshi_ticker for w in live})
         if self.poly is not None:
-            await self.poly.set_wanted({t for w in live for t in (w.yes_token, w.no_token)})
+            if isinstance(self.poly, PolyShards):
+                groups: dict[str, set[str]] = {}
+                for w in live:
+                    groups.setdefault(w.asset, set()).update((w.yes_token, w.no_token))
+                await self.poly.set_wanted_groups(groups)
+            else:
+                await self.poly.set_wanted({t for w in live for t in (w.yes_token, w.no_token)})
             sec_into = now - targets[0]
             if self.poly.removed_since_connect >= RECYCLE_POLY_AFTER_REMOVED and 1 <= sec_into < 8:
                 # Inside entry_early_s: no decision can need these books yet.
                 log_event("poly_recycle", removed=self.poly.removed_since_connect)
-                await self.poly.recycle()
+                if isinstance(self.poly, PolyShards):
+                    await self.poly.recycle(RECYCLE_POLY_AFTER_REMOVED)
+                else:
+                    await self.poly.recycle()
         sec_into = now - targets[0]
         if sec_into > 30:
             missing = [a for a in self.settings.assets if targets[0] not in self.engine.windows[a]]
@@ -324,7 +345,12 @@ class Runtime:
             load1 = round(os.getloadavg()[0], 2)
         except OSError:
             load1 = None
-        return {"cpu_pct": self.cpu_pct, "load1": load1, "cpus": os.cpu_count()}
+        try:
+            loop = type(asyncio.get_running_loop()).__module__.split(".")[0]
+        except RuntimeError:
+            loop = None
+        # "uvloop" when uvicorn picked it up (PLAN 2.3), "asyncio" otherwise.
+        return {"cpu_pct": self.cpu_pct, "load1": load1, "cpus": os.cpu_count(), "loop": loop}
 
     async def health_tick(self) -> None:
         self._sample_cpu()

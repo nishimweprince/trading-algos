@@ -14,6 +14,14 @@ information over Polymarket any more: the edge is gone. If win rate is far
 
 Read by ``pk-status`` straight from ``<state_dir>/journal`` on disk, so showing
 results costs the trading process nothing. Pure Python, like ``gates``.
+
+**Days.** Entries, fills and no-fills count on the day of the decision; settled
+trades, wins and P&L count on the day they settled (UTC), the day cash moved.
+That is the ledger's ``realised_today`` basis too, so the two agree.
+
+**Markouts** (``markout`` records): the cheap leg's mid 1, 5 and 30 s after a
+fill or a no-fill, against the price paid (or the limit), in ¢/share. Fills
+next to no-fills is the direct read of adverse selection.
 """
 
 from __future__ import annotations
@@ -25,6 +33,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 from .decision import WINDOW_S
+from .engine import MARKOUT_S
+from .shadow import shadow_table
 
 __all__ = ["SETTLE_DELAY_DEFAULT_S", "open_trade_etas", "paper_results"]
 
@@ -159,15 +169,31 @@ def open_trade_etas(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _markout_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    out: dict[str, Any] = {"n": len(rows)}
+    for h in MARKOUT_S:
+        values = [r[f"markout_{h}s"] for r in rows if r.get(f"markout_{h}s") is not None]
+        out[f"{h}s"] = {
+            "n": len(values),
+            "mean": statistics.fmean(values) if values else None,
+            "median": statistics.median(values) if values else None,
+        }
+    return out
+
+
 def paper_results(records: Iterable[dict[str, Any]], trades_limit: int = 50) -> dict[str, Any]:
+    records = list(records)
     decisions: dict[tuple[str, int], dict[str, Any]] = {}
     fills: dict[tuple[str, int], dict[str, Any]] = {}
     settles: dict[tuple[str, int], dict[str, Any]] = {}
+    markouts: dict[tuple[str, int], dict[str, Any]] = {}
     windows: list[dict[str, Any]] = []
     for r in records:
         key = (r.get("asset"), r.get("open_unix"))
         kind = r.get("type")
-        if kind == "decision":
+        if kind == "markout":
+            markouts[key] = r
+        elif kind == "decision":
             decisions[key] = r
         elif kind == "fill":
             fills[key] = r
@@ -201,10 +227,12 @@ def paper_results(records: Iterable[dict[str, Any]], trades_limit: int = 50) -> 
         day["fees"] += f["fee"]
         s = settles.get(key)
         if s is not None:
-            day["settled"] += 1
-            day["wins"] += 1 if s["payout"] > 0 else 0
-            day["pnl"] += s["pnl"]
-            day["cents"].append(100 * (s["payout"] - f["cost"] - f["fee"]) / f["shares"])
+            # Settle day: older settle records carry no t_ns; their window's close stands in.
+            settled_on = days[_day(s.get("t_ns") or (key[1] + WINDOW_S) * 1_000_000_000)]
+            settled_on["settled"] += 1
+            settled_on["wins"] += 1 if s["payout"] > 0 else 0
+            settled_on["pnl"] += s["pnl"]
+            settled_on["cents"].append(100 * (s["payout"] - f["cost"] - f["fee"]) / f["shares"])
 
     daily = []
     cumulative = 0.0
@@ -250,6 +278,11 @@ def paper_results(records: Iterable[dict[str, Any]], trades_limit: int = 50) -> 
                 "fee": f["fee"],
                 "outcome": None if s is None else s["outcome"],
                 "pnl": None if s is None else s["pnl"],
+                "depth_at_limit": f.get("depth_at_limit"),
+                **{
+                    f"markout_{h}s": (markouts.get(key) or {}).get(f"markout_{h}s")
+                    for h in MARKOUT_S
+                },
             }
         )
     trades.sort(key=lambda t: t["t_ns"])
@@ -312,6 +345,10 @@ def paper_results(records: Iterable[dict[str, Any]], trades_limit: int = 50) -> 
         ),  # fmt: skip
         "kalshi_age_ms_p50": _pct(ages_k, 0.5),
         "kalshi_age_ms_p90": _pct(ages_k, 0.9),
+        "markouts": {
+            "fills": _markout_summary([m for m in markouts.values() if m.get("filled")]),
+            "no_fills": _markout_summary([m for m in markouts.values() if not m.get("filled")]),
+        },
     }
     evals = sum(w.get("evals", 0) for w in windows)
     invalid = sum((w.get("reasons") or {}).get("invalid_leg", 0) for w in windows)
@@ -336,6 +373,8 @@ def paper_results(records: Iterable[dict[str, Any]], trades_limit: int = 50) -> 
             "invalid_leg_share": invalid / evals if evals else None,
         },
         "daily": daily[::-1],
+        "daily_basis": "entries by decision day; settled, wins and P&L by settle day (UTC)",
+        "shadow": shadow_table(records),
         "curve": curve,
         "trades": trades[::-1][:trades_limit],
         "signal": _group(settled_rows),

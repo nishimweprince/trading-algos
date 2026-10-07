@@ -18,9 +18,15 @@ every line from one monotonic clock, so file order *is* arrival order and a
 replay never has to merge (kpc trap 7: recorded file order turned out not to
 be timestamp order, and a naive merge returned an empty join).
 
-Compression and disk writes happen on a writer thread; the event loop only
-enqueues. The recorder never raises into its caller: a write error is counted,
-logged, and reported on /v1/status.
+Compression runs in a ``gzip -1`` child process per open file, fed through a
+pipe by a writer thread; the event loop only enqueues. Compressing in a thread
+of this process held the GIL against the feed readers (PLAN 2.2); the child
+compresses on another core. The file format is unchanged (gzip), so
+``recordings.read_lines`` reads it as before. If this process dies, the child
+sees EOF on its stdin and finishes the file with its gzip trailer. Without a
+``gzip`` binary the recorder falls back to compressing on the writer thread.
+The recorder never raises into its caller: a write error is counted, logged,
+and reported on /v1/status.
 
 **Disk guard.** Every ``DISK_CHECK_SECONDS`` the writer checks free space on the
 recording volume. Below ``min_free_bytes`` it closes its file (manifest
@@ -35,6 +41,7 @@ import json
 import logging
 import queue
 import shutil
+import subprocess
 import threading
 import time
 from collections import Counter
@@ -66,11 +73,40 @@ def hour_path(root: Path, recv_ns: int, session_ns: int = 0) -> tuple[Path, str]
     return root / day / f"pk_{day}_{hour}_{session_ns:020d}.gz", f"{day}T{hour}"
 
 
+class _GzipPipe:
+    """A text sink that a ``gzip -1`` child compresses into ``path`` (appending a member)."""
+
+    def __init__(self, gzip_bin: str, path: Path, level: int) -> None:
+        self._file = path.open("ab")
+        self._proc = subprocess.Popen(
+            [gzip_bin, f"-{level}", "-c"],
+            stdin=subprocess.PIPE,
+            stdout=self._file,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,  # a Ctrl-C to the service must not kill it mid-file
+        )
+        assert self._proc.stdin is not None
+        self._stdin = self._proc.stdin
+
+    def write(self, text: str) -> None:
+        self._stdin.write(text.encode("utf-8"))
+
+    def flush(self) -> None:
+        self._stdin.flush()
+
+    def close(self) -> None:
+        try:
+            self._stdin.close()
+            self._proc.wait(timeout=30)
+        finally:
+            self._file.close()
+
+
 @dataclass
 class _Open:
     path: Path
     hour: str
-    handle: IO[str]
+    handle: IO[str] | _GzipPipe
     lines: int = 0
     streams: Counter[str] = field(default_factory=Counter)
     first_ns: int | None = None
@@ -93,8 +129,11 @@ class Recorder:
         queue_limit: int = 500_000,
         min_free_bytes: int = 0,
         disk_usage: Any = shutil.disk_usage,
+        gzip_bin: str | None = "auto",
     ) -> None:
         self.root = root
+        # "auto": the system gzip if there is one; None: compress on the writer thread.
+        self.gzip_bin = shutil.which("gzip") if gzip_bin == "auto" else gzip_bin
         self.host_tag = host_tag
         self.session_ns = time.time_ns()
         self.min_free_bytes = min_free_bytes
@@ -155,6 +194,7 @@ class Recorder:
             "disk_paused": self.disk_paused,
             "skipped_for_disk": self.skipped_for_disk,
             "open_files": sorted(str(item.path) for item in self._open.values()),
+            "compressor": "gzip-child" if self.gzip_bin else "thread",
         }
 
     # --- writer thread ----------------------------------------------------------
@@ -233,8 +273,13 @@ class Recorder:
             current = None
         if current is None:
             path.parent.mkdir(parents=True, exist_ok=True)
-            # "at": the same session re-opens its own file after a disk pause.
-            handle = gzip.open(path, "at", encoding="utf-8", compresslevel=COMPRESS_LEVEL)
+            # Append: the same session re-opens its own file after a disk pause, as
+            # a second gzip member, which the reader reads straight through.
+            handle: IO[str] | _GzipPipe
+            if self.gzip_bin:
+                handle = _GzipPipe(self.gzip_bin, path, COMPRESS_LEVEL)
+            else:
+                handle = gzip.open(path, "at", encoding="utf-8", compresslevel=COMPRESS_LEVEL)
             current = _Open(path, hour, handle)
             self._open[symbol] = current
         current.pending.append(f"{recv_ns} {venue} {text}\n")

@@ -16,8 +16,10 @@ a control line, so a replay knows exactly which ids were live when.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import random
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -32,6 +34,11 @@ __all__ = ["USER_AGENT", "Discovery", "Window", "poly_slug", "window_open"]
 
 # Gamma sits behind Cloudflare, which answers Python's default agent with 403.
 USER_AGENT = "poly-kalshi/0.1 (+trading-algos)"
+# Kalshi answered HTTP 429 three times during restarts (epoch 3): retry with
+# jittered backoff, and query each series once per roll (current + next window).
+RETRIES_429 = 4
+BACKOFF_429_S = 0.5
+KALSHI_CACHE_S = 6 * 3600
 
 
 def window_open(unix_s: float) -> int:
@@ -83,11 +90,19 @@ class Discovery:
         self._http = http
         self._gamma = gamma_url.rstrip("/")
         self._kalshi = kalshi_rest_url.rstrip("/")
+        # (asset, close_unix) -> market, from one series query per asset per roll.
+        self._kalshi_markets: dict[tuple[str, int], dict[str, Any]] = {}
+        self.retries_429 = 0
 
     async def _get(self, url: str, **params: Any) -> Any:
-        response = await self._http.get(
-            url, params=params, headers={"User-Agent": USER_AGENT}, timeout=10.0
-        )
+        for attempt in range(RETRIES_429 + 1):
+            response = await self._http.get(
+                url, params=params, headers={"User-Agent": USER_AGENT}, timeout=10.0
+            )
+            if response.status_code != 429 or attempt == RETRIES_429:
+                break
+            self.retries_429 += 1
+            await asyncio.sleep(BACKOFF_429_S * 2**attempt * (1 + random.random()))
         response.raise_for_status()
         return response.json()
 
@@ -103,18 +118,34 @@ class Discovery:
 
     async def kalshi_market(self, asset: str, open_unix: int) -> dict[str, Any] | None:
         close = open_unix + WINDOW_S
-        body = await self._get(
-            f"{self._kalshi}/markets",
-            series_ticker=f"KX{asset}15M",
-            min_close_ts=close - 1,
-            max_close_ts=close + 1,
-        )
-        markets = body.get("markets") or []
-        if len(markets) > 1:
-            raise DiscoveryError(f"{asset} {open_unix}: {len(markets)} Kalshi markets")
-        if not markets:
+        market = self._kalshi_markets.get((asset, close))
+        if market is None:
+            # One query for this window and the next: the roll's second lookup is cached.
+            body = await self._get(
+                f"{self._kalshi}/markets",
+                series_ticker=f"KX{asset}15M",
+                min_close_ts=close - 1,
+                max_close_ts=close + WINDOW_S + 1,
+            )
+            by_close: dict[int, list[dict[str, Any]]] = {}
+            for m in body.get("markets") or []:
+                if m.get("close_time"):
+                    close_unix = _iso_to_unix(m["close_time"])
+                elif m.get("open_time"):
+                    close_unix = _iso_to_unix(m["open_time"]) + WINDOW_S
+                else:
+                    continue
+                by_close.setdefault(close_unix, []).append(m)
+            for close_unix, found in by_close.items():
+                if len(found) > 1:
+                    raise DiscoveryError(f"{asset} {close_unix}: {len(found)} Kalshi markets")
+                self._kalshi_markets[(asset, close_unix)] = found[0]
+            cutoff = close - KALSHI_CACHE_S
+            for key in [k for k in self._kalshi_markets if k[1] < cutoff]:
+                del self._kalshi_markets[key]
+            market = self._kalshi_markets.get((asset, close))
+        if market is None:
             return None
-        market = markets[0]
         if _iso_to_unix(market["open_time"]) != open_unix:
             raise DiscoveryError(f"{asset} {open_unix}: Kalshi open_time {market['open_time']}")
         return market

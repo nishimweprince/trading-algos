@@ -152,6 +152,7 @@ class Ledger:
         settled = [p for p in self.positions.values() if p.status == "settled"]
         open_ = self.open_positions()
         oldest = min((p.open_unix for p in open_), default=None)
+        oldest_entry = min((p.entry_ns for p in open_), default=None)
         return {
             "cash": round(self.cash, 2),
             "start_cash": self.start_cash,
@@ -163,6 +164,14 @@ class Ledger:
             "settled": len(settled),
             "rejects": self.rejects,
             "largest_open_cost": round(max((p.cost + p.fee for p in open_), default=0.0), 2),
-            # Seconds the oldest unsettled position has waited since its window closed.
-            "oldest_open_age_s": None if oldest is None else round(t_ns / 1e9 - (oldest + 900)),
+            # Seconds the oldest unsettled position has waited since its window closed:
+            # 0 while that window is still running, never negative.
+            "oldest_open_age_s": None
+            if oldest is None
+            else max(0, round(t_ns / 1e9 - (oldest + 900))),
+            "oldest_entry_age_s": None
+            if oldest_entry is None
+            else max(0, round((t_ns - oldest_entry) / 1e9)),
+            # realised_today counts by settle day (UTC): the day cash moved.
+            "realised_basis": "settle_day",
         }

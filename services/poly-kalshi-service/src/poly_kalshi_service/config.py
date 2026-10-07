@@ -19,6 +19,7 @@ from ta_core import load_settings as _load_settings
 from ta_notify import NotificationSettings
 
 from .decision import StrategyParams
+from .shadow import DEFAULT_VARIANTS, Variant, parse_variants
 
 __all__ = ["ExecutionMode", "Settings", "load_settings"]
 
@@ -47,6 +48,11 @@ class Settings(BaseServiceSettings, NotificationSettings):
     notional_usd: float = Field(default=50.0, gt=0, validation_alias="PK_NOTIONAL_USD")
     entry_early_s: int = Field(default=20, ge=0, le=900, validation_alias="PK_ENTRY_EARLY_S")
     entry_late_s: int = Field(default=60, ge=0, le=900, validation_alias="PK_ENTRY_LATE_S")
+    # Variants decided alongside the live rule, never ordered (shadow.py). JSON list of
+    # {name, gap, cap, early, late, max_kalshi_spread}; empty disables them.
+    shadow_variants_json: str = Field(
+        default=DEFAULT_VARIANTS, validation_alias="PK_SHADOW_VARIANTS"
+    )
 
     # Paper venue: the order meets the book this long after the decision.
     paper_latency_ms: int = Field(
@@ -77,6 +83,9 @@ class Settings(BaseServiceSettings, NotificationSettings):
     # closes a connection whose reader falls behind (1013 "slow consumer"), so
     # bursts need room here; ~1 KB a frame.
     ws_max_queue: int = Field(default=32768, ge=1024, validation_alias="PK_WS_MAX_QUEUE")
+    # Polymarket sockets, assets spread across them (0 = one per asset). Each has its
+    # own reader and reconnect, and a reconnect drops only its own books.
+    poly_sockets: int = Field(default=0, ge=0, le=16, validation_alias="PK_POLY_SOCKETS")
     # One summary log line this often (0 disables): silence then means a stall.
     heartbeat_seconds: float = Field(default=60.0, ge=0, validation_alias="PK_HEARTBEAT_SECONDS")
     # A venue with no message for this long is reported stale and alerted.
@@ -153,6 +162,10 @@ class Settings(BaseServiceSettings, NotificationSettings):
             entry_late_s=self.entry_late_s,
         )
 
+    @property
+    def shadow_variants(self) -> tuple[Variant, ...]:
+        return parse_variants(self.shadow_variants_json, self.params)
+
     @model_validator(mode="after")
     def check_pk(self) -> Self:
         if self.execution_mode is ExecutionMode.LIVE:
@@ -169,6 +182,10 @@ class Settings(BaseServiceSettings, NotificationSettings):
             raise ValueError("PK_ENTRY_EARLY_S + PK_ENTRY_LATE_S leaves no entry window")
         if self.notional_usd > self.max_open_notional_usd:
             raise ValueError("PK_NOTIONAL_USD cannot exceed PK_MAX_OPEN_NOTIONAL_USD")
+        try:
+            parse_variants(self.shadow_variants_json, self.params)
+        except (ValueError, TypeError) as exc:
+            raise ValueError(f"PK_SHADOW_VARIANTS: {exc}") from exc
         if self.telegram_bot_token is not None and not self.telegram_admin_user_ids:
             raise ValueError("PK_TELEGRAM_ADMIN_USER_IDS is required with PK_TELEGRAM_BOT_TOKEN")
         return self

@@ -41,5 +41,8 @@ def build_id() -> str:
 
 
 def config_hash(params: StrategyParams, latency_ms: int) -> str:
-    body = json.dumps(asdict(params) | {"paper_latency_ms": latency_ms}, sort_keys=True)
+    # Optional parameters that are unset are left out, so adding one does not
+    # change the hash of every configuration that does not use it.
+    fields = {k: v for k, v in asdict(params).items() if v is not None}
+    body = json.dumps(fields | {"paper_latency_ms": latency_ms}, sort_keys=True)
     return hashlib.sha256(body.encode()).hexdigest()[:10]

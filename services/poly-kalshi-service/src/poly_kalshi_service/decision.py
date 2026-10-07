@@ -10,6 +10,11 @@ Three semantics are load-bearing and must not be "improved" here:
 2. A crossing whose entry price is above the cap returns ``SKIP``, and the
    caller consumes the window: no retry at a later, cheaper tick.
 3. Nothing here exits. Positions are held to settlement.
+
+``max_kalshi_spread`` (default off) is a filter for research variants: a
+crossing measured on a Kalshi book wider than this returns ``NONE`` with reason
+``kalshi_spread`` and does **not** consume the window, since a gap on a wide
+Kalshi mid is not yet a signal. With it unset the rule is exactly the above.
 """
 
 from __future__ import annotations
@@ -32,6 +37,7 @@ class StrategyParams:
     notional_usd: float = 50.0
     entry_early_s: int = 20
     entry_late_s: int = 60
+    max_kalshi_spread: float | None = None
 
 
 class Action(StrEnum):
@@ -85,6 +91,11 @@ def decide(
     gap = k_mid - p_mid
     if abs(gap) < params.gap_threshold:
         return _none("below_threshold", gap)
+    if params.max_kalshi_spread is not None:
+        # A valid quote has both sides (its mid exists), so the ``or`` never applies.
+        spread = (kalshi_yes.ask or 0.0) - (kalshi_yes.bid or 0.0)
+        if spread > params.max_kalshi_spread + 1e-9:
+            return _none("kalshi_spread", gap)
 
     buy_yes = gap > 0
     if not buy_yes and not poly_no.valid:

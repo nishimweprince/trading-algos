@@ -17,6 +17,18 @@ only if its book has updated since the window opened.
 
 **Evaluation (kpc trap 5).** The rule runs on every book update of the
 asset's current window, not on a one-second sample.
+
+**Observability that changes no decision** (PLAN phase 1):
+
+- The gap keeps being measured after the window is consumed, so the ``window``
+  record carries the uncensored ``max_abs_gap_full`` and, for each threshold in
+  ``FULL_THRESHOLDS``, the first second ``|gap|`` reached it and the side.
+- ``shadow``: the variants of ``PK_SHADOW_VARIANTS`` are decided on the same
+  updates (``shadow.py``).
+- Every entry decision records ``depth_at_limit``, the shares offered at or
+  below the limit; every fill and no-fill records it again at fill time, and
+  the cheap leg's ask and mid 1, 5 and 30 s later (``markout`` records): the
+  direct measure of adverse selection.
 """
 
 from __future__ import annotations
@@ -36,6 +48,7 @@ from .fees import taker_fee
 from .ledger import Ledger, Position
 from .metrics import Metrics
 from .risk import RiskState
+from .shadow import Shadow
 from .trades import JsonlDaily
 from .venue import Venue
 from .windows import Window, window_open
@@ -45,6 +58,12 @@ __all__ = ["AssetState", "Engine"]
 NS = 1_000_000_000
 SERIES_POINTS = 2 * WINDOW_S
 KEEP_WINDOWS_S = 6 * 3600  # identities kept for late resolutions
+FULL_THRESHOLDS = (0.08, 0.10, 0.12, 0.15, 0.20)
+# The best bid/ask carried on each price_change is checked against our book on 1
+# in this many (31M checks in the epoch-3 export). The two counters keep their
+# names and are both sampled, so mismatch / checks is still the rate.
+BBO_CHECK_EVERY = 50
+MARKOUT_S = (1, 5, 30)
 
 Alert = Callable[[str, str, list[str]], None]
 
@@ -59,6 +78,9 @@ class AssetState:
     evals: int = 0
     reasons: Counter[str] = field(default_factory=Counter)
     last_gap: float | None = None
+    # Uncensored: measured over the whole entry window, crossing or not.
+    max_abs_gap_full: float = 0.0
+    first_cross: dict[str, tuple[float, str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -69,6 +91,17 @@ class _Pending:
     side: str
     decision: Decision
     decision_ns: int
+
+
+@dataclass
+class _Markout:
+    """The cheap leg after a fill or no-fill: resolved on the first event past each horizon."""
+
+    fill_ns: int
+    token: str
+    ref_px: float
+    record: dict[str, Any]
+    horizons: list[int] = field(default_factory=lambda: list(MARKOUT_S))
 
 
 class Engine:
@@ -83,6 +116,7 @@ class Engine:
         journal: JsonlDaily | None = None,
         alert: Alert | None = None,
         stamp: dict[str, str] | None = None,
+        shadow: Shadow | None = None,
     ) -> None:
         self.params = params
         self.assets = assets
@@ -99,6 +133,10 @@ class Engine:
         self.ids: dict[str, tuple[str, int]] = {}  # book id -> (asset, open_unix)
         self.state = {a: AssetState() for a in assets}
         self.pending: list[_Pending] = []
+        self.markouts: list[_Markout] = []
+        self._bbo_seen = 0
+        self.bbo_check_every = BBO_CHECK_EVERY
+        self.shadow = shadow or Shadow((), params)
         self.resolutions: dict[tuple[str, int], dict[str, str]] = {}
         self.recent: deque[dict[str, Any]] = deque(maxlen=200)
         self.counters: Counter[str] = Counter()
@@ -128,6 +166,8 @@ class Engine:
             self._roll(recv_ns)
         if self.pending:
             self._resolve_pending(recv_ns)
+        if self.markouts:
+            self._resolve_markouts(recv_ns)
         try:
             body = orjson.loads(text)
         except ValueError:
@@ -199,6 +239,7 @@ class Engine:
                     self.ids.pop(book_id)
                     self.books.pop(book_id, None)
             cutoff = now_open - KEEP_WINDOWS_S
+            self.shadow.forget_before(cutoff)
             for open_unix in [o for o in self.windows[asset] if o < cutoff]:
                 old = self.windows[asset].pop(open_unix)
                 self.by_condition.pop(old.condition_id, None)
@@ -218,11 +259,27 @@ class Engine:
                 "identified": st.window is not None,
                 "action": (st.decision or {}).get("action", "none"),
                 "max_abs_gap": round(st.max_abs_gap, 4),
+                "max_abs_gap_full": round(st.max_abs_gap_full, 4),
+                "first_cross_s": {
+                    f"{t:.2f}": st.first_cross[f"{t:.2f}"][0]
+                    if f"{t:.2f}" in st.first_cross
+                    else None
+                    for t in FULL_THRESHOLDS
+                },
+                "gap_at_cross_side": {
+                    f"{t:.2f}": st.first_cross[f"{t:.2f}"][1]
+                    if f"{t:.2f}" in st.first_cross
+                    else None
+                    for t in FULL_THRESHOLDS
+                },
                 "evals": st.evals,
                 "reasons": dict(st.reasons),
             },
             keep=False,
         )
+        if st.window is not None:
+            for record in self.shadow.close((asset, st.open_unix)):
+                self._write(recv_ns, record, keep=False)
 
     # --- venues -----------------------------------------------------------------
 
@@ -254,7 +311,10 @@ class Engine:
                         continue
                     side = "bid" if change.get("side") == "BUY" else "ask"
                     book.set_level(side, px(change["price"]), float(change["size"]), recv_ns)
-                    self._check_bbo(book, change, "pc")
+                    self._bbo_seen += 1
+                    every = self.bbo_check_every
+                    if self._bbo_seen % every == 1 % every:  # the 1st, then every nth
+                        self._check_bbo(book, change, "pc")
                     touched.add(self.ids[book_id][0])
             elif kind == "best_bid_ask":
                 book = self._book_for(str(msg.get("asset_id")))
@@ -339,10 +399,18 @@ class Engine:
             return {window.asset} if window.asset in self.state else set()
         if kind in ("reconnect", "resync"):
             prefix = body.get("venue")
-            for book_id, book in self.books.items():
-                is_kalshi = book_id.startswith("KX")
-                if (prefix == "k") == is_kalshi:
-                    book.invalidate()
+            tokens = body.get("tokens")
+            if isinstance(tokens, list):
+                # A sharded socket (PLAN 2.1): only that shard's books go stale.
+                for book_id in tokens:
+                    book = self.books.get(str(book_id))
+                    if book is not None:
+                        book.invalidate()
+            else:
+                for book_id, book in self.books.items():
+                    is_kalshi = book_id.startswith("KX")
+                    if (prefix == "k") == is_kalshi:
+                        book.invalidate()
             self.counters[f"{kind}_{prefix}"] += 1
             return set()
         if kind == "resolution":
@@ -363,15 +431,50 @@ class Engine:
             return None
         return k.quote(since), y.quote(since), n.quote(since)
 
+    def _depth(self, window: Window, buy_yes: bool, limit: float) -> float:
+        """Shares offered at or below ``limit`` on the leg a buy would take."""
+        book = self.books.get(window.yes_token if buy_yes else window.no_token)
+        if book is None or book.snapshot_ns is None:
+            return 0.0
+        return sum(size for _p, size in book.asks_upto(limit))
+
+    def _track_gap(self, st: AssetState, k: Quote, y: Quote, sec_into: float) -> None:
+        """The uncensored gap: every update inside the entry window, consumed or not."""
+        if not self.params.entry_early_s <= sec_into <= WINDOW_S - self.params.entry_late_s:
+            return
+        if k.mid is None or y.mid is None:
+            return
+        gap = k.mid - y.mid
+        st.max_abs_gap_full = max(st.max_abs_gap_full, abs(gap))
+        if len(st.first_cross) == len(FULL_THRESHOLDS):
+            return
+        for t in FULL_THRESHOLDS:
+            key = f"{t:.2f}"
+            if key not in st.first_cross and abs(gap) >= t:
+                st.first_cross[key] = (round(sec_into, 3), "yes" if gap > 0 else "no")
+
     def _evaluate(self, asset: str, recv_ns: int) -> None:
         st = self.state[asset]
-        if st.window is None or st.traded:
+        if st.window is None:
             return
         quotes = self.quotes(asset)
         if quotes is None:
             return
         k, y, n = quotes
-        sec_into = recv_ns / NS - st.window.open_unix
+        window = st.window
+        sec_into = recv_ns / NS - window.open_unix
+        self._track_gap(st, k, y, sec_into)
+        if self.shadow:
+            self.shadow.evaluate(
+                (asset, window.open_unix),
+                quotes,
+                sec_into,
+                recv_ns,
+                lambda buy_yes, limit: self._depth(window, buy_yes, limit),
+                (window.fee_rate, window.fee_exponent),
+            )
+        if st.traded:
+            return
         decision = decide(k, y, n, self.params, sec_into, st.traded)
         st.evals += 1
         st.reasons[decision.reason or decision.action.value] += 1
@@ -414,6 +517,10 @@ class Engine:
             "poly_no": n.as_dict(),
             # How old each leg's book was at the decision: a stale signal shows here.
             "age_ms": ages,
+            # Shares offered at or below the entry price: what the order could take.
+            "depth_at_limit": None
+            if decision.entry_px is None
+            else round(self._depth(st.window, bool(decision.buy_yes), decision.entry_px), 2),
             "params": {
                 "gap_threshold": self.params.gap_threshold,
                 "max_entry_px": self.params.max_entry_px,
@@ -473,6 +580,11 @@ class Engine:
         assert self.venue is not None and order.decision.entry_px is not None
         decision, window = order.decision, order.window
         book = self.books.get(order.token) or Book()
+        depth = (
+            sum(size for _p, size in book.asks_upto(decision.entry_px))
+            if book.snapshot_ns is not None
+            else 0.0
+        )
         result = self.venue.fill(
             book, decision.entry_px, decision.contracts, window.fee_rate, window.fee_exponent
         )
@@ -497,8 +609,26 @@ class Engine:
             "touch_px": decision.entry_px,
             "touch_shares": decision.contracts,
             "touch_fee": round(touch_fee, 4),
+            "depth_at_limit": round(depth, 2),
         }
         self.counters["fills" if result.shares > 0 else "no_fills"] += 1
+        self.markouts.append(
+            _Markout(
+                recv_ns,
+                order.token,
+                result.vwap if result.vwap is not None else decision.entry_px,
+                {
+                    "type": "markout",
+                    "asset": window.asset,
+                    "open_unix": window.open_unix,
+                    "side": order.side,
+                    "filled": result.shares > 0,
+                    "ref_px": round(result.vwap, 4)
+                    if result.vwap is not None
+                    else decision.entry_px,
+                },
+            )
+        )
         if result.shares > 0:
             self.ledger.buy(
                 Position(
@@ -515,6 +645,31 @@ class Engine:
             if known is not None:
                 self._settle(window.asset, window.open_unix, known, recv_ns)
         self._write(recv_ns, record)
+
+    def _resolve_markouts(self, recv_ns: int) -> None:
+        """At the first event past each horizon, read the cheap leg's book as it stood.
+
+        Markout (¢/share) = 100 x (mid - price paid): positive when the market
+        moved our way after the fill. For a no-fill the price is the limit.
+        """
+        keep = []
+        for m in self.markouts:
+            while m.horizons and recv_ns >= m.fill_ns + m.horizons[0] * NS:
+                h = m.horizons.pop(0)
+                book = self.books.get(m.token)
+                q = book.quote() if book is not None else None
+                ask = q.ask if q is not None and q.valid else None
+                mid = q.mid if q is not None else None
+                m.record[f"ask_{h}s"] = ask
+                m.record[f"mid_{h}s"] = None if mid is None else round(mid, 4)
+                m.record[f"markout_{h}s"] = (
+                    None if mid is None else round(100 * (mid - m.ref_px), 2)
+                )
+            if m.horizons:
+                keep.append(m)
+            else:
+                self._write(recv_ns, m.record, keep=False)
+        self.markouts = keep
 
     # --- settlement -------------------------------------------------------------
 
@@ -542,6 +697,8 @@ class Engine:
             keep=False,
         )
         if venue == "poly":
+            for record in self.shadow.settle((asset, open_unix), outcome):
+                self._write(recv_ns, record, keep=False)
             self._settle(asset, open_unix, outcome, recv_ns)
 
     def _settle(self, asset: str, open_unix: int, outcome: str, recv_ns: int) -> None:
@@ -555,6 +712,7 @@ class Engine:
                 "type": "settle",
                 "asset": asset,
                 "open_unix": open_unix,
+                "t_ns": recv_ns,
                 "side": position.side,
                 "outcome": outcome,
                 "shares": position.shares,

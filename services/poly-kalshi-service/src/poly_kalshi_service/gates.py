@@ -1,4 +1,16 @@
-"""The pre-registered gates, read from the journal (plan §Gates, manual §10).
+"""The pre-registered gates, read from the journal (README §Gates).
+
+Re-registered 2026-10-07 for the 0.10 threshold, before any new result was
+read: at 0.10 the first crossing defines a different trade from the manual's
+0.20, so the manual's magnitudes ($/entry +4.4 to +6.9, the band shape) are
+no longer targets. They are still reported, not gated.
+
+- ``day_t``: day-t >= 2 at n >= 300 *filled* entries at or below the cap, net
+  of fees, at the real fill (VWAP). Kill if not met.
+- ``markout_5s``: the median 5 s markout on fills is no worse than -3¢.
+- ``fill_price``: average and p90 fill at or below the cap.
+- ``capacity_usd_per_entry``: median $ filled per entry, per asset (reported:
+  an asset under $10 cannot carry live size, whatever its edge).
 
 Pure Python (no pandas) so the status page can show progress on the host.
 ``research.readout`` prints the same numbers.
@@ -31,7 +43,9 @@ BANDS = (
 )
 GATE_MIN_N = 300
 GATE_MIN_DAY_T = 2.0
-GATE_DOLLARS_PER_ENTRY = (4.4, 6.9)
+GATE_MARKOUT_5S_CENTS = -3.0
+GATE_MARKOUT_MIN_N = 30
+CAPACITY_MIN_USD = 10.0
 DISAGREEMENT_EXPECTED = (0.03, 0.10)
 
 
@@ -68,6 +82,7 @@ def evaluate(records: Iterable[dict[str, Any]], max_entry_px: float = 0.60) -> d
     no_fills = 0
     resolutions: dict[tuple[str, int], dict[str, str]] = defaultdict(dict)
     windows: dict[tuple[str, str], int] = defaultdict(int)
+    markouts_5s: list[float] = []
     for r in records:
         key = (r.get("asset"), r.get("open_unix"))
         kind = r.get("type")
@@ -84,6 +99,8 @@ def evaluate(records: Iterable[dict[str, Any]], max_entry_px: float = 0.60) -> d
             resolutions[key][r["venue"]] = r["outcome"]
         elif kind == "window":
             windows[(r["asset"], _day(r["open_unix"]))] += 1
+        elif kind == "markout" and r.get("filled") and r.get("markout_5s") is not None:
+            markouts_5s.append(r["markout_5s"])
 
     vwaps = [f["vwap"] for f in fills.values()]
     settled = []
@@ -113,14 +130,19 @@ def evaluate(records: Iterable[dict[str, Any]], max_entry_px: float = 0.60) -> d
     avg_vwap = statistics.fmean(vwaps) if vwaps else None
     p90 = _pctl(vwaps, 0.9)
     dollars = statistics.fmean(pnl) if pnl else None
+    markout_med = statistics.median(markouts_5s) if markouts_5s else None
+    by_asset: dict[str, list[float]] = defaultdict(list)
+    for (asset, _o), f in fills.items():
+        by_asset[asset].append(f["cost"])
+    capacity = {a: statistics.median(v) for a, v in sorted(by_asset.items())}
     gates = {
         "fill_price": None
         if avg_vwap is None
         else (avg_vwap <= max_entry_px and (p90 or 0) <= max_entry_px),
         "day_t": None if len(in_band) < GATE_MIN_N or day_t is None else day_t >= GATE_MIN_DAY_T,
-        "dollars_per_entry": None
-        if len(pnl) < GATE_MIN_N or dollars is None
-        else GATE_DOLLARS_PER_ENTRY[0] <= dollars,
+        "markout_5s": None
+        if len(markouts_5s) < GATE_MARKOUT_MIN_N or markout_med is None
+        else markout_med >= GATE_MARKOUT_5S_CENTS,
     }
     return {
         "decisions": dict(decisions),
@@ -133,6 +155,10 @@ def evaluate(records: Iterable[dict[str, Any]], max_entry_px: float = 0.60) -> d
         "settled": len(settled),
         "net_cents_per_share": statistics.fmean([c for *_, c in settled]) if settled else None,
         "dollars_per_entry": dollars,
+        "markout_5s_median": markout_med,
+        "markout_5s_n": len(markouts_5s),
+        "capacity_usd_per_entry": capacity,
+        "capacity_below_min": sorted(a for a, v in capacity.items() if v < CAPACITY_MIN_USD),
         "pnl_total": sum(pnl),
         "bands": {
             band_of(lo): {"n": len(bands.get(band_of(lo), [])), "net_cents": _mean(bands, lo)}

@@ -196,3 +196,16 @@ def test_grid_seconds_are_window_relative(tmp_path: Path) -> None:
     assert sampler is not None
     secs = {row[2] for row in sampler.rows if row[0] == "BTC"}
     assert min(secs) >= 0 and max(secs) < 100
+
+
+def test_shift_lines_delays_a_venue_and_re_merges_by_the_new_time() -> None:
+    from research.replay import shift_lines
+
+    lines = [(100, "k", "k1"), (105, "p", "p1"), (110, "k", "k2"), (120, "p", "p2")]
+    stats: dict[str, int] = {}
+    # Kalshi 8 ns later (in ms units below: 8e-6 ms), Polymarket 3 ns earlier.
+    out = list(shift_lines(iter(lines), {"k": 8e-6, "p": -3e-6}, stats))
+    assert [(t, x) for t, _v, x in out] == [(102, "p1"), (108, "k1"), (117, "p2"), (118, "k2")]
+    assert stats["reordered"] == 2  # p1 now precedes k1, p2 precedes k2
+    # No shift: the tape is untouched.
+    assert list(shift_lines(iter(lines), {}, {})) == lines

@@ -30,11 +30,12 @@ from .alerts import Alerts
 from .build import build_id, config_hash
 from .config import ExecutionMode, Settings, load_settings
 from .engine import Engine
-from .feeds import KalshiFeed, KalshiSigner, PolyFeed
+from .feeds import KalshiFeed, KalshiSigner, PolyShards
 from .ledger import Ledger
 from .recorder import Recorder
 from .risk import RiskLimits, RiskState
 from .runtime import Runtime
+from .shadow import Shadow
 from .telegram_commands import TelegramCommands
 from .trades import JsonlDaily
 from .venue import PaperVenue
@@ -90,6 +91,7 @@ def build_runtime(settings: Settings, notifier: Any | None, http: httpx.AsyncCli
             "build": build_id(),
             "config": config_hash(settings.params, settings.paper_latency_ms),
         },
+        shadow=Shadow(settings.shadow_variants, settings.params),
     )
     recorder = (
         Recorder(
@@ -116,7 +118,13 @@ def build_runtime(settings: Settings, notifier: Any | None, http: httpx.AsyncCli
             http, gamma_url=settings.poly_gamma_url, kalshi_rest_url=settings.kalshi_rest_url
         ),
         kalshi=KalshiFeed(settings.kalshi_ws_url, emit, signer, max_queue=settings.ws_max_queue),
-        poly=PolyFeed(settings.poly_ws_url, emit, max_queue=settings.ws_max_queue),
+        poly=PolyShards(
+            settings.poly_ws_url,
+            emit,
+            settings.assets,
+            settings.poly_sockets,
+            max_queue=settings.ws_max_queue,
+        ),
         alerts=alerts,
         recorder=recorder,
         http=http,

@@ -95,7 +95,9 @@ h3.section { font-size:12px; text-transform:uppercase; letter-spacing:.08em; col
 
 <h3 class="section">History</h3>
 <div class="card" style="margin-bottom:12px"><h2>Paper equity (cumulative P&amp;L, settled trades)</h2><div id="curve" class="muted">no settled trades yet</div></div>
-<div class="card" style="margin-bottom:12px"><h2>Daily paper results (UTC)</h2><table id="daily"></table></div>
+<div class="card" style="margin-bottom:12px"><h2>Shadow variants · decided live, never ordered · net at the touch</h2><table id="shadow"></table></div>
+<div class="card" style="margin-bottom:12px"><h2>Markouts · cheap leg mid after the order, ¢/share vs price paid (limit for a no-fill)</h2><table id="markouts"></table></div>
+<div class="card" style="margin-bottom:12px"><h2>Daily paper results (UTC) · entries by decision day, settled &amp; P&amp;L by settle day</h2><table id="daily"></table></div>
 <div class="card" style="margin-bottom:12px"><h2>Open trades · settlement ETA (UTC)</h2><table id="open"></table></div>
 <div class="card" style="margin-bottom:12px"><h2>Paper trades (last 50)</h2><table id="trades"></table></div>
 <div class="card" style="margin-bottom:12px"><h2>Recent engine events</h2><table id="recent"></table></div>
@@ -222,8 +224,11 @@ async function tick() {
     ["slow-consumer drops (Poly · Kalshi)", `${(feeds.poly || {}).slow_consumer ?? 0} · ${(feeds.kalshi || {}).slow_consumer ?? 0}`, ((feeds.poly || {}).slow_consumer || (feeds.kalshi || {}).slow_consumer) ? "warn" : ""]]));
   const gg = g.gates || {}, v = g.vwap || {};
   put("gates", kv([["entries (≤ cap)", `${g.in_band_n ?? 0} / ${g.gate_min_n ?? 300}`], ["avg / p90 fill", `${f(v.avg, 3)} / ${f(v.p90, 3)}`, verdict(gg.fill_price)[1]],
-    ["fill rate", f((g.fill_rate ?? 0) * 100, 1) + "%"], ["net ¢/share", f(g.net_cents_per_share)], ["$ / entry", f(g.dollars_per_entry)],
-    ["day-t (" + (g.days ?? 0) + "d, " + (g.days_positive ?? 0) + " +)", f(g.day_t), verdict(gg.day_t)[1]], ["venue disagreement", g.venue_disagreement == null ? "–" : f(g.venue_disagreement * 100, 1) + "%"]]));
+    ["fill rate", f((g.fill_rate ?? 0) * 100, 1) + "%"], ["net ¢/share", f(g.net_cents_per_share)], ["$ / entry (reported)", f(g.dollars_per_entry)],
+    ["day-t (" + (g.days ?? 0) + "d, " + (g.days_positive ?? 0) + " +)", f(g.day_t), verdict(gg.day_t)[1]],
+    ["5 s markout on fills (median, n " + (g.markout_5s_n ?? 0) + ")", f(g.markout_5s_median) + "¢", verdict(gg.markout_5s)[1]],
+    ["$ filled / entry under $10", (g.capacity_below_min || []).join(", ") || "none", (g.capacity_below_min || []).length ? "warn" : ""],
+    ["venue disagreement", g.venue_disagreement == null ? "–" : f(g.venue_disagreement * 100, 1) + "%"]]));
   const lat = (live && live.latency) || {}, rates = body.rates || {};
   const pq = (m, unit, d = 0) => lat[m] ? `${f(lat[m].p50, d)} / ${f(lat[m].p99, d)} ${unit}` : "–";
   put("latency", kv([["Polymarket feed p50 / p99", pq("feed_ms_p", "ms"), (lat.feed_ms_p || {}).p99 > 1000 ? "bad" : ""],
@@ -247,6 +252,16 @@ async function tick() {
     (Object.keys(rows).length ? Object.entries(rows).map(([k, r]) => `<tr><td>${esc(k)}</td><td>${r.n}</td><td>${r.win_rate == null ? "–" : f(r.win_rate * 100, 1)}</td>
       <td>${r.kalshi_implied == null ? "–" : f(r.kalshi_implied * 100, 1)}</td><td>${r.avg_price == null ? "–" : f(r.avg_price * 100, 1)}</td>
       <td class="${r.net_cents == null ? "" : r.net_cents < 0 ? "bad" : "good"}">${f(r.net_cents)}</td><td class="${r.pnl < 0 ? "bad" : "good"}">${f(r.pnl)}</td></tr>`).join("") : '<tr><td class="muted">no settled trades yet</td></tr>');
+  const SH = res.shadow || {};
+  put("shadow", "<tr><th>variant</th><th>windows</th><th>crossings</th><th>settled entries</th><th>win %</th><th>avg paid ¢</th><th>net ¢/sh (touch)</th><th>± s.e.</th></tr>" +
+    (Object.keys(SH).length ? Object.entries(SH).map(([k, r]) => `<tr><td>${k === "live" ? "<b>live</b>" : esc(k)}</td><td>${r.windows}</td><td>${r.crossings}</td><td>${r.n}</td>
+      <td>${r.win_rate == null ? "–" : f(r.win_rate * 100, 1)}</td><td>${r.avg_px == null ? "–" : f(r.avg_px * 100, 1)}</td>
+      <td class="${r.net_cents == null ? "" : r.net_cents < 0 ? "bad" : "good"}">${f(r.net_cents)}</td><td class="muted">${f(r.se_cents)}</td></tr>`).join("")
+      : '<tr><td class="muted">no shadow records yet (PK_SHADOW_VARIANTS)</td></tr>'));
+  const MK = E.markouts || {}, mrow = (name, m) => `<tr><td>${name}</td><td>${(m || {}).n ?? 0}</td>` +
+    ["1s", "5s", "30s"].map((h) => { const x = (m || {})[h] || {}; return `<td class="${x.mean == null ? "" : x.mean < -3 ? "bad" : x.mean < 0 ? "warn" : "good"}">${f(x.mean)} / ${f(x.median)}</td>`; }).join("") + "</tr>";
+  put("markouts", "<tr><th></th><th>n</th><th>+1 s mean / median</th><th>+5 s</th><th>+30 s</th></tr>" + mrow("fills", MK.fills) + mrow("no-fills", MK.no_fills) +
+    '<tr><td colspan="5" class="muted" style="text-align:left;border-bottom:none">Gate: median 5 s markout on fills no worse than −3¢. Worse means faster traders own the edge and we are their exit.</td></tr>');
   put("by-asset", grp(res.by_asset || {}));
   put("by-sec", grp(res.by_sec || {}));
   const C = res.curve || [];

@@ -56,6 +56,7 @@ def test_poly_size_zero_removes_the_level(engine: Engine) -> None:
 def test_bbo_mismatch_is_counted(engine: Engine) -> None:
     w = window()
     setup_window(engine, w)
+    engine.bbo_check_every = 1  # every change, not the live 1 in 50
     change = poly_change(w.yes_token, 0.43, 5, "BUY", best_bid="0.44", best_ask="0.46")
     engine.handle_line(at(OPEN, 1), "p", change)
     bad = poly_change(w.yes_token, 0.42, 5, "BUY", best_bid="0.45", best_ask="0.46")

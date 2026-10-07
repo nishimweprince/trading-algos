@@ -16,6 +16,10 @@ drop that venue's books until fresh snapshots arrive.
   Unsubscribe was not seen to stop the flow (2026-10-06), so the engine
   ignores tokens it does not hold, and ``recycle()`` reconnects with only the
   live set once enough have piled up.
+- **Polymarket shards** (``PolyShards``, PLAN 2.1): ``PK_POLY_SOCKETS`` sockets,
+  each with its own reader task and reconnect, assets spread across them. A
+  shard's ``reconnect`` control line names the shard and its tokens, so the
+  engine drops only those books. The tape stays one stream (venue ``p``).
 """
 
 from __future__ import annotations
@@ -35,7 +39,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from ta_core.logging_config import log_event
 
-__all__ = ["KalshiFeed", "KalshiSigner", "PolyFeed", "WsConnect"]
+__all__ = ["KalshiFeed", "KalshiSigner", "PolyFeed", "PolyShards", "WsConnect"]
 
 Emit = Callable[[str, str], None]
 WsConnect = Callable[..., contextlib.AbstractAsyncContextManager[Any]]
@@ -125,6 +129,9 @@ class _WsFeed:
     def _control(self, kind: str, **fields: Any) -> None:
         self._emit("c", json.dumps({"type": kind, "venue": self.venue, **fields}))
 
+    def _reconnect_fields(self) -> dict[str, Any]:
+        return {}
+
     async def run(self) -> None:
         backoff = 1.0
         while True:
@@ -133,7 +140,7 @@ class _WsFeed:
                     self._ws = ws
                     self.connected = True
                     self.connects += 1
-                    self._control("reconnect", n=self.connects)
+                    self._control("reconnect", n=self.connects, **self._reconnect_fields())
                     log_event("feed_connected", venue=self.venue, n=self.connects)
                     async with self._lock:
                         self.subscribed = set()
@@ -307,11 +314,18 @@ class PolyFeed(_WsFeed):
     venue = "p"
     PING_SECONDS = 10.0
 
-    def __init__(self, url: str, emit: Emit, **kwargs: Any) -> None:
+    def __init__(self, url: str, emit: Emit, *, shard: int | None = None, **kwargs: Any) -> None:
         super().__init__(url, emit, **kwargs)
+        self.shard = shard
         self._initial_sent = False
         self._pinger: asyncio.Task[None] | None = None
         self.removed_since_connect = 0
+
+    def _reconnect_fields(self) -> dict[str, Any]:
+        """A shard names itself and its tokens: only those books go stale."""
+        if self.shard is None:
+            return {}
+        return {"shard": self.shard, "tokens": sorted(self.wanted)}
 
     async def _on_open(self, ws: Any) -> None:
         self._initial_sent = False
@@ -353,3 +367,62 @@ class PolyFeed(_WsFeed):
 
     def stats(self) -> dict[str, Any]:
         return {**super().stats(), "removed_since_connect": self.removed_since_connect}
+
+
+class PolyShards:
+    """``n`` Polymarket sockets, assets spread round-robin across them.
+
+    The same surface the runtime uses on one ``PolyFeed`` (``run``,
+    ``set_wanted``, ``recycle``, ``connected``, ``stats``), plus
+    ``set_wanted_groups`` so each asset's tokens stay on one shard.
+    """
+
+    def __init__(self, url: str, emit: Emit, assets: tuple[str, ...], n: int, **kwargs: Any):
+        n = max(1, min(n or len(assets), len(assets)))
+        self.shards = [PolyFeed(url, emit, shard=i, **kwargs) for i in range(n)]
+        self.shard_of = {asset: i % n for i, asset in enumerate(assets)}
+
+    async def run(self) -> None:
+        await asyncio.gather(*(shard.run() for shard in self.shards))
+
+    async def set_wanted_groups(self, groups: dict[str, set[str]]) -> None:
+        wanted: list[set[str]] = [set() for _ in self.shards]
+        for asset, ids in groups.items():
+            wanted[self.shard_of.get(asset, 0)] |= ids
+        await asyncio.gather(*(s.set_wanted(w) for s, w in zip(self.shards, wanted, strict=True)))
+
+    async def set_wanted(self, ids: set[str]) -> None:
+        """Without asset groups everything goes to shard 0 (tests, one-socket use)."""
+        await self.set_wanted_groups({"": ids})
+
+    @property
+    def removed_since_connect(self) -> int:
+        return max(s.removed_since_connect for s in self.shards)
+
+    async def recycle(self, min_removed: int = 0) -> None:
+        for shard in self.shards:
+            if shard.removed_since_connect >= min_removed:
+                await shard.recycle()
+
+    @property
+    def connected(self) -> bool:
+        return all(s.connected for s in self.shards)
+
+    @property
+    def last_error(self) -> str | None:
+        return next((s.last_error for s in self.shards if s.last_error), None)
+
+    def stats(self) -> dict[str, Any]:
+        per = [s.stats() for s in self.shards]
+        total = {
+            k: sum(p[k] for p in per)
+            for k in ("connects", "messages", "errors", "subscribed", "wanted", "slow_consumer")
+        }
+        return {
+            "connected": self.connected,
+            **total,
+            "last_error": self.last_error,
+            "removed_since_connect": self.removed_since_connect,
+            "sockets": len(self.shards),
+            "shards": per,
+        }

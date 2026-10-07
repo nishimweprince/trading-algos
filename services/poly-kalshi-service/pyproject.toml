@@ -27,8 +27,8 @@ ta-core = { workspace = true }
 ta-notify = { workspace = true }
 
 [project.optional-dependencies]
-# Replay, null battery and the gate read-out. CI installs it.
-research = ["numpy>=1.26", "pandas>=2.2", "pyarrow>=17"]
+# Replay, null battery, the gate read-out and the Helix tape decoder. CI installs it.
+research = ["numpy>=1.26", "pandas>=2.2", "pyarrow>=17", "zstandard>=0.22"]
 
 [project.scripts]
 poly-kalshi-service = "poly_kalshi_service.main:run"
