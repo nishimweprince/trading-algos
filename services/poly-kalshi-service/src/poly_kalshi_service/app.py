@@ -89,9 +89,12 @@ def build_runtime(settings: Settings, notifier: Any | None, http: httpx.AsyncCli
         stamp={
             "epoch": settings.results_epoch,
             "build": build_id(),
-            "config": config_hash(settings.params, settings.paper_latency_ms),
+            "config": config_hash(
+                settings.params, settings.paper_latency_ms, settings.limit_offset
+            ),
         },
         shadow=Shadow(settings.shadow_variants, settings.params),
+        limit_offset=settings.limit_offset,
     )
     recorder = (
         Recorder(

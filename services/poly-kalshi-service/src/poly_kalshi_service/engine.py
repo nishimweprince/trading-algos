@@ -117,6 +117,7 @@ class Engine:
         alert: Alert | None = None,
         stamp: dict[str, str] | None = None,
         shadow: Shadow | None = None,
+        limit_offset: float = 0.0,
     ) -> None:
         self.params = params
         self.assets = assets
@@ -137,6 +138,9 @@ class Engine:
         self._bbo_seen = 0
         self.bbo_check_every = BBO_CHECK_EVERY
         self.shadow = shadow or Shadow((), params)
+        # The order's limit sits this far above the touch, never above the cap
+        # (PLAN 3.3, PREREG C1). The decision and its size stay at the touch.
+        self.limit_offset = limit_offset
         self.resolutions: dict[tuple[str, int], dict[str, str]] = {}
         self.recent: deque[dict[str, Any]] = deque(maxlen=200)
         self.counters: Counter[str] = Counter()
@@ -568,6 +572,9 @@ class Engine:
         )
         return None
 
+    def limit_px(self, entry_px: float) -> float:
+        return round(min(entry_px + self.limit_offset, self.params.max_entry_px), 4)
+
     def _resolve_pending(self, recv_ns: int) -> None:
         due = [p for p in self.pending if p.due_ns <= recv_ns]
         if not due:
@@ -580,13 +587,12 @@ class Engine:
         assert self.venue is not None and order.decision.entry_px is not None
         decision, window = order.decision, order.window
         book = self.books.get(order.token) or Book()
+        limit = self.limit_px(decision.entry_px)
         depth = (
-            sum(size for _p, size in book.asks_upto(decision.entry_px))
-            if book.snapshot_ns is not None
-            else 0.0
+            sum(size for _p, size in book.asks_upto(limit)) if book.snapshot_ns is not None else 0.0
         )
         result = self.venue.fill(
-            book, decision.entry_px, decision.contracts, window.fee_rate, window.fee_exponent
+            book, limit, decision.contracts, window.fee_rate, window.fee_exponent
         )
         touch_fee = taker_fee(
             decision.entry_px, decision.contracts, window.fee_rate, window.fee_exponent
@@ -598,7 +604,7 @@ class Engine:
             "t_ns": recv_ns,
             "latency_ms": round((recv_ns - order.decision_ns) / 1e6, 1),
             "side": order.side,
-            "limit_px": decision.entry_px,
+            "limit_px": limit,
             "ordered": decision.contracts,
             "shares": result.shares,
             "vwap": None if result.vwap is None else round(result.vwap, 4),
@@ -616,16 +622,14 @@ class Engine:
             _Markout(
                 recv_ns,
                 order.token,
-                result.vwap if result.vwap is not None else decision.entry_px,
+                result.vwap if result.vwap is not None else limit,
                 {
                     "type": "markout",
                     "asset": window.asset,
                     "open_unix": window.open_unix,
                     "side": order.side,
                     "filled": result.shares > 0,
-                    "ref_px": round(result.vwap, 4)
-                    if result.vwap is not None
-                    else decision.entry_px,
+                    "ref_px": round(result.vwap, 4) if result.vwap is not None else limit,
                 },
             )
         )

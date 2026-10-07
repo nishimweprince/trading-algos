@@ -342,3 +342,19 @@ def test_recorder_output_reads_back_with_either_compressor(tmp_path: Path, gzip_
     assert list(read_lines(files)) == lines
     with gzip.open(files[0], "rt") as handle:  # a standard gzip file
         assert handle.readline().startswith(str(lines[0][0]))
+
+
+def test_limit_offset_raises_the_order_limit_not_the_decision(tmp_path: Path) -> None:
+    engine = make_engine(tmp_path)
+    engine.limit_offset = 0.02
+    w = window()
+    setup_window(engine, w)  # YES asks 0.46 x 60, 0.47 x 80; the touch is 0.46
+    t = at(OPEN, 20)
+    engine.handle_line(t, "k", kalshi_delta(w.kalshi_ticker, "no", 0.05, 1))
+    engine.handle_line(t + 200_000_000, "k", kalshi_delta(w.kalshi_ticker, "no", 0.05, 1))
+    (decision,) = [r for r in read_journal(tmp_path / "journal") if r["type"] == "decision"]
+    (fill,) = [r for r in read_journal(tmp_path / "journal") if r["type"] == "fill"]
+    assert decision["entry_px"] == 0.46 and decision["contracts"] == 108
+    assert fill["limit_px"] == 0.48 and fill["shares"] == 108  # 60 at 0.46, 48 at 0.47
+    assert fill["depth_at_limit"] == 140
+    assert engine.limit_px(0.59) == 0.60  # never above the cap

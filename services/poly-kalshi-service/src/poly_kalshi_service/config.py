@@ -58,6 +58,10 @@ class Settings(BaseServiceSettings, NotificationSettings):
     paper_latency_ms: int = Field(
         default=150, ge=0, le=5000, validation_alias="PK_PAPER_LATENCY_MS"
     )
+    # The order's limit above the touch, in dollars (0.02 = 2¢), never above
+    # PK_MAX_ENTRY_PX. The decision and its size stay at the touch. The Helix holdout
+    # supported +2¢ (research/PREREG.md C1); it changes fills, so bump the epoch.
+    limit_offset: float = Field(default=0.0, ge=0, le=0.05, validation_alias="PK_LIMIT_OFFSET")
     paper_start_cash_usd: float = Field(
         default=1000.0, gt=0, validation_alias="PK_PAPER_START_CASH_USD"
     )

@@ -415,6 +415,7 @@ class Runtime:
                 "entry_early_s": self.settings.entry_early_s,
                 "entry_late_s": self.settings.entry_late_s,
                 "paper_latency_ms": self.settings.paper_latency_ms,
+                "limit_offset": self.settings.limit_offset,
             },
             "started_ns": self.started_ns,
             "host_load": self.host(),
