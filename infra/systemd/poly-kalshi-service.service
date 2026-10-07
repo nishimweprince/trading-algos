@@ -19,11 +19,14 @@ WorkingDirectory=/home/pk/trading-algos/services/poly-kalshi-service
 ExecStart=/home/pk/trading-algos/.venv/bin/poly-kalshi-service --profile dev
 Restart=always
 RestartSec=5
-# Time for the recorder to flush and write its manifests on stop.
-TimeoutStopSec=30
-# SIGTERM to the service only: its gzip children must outlive it long enough to
-# be fed the last lines and closed (control-group would kill them first and
-# truncate the hour file). Anything left after TimeoutStopSec is SIGKILLed.
+# Time for the trader to close the observer's pipe and for the observer (the
+# pk-observer child: tape, journal, statistics) to drain it, close the hour file
+# and write its manifest. The trader waits up to 25 s for it.
+TimeoutStopSec=45
+# SIGTERM to the trader only: its observer child and the observer's gzip child
+# must outlive it long enough to be fed the last lines and closed (control-group
+# would kill them first and truncate the hour file). The trader exits only after
+# the observer has. Anything left after TimeoutStopSec is SIGKILLed.
 KillMode=mixed
 LimitNOFILE=65536
 NoNewPrivileges=true

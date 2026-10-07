@@ -49,7 +49,7 @@ INVALID = Quote(False)
 
 
 class Book:
-    __slots__ = ("asks", "bids", "last_update_ns", "snapshot_ns")
+    __slots__ = ("asks", "bids", "lag_ms", "last_update_ns", "snapshot_ns")
 
     def __init__(self) -> None:
         self.bids: dict[float, float] = {}
@@ -58,6 +58,9 @@ class Book:
         self.last_update_ns: int | None = None
         # None until a full snapshot arrived: deltas onto nothing are not a book.
         self.snapshot_ns: int | None = None
+        # Receive time minus the venue's own stamp on the latest frame (ms), when
+        # the venue stamps it: how old our view of this book was when it arrived.
+        self.lag_ms: float | None = None
 
     def snapshot(
         self,

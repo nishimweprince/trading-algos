@@ -25,24 +25,53 @@ from typing import Any
 
 __all__ = ["JsonlDaily", "in_epoch", "read_journal"]
 
+DAY_NS = 86_400 * 1_000_000_000
+
 
 class JsonlDaily:
-    """Append JSON lines to ``<dir>/<YYYY-MM-DD>.jsonl`` by the record's event time."""
+    """Append JSON lines to ``<dir>/<YYYY-MM-DD>.jsonl`` by the record's event time.
+
+    The day's file stays open (one ``open`` per day, not per record: the observer
+    writes ~100 shadow records at every roll) and every line is flushed, so a
+    reader sees it at once and a crash loses nothing written.
+    """
 
     def __init__(self, directory: Path | None) -> None:
         self.directory = directory
         self.errors = 0
+        self._day: str | None = None
+        self._day_end_ns = 0
+        self._handle: Any = None
 
     def write(self, t_ns: int, record: dict[str, Any]) -> None:
         if self.directory is None:
             return
-        day = datetime.fromtimestamp(t_ns / 1e9, UTC).strftime("%Y-%m-%d")
         try:
-            self.directory.mkdir(parents=True, exist_ok=True)
-            with (self.directory / f"{day}.jsonl").open("a") as handle:
-                handle.write(json.dumps(record, separators=(",", ":"), default=str) + "\n")
+            if self._handle is None or t_ns >= self._day_end_ns or t_ns < self._day_end_ns - DAY_NS:
+                self._open_day(t_ns)
+            self._handle.write(json.dumps(record, separators=(",", ":"), default=str) + "\n")
+            self._handle.flush()
         except OSError:
             self.errors += 1  # a record must never stop the engine
+            self.close()
+
+    def _open_day(self, t_ns: int) -> None:
+        assert self.directory is not None
+        self.close()
+        stamp = datetime.fromtimestamp(t_ns / 1e9, UTC)
+        self._day = stamp.strftime("%Y-%m-%d")
+        start = datetime(stamp.year, stamp.month, stamp.day, tzinfo=UTC)
+        self._day_end_ns = int(start.timestamp()) * 1_000_000_000 + DAY_NS
+        self.directory.mkdir(parents=True, exist_ok=True)
+        self._handle = (self.directory / f"{self._day}.jsonl").open("a")
+
+    def close(self) -> None:
+        if self._handle is not None:
+            try:
+                self._handle.close()
+            except OSError:
+                pass
+            self._handle = None
 
 
 def in_epoch(records: list[dict[str, Any]], epoch: str | None) -> tuple[list[dict[str, Any]], int]:

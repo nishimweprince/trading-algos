@@ -126,3 +126,60 @@ ends the epoch-4 holdout for parts 2 and 3: their counts are read on epoch 4 as 
 as it went, and nothing from epoch 4 decided this change. From epoch 5, `live` is
 0.15 and the `t10` shadow variant measures the old rule; the part 2 and 3 tests
 run unchanged against `live`, counted from epoch 5's start.
+
+---
+
+# Part 4: assets, cap, threshold and the stale-frame filter (registered 2026-10-07, before deploy)
+
+**What has been read.** The export `pk-export-dublin-dev-20261007T101722Z` (all of
+epochs 3 and 4, and epoch 5 up to 10:13 UTC, about 17.5 h): 93 settled paper trades and
+346 shadow entries. The hypotheses below come from that read and from the Helix
+discovery and holdout, so none of them can be tested on it. The count for this part
+starts at the deploy of the commit that adds this text. **Live parameters are unchanged**
+(epoch 5: gap 0.15, cap 0.60, 20/60 s, 150 ms, +2¢ limit); this deploy moves only the
+statistics into the observer process, which decides nothing. The part 2 and 3 counts
+continue.
+
+What the read showed (none of it significant):
+
+- Without BTC and SOL the run's settled paper P&L is +$195.5 (n 56) against +$49.5
+  (n 93). Most of the difference is BTC's size (an average $41 filled, against $6–22 on
+  the other assets), not its edge per share: BTC −3.0¢/share, BNB −13.9, DOGE −14.5, SOL
+  −14.8, HYPE +8.8, XRP +19.8, ETH +26.0 (ETH's +$207 is mostly three 0.20-era trades).
+  BTC was also the one asset below zero on Helix: −0.2¢ in the holdout (n 317), −0.9¢ on
+  our tape after fills.
+- The 0.10 era lost −$284.0 in all (−$70.1 without BTC and SOL); the 0.20 hour made
+  +$295.9 and epoch 5 (0.15) +$37.6.
+- Helix: cap 0.50 +8.44¢ vs base +6.91¢ (holdout); 0.20 beats 0.15 per day at 150 ms and
+  +2¢ in discovery (1,262 vs 1,096 ¢/day); a Polymarket spread of 1¢ or less +9.1¢, above
+  0.10 −2.3¢.
+- At decisions the Polymarket feed's frame lag was p50 67 ms, p90 231 ms, and the leg's
+  book age reached 1.9 s (p99).
+
+Tests (each on ≥ 300 settled `live` entries counted from this deploy, the daily
+difference's day-t ≥ 2, window-clustered s.e. reported; a holding result goes to the
+owner with the numbers, nothing is applied automatically):
+
+- **A1. Without BTC and SOL.** `research.readout --exclude-assets BTC,SOL` against the
+  full read: settled paper P&L and net ¢/share at the real fill, per day, and the `live`
+  shadow net at the touch. Paper positions share no risk budget, so the reduced read is
+  exactly what not trading them would have produced; BTC and SOL keep trading in paper.
+  Read alongside: $ filled per entry per asset (BTC carries most of the capacity).
+- **A2. Cap 0.50.** `cap50` minus `live`, net ¢/share at the touch per day.
+- **A3. Threshold 0.20 under a 0.50 cap.** `t20_cap50` minus `live`, **sum** of net
+  ¢/share per day (it trades less by design). `t20` is reported.
+- **A4. Polymarket spread ≤ 1¢.** `pspread01` minus `live`, sum per day.
+- **A5. Fresh Polymarket frame.** `plag250`: no decision while the cheap leg's latest
+  frame arrived more than 250 ms after Polymarket stamped it (the window is not
+  consumed). Sum per day. The lag includes clock skew between the hosts; it is read on
+  the same host as `live`, so the skew is common to both.
+
+Execution option, not a test: `PK_SIZE_TO_DEPTH=true` orders at most the shares offered
+at or below the limit at the decision. On paper it changes almost nothing (the venue
+fills only what is offered); it is the order size a live run would send, and it is in
+the config hash when on.
+
+**The AWS move.** If the paper host moves to AWS eu-west-1 (infra/systemd/README.md,
+"Moving poly-kalshi to AWS"), the results epoch is bumped at the switch, because fills
+depend on latency. Each test then counts the two epochs separately and reports both; it
+passes only if the pooled day-t is ≥ 2 and the sign matches in each.

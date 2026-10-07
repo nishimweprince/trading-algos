@@ -235,6 +235,9 @@ async function tick() {
     ["Kalshi feed p50 / p99", pq("feed_ms_k", "ms"), (lat.feed_ms_k || {}).p99 > 1000 ? "bad" : ""],
     ["messages / s (Poly · Kalshi)", `${f(rates.poly, 0)} · ${f(rates.kalshi, 0)}`],
     ["engine per message p50 / p99", pq("engine_us", "µs")], ["event-loop lag p50 / p99", pq("loop_lag_ms", "ms", 1), (lat.loop_lag_ms || {}).p99 > 100 ? "bad" : ""],
+    ["GC pause young / full p99", `${f((lat.gc_ms || {}).p99, 1)} / ${f((lat.gc2_ms || {}).p99, 1)} ms`, (lat.gc2_ms || {}).p99 > 50 ? "warn" : ""],
+    ["observer (stats process)", (() => { const o = (live && live.observer) || {}; if (!o.enabled) return "off (in-process)"; return (o.alive ? "up" : "DOWN") + ` · behind ${f(o.behind_ms, 0)} ms · dropped ${o.dropped ?? 0}`; })(), live && live.observer && live.observer.enabled && !live.observer.alive ? "bad" : ""],
+    ["PolyBolt (spot + TWAP)", (() => { const p = ((live && live.observer) || {}).polybolt || {}; if (!p.enabled && p.connected == null) return "off (no CLOB credentials)"; return (p.connected ? "up" : "down") + ` · ${p.messages ?? 0} msgs`; })()],
     ["Kalshi book age at decision", pq("age_ms_kalshi", "ms")], ["Poly book age at decision", pq("age_ms_poly", "ms")],
     ["result delay Poly / Kalshi (p50)", `${f((lat.resolution_s_poly || {}).p50, 0)} / ${f((lat.resolution_s_kalshi || {}).p50, 0)} s`]]));
   const S = res.signal || {};

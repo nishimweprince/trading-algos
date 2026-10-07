@@ -242,3 +242,40 @@ def test_page_script_has_no_double_quotes_inside_double_quoted_html() -> None:
         for literal in re.findall(r'put\("[^"]+", "((?:[^"\\]|\\.)*)"', line):
             assert "=" not in literal or "='" in literal or '="' not in literal, line[:120]
         assert not re.search(r'put\("[^"]+", "[^"]*<[^>"]*\w="', line), line[:120]
+
+
+def test_merge_observer_folds_in_the_statistics_process() -> None:
+    from poly_kalshi_service.status_app import merge_observer, pick
+
+    trader = {
+        "observer": {"enabled": True, "alive": True, "dropped": 0},
+        "recorder": {"enabled": True, "in": "observer"},
+        "engine": {
+            "latency": {"engine_us": {"p50": 40}, "loop_lag_ms": {"p50": 0.3}},
+            "counters": {"fills": 2},
+        },
+    }
+    obs = {
+        "behind_ms": 3.2,
+        "gaps": 0,
+        "engine_errors": 0,
+        "engine": {
+            "latency": {"feed_ms_p": {"p50": 11}, "engine_us": {"p50": 999}},
+            "counters": {"bbo_checks_pc": 5, "fills": 0},
+        },
+        "recorder": {"enabled": True, "lines_written": 10, "dropped": 0},
+        "polybolt": {"enabled": False},
+    }
+    merged = merge_observer(trader, obs)
+    assert merged is not None
+    lat = merged["engine"]["latency"]
+    assert lat["feed_ms_p"]["p50"] == 11 and lat["engine_us"]["p50"] == 40  # the trader's own
+    assert merged["engine"]["counters"] == {"bbo_checks_pc": 5, "fills": 2}
+    assert merged["recorder"]["lines_written"] == 10
+    picked = pick(merged)
+    assert picked is not None and picked["observer"]["behind_ms"] == 3.2
+    assert picked["observer"]["polybolt"] == {"enabled": False}
+    down = merge_observer(trader, None)
+    assert down is not None and down["observer"]["api"] == "down"
+    # Without an observer the trader's status is used as it is.
+    assert merge_observer({"observer": {"enabled": False}}, obs) == {"observer": {"enabled": False}}

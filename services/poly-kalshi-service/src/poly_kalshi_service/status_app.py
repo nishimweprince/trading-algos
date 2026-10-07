@@ -12,7 +12,11 @@
 **Load on the trader is fixed, not per viewer.** One background poller reads the
 service's ``/v1/status`` every ``LIVE_POLL_SECONDS`` and the journal on disk
 every ``JOURNAL_EVERY``, and pulls only the *new* per-second price points
-from ``/v1/series``; requests are answered from that cache. Ten open tabs
+from ``/v1/series``; requests are answered from that cache. With the observer
+process on (``PK_OBSERVER``, the default) the recorder, feed latencies, data
+quality counters and the series come from the observer's own API
+(``PK_OBSERVER_PORT``), so the trader answers only its small status, once per
+poll (``merge_observer``). Ten open tabs
 cost the trading process exactly what none do. Results (daily P&L, equity
 curve, trades, gates) come from the journal files, never from the service.
 
@@ -123,6 +127,21 @@ def pick(status: dict[str, Any] | None) -> dict[str, Any] | None:
             ("enabled", "lines_written", "dropped", "errors", "disk_free_gb", "disk_paused"),
         ),
         "latency": engine.get("latency"),
+        "observer": _keep(
+            status.get("observer"),
+            (
+                "enabled",
+                "alive",
+                "spawns",
+                "dropped",
+                "buffer_bytes",
+                "fallback_writes",
+                "behind_ms",
+                "gaps",
+                "engine_errors",
+                "polybolt",
+            ),
+        ),  # fmt: skip
         "host_load": status.get("host_load"),
         "telegram": _keep(status.get("telegram"), ("handled", "errors", "conflicts")),
         "ledger": engine.get("ledger"),
@@ -149,22 +168,68 @@ def pick(status: dict[str, Any] | None) -> dict[str, Any] | None:
     }
 
 
+def merge_observer(
+    status: dict[str, Any] | None, obs: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """The trader's status with the observer's statistics folded in.
+
+    The observer owns the recorder, the feed-latency samples, the result delays
+    and the data-quality counters; the trader owns ``engine_us``, ``loop_lag_ms``,
+    the GC pauses, the book ages at decisions and the trade counters.
+    """
+    if status is None:
+        return None
+    link = dict(status.get("observer") or {})
+    if not link.get("enabled"):
+        return status
+    status = dict(status)
+    engine = dict(status.get("engine") or {})
+    if obs is None:
+        link["alive"] = False if link.get("alive") is None else link["alive"]
+        link["api"] = "down"
+        status["observer"] = link
+        status["recorder"] = {"enabled": True, "observer": "unreachable"}
+        return status
+    o_engine = obs.get("engine") or {}
+    engine["latency"] = {**(o_engine.get("latency") or {}), **(engine.get("latency") or {})}
+    engine["counters"] = {**(o_engine.get("counters") or {}), **(engine.get("counters") or {})}
+    status["engine"] = engine
+    status["recorder"] = obs.get("recorder") or {"enabled": False}
+    polybolt = obs.get("polybolt") or {}
+    link.update(
+        behind_ms=obs.get("behind_ms"),
+        gaps=obs.get("gaps"),
+        engine_errors=obs.get("engine_errors"),
+        polybolt=_keep(polybolt, ("enabled", "connected", "authed", "messages", "errors"))
+        if polybolt.get("enabled", True)
+        else {"enabled": False},
+    )
+    status["observer"] = link
+    return status
+
+
 def _service_fetchers(settings: Settings, http: httpx.AsyncClient) -> tuple[Fetch, FetchSeries]:
     base = f"http://127.0.0.1:{settings.port}"
+    obs_base = f"http://127.0.0.1:{settings.observer_port}"
     headers = {"X-API-Key": settings.api_key.get_secret_value()}
 
-    async def get(path: str, **params: Any) -> dict[str, Any] | None:
+    async def get(url: str, **params: Any) -> dict[str, Any] | None:
         try:
-            response = await http.get(base + path, params=params, headers=headers, timeout=5.0)
+            response = await http.get(url, params=params, headers=headers, timeout=5.0)
         except httpx.HTTPError:
             return None
         return response.json() if response.status_code == 200 else None
 
     async def fetch() -> dict[str, Any] | None:
-        return await get("/v1/status")
+        status = await get(base + "/v1/status")
+        if not settings.observer_enabled:
+            return status
+        return merge_observer(status, await get(obs_base + "/v1/obs/status"))
 
     async def fetch_series(since: int) -> dict[str, Any] | None:
-        return await get("/v1/series", since=since)
+        # The trader samples no series when the observer runs.
+        source = obs_base if settings.observer_enabled else base
+        return await get(source + "/v1/series", since=since)
 
     return fetch, fetch_series
 

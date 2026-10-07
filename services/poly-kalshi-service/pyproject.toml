@@ -33,6 +33,7 @@ research = ["numpy>=1.26", "pandas>=2.2", "pyarrow>=17", "zstandard>=0.22"]
 [project.scripts]
 poly-kalshi-service = "poly_kalshi_service.main:run"
 pk-status = "poly_kalshi_service.status_app:run"
+pk-observer = "poly_kalshi_service.observer:run"
 pk-unit-alert = "poly_kalshi_service.unit_alert:main"
 
 [tool.hatch.build.targets.wheel]

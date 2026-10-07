@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import orjson
 from ta_core.logging_config import log_event
 
 __all__ = ["Ledger", "Position"]
@@ -103,7 +104,8 @@ class Ledger:
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(body, indent=1))
+        # orjson: this runs on the trader's loop at every buy and settlement.
+        tmp.write_bytes(orjson.dumps(body, option=orjson.OPT_INDENT_2))
         os.replace(tmp, self.path)
 
     def open_positions(self) -> list[Position]:

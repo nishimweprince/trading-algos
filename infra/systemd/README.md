@@ -209,3 +209,44 @@ sudo systemctl daemon-reload && sudo systemctl enable --now poly-kalshi-service 
 
 Before this (until 2026-10-07) they were started by hand, and a reboot left the
 tunnel (`poly.nishimweprince.dev` → `127.0.0.1:8051`) answering 502.
+
+## Moving poly-kalshi to AWS eu-west-1 (Dublin)
+
+Polymarket's CLOB origin is AWS eu-west-2 (London), behind Cloudflare. eu-west-1 is
+the nearest region Polymarket allows to trade from (the UK is close-only). The Azure
+North Europe host is also in Dublin, so the question is measured, not assumed:
+**is the AWS host's Polymarket feed lag and CLOB round trip better by enough?**
+
+1. **Instance.** Ubuntu 24.04, ≥ 4 vCPU on a compute-optimised type (c7i.xlarge or
+   c7g.xlarge), an EBS gp3 data volume of ≥ 200 GB mounted at `/data` (`/etc/fstab`
+   with `nofail`), chrony on (`sudo apt install chrony`; Amazon Time Sync is at
+   169.254.169.123 and is the default on the AWS images). Security group: inbound SSH
+   only. No 8050/8051/8052.
+2. **User, checkout, units.** As in "poly-kalshi (London VM)" above (user `pk`,
+   `/data/pk`). Copy `.env.dev` from Dublin, then change:
+   - `PK_HOST_TAG=aws-euw1`
+   - `PK_RECORD_DIR=/data/pk/raw/dev`
+   - **`PK_EXECUTION_MODE=off`** for the comparison (records, decides, observes; no
+     paper orders, no ledger change)
+   - **remove `PK_TELEGRAM_BOT_TOKEN`** until the cutover: two hosts polling one bot
+     token steal each other's updates.
+   - Same `PK_RESULTS_EPOCH` for now.
+3. **24 h side by side.** Both hosts run. On each:
+   `python -m research.netprobe --minutes 1440` (REST round trip to the CLOB and Kalshi),
+   and the live feed lags on the status page or `/v1/obs/status` → `engine.latency`:
+   `feed_ms_p` and `feed_ms_k` (receive time minus the venue's stamp; both hosts run
+   chrony against nearby sources, so the skew is small and similar), plus
+   `observer.behind_ms` and the trader's `loop_lag_ms`.
+4. **Decide** (PLAN 5.1): move if AWS improves `feed_ms_p` p50 by > 2 ms or p99 by > 10 ms,
+   or the CLOB round trip p50 by > 2 ms. Otherwise stay on Azure and stop the AWS host.
+5. **Cutover**, if it moves, at a window roll:
+   - On Azure: `sudo systemctl stop poly-kalshi-service pk-status`. Copy
+     `data/state/dev/` (journal and ledger) to the AWS host, so the page keeps the history.
+   - On AWS: `PK_EXECUTION_MODE=paper`, `PK_RESULTS_EPOCH=<n+1>` (fills depend on latency;
+     PREREG part 4 counts the epochs separately), restore `PK_TELEGRAM_BOT_TOKEN`, then
+     `sudo systemctl restart poly-kalshi-service pk-status`.
+   - Move the Cloudflare tunnel (`poly.nishimweprince.dev` → `127.0.0.1:8051`) to the AWS
+     host (infra/cloudflare/README.md).
+   - Leave the Azure host recording with `PK_EXECUTION_MODE=off` for a week if the disk
+     allows: two tapes of the same windows from two hosts measure the latency's effect on
+     the same decisions.

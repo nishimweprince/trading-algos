@@ -209,3 +209,20 @@ def test_shift_lines_delays_a_venue_and_re_merges_by_the_new_time() -> None:
     assert stats["reordered"] == 2  # p1 now precedes k1, p2 precedes k2
     # No shift: the tape is untouched.
     assert list(shift_lines(iter(lines), {}, {})) == lines
+
+
+def test_readout_reads_the_journal_without_excluded_assets() -> None:
+    from research.readout import asset_comparison, without_assets
+
+    records = [
+        {"type": "settle", "asset": "BTC", "open_unix": 1, "shares": 100.0, "pnl": -50.0},
+        {"type": "settle", "asset": "ETH", "open_unix": 1, "shares": 50.0, "pnl": 10.0},
+        {"type": "window", "asset": "BTC", "open_unix": 1},
+    ]
+    assert [r["asset"] for r in without_assets(records, {"BTC"})] == ["ETH"]
+    out = asset_comparison(records, {"BTC"})
+    assert out["all"]["pnl"] == -40.0 and out["all"]["settled"] == 2
+    assert out["without"] == {
+        "settled": 1, "pnl": 10.0, "net_cents_per_share": 20.0,
+        "shadow_live": {"n": None, "net_cents": None, "se_cluster_cents": None},
+    }  # fmt: skip

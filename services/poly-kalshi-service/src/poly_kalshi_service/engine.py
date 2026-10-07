@@ -33,14 +33,30 @@ asset's current window, not on a one-second sample.
   leg's best bid and its size at each of ``EXIT_S``, and the first time
   (``exit_gap_s``) the gap closed to ``EXIT_GAP`` or less, with the bid then.
   The record is written at the last horizon, 120 s after the fill.
+
+**Roles: the trade path and the statistics are separate** (``role``):
+
+- ``trade`` is what the live trader process runs: books, the live decision, the
+  paper venue, the ledger, and the ``decision``, ``fill`` and ``settle``
+  records. Nothing else runs on its event loop: no shadow variants, no
+  markouts, no per-second series, no uncensored gap, no BBO cross-checks, no
+  feed-latency samples, no ``window`` / ``resolution`` records.
+- ``observe`` is what the observer process runs on the same lines, a few ms
+  behind (``observer.py``): everything ``trade`` skips. It decides the live rule
+  too, so a window is consumed exactly as the trader consumed it, but it never
+  orders, never touches a ledger and writes no ``decision``/``fill``/``settle``
+  record. Markouts start from the trader's fills (``note_fill``).
+- ``full`` is both in one object: replay and tests, and the reference the
+  split is checked against (``tests/test_roles.py``).
 """
 
 from __future__ import annotations
 
 import logging
+import math
 from collections import Counter, deque
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import orjson
@@ -57,7 +73,9 @@ from .trades import JsonlDaily
 from .venue import Venue
 from .windows import Window, window_open
 
-__all__ = ["AssetState", "Engine"]
+__all__ = ["ROLES", "AssetState", "Engine"]
+
+ROLES = ("full", "trade", "observe")
 
 NS = 1_000_000_000
 SERIES_POINTS = 2 * WINDOW_S
@@ -127,7 +145,17 @@ class Engine:
         stamp: dict[str, str] | None = None,
         shadow: Shadow | None = None,
         limit_offset: float = 0.0,
+        role: str = "full",
+        size_to_depth: bool = False,
     ) -> None:
+        if role not in ROLES:
+            raise ValueError(f"role must be one of {ROLES}, not {role!r}")
+        self.role = role
+        self.trade = role in ("full", "trade")
+        self.observe = role in ("full", "observe")
+        # Order no more than the shares offered at or below the limit at the
+        # decision (PREREG part 4). Off by default; it changes the order's size.
+        self.size_to_depth = size_to_depth
         self.params = params
         self.assets = assets
         # epoch / build / config, added to every journal record.
@@ -168,11 +196,12 @@ class Engine:
     def handle_line(self, recv_ns: int, venue: str, text: str) -> None:
         self.last_ns = recv_ns
         self.last_by_venue[venue] = recv_ns
-        sec = recv_ns // NS
-        if sec != self._sample_sec:
-            if self._sample_sec is not None:
-                self._sample(self._sample_sec)  # the books as they stood at its end
-            self._sample_sec = sec
+        if self.observe:
+            sec = recv_ns // NS
+            if sec != self._sample_sec:
+                if self._sample_sec is not None:
+                    self._sample(self._sample_sec)  # the books as they stood at its end
+                self._sample_sec = sec
         grid = window_open(recv_ns / NS)
         if grid != self._grid_open:
             self._grid_open = grid
@@ -181,6 +210,10 @@ class Engine:
             self._resolve_pending(recv_ns)
         if self.markouts:
             self._resolve_markouts(recv_ns)
+        if venue not in ("p", "k", "c"):
+            # e.g. ``b``, the PolyBolt reference prices: recorded, never traded on.
+            self.counters["unknown_venue"] += 1
+            return
         try:
             body = orjson.loads(text)
         except ValueError:
@@ -190,11 +223,8 @@ class Engine:
             touched = self._poly(body, recv_ns)
         elif venue == "k":
             touched = self._kalshi(body, recv_ns)
-        elif venue == "c":
-            touched = self._control(body, recv_ns)
         else:
-            self.counters["unknown_venue"] += 1
-            return
+            touched = self._control(body, recv_ns)
         for asset in touched:
             self._evaluate(asset, recv_ns)
 
@@ -259,7 +289,7 @@ class Engine:
                 self.resolutions.pop((asset, open_unix), None)
 
     def _close_window(self, asset: str, st: AssetState, recv_ns: int) -> None:
-        if st.open_unix is None:
+        if st.open_unix is None or not self.observe:
             return
         if st.window is None:
             self.counters["windows_unidentified"] += 1
@@ -301,10 +331,17 @@ class Engine:
 
     def _poly(self, body: Any, recv_ns: int) -> set[str]:
         touched: set[str] = set()
+        observe = self.observe
+        # The trader reads each book's frame lag only when the live rule uses it.
+        want_lag = observe or self.params.max_poly_lag_ms is not None
+        lag: float | None = None
         for msg in body if isinstance(body, list) else [body]:
             if not isinstance(msg, dict):
                 continue
-            self._feed_latency("feed_ms_p", msg.get("timestamp"), recv_ns)
+            if want_lag:
+                lag = _lag_ms(msg.get("timestamp"), recv_ns)
+                if observe and lag is not None:
+                    self.metrics.add("feed_ms_p", lag)
             kind = msg.get("event_type") or ("book" if "bids" in msg else None)
             if kind == "book":
                 book = self._book_for(str(msg.get("asset_id")))
@@ -315,6 +352,8 @@ class Engine:
                     [(px(lv["price"]), float(lv["size"])) for lv in msg.get("asks", [])],
                     recv_ns,
                 )
+                if want_lag:
+                    book.lag_ms = lag
                 touched.add(self.ids[str(msg["asset_id"])][0])
             elif kind == "price_change":
                 for change in msg.get("price_changes", []):
@@ -324,12 +363,15 @@ class Engine:
                         continue
                     side = "bid" if change.get("side") == "BUY" else "ask"
                     book.set_level(side, px(change["price"]), float(change["size"]), recv_ns)
-                    self._bbo_seen += 1
-                    every = self.bbo_check_every
-                    if self._bbo_seen % every == 1 % every:  # the 1st, then every nth
-                        self._check_bbo(book, change, "pc")
+                    if want_lag:
+                        book.lag_ms = lag
+                    if observe:
+                        self._bbo_seen += 1
+                        every = self.bbo_check_every
+                        if self._bbo_seen % every == 1 % every:  # the 1st, then every nth
+                            self._check_bbo(book, change, "pc")
                     touched.add(self.ids[book_id][0])
-            elif kind == "best_bid_ask":
+            elif kind == "best_bid_ask" and observe:
                 book = self._book_for(str(msg.get("asset_id")))
                 if book is not None and book.snapshot_ns is not None:
                     self._check_bbo(book, msg, "event")
@@ -373,19 +415,17 @@ class Engine:
 
     def _feed_latency(self, name: str, venue_ms: Any, recv_ns: int) -> None:
         """Receive time minus the venue's own timestamp (ms). Includes clock skew."""
-        if isinstance(venue_ms, str):
-            if not venue_ms.isdigit():
-                return
-            venue_ms = int(venue_ms)
-        if isinstance(venue_ms, int | float) and venue_ms > 0:
-            self.metrics.add(name, recv_ns / 1e6 - venue_ms)
+        lag = _lag_ms(venue_ms, recv_ns)
+        if lag is not None:
+            self.metrics.add(name, lag)
 
     def _kalshi(self, body: dict[str, Any], recv_ns: int) -> set[str]:
         kind = body.get("type")
         msg = body.get("msg") or {}
         if kind not in ("orderbook_snapshot", "orderbook_delta"):
             return set()
-        self._feed_latency("feed_ms_k", msg.get("ts_ms") or body.get("sending_ts_ms"), recv_ns)
+        if self.observe:
+            self._feed_latency("feed_ms_k", msg.get("ts_ms") or body.get("sending_ts_ms"), recv_ns)
         ticker = str(msg.get("market_ticker"))
         book = self._book_for(ticker)
         if book is None:
@@ -410,7 +450,7 @@ class Engine:
             window = Window.from_control(body)
             self._register(window, recv_ns)
             return {window.asset} if window.asset in self.state else set()
-        if kind in ("reconnect", "resync"):
+        if kind in ("reconnect", "resync") and body.get("venue") in ("k", "p"):
             prefix = body.get("venue")
             tokens = body.get("tokens")
             if isinstance(tokens, list):
@@ -451,6 +491,11 @@ class Engine:
             return 0.0
         return sum(size for _p, size in book.asks_upto(limit))
 
+    def _lags(self, window: Window) -> tuple[float | None, float | None]:
+        """Frame lag (ms) of the YES and NO books' latest updates."""
+        y, n = self.books.get(window.yes_token), self.books.get(window.no_token)
+        return (None if y is None else y.lag_ms, None if n is None else n.lag_ms)
+
     def _track_gap(self, st: AssetState, k: Quote, y: Quote, sec_into: float) -> None:
         """The uncensored gap: every update inside the entry window, consumed or not."""
         if not self.params.entry_early_s <= sec_into <= WINDOW_S - self.params.entry_late_s:
@@ -476,29 +521,50 @@ class Engine:
         k, y, n = quotes
         window = st.window
         sec_into = recv_ns / NS - window.open_unix
-        self._track_gap(st, k, y, sec_into)
-        if self.shadow:
-            self.shadow.evaluate(
-                (asset, window.open_unix),
-                quotes,
-                sec_into,
-                recv_ns,
-                lambda buy_yes, limit: self._depth(window, buy_yes, limit),
-                (window.fee_rate, window.fee_exponent),
-            )
+        if self.observe:
+            self._track_gap(st, k, y, sec_into)
+            if self.shadow:
+                self.shadow.evaluate(
+                    (asset, window.open_unix),
+                    quotes,
+                    sec_into,
+                    recv_ns,
+                    lambda buy_yes, limit: self._depth(window, buy_yes, limit),
+                    (window.fee_rate, window.fee_exponent),
+                    self._lags(window),
+                )
         if st.traded:
             return
-        decision = decide(k, y, n, self.params, sec_into, st.traded)
+        lags = self._lags(window) if self.params.max_poly_lag_ms is not None else None
+        decision = decide(k, y, n, self.params, sec_into, st.traded, poly_lag_ms=lags)
         st.evals += 1
-        st.reasons[decision.reason or decision.action.value] += 1
-        if decision.reason == "invalid_leg":
-            self._count_invalid_legs(st.window)
+        if self.observe:
+            st.reasons[decision.reason or decision.action.value] += 1
+            if decision.reason == "invalid_leg":
+                self._count_invalid_legs(st.window)
         if decision.gap is not None:
             st.last_gap = decision.gap
             st.max_abs_gap = max(st.max_abs_gap, abs(decision.gap))
         if not decision.consumes_window:
             return
         st.traded = True
+        if not self.trade:
+            # The observer consumes the window as the trader did; the trader
+            # writes the decision record and places the order.
+            st.decision = {
+                "action": decision.action.value,
+                "side": "yes" if decision.buy_yes else "no",
+                "entry_px": decision.entry_px,
+                "sec_into": round(sec_into, 3),
+                "gap": round(decision.gap or 0.0, 4),
+            }
+            return
+        if decision.action is Action.ENTER and self.size_to_depth:
+            assert decision.entry_px is not None
+            offered = self._depth(window, bool(decision.buy_yes), self.limit_px(decision.entry_px))
+            capped = max(1, min(decision.contracts, math.floor(offered)))
+            if capped < decision.contracts:
+                decision = replace(decision, contracts=capped)
         ages = {
             leg: None if b is None or b.last_update_ns is None
             else round((recv_ns - b.last_update_ns) / 1e6, 1)
@@ -627,25 +693,14 @@ class Engine:
             "depth_at_limit": round(depth, 2),
         }
         self.counters["fills" if result.shares > 0 else "no_fills"] += 1
-        self.markouts.append(
-            _Markout(
+        if self.observe:
+            self._add_markout(
                 recv_ns,
-                order.token,
-                result.vwap if result.vwap is not None else limit,
-                {
-                    "type": "markout",
-                    "asset": window.asset,
-                    "open_unix": window.open_unix,
-                    "side": order.side,
-                    "filled": result.shares > 0,
-                    "ref_px": round(result.vwap, 4) if result.vwap is not None else limit,
-                    "exit_gap_s": None,
-                    "exit_gap_bid": None,
-                    "exit_gap_bid_size": None,
-                },
                 window,
+                order.side,
+                result.shares > 0,
+                result.vwap if result.vwap is not None else limit,
             )
-        )
         if result.shares > 0:
             self.ledger.buy(
                 Position(
@@ -662,6 +717,47 @@ class Engine:
             if known is not None:
                 self._settle(window.asset, window.open_unix, known, recv_ns)
         self._write(recv_ns, record)
+
+    def _add_markout(
+        self, fill_ns: int, window: Window, side: str, filled: bool, ref_px: float
+    ) -> None:
+        token = window.yes_token if side == "yes" else window.no_token
+        self.markouts.append(
+            _Markout(
+                fill_ns,
+                token,
+                ref_px,
+                {
+                    "type": "markout",
+                    "asset": window.asset,
+                    "open_unix": window.open_unix,
+                    "side": side,
+                    "filled": filled,
+                    "ref_px": round(ref_px, 4),
+                    "exit_gap_s": None,
+                    "exit_gap_bid": None,
+                    "exit_gap_bid_size": None,
+                },
+                window,
+            )
+        )
+
+    def note_fill(self, record: dict[str, Any]) -> None:
+        """The observer's side of a trader ``fill`` record: start its markout.
+
+        The trader's fill happens at the start of a line; this arrives right after
+        that line, so the markout's first gap-closure check is one line later than
+        in the ``full`` engine. Horizons are timed from the fill's own ``t_ns``.
+        """
+        if not self.observe or record.get("type") != "fill":
+            return
+        window = self.windows.get(record.get("asset", ""), {}).get(int(record["open_unix"]))
+        if window is None:
+            return
+        ref = record["vwap"] if record.get("vwap") is not None else record["limit_px"]
+        self._add_markout(
+            int(record["t_ns"]), window, record["side"], record["shares"] > 0, float(ref)
+        )
 
     def _resolve_markouts(self, recv_ns: int) -> None:
         """At the first event past each horizon, read the cheap leg's book as it stood.
@@ -729,23 +825,25 @@ class Engine:
         if venue in seen:
             return
         seen[venue] = outcome
-        delay_s = round(recv_ns / NS - (open_unix + WINDOW_S), 1)
-        self.metrics.add(f"resolution_s_{venue}", delay_s)
-        self._write(
-            recv_ns,
-            {
-                "type": "resolution",
-                "asset": asset,
-                "open_unix": open_unix,
-                "venue": venue,
-                "outcome": outcome,
-                "delay_s": delay_s,
-            },
-            keep=False,
-        )
-        if venue == "poly":
-            for record in self.shadow.settle((asset, open_unix), outcome):
-                self._write(recv_ns, record, keep=False)
+        if self.observe:
+            delay_s = round(recv_ns / NS - (open_unix + WINDOW_S), 1)
+            self.metrics.add(f"resolution_s_{venue}", delay_s)
+            self._write(
+                recv_ns,
+                {
+                    "type": "resolution",
+                    "asset": asset,
+                    "open_unix": open_unix,
+                    "venue": venue,
+                    "outcome": outcome,
+                    "delay_s": delay_s,
+                },
+                keep=False,
+            )
+            if venue == "poly":
+                for record in self.shadow.settle((asset, open_unix), outcome):
+                    self._write(recv_ns, record, keep=False)
+        if venue == "poly" and self.trade:
             self._settle(asset, open_unix, outcome, recv_ns)
 
     def _settle(self, asset: str, open_unix: int, outcome: str, recv_ns: int) -> None:
@@ -860,6 +958,17 @@ class Engine:
             "ledger": self.ledger.snapshot(now) if now else None,
             "risk": self.risk.snapshot(),
         }
+
+
+def _lag_ms(venue_ms: Any, recv_ns: int) -> float | None:
+    """Receive time minus the venue's own stamp (ms), or None without one."""
+    if isinstance(venue_ms, str):
+        if not venue_ms.isdigit():
+            return None
+        venue_ms = int(venue_ms)
+    if isinstance(venue_ms, int | float) and venue_ms > 0:
+        return recv_ns / 1e6 - venue_ms
+    return None
 
 
 def _r(value: float | None) -> float | None:

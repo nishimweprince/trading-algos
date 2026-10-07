@@ -115,7 +115,7 @@ def test_parse_variants_keeps_live_values_and_rejects_bad_names() -> None:
 
 
 def test_settings_validate_shadow_variants(tmp_path: Path) -> None:
-    assert len(make_settings(tmp_path).shadow_variants) == 14
+    assert len(make_settings(tmp_path).shadow_variants) == 17
     with pytest.raises(ValidationError, match="PK_SHADOW_VARIANTS"):
         make_settings(tmp_path, PK_SHADOW_VARIANTS='{"not": "a list"}')
 

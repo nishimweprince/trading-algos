@@ -1,9 +1,19 @@
-"""The live process: feeds -> one clock -> recorder + engine; window and resolution loops.
+"""The live process: feeds -> one clock -> observer pipe + engine; window and resolution loops.
 
 ``ingest(venue, text)`` is the only way a line enters. It stamps the line from
-one strictly increasing clock, writes it to the tape, then hands it to the
-engine, all on the event loop. That makes the tape a faithful, ordered record
-of what the engine saw, and ``research.replay`` re-runs it exactly.
+one strictly increasing clock, hands it to the observer process (which writes
+the tape and computes every statistic, ``observer.py``), then to the trading
+engine, all on the event loop. The observer gets the lines in the same order
+with the same stamps, so the tape is still a faithful, ordered record of what
+the engine saw, and ``research.replay`` re-runs it exactly. With
+``PK_OBSERVER=false`` the recorder and the full engine run in this process, as
+before.
+
+**The event loop is the trade path.** Per line it does a stamp, a list append
+for the observer, and the engine's book update and live decision. Status is
+answered from state already in memory and serialised with orjson. After startup
+the garbage collector is tuned (``tune_gc``) and its pauses are measured
+(``gc_ms`` / ``gc2_ms``), next to ``loop_lag_ms`` and ``engine_us``.
 
 Loops:
 
@@ -21,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import gc
 import json
 import logging
 import os
@@ -36,10 +47,12 @@ from .config import Settings
 from .decision import WINDOW_S
 from .engine import Engine
 from .feeds import KalshiFeed, PolyFeed, PolyShards
+from .metrics import Metrics
+from .observer import ObserverLink
 from .recorder import Recorder
 from .windows import Discovery, Window, window_open
 
-__all__ = ["Runtime"]
+__all__ = ["Runtime", "tune_gc"]
 
 NS = 1_000_000_000
 TICK_SECONDS = 2.0
@@ -49,6 +62,33 @@ RECYCLE_POLY_AFTER_REMOVED = 60  # ~6 windows of 5 assets x 2 tokens
 # Kalshi answered 429 to a burst of per-asset discovery queries at restart:
 # assets are discovered this far apart.
 DISCOVER_STAGGER_S = 0.25
+# Young collections every 20k net allocations instead of 700. Everything alive
+# at startup (and again once the books are warm) is frozen out of the scans.
+GC_THRESHOLD = (20_000, 20, 100)
+GC_REFREEZE_AFTER_S = 60.0
+
+
+_gc_metrics: list[Metrics] = []
+_gc_started = [0.0]
+
+
+def _gc_timer(phase: str, info: dict[str, Any]) -> None:
+    if phase == "start":
+        _gc_started[0] = time.perf_counter()
+        return
+    if _gc_metrics:
+        ms = (time.perf_counter() - _gc_started[0]) * 1000
+        _gc_metrics[0].add("gc2_ms" if info.get("generation") == 2 else "gc_ms", ms)
+
+
+def tune_gc(metrics: Metrics) -> None:
+    """Freeze the startup heap, raise the young threshold, time every collection."""
+    _gc_metrics[:] = [metrics]
+    gc.collect()
+    gc.freeze()
+    gc.set_threshold(*GC_THRESHOLD)
+    if _gc_timer not in gc.callbacks:
+        gc.callbacks.append(_gc_timer)
 
 
 class Runtime:
@@ -64,6 +104,7 @@ class Runtime:
         recorder: Recorder | None = None,
         http: httpx.AsyncClient | None = None,
         clock_ns: Callable[[], int] = time.time_ns,
+        observer: ObserverLink | None = None,
     ) -> None:
         self.settings = settings
         self.engine = engine
@@ -72,6 +113,7 @@ class Runtime:
         self.poly = poly
         self.alerts = alerts
         self.recorder = recorder
+        self.observer = observer
         self.http = http
         self._clock = clock_ns
         self._last_ns = 0
@@ -95,7 +137,9 @@ class Runtime:
         recv_ns = max(self._last_ns + 1, self._clock())
         self._last_ns = recv_ns
         self.lines += 1
-        if self.recorder is not None:
+        if self.observer is not None:
+            self.observer.line(recv_ns, venue, text)
+        elif self.recorder is not None:
             self.recorder.write(venue, recv_ns, text)
         started = time.perf_counter_ns()
         try:
@@ -137,8 +181,13 @@ class Runtime:
 
     async def start(self) -> None:
         self.started_ns = self._clock()
+        if self.observer is not None:
+            await self.observer.start()
         if self.recorder is not None:
             self.recorder.start()
+        if self.settings.gc_freeze:
+            tune_gc(self.engine.metrics)
+            self.spawn(self._refreeze(), "pk-gc-refreeze")
         if self.kalshi is not None:
             self.spawn(self.kalshi.run(), "pk-kalshi")
         if self.poly is not None:
@@ -156,9 +205,17 @@ class Runtime:
         for task in list(self._tasks):
             with contextlib.suppress(BaseException):
                 await task
+        if self.observer is not None:
+            await self.observer.close()
         if self.recorder is not None:
             self.recorder.stop()
         await self.alerts.drain()
+
+    async def _refreeze(self) -> None:
+        """Once the books and windows are warm, freeze them too (one collection)."""
+        await asyncio.sleep(GC_REFREEZE_AFTER_S)
+        gc.collect()
+        gc.freeze()
 
     async def _loop(self, tick: Callable[[], Coroutine[Any, Any, None]], seconds: float) -> None:
         while True:
@@ -354,6 +411,8 @@ class Runtime:
 
     async def health_tick(self) -> None:
         self._sample_cpu()
+        if self.observer is not None:
+            await self.observer.check()
         now_ns = self._clock()
         stale = self.settings.stale_feed_seconds
         for venue, feed in (("k", self.kalshi), ("p", self.poly)):
@@ -425,7 +484,10 @@ class Runtime:
                 "kalshi": self.kalshi.stats() if self.kalshi else None,
                 "poly": self.poly.stats() if self.poly else None,
             },
-            "recorder": self.recorder.stats() if self.recorder else {"enabled": False},
+            "recorder": self.recorder.stats()
+            if self.recorder
+            else {"enabled": self.observer is not None, "in": "observer"},
+            "observer": self.observer.stats() if self.observer else {"enabled": False},
             "alerts": {"recent": self.alerts.sent[-10:], "suppressed": self.alerts.suppressed},
             "engine": self.engine.status(),
             "recent": list(self.engine.recent)[-50:][::-1],

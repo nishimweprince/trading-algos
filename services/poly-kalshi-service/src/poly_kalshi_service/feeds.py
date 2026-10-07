@@ -20,6 +20,14 @@ drop that venue's books until fresh snapshots arrive.
   each with its own reader task and reconnect, assets spread across them. A
   shard's ``reconnect`` control line names the shard and its tokens, so the
   engine drops only those books. The tape stays one stream (venue ``p``).
+- **PolyBolt** (``b``, ``PolyBoltFeed``): Polymarket's reference-price socket
+  (``wss://ws-live-v2.polymarket.com/ws``, 2026-09-15): ``price.crypto`` (Pyth)
+  and ``price.crypto.twap`` (the Chainlink 60 s TWAP the 15-minute markets settle
+  on). Authenticated with CLOB API credentials, ``{"op": "auth"}`` first, then
+  ``{"op": "subscribe", "subscriptions": [...]}``; the server pings every 25 s.
+  It is a research feed (PLAN 4.1, a fast spot signal): the observer records it,
+  the engine ignores venue ``b``. Its connects are written as ``b`` lines, never
+  as ``c`` control lines, which the engine would read as a book reset.
 """
 
 from __future__ import annotations
@@ -39,7 +47,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from ta_core.logging_config import log_event
 
-__all__ = ["KalshiFeed", "KalshiSigner", "PolyFeed", "PolyShards", "WsConnect"]
+__all__ = ["KalshiFeed", "KalshiSigner", "PolyBoltFeed", "PolyFeed", "PolyShards", "WsConnect"]
 
 Emit = Callable[[str, str], None]
 WsConnect = Callable[..., contextlib.AbstractAsyncContextManager[Any]]
@@ -367,6 +375,100 @@ class PolyFeed(_WsFeed):
 
     def stats(self) -> dict[str, Any]:
         return {**super().stats(), "removed_since_connect": self.removed_since_connect}
+
+
+class PolyBoltFeed(_WsFeed):
+    """PolyBolt reference prices for the traded assets, recorded as venue ``b``."""
+
+    venue = "b"
+    SYMBOLS = {
+        "BTC": "btcusd", "ETH": "ethusd", "SOL": "solusd", "XRP": "xrpusd",
+        "BNB": "bnbusd", "DOGE": "dogeusd", "HYPE": "hypeusd",
+    }  # fmt: skip
+    TWAP_WINDOW_S = 60
+
+    def __init__(
+        self,
+        url: str,
+        emit: Emit,
+        credentials: tuple[str, str, str],
+        assets: tuple[str, ...],
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(url, emit, **kwargs)
+        self._credentials = credentials
+        self.wanted = {self.SYMBOLS[a] for a in assets if a in self.SYMBOLS}
+        self._authed = False
+        self.auth_failures = 0
+
+    def _control(self, kind: str, **fields: Any) -> None:
+        # Never a ``c`` line: a replay would read a ``reconnect`` there as a reset
+        # of every Polymarket book.
+        self._emit(self.venue, json.dumps({"type": f"pk_{kind}", "venue": self.venue, **fields}))
+
+    def subscriptions(self, symbols: list[str]) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for symbol in symbols:
+            out.append({"channel": "price.crypto", "filter": {"symbol": symbol}})
+            out.append(
+                {
+                    "channel": "price.crypto.twap",
+                    "filter": {"symbol": symbol, "window_seconds": self.TWAP_WINDOW_S},
+                }
+            )
+        return out
+
+    async def _on_open(self, ws: Any) -> None:
+        self._authed = False
+        key, secret, passphrase = self._credentials
+        await ws.send(
+            json.dumps(
+                {
+                    "op": "auth",
+                    "rid": "auth",
+                    "auth": {"apiKey": key, "secret": secret, "passphrase": passphrase},
+                }
+            )
+        )
+
+    async def _add(self, ws: Any, ids: list[str]) -> None:
+        if not self._authed:
+            return  # subscribed once the auth is acknowledged
+        await ws.send(
+            json.dumps({"op": "subscribe", "rid": "sub", "subscriptions": self.subscriptions(ids)})
+        )
+        self.subscribed.update(ids)
+
+    async def _remove(self, ws: Any, ids: list[str]) -> None:
+        return None  # the symbol set is fixed for the process
+
+    async def _on_message(self, text: str) -> bool:
+        if not self._authed:
+            try:
+                body = orjson.loads(text)
+            except ValueError:
+                body = {}
+            failed = isinstance(body, dict) and (
+                body.get("ok") is False
+                or body.get("error") is not None
+                or body.get("status") == "error"
+            )
+            if failed:
+                self.auth_failures += 1
+                self.errors += 1
+                self.last_error = f"polybolt auth: {text[:150]}"
+                log_event("polybolt_auth_failed", level=logging.WARNING, frame=text[:200])
+                self._emit(self.venue, text)
+                return False
+            # The first frame that is not an error acknowledges the auth.
+            self._authed = True
+            if self._ws is not None and self.wanted:
+                await self._add(self._ws, sorted(self.wanted))
+        self._emit(self.venue, text)
+        return True
+
+    def stats(self) -> dict[str, Any]:
+        return {**super().stats(), "authed": self._authed, "auth_failures": self.auth_failures}
 
 
 class PolyShards:

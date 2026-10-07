@@ -115,6 +115,35 @@ class Settings(BaseServiceSettings, NotificationSettings):
         validation_alias="POLY_WS_URL",
     )
 
+    # Statistics run in a separate observer process (observer.py): the tape, the
+    # journal, shadow variants, markouts, the charts' series, feed metrics. The
+    # trader's event loop keeps only feeds, books, the live rule, fills and the
+    # ledger. False runs everything in one process (the layout before 2026-10-07).
+    observer_enabled: bool = Field(default=True, validation_alias="PK_OBSERVER")
+    observer_port: int = Field(default=8052, gt=0, le=65535, validation_alias="PK_OBSERVER_PORT")
+    # Order at most the shares offered at or below the limit at the decision
+    # (PREREG part 4). It changes the order's size, so it is in the config hash.
+    size_to_depth: bool = Field(default=False, validation_alias="PK_SIZE_TO_DEPTH")
+    # Move everything alive after startup out of the garbage collector's scans,
+    # and collect the young generation less often: a full collection over a large
+    # heap stalls the loop (loop lag p99 85 ms, max 343 ms in epoch 5).
+    gc_freeze: bool = Field(default=True, validation_alias="PK_GC_FREEZE")
+
+    # PolyBolt (Polymarket's reference-price socket, 2026-09-15): Pyth crypto prices
+    # and the Chainlink 60 s TWAP that settles the 15-minute markets. Recorded by the
+    # observer as venue ``b``, never traded on (PLAN 4.1). It needs CLOB API
+    # credentials (key, secret, passphrase); without them it stays off.
+    polybolt_url: str = Field(
+        default="wss://ws-live-v2.polymarket.com/ws", validation_alias="POLYBOLT_URL"
+    )
+    poly_clob_api_key: SecretStr | None = Field(default=None, validation_alias="POLY_CLOB_API_KEY")
+    poly_clob_api_secret: SecretStr | None = Field(
+        default=None, validation_alias="POLY_CLOB_API_SECRET"
+    )
+    poly_clob_api_passphrase: SecretStr | None = Field(
+        default=None, validation_alias="POLY_CLOB_API_PASSPHRASE"
+    )
+
     status_host: str = Field(default="127.0.0.1", validation_alias="PK_STATUS_HOST")
     status_port: int = Field(default=8051, gt=0, le=65535, validation_alias="PK_STATUS_PORT")
 
@@ -127,7 +156,13 @@ class Settings(BaseServiceSettings, NotificationSettings):
         default="", validation_alias="PK_TELEGRAM_ADMIN_USER_IDS"
     )
 
-    @field_validator("telegram_bot_token", mode="before")
+    @field_validator(
+        "telegram_bot_token",
+        "poly_clob_api_key",
+        "poly_clob_api_secret",
+        "poly_clob_api_passphrase",
+        mode="before",
+    )
     @classmethod
     def blank_is_unset(cls, value: object) -> object:
         return None if isinstance(value, str) and not value.strip() else value
@@ -167,6 +202,13 @@ class Settings(BaseServiceSettings, NotificationSettings):
         )
 
     @property
+    def polybolt_credentials(self) -> tuple[str, str, str] | None:
+        parts = (self.poly_clob_api_key, self.poly_clob_api_secret, self.poly_clob_api_passphrase)
+        if any(p is None for p in parts):
+            return None
+        return tuple(p.get_secret_value() for p in parts if p is not None)  # type: ignore[return-value]
+
+    @property
     def shadow_variants(self) -> tuple[Variant, ...]:
         return parse_variants(self.shadow_variants_json, self.params)
 
@@ -190,6 +232,13 @@ class Settings(BaseServiceSettings, NotificationSettings):
             parse_variants(self.shadow_variants_json, self.params)
         except (ValueError, TypeError) as exc:
             raise ValueError(f"PK_SHADOW_VARIANTS: {exc}") from exc
+        if self.observer_enabled and self.observer_port in (self.port, self.status_port):
+            raise ValueError("PK_OBSERVER_PORT must differ from PORT and PK_STATUS_PORT")
+        clob = (self.poly_clob_api_key, self.poly_clob_api_secret, self.poly_clob_api_passphrase)
+        if any(p is not None for p in clob) and any(p is None for p in clob):
+            raise ValueError(
+                "POLY_CLOB_API_KEY, POLY_CLOB_API_SECRET and POLY_CLOB_API_PASSPHRASE go together"
+            )
         if self.telegram_bot_token is not None and not self.telegram_admin_user_ids:
             raise ValueError("PK_TELEGRAM_ADMIN_USER_IDS is required with PK_TELEGRAM_BOT_TOKEN")
         return self

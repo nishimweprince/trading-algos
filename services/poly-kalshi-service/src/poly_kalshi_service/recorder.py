@@ -64,6 +64,7 @@ COMPRESS_LEVEL = 1
 RESUME_HEADROOM = 1.2  # resume at 120% of the floor, so it does not flap
 _STOP = object()
 _FILE = "pk"  # the one open file's key
+HOUR_NS = 3600 * 1_000_000_000
 
 
 def hour_path(root: Path, recv_ns: int, session_ns: int = 0) -> tuple[Path, str]:
@@ -149,6 +150,8 @@ class Recorder:
         self.errors = 0
         self.last_error: str | None = None
         self.files_closed = 0
+        self._hour_start_ns = -HOUR_NS
+        self._hour_cached: tuple[Path, str] | None = None
 
     # --- event-loop side --------------------------------------------------------
 
@@ -261,12 +264,21 @@ class Recorder:
         for symbol in list(self._open):
             self._close(symbol)
 
+    def _hour(self, recv_ns: int) -> tuple[Path, str]:
+        """``hour_path``, computed once per hour instead of a datetime per line
+        (2.4% of the process in the Dublin flamegraph)."""
+        if not self._hour_start_ns <= recv_ns < self._hour_start_ns + HOUR_NS:
+            self._hour_start_ns = recv_ns - recv_ns % HOUR_NS
+            self._hour_cached = hour_path(self.root, recv_ns, self.session_ns)
+        assert self._hour_cached is not None
+        return self._hour_cached
+
     def _write_line(self, recv_ns: int, venue: str, text: str) -> None:
         if self.disk_paused:
             self.skipped_for_disk += 1
             return
         symbol, stream = _FILE, venue
-        path, hour = hour_path(self.root, recv_ns, self.session_ns)
+        path, hour = self._hour(recv_ns)
         current = self._open.get(symbol)
         if current is not None and current.hour != hour:
             self._close(symbol)

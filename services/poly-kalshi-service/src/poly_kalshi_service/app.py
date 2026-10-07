@@ -20,7 +20,9 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
+import orjson
 from fastapi import Depends, FastAPI, Query
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from ta_core import ServiceError, create_base_app
 from ta_core.logging_config import configure_file_logs, configure_logging, log_event
@@ -32,6 +34,7 @@ from .config import ExecutionMode, Settings, load_settings
 from .engine import Engine
 from .feeds import KalshiFeed, KalshiSigner, PolyShards
 from .ledger import Ledger
+from .observer import ObserverLink, observer_argv
 from .recorder import Recorder
 from .risk import RiskLimits, RiskState
 from .runtime import Runtime
@@ -78,23 +81,45 @@ def build_runtime(settings: Settings, notifier: Any | None, http: httpx.AsyncCli
         if settings.execution_mode is ExecutionMode.PAPER
         else None
     )
+    journal = JsonlDaily(settings.state_dir / "journal")
+    # The observer process records the tape and computes every statistic; this
+    # process keeps the trade path (observer.py). Its journal records go to the
+    # observer, the single journal writer, and straight to disk while it is down.
+    link = (
+        ObserverLink(
+            observer_argv(settings.profile),
+            fallback=journal,
+            on_down=lambda why: alerts.send(
+                "observer_down",
+                "poly-kalshi: the observer process died (tape and statistics paused)",
+                [why, "It is restarted on the next health tick; trading is unaffected."],
+            ),
+        )
+        if settings.observer_enabled
+        else None
+    )
     engine = Engine(
         settings.params,
         settings.assets,
         ledger=ledger,
         risk=risk,
         venue=venue,
-        journal=JsonlDaily(settings.state_dir / "journal"),
+        journal=link.sink if link is not None else journal,  # type: ignore[arg-type]
         alert=alerts.send,
         stamp={
             "epoch": settings.results_epoch,
             "build": build_id(),
             "config": config_hash(
-                settings.params, settings.paper_latency_ms, settings.limit_offset
+                settings.params,
+                settings.paper_latency_ms,
+                settings.limit_offset,
+                settings.size_to_depth,
             ),
         },
-        shadow=Shadow(settings.shadow_variants, settings.params),
+        shadow=Shadow(() if link is not None else settings.shadow_variants, settings.params),
         limit_offset=settings.limit_offset,
+        role="trade" if link is not None else "full",
+        size_to_depth=settings.size_to_depth,
     )
     recorder = (
         Recorder(
@@ -102,7 +127,7 @@ def build_runtime(settings: Settings, notifier: Any | None, http: httpx.AsyncCli
             host_tag=settings.host_tag,
             min_free_bytes=int(settings.min_free_disk_gb * 1e9),
         )
-        if settings.record_enabled
+        if settings.record_enabled and link is None
         else None
     )
     runtime: Runtime | None = None
@@ -131,6 +156,7 @@ def build_runtime(settings: Settings, notifier: Any | None, http: httpx.AsyncCli
         alerts=alerts,
         recorder=recorder,
         http=http,
+        observer=link,
     )
     return runtime
 
@@ -230,8 +256,10 @@ def create_app(settings: Settings | None = None, runtime: Runtime | None = None)
         return current
 
     @app.get("/v1/status", dependencies=auth)
-    async def status() -> dict[str, Any]:
-        return current_runtime().status()
+    async def status() -> Response:
+        # orjson on the trader's loop: FastAPI's encoder walks the dict in Python.
+        body = orjson.dumps(current_runtime().status(), default=str)
+        return Response(body, media_type="application/json")
 
     @app.get("/v1/recent", dependencies=auth)
     async def recent(limit: int = Query(default=100, ge=1, le=200)) -> dict[str, Any]:

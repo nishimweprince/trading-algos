@@ -40,12 +40,19 @@ def build_id() -> str:
     return out.stdout.strip() or "unknown"
 
 
-def config_hash(params: StrategyParams, latency_ms: int, limit_offset: float = 0.0) -> str:
+def config_hash(
+    params: StrategyParams,
+    latency_ms: int,
+    limit_offset: float = 0.0,
+    size_to_depth: bool = False,
+) -> str:
     # Optional parameters that are unset are left out, so adding one does not
     # change the hash of every configuration that does not use it.
     fields = {k: v for k, v in asdict(params).items() if v is not None}
     fields["paper_latency_ms"] = latency_ms
     if limit_offset:
         fields["limit_offset"] = limit_offset
+    if size_to_depth:
+        fields["size_to_depth"] = True
     body = json.dumps(fields, sort_keys=True)
     return hashlib.sha256(body.encode()).hexdigest()[:10]

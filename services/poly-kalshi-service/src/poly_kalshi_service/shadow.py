@@ -59,6 +59,12 @@ DEFAULT_VARIANTS = json.dumps(
         {"name": "kext_t15", "kalshi_extreme": True, "gap": 0.15},
         {"name": "floor15", "min_px": 0.15},
         {"name": "usnight", "skip_hours_utc": US_NIGHT_UTC},
+        # After epoch 5's asset and latency read: pre-registered in research/PREREG.md,
+        # part 4. A Polymarket spread of 1¢ or less (+9.1¢ on Helix discovery), a
+        # cheap leg whose latest frame arrived within 250 ms, and 0.20 under a 0.50 cap.
+        {"name": "pspread01", "max_poly_spread": 0.01},
+        {"name": "plag250", "max_poly_lag_ms": 250},
+        {"name": "t20_cap50", "gap": 0.20, "cap": 0.50},
     ]
 )
 _FIELDS = {
@@ -71,6 +77,7 @@ _FIELDS = {
     "min_px": "min_entry_px",
     "kalshi_extreme": "kalshi_extreme",
     "skip_hours_utc": "skip_hours_utc",
+    "max_poly_lag_ms": "max_poly_lag_ms",
 }
 
 
@@ -82,7 +89,7 @@ class Variant:
 
 def parse_variants(text: str, base: StrategyParams) -> tuple[Variant, ...]:
     """``[{name, gap, cap, early, late, max_kalshi_spread, max_poly_spread, min_px,
-    kalshi_extreme, skip_hours_utc}, ...]``; a missing key
+    kalshi_extreme, skip_hours_utc, max_poly_lag_ms}, ...]``; a missing key
     keeps the live value. An empty string means no variants."""
     if not text.strip():
         return ()
@@ -130,9 +137,11 @@ class Shadow:
         recv_ns: int,
         depth: Any,
         fee: tuple[float, float],
+        lags: tuple[float | None, float | None] | None = None,
     ) -> None:
         """Run every variant not yet consumed in this window. ``depth(buy_yes, px)``
-        returns the shares offered at or below ``px`` on that leg."""
+        returns the shares offered at or below ``px`` on that leg; ``lags`` is the
+        transport lag of the YES and NO books' latest frames (``decide``)."""
         done = self._done.setdefault(key, set())
         if len(done) == len(self.variants):
             return
@@ -141,7 +150,7 @@ class Shadow:
         for variant in self.variants:
             if variant.name in done:
                 continue
-            d: Decision = decide(k, y, n, variant.params, sec_into, False, utc_hour)
+            d: Decision = decide(k, y, n, variant.params, sec_into, False, utc_hour, lags)
             if not d.consumes_window:
                 continue
             done.add(variant.name)

@@ -30,6 +30,8 @@ pk-status --profile dev                # 127.0.0.1:8051, read-only page
 | Route | |
 |---|---|
 | `GET /health/ready` | both feeds up and every asset's current window identified |
+| `GET /v1/obs/status` (observer, `:8052`) | the observer's lines, lag behind the trader, recorder, feed latencies, counters, PolyBolt |
+| `GET /v1/series` (observer, `:8052`) | the per-second chart points (the trader samples none) |
 | `GET /v1/status` | feeds, recorder, per-asset window and quotes, ledger, risk (`X-API-Key`) |
 | `GET /v1/recent` | last decisions, fills and settlements |
 | `POST /v1/kill`, `POST /v1/kill/ack` | halt or resume paper entries (recording continues) |
@@ -57,14 +59,36 @@ Results come from the journal on disk; live state comes from one cached read of 
 ## How it works
 
 ```
+                              trader process (poly-kalshi-service): the trade path only
 Kalshi WS (orderbook_delta) ─┐
-Polymarket WS (market) ──────┼─▶ Runtime.ingest: one clock ─▶ Recorder (tape)
-control lines (windows,      │                             └▶ Engine.handle_line
-  resolutions, reconnects) ──┘                                  ├ books per window id
-                                                                ├ decide() on every update
-                                                                ├ PaperVenue (+latency, walk asks)
-                                                                └ Ledger (cash; payout credited)
+Polymarket WS (market) ──────┼─▶ Runtime.ingest: one clock ─┬▶ Engine(role="trade")
+control lines (windows,      │                              │   ├ books per window id
+  resolutions, reconnects) ──┘                              │   ├ decide() on every update
+                                                            │   ├ PaperVenue (+latency, walk asks)
+                                                            │   └ Ledger (cash; payout credited)
+                                                            │       decision / fill / settle records ─┐
+                                                            └▶ ObserverLink: one non-blocking pipe ◀──┘
+                                                                 write per loop turn, never waits
+                              observer process (pk-observer, a child of the trader)
+                               ├ Recorder (the tape; writer thread + gzip child)
+                               ├ Engine(role="observe"): shadow variants, markouts, series,
+                               │   uncensored gap, window/resolution records, BBO checks, feed lags
+                               ├ the journal (its only writer, in the trader's line order)
+                               ├ PolyBolt reference prices (venue b, optional)
+                               └ loopback API :8052 → pk-status
 ```
+
+**Statistics never run on the trading loop.** Before 2026-10-07 the shadow variants,
+markouts, series, the recorder's writer thread and the journal shared the trader's
+event loop and GIL (loop lag p99 85 ms, max 343 ms in epoch 5). Now the trader does,
+per line: a stamp, one list append for the pipe, the book update and the live rule.
+The observer runs the same engine code in `observe` role on the same lines, a few ms
+behind. `tests/test_roles.py` checks that `trade` + `observe` write exactly the
+journal of the one-process `full` engine, record for record and in order. If the
+observer dies, the trader keeps trading, writes its own records to disk, alerts, and
+restarts it (the tape then has a gap). `PK_OBSERVER=false` restores the one-process
+layout. The trader also freezes its startup heap out of the garbage collector and
+times every collection (`gc_ms`, `gc2_ms` on the page next to the loop lag).
 
 - **Window identity** (`windows.py`):
   - Polymarket's slug is `<asset>-updown-15m-<open_unix>`, with `clobTokenIds = [Up, Down]`.
@@ -104,12 +128,13 @@ python -m research.replay run --record-dir data/raw/dev --out research/data/run1
 python -m research.replay compare --live data/state/dev/journal --replay research/data/run1/journal
 python -m research.nulls --run research/data/run1
 python -m research.readout --journal data/state/dev/journal
+python -m research.readout --journal data/state/dev/journal --exclude-assets BTC,SOL
 ```
 
 - `replay run` re-runs the tape through the live engine. It writes a journal and a per-second `grid.parquet`.
 - `replay compare` must show 100% agreement with live on the same tape.
 - `nulls` is the manual's null battery. Expect `signal` ≈ +5 pp and `random_same_rule` ≈ 0 pp.
-- `readout` reports the gates below, the shadow-variant table, markouts and capacity.
+- `readout` reports the gates below, the shadow-variant table, markouts and capacity. `--exclude-assets` reads the journal as if those assets were never traded, next to the full read (PREREG part 4, A1).
 
 ### The Helix tape (`~/kpc/raw`, 73 days of best bid/ask)
 

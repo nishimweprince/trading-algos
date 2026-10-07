@@ -139,3 +139,60 @@ Read from the export journal. It is not a test; the hypotheses are in PREREG par
 - `helix_sweeps` → `regime` (A1–A3, A5).
 
 **Not yet run:** `helix_sweeps --split discovery` on the research server.
+
+## 2026-10-07 afternoon: statistics out of the trading process
+
+Read from `pk-export-dublin-dev-20261007T101722Z` (epoch 5 to 10:13 UTC). The trader's
+event loop showed **loop lag p99 85 ms, max 343 ms**, while the engine took 74 µs per
+line (p50). So the stalls came from the work sharing the loop and the GIL with the
+trade path:
+- the recorder's writer thread, building ~4,500 lines a second;
+- nine to fourteen shadow variants evaluated on every update;
+- markouts and the per-second series;
+- the journal, which opened a file for every record (about 100 at each roll);
+- FastAPI's Python JSON encoder on `/v1/status`;
+- garbage-collector passes over a heap that only grows.
+
+**What changed** (live parameters unchanged, so no epoch bump):
+- **Observer process** (`observer.py`), a child of the trader, which supervises it.
+  - It owns the tape, the journal, `Engine(role="observe")` (shadow, markouts, series,
+    uncensored gap, window and resolution records, BBO checks, feed lags) and PolyBolt.
+  - The trader runs `Engine(role="trade")`. Per line it does a stamp, one list append
+    for the pipe, the book update and the live rule.
+  - The pipe is the tape's own line format, written once per loop turn through a
+    non-blocking transport. Market lines are dropped, with a gap noted, if the observer
+    falls 64 MB behind; journal records never are.
+- **Equivalence:** `tests/test_roles.py` checks that `trade` + `observe` write exactly the
+  `full` engine's journal, in the same order. One difference: the markout gap-closure
+  check on a fill starts one line later.
+- **GC:** the startup heap is frozen (and again after 60 s), and the young threshold
+  goes from 700 to 20,000. Every collection is timed (`gc_ms`, `gc2_ms`) so the next
+  export says whether GC was part of the 343 ms.
+- **Smaller fixes:**
+  - `/v1/status` is serialised with orjson.
+  - The ledger is written with orjson.
+  - The recorder computes its hour path once per hour.
+  - The journal keeps the day's file open.
+
+**Faster Polymarket feeds: none for the book.** The CLOB market channel
+(`wss://ws-subscriptions-clob.polymarket.com/ws/market`) is the only order-book feed.
+The other public sockets are sports, the legacy RTDS, and since 2026-09-15 **PolyBolt**
+(`wss://ws-live-v2.polymarket.com/ws`), which carries reference prices: `price.crypto`
+(Pyth) and `price.crypto.twap` (the Chainlink 60 s TWAP the 15-minute markets settle
+on). PolyBolt is the fast spot feed PLAN 4.1 asked for. The observer records it as venue
+`b` when CLOB API credentials are set. It is never traded on.
+- The origin is AWS eu-west-2 (London) behind Cloudflare, so the remaining lever for the
+  book feed is location. AWS eu-west-1 is the nearest permitted region, and
+  infra/systemd/README.md has the side-by-side test and the cutover.
+- Others report the same 1013 "slow consumer" closes from other regions
+  (Polymarket/rs-clob-client-v2#122, unanswered). Draining the socket fast, which is
+  what this change does, is the client-side fix.
+
+**For Phase 3 (live orders, not built):** a warm HTTP/2 keep-alive connection to
+`clob.polymarket.com`, orders signed ahead at the likely limit prices as the gap nears
+the threshold (so the hot path is one POST), and decision → acknowledgement timed per
+order. Paper's 150 ms is an assumption until then.
+
+**Assets and the next tests:** PREREG part 4 (A1 without BTC and SOL, A2 cap 0.50, A3
+0.20 under a 0.50 cap, A4 Polymarket spread ≤ 1¢, A5 stale-frame filter `plag250`).
+These come with new shadow variants and `research.readout --exclude-assets`.

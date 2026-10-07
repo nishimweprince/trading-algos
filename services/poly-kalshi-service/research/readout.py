@@ -15,6 +15,10 @@ resolved the same window differently. Also:
   same orders (PREREG part 3, P4). An exit sells at the held leg's best bid,
   taker fee on both legs. Where there was no bid at the horizon, or the gap
   never closed, the order is held, so every rule has the same n.
+- ``assets`` (with ``--exclude-assets``): the same read on all assets and
+  without the excluded ones, side by side (PREREG part 4, A1): settled paper
+  P&L, net ¢/share and the ``live`` shadow row. The main read above is then of
+  the reduced set.
 """
 
 from __future__ import annotations
@@ -82,6 +86,34 @@ def exit_table(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def without_assets(records: list[dict[str, Any]], excluded: set[str]) -> list[dict[str, Any]]:
+    """The journal as if ``excluded`` had never been traded: every record of those
+    assets is dropped. Paper positions share no risk budget, so this is exactly
+    what not trading them would have produced."""
+    return [r for r in records if r.get("asset") not in excluded]
+
+
+def asset_comparison(records: list[dict[str, Any]], excluded: set[str]) -> dict[str, Any]:
+    def read(rows: list[dict[str, Any]]) -> dict[str, Any]:
+        settles = [r for r in rows if r.get("type") == "settle"]
+        shares = sum(r["shares"] for r in settles)
+        live = shadow_table(rows).get("live") or {}
+        return {
+            "settled": len(settles),
+            "pnl": round(sum(r["pnl"] for r in settles), 2),
+            "net_cents_per_share": None
+            if not shares
+            else round(100 * sum(r["pnl"] for r in settles) / shares, 2),
+            "shadow_live": {k: live.get(k) for k in ("n", "net_cents", "se_cluster_cents")},
+        }
+
+    return {
+        "excluded": sorted(excluded),
+        "all": read(records),
+        "without": read(without_assets(records, excluded)),
+    }
+
+
 def _main() -> None:
     parser = argparse.ArgumentParser(prog="research.readout")
     parser.add_argument("--journal", type=Path, required=True)
@@ -89,9 +121,18 @@ def _main() -> None:
     parser.add_argument(
         "--epoch", help="results epoch to read (default: the latest in the journal)"
     )
+    parser.add_argument(
+        "--exclude-assets", default="", help="e.g. BTC,SOL: read as if they were not traded"
+    )
     args = parser.parse_args()
     records, excluded = in_epoch(list(read_journal(args.journal)), args.epoch)
+    dropped = {a.strip().upper() for a in args.exclude_assets.split(",") if a.strip()}
+    comparison = asset_comparison(records, dropped) if dropped else None
+    if dropped:
+        records = without_assets(records, dropped)
     result = evaluate(records, args.cap)
+    if comparison is not None:
+        result["assets"] = comparison
     result["epoch"] = args.epoch or next(
         (r["epoch"] for r in reversed(records) if r.get("epoch")), None
     )
