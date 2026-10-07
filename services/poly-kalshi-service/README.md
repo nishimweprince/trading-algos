@@ -2,13 +2,15 @@
 
 The kpc convergence trade, rebuilt to measure its one untested repair. On 15-minute
 crypto up/down binaries, when Kalshi's YES mid and Polymarket's differ by at least
-0.10, buy the cheap Polymarket leg as a taker, at or below 0.60, and hold to
+0.15, buy the cheap Polymarket leg as a taker, at or below 0.60, and hold to
 settlement. Kalshi is the signal only.
 
-The threshold is 0.10, not the manual's 0.20 (decided 2026-10-07): at 0.20 there
-were almost no fills. Because the first crossing decides, the threshold defines
-the trade, so this is a different strategy from the manual's, with its own gates
-(below). Paper runs in Dublin, the closest location allowed to trade on
+The threshold is 0.15 (results epoch 5, from 2026-10-07). It was 0.10 in epochs
+3 and 4, chosen because at the manual's 0.20 there were almost no fills. On the
+Helix tape 0.15 beat 0.10 per day on price-side fills, in discovery and in the
+holdout (research/PREREG.md C2); the `t10` shadow variant keeps measuring 0.10.
+Because the first crossing decides, the threshold defines the trade, so this is
+a different strategy from the manual's, with its own gates (below). Paper runs in Dublin, the closest location allowed to trade on
 Polymarket; London is close-only and records only.
 
 **Phases 1–2 only: record, replay, paper.** Nothing here can place a real order.

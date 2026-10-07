@@ -118,3 +118,11 @@ Variants (`shadow.DEFAULT_VARIANTS`) and telemetry (`engine.EXIT_S`, `EXIT_GAP`)
 Every comparison uses the window-clustered s.e. shown next to the per-entry s.e. Entries in one window move together: epoch 4's 16 came from 4 windows. The day-t tests above already treat a day as the unit.
 
 **Discovery on Helix.** `research.helix_sweeps --split discovery` → `regime`. It runs the base rate of a bad hour, P(0 wins in an hour with ≥ 10 entries); net by UTC hour; the Kalshi-extremeness split; and clustering. The results go into RESULTS.md before any part-3 data is read. They can retire a hypothesis, which is then reported and not tested. They cannot add one to this part.
+
+---
+
+**2026-10-07, epoch 5: the live threshold is 0.15** (owner's decision after C2). This
+ends the epoch-4 holdout for parts 2 and 3: their counts are read on epoch 4 as far
+as it went, and nothing from epoch 4 decided this change. From epoch 5, `live` is
+0.15 and the `t10` shadow variant measures the old rule; the part 2 and 3 tests
+run unchanged against `live`, counted from epoch 5's start.

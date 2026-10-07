@@ -43,6 +43,8 @@ US_NIGHT_UTC = [5, 6, 7, 8, 9, 10]
 DEFAULT_VARIANTS = json.dumps(
     [
         {"name": "t08", "gap": 0.08},
+        # The rule before epoch 5 (gap 0.10), kept for comparison with 0.15.
+        {"name": "t10", "gap": 0.10},
         {"name": "t12", "gap": 0.12},
         {"name": "t15", "gap": 0.15},
         {"name": "t20", "gap": 0.20},
