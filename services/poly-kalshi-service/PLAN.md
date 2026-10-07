@@ -23,8 +23,11 @@ Still out of scope: live orders. `PK_EXECUTION_MODE=live` stays refused.
 - **Dublin is the paper host and the planned live host.** It is the closest location
   allowed to trade on Polymarket. London is close-only, so it can record but never
   trade.
-- **The tapes on the research server were recorded in London.** Replays must be
-  re-timed to Dublin before their fill numbers mean anything for Dublin (task 3.1).
+- **The research server holds the Helix kpc tape** (`~/kpc/raw`, about 73 days,
+  binary, best bid/ask only). Its decoder is missing (task 0.1a). Our own tapes
+  (`pk_*.gz`) were recorded in London on 2026-10-06 and in Dublin after that.
+  London-recorded tapes must be re-timed to Dublin before their fill numbers mean
+  anything for Dublin (task 3.1).
 
 ### Epoch-3 baseline: Dublin, 2026-10-06 19:00 to 2026-10-07 00:50 UTC, 7 assets, gap 0.10
 
@@ -83,16 +86,104 @@ exist to measure it properly.
 
 ## Phase 0: inventory and baseline (research server)
 
-### 0.1 Inventory the tapes
+### 0.1 Two tape families, two jobs
 
-- Find out what `~/kpc` (368 GB) holds:
-  - our recorder's `pk_<YYYYMMDD>_<HH>_<session>.gz` hour files, or another format;
-  - which hours, assets and builds;
-  - the recording hosts.
-- If it is another format (for example the Helix kpc tape), write
-  `research/tape_adapters.py`. It yields the same `(recv_ns, venue, text)` tuples
-  as `recordings.read_lines` and streams them. **Never decompress to disk:** there
-  are 122 GB free and the tape is still growing.
+There are two kinds of tape, and they answer different questions:
+
+| | Helix tape (`~/kpc/raw`) | Our tape (`pk_*.gz`) |
+|---|---|---|
+| Span | about 73 days | London hours on 2026-10-06, then Dublin from 18:43 UTC |
+| Format | binary `.hlxz` (`HLX1` magic), one file per stream per day | gzip text, `<recv_ns> <venue> <raw frame>`, one file per hour |
+| Polymarket | YES and NO **best bid/ask only**, about 159 ticks/s, 138 GB per side | full book (snapshots and deltas) |
+| Kalshi | YES and NO best bid/ask, 53 GB per side | full book |
+| Extra | executed trades on both venues; **Chainlink reference prices**; window definitions (strike, open time, token ids) | control lines (windows, resolutions, reconnects) |
+| Readable here | **not yet: the decoder (`research.recv3`) is coming from Helix's owner** | yes, by `recordings.read_lines` |
+| Good for | signal statistics at scale: threshold, timing, spread filter, null battery, regime split, fair value on Chainlink, trade-flow adverse selection | fills: depth, latency, limit offset, markouts, determinism against live |
+
+The Helix tape has no depth, so it cannot say how much would have filled. Our tape
+can, but it covers only days. So use Helix for *whether the signal is real and which
+variant is best*, and our tape for *how much of it we can actually fill*.
+
+**Disk:** the Helix tape is 368 GB compressed, and 122 GB is free. **Never write a
+decoded copy of the tape.** Decode in a stream, and write only derived outputs
+(0.1b).
+
+### 0.1a Helix decoder
+
+1. **Run `sha256sum -c kpc_tier2.sha256` first,** so corrupt files are known before
+   any number depends on them.
+2. **Use the original decoder.** Helix's owner is sending `research.recv3`, the
+   module the scripts in `~/kpc/kpc_tick/` import from `/Users/cartasyl/...` (with
+   `iter_poly_windows` among others).
+   - Vendor it as `research/helix/recv3.py`, unchanged, with a header noting its
+     source and the date received. Replace the hardcoded path with an argument or
+     `HELIX_TAPE_DIR`, and change nothing else.
+   - Read it, then write `research/helix/README.md` documenting:
+     - the `HLX1` record layout;
+     - which clock each timestamp is on;
+     - whether sizes are present;
+     - its public functions.
+   - Wrap it in `research/helix/reader.py`, a streaming reader per stream and day
+     that yields typed records: receive time, venue time if present, token or ticker,
+     bid, ask, sizes if present. Everything else imports from this wrapper, never
+     from `recv3` directly.
+   - Measure decode speed on a full Polymarket day. If it can't do about 1B ticks in
+     reasonable time over 4 vCPUs, add a chunked `numpy.frombuffer` path to the
+     wrapper, and check it gives identical output to `recv3` on a sample day.
+3. **Only if the file never arrives:** reverse-engineer the format from the `HLX1`
+   header and how `kpc_tick/` uses the decoded fields, behind the same
+   `reader.py` interface.
+
+**Validate the decoder before using it:**
+
+- Polymarket YES and NO mirror each other: `yes_bid ≈ 1 − no_ask` on almost every
+  tick.
+- Ticks fall inside their window's open-to-close span, taken from the Window stream.
+- The final quotes converge to 1/0 on the side that resolved. Check that against
+  Polymarket's recorded resolution for a sample of windows (Gamma, cached; send our
+  own user agent).
+- Tick rates match the manual: about 159 per second for Polymarket.
+- Find out which clock the timestamps are on (receive time, venue time, or both) and
+  which host recorded them. Re-timing (3.1) depends on it.
+
+**Done when:** `research/helix/reader.py` decodes a full day of each stream, and every check
+above passes.
+
+### 0.1b Helix inventory and derived outputs (`research/helix_replay.py`)
+
+- **`research/data/helix_inventory.json`**, one row per stream per day:
+  - records and time span;
+  - checksum result;
+  - assets present;
+  - largest internal time gap.
+- **The settlement regime of each day.** Polymarket's 15-minute markets moved to
+  Chainlink 60 s TWAP settlement at some date; find it from Polymarket's
+  announcements or the Window stream. Days before and after are different markets,
+  so every Helix result is reported per regime. The 0.10 gate is set from the
+  post-TWAP days only.
+- **The fee per window,** if the Window stream carries it. Otherwise find when the
+  crypto 15-minute taker fee (rate 0.07) started, and apply it from that date.
+- **`helix_replay.py`:**
+  - merges the day's streams by time (a heap merge over the per-stream readers);
+  - keeps a `Quote` per leg per window;
+  - calls **the same `decide()`** for every variant (1.2's list), so research and
+    live share one rule.
+- **Settlement:**
+  - Polymarket's resolution, fetched once per window and cached in
+    `research/data/resolutions.parquet`;
+  - Chainlink derived from the tape as a cross-check;
+  - Kalshi's resolution, to measure venue disagreement.
+- **Outputs, the only things written:**
+  - `grid.parquet`: per window per second, as `replay.py` writes;
+  - `crossings.parquet`: per variant per window, the first crossing with the touch
+    and gap;
+  - `slices.parquet`: for each crossing, the tick-level best bid/ask and trades from
+    −2 s to +5 s.
+
+  Expect roughly 1 to 3 GB for all 73 days, against 122 GB free.
+
+### 0.1c Our tape inventory
+
 - Write `research/data/inventory.json` with one row per hour:
   - host, lines per venue, sessions;
   - `out_of_order` and `truncated` counts;
@@ -100,7 +191,8 @@ exist to measure it properly.
     (Kalshi sequence fix). Those hours are excluded from fill research, or at least
     flagged.
 
-**Done when:** every hour is classified as usable or excluded, with the reason.
+**Done when:** every hour of both families is classified as usable or excluded, with
+the reason.
 
 ### 0.2 Replay determinism on a Dublin hour
 
@@ -122,8 +214,9 @@ targets:
 - **Capacity:** the median $ filled per entry is reported per asset. An asset under
   $10 at the touch can't carry live size, whatever its edge.
 - **Null battery:** `signal` is above `random_same_rule` by a margin fixed now. The
-  +5 pp target was for 0.20; re-derive it from the London tape in phase 3, and write
-  it down before running Dublin's holdout.
+  +5 pp target was for 0.20. Re-derive it from the Helix discovery days of the
+  current settlement regime (phase 3), and write it down before running the
+  holdout.
 
 **Done when:** the README is updated and committed before phase 3 starts.
 
@@ -249,7 +342,11 @@ thread.
 
 ## Phase 3: replay research on the tapes
 
-### 3.1 Re-time London tapes to Dublin (`research/replay.py`)
+### 3.1 Re-time London tapes to Dublin (`research/replay.py`, `research/helix_replay.py`)
+
+This applies to our London hours and, if 0.1a finds Helix recorded in London (or
+anywhere else that isn't Dublin), to the Helix tape too. Both replays take the same
+`--shift-ms` option.
 
 A London tape has Polymarket at about 1 ms and Kalshi at about 38 ms from the
 venues. Dublin sees Polymarket at about 10 ms and Kalshi at about 47 ms.
@@ -283,34 +380,51 @@ every combination.
   - limit offset ∈ {0, 1, 2, 3}¢ above the touch, never above the cap.
 - Check it against the engine: at 150 ms and offset 0 it must reproduce the replay's
   own fills exactly.
+- **On our tape**, this uses the full ask ladder, so it measures size.
+- **On the Helix tape**, the same pass runs on `slices.parquet`, but it can answer
+  only *whether the ask was still at or below the limit after L ms*. That gives the
+  price side of the latency curve over 73 days of n, with no size.
+- **Helix trades give a proxy for adverse selection:** were there trades at or
+  through our ask between the crossing and crossing + L? Those were other traders
+  taking the liquidity we wanted. Check how well this proxy predicts the outcome
+  against our tape's markouts (1.3) before relying on it.
 
 ### 3.3 The sweeps
 
-Run each on the London tape, then on the Dublin tape:
-
-| Sweep | Values | Question |
-|---|---|---|
-| Latency | 0 to 400 ms | Fill rate and net ¢ at the *real* fill, against latency, per asset. **This decides whether speed (5.2, 5.3) is worth money, and whether BTC is playable.** |
-| Limit offset | 0 to 3¢ | Does paying 1 to 2¢ above the touch win back the no-fill winners for less than their edge? |
-| Threshold | 0.08, 0.10, 0.12, 0.15, 0.20 | Uncensored, using 1.1's crossing times. |
-| Entry start | 20, 60, 120, 180 s | Is the first-2-minutes loss real? |
-| Kalshi spread filter | off, 0.03, 0.05, 0.10 | Is a gap measured on a wide Kalshi mid just noise? |
-| Sizing | $50 notional; fixed 100 shares; min(notional, depth at the touch) | P&L variance, and how much one cheap BTC entry dominates. |
+| Sweep | Values | Tape | Question |
+|---|---|---|---|
+| Threshold | 0.08, 0.10, 0.12, 0.15, 0.20 | Helix (our tape after 1.1) | Uncensored: which threshold has the best net per window, and how often does each fire? |
+| Entry start | 20, 60, 120, 180 s | Helix | Is the first-2-minutes loss real? |
+| Kalshi spread filter | off, 0.03, 0.05, 0.10 | Helix | Is a gap measured on a wide Kalshi mid just noise? |
+| Null battery | `research.nulls` arms | Helix | Is the signal above `random_same_rule`, per regime and per asset? |
+| Latency, price side | 0 to 400 ms | Helix slices | Does the ask stay at or below the limit, per asset, over 73 days? |
+| Latency, with size | 0 to 400 ms | ours | Fill rate and net ¢ at the *real* fill, per asset. **This decides whether speed (5.2, 5.3) is worth money, and whether BTC is playable.** |
+| Limit offset | 0 to 3¢ | ours (price side also on Helix) | Does paying 1 to 2¢ above the touch win back the no-fill winners for less than their edge? |
+| Sizing | $50 notional; fixed 100 shares; min(notional, depth at the touch) | ours for depth; Helix for variance | P&L variance, and how much one cheap BTC entry dominates. |
 
 Run `research.nulls` on every arm that is promoted.
 
 **Discipline:**
 
-- The London tape is the discovery set; Dublin hours from after phase 1 are the
-  holdout.
+- **Discovery:** the Helix days of the current settlement regime, except the most
+  recent 14.
+- **Holdout:**
+  - the most recent 14 Helix days;
+  - our Dublin hours from after phase 1, for anything that needs depth.
+- Report the earlier regime's days separately. They show whether the edge moved
+  with the TWAP change, but never set a parameter.
 - Promote at most two changes to the live parameters, and only if they hold on the
   holdout.
 - A sweep winner that doesn't hold on the holdout is noise.
 - Write the chosen comparisons down before running the holdout.
 
-**Throughput:** a Dublin hour is about 7M lines. Parallelise by day over the 4
-vCPUs. Write the outputs (journal, `grid.parquet`, `fills.parquet`) under
-`research/data/<run>/`. Check free disk before each batch, and stop below 30 GB.
+**Throughput:**
+
+- **Helix:** about 1B Polymarket ticks over 73 days. Decode in chunks with numpy,
+  run one process per day over the 4 vCPUs, and write only the outputs from 0.1b.
+- **Our tape:** a Dublin hour is about 7M lines. Parallelise by day.
+- Write everything under `research/data/<run>/`. Check free disk before each batch,
+  and stop below 30 GB. The Helix tape is not ours to delete to make room.
 
 ---
 
@@ -321,12 +435,18 @@ traders who take our no-fill winners are probably reacting to spot or to Polymar
 flow, not to Kalshi 47 ms later. Matching them needs a faster signal, not a
 different server.
 
+**The Helix tape already holds Chainlink reference prices** (52 days). So 4.2 and
+4.3 can start on history as soon as 0.1a works, without waiting for new recordings.
+Chainlink is the settlement reference, but it is an oracle stream, not the fastest
+spot feed. History therefore answers *whether a fair-value signal beats the gap*;
+answering *how fast* still needs 4.1.
+
 ### 4.1 Record spot
 
 - Add a record-only venue `s` to the tape: one or two spot feeds with low latency
   into Dublin. Measure the candidates' `feed_ms` from Dublin before choosing.
 - Add, if it can be had, the Chainlink stream Polymarket settles on (the 60 s TWAP
-  source).
+  source), so live data and the Helix history match.
 - No trading logic yet. The engine ignores `s` except for the grid.
 
 ### 4.2 Measure lead and lag at millisecond resolution
@@ -346,6 +466,9 @@ anything once spot is known?
   - τ is the time left.
 - Run it as a shadow variant (1.2): enter when P(up) − ask > edge after fee.
 - Compare it with the Kalshi gap on the same windows, especially BTC.
+- Fit σ and the edge threshold on the Helix discovery days, using Chainlink as S and
+  the Window stream's strike as K. Test on the holdout days, then live as a shadow
+  variant.
 
 **Decision:**
 
@@ -442,9 +565,10 @@ Our notes put Kalshi's API in AWS us-east-1 (N. Virginia); Ohio is us-east-2.
 
 | Step | Unlocks |
 |---|---|
-| 0.1 to 0.3 | Usable tapes; determinism; honest gates for 0.10 |
+| 0.1a | **Blocks all Helix research:** vendor `recv3` (being sent by Helix's owner), wrap it and validate it |
+| 0.1b to 0.3 | Inventories, settlement regimes, Helix derived outputs; determinism; honest gates for 0.10 |
 | 1.1 to 1.4 | Uncensored gaps, shadow variants and markouts accumulate on Dublin from now on |
 | 2.1 to 2.3 | A clean feed; acceptance, or the trigger for the 5.3 gateway |
-| 3.1 to 3.3 | The value of latency, the limit offset, the threshold, timing and sizing (London discovery, Dublin holdout) |
-| 4.1 to 4.3 | Whether a spot signal makes BTC playable |
+| 3.1 to 3.3 | Threshold, timing, spread filter and nulls over 73 Helix days; latency, limit offset and sizing with depth on our tape (holdout: the last 14 Helix days and Dublin after phase 1) |
+| 4.2 and 4.3 on Helix Chainlink, then 4.1 | Whether a fair-value signal beats the gap (history), then whether a fast spot feed makes BTC playable (live) |
 | 5.x | Location, relay and stack decisions, made with 3.3's numbers |
