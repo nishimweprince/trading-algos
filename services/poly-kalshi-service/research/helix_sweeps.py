@@ -263,7 +263,37 @@ def latency(data: Path, days: list[str], entries: pd.DataFrame) -> dict[str, Any
             }
         per_variant[name] = cells
     out["variants_150ms"] = per_variant
+    out["prereg"] = prereg_comparisons(df)
     return out
+
+
+def _paired(a: pd.Series, b: pd.Series) -> dict[str, Any]:
+    """Day-by-day difference a − b (both indexed by day): mean, day-t, days positive."""
+    d = (a - b).dropna()
+    t = _t(d.tolist())
+    return {
+        "mean_daily_diff": round(float(d.mean()), 2),
+        "day_t": None if t is None else round(t, 2),
+        "days_positive": f"{int((d > 0).sum())}/{len(d)}",
+    }
+
+
+def prereg_comparisons(df: pd.DataFrame) -> dict[str, Any]:
+    """research/PREREG.md C1 and C2, at 150 ms, price side; an entry the limit misses is 0."""
+
+    def per_entry(variant: str, off: int) -> pd.DataFrame:
+        g = df[df["variant"] == variant]
+        _ok, net = _fill(g, 150, off)
+        return pd.DataFrame({"day": g["day"], "net": net.fillna(0)})
+
+    base0, base2, t15 = per_entry("base", 0), per_entry("base", 2), per_entry("t15", 0)
+    c1 = _paired(base2.groupby("day")["net"].mean(), base0.groupby("day")["net"].mean())
+    c1 |= {"per_entry_plus2c": round(float(base2["net"].mean()), 2),
+           "per_entry_touch": round(float(base0["net"].mean()), 2)}  # fmt: skip
+    c2 = _paired(t15.groupby("day")["net"].sum(), base0.groupby("day")["net"].sum())
+    c2 |= {"per_day_t15": round(float(t15.groupby("day")["net"].sum().mean()), 0),
+           "per_day_base": round(float(base0.groupby("day")["net"].sum().mean()), 0)}  # fmt: skip
+    return {"C1_offset_plus2c_vs_touch": c1, "C2_t15_vs_t10_per_day": c2}
 
 
 def spreads(entries: pd.DataFrame) -> dict[str, Any]:
