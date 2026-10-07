@@ -93,3 +93,28 @@ At the touch:
 2. Owner decisions: `PK_LIMIT_OFFSET=0.02` (C1 held), and the threshold (C2 held on price; size unknown).
 3. Record 4.1 (a fast spot feed in Dublin) before any BTC decision.
 4. Pre-register the Polymarket-spread filter on the next holdout. It is not in this one.
+
+## Deployed 2026-10-07 07:16 UTC (Dublin, `5503828`, results epoch 4)
+
+- **Live settings:** `PK_LIMIT_OFFSET=0.02` (C1), and shadow variants including
+  `pspread05`/`pspread10`. The live holdout for P1 and P2 is in PREREG part 2.
+- **The outage:** the services were not systemd units on this host, so the 01:18
+  reboot took them down. They are now installed from `infra/systemd`, adapted (user
+  `poly`, `/home/poly`, no `/data`; see the README there). Public:
+  `poly.nishimweprince.dev` → `pk-status`.
+- **Flamegraph** (`docs/flamegraph-dublin-20261007.svg`, py-spy, 120 s live):
+  - ~70% of busy samples are the uvloop `run` frame, waiting on I/O.
+  - `ingest` 19% inclusive, `_evaluate` 14% (quotes and nine shadow variants).
+  - The recorder ~4%, of which `hour_path` (a datetime per line) is 2.4%: a cheap fix.
+  - No hot spot calls for the 5.3 gateway yet; the acceptance run decides.
+- **Network probe, 3 min:**
+  - Polymarket CLOB `/time`: p50 26.8 ms, p99 34.5 ms.
+  - Kalshi: p50 6.7 ms, p99 251 ms.
+  - Both are behind a CDN, so these compare hosts, not distance to the matching
+    engine. A 24 h run (`pk-netprobe`) is going.
+  - An AWS eu-west-1 comparison needs an instance there: the only open step of 5.1.
+- **Running, 24 h:**
+  - `pk-acceptance`: the phase 2 criteria, written to
+    `research/data/acceptance/acceptance_<start>.json`.
+  - `pk-netprobe`.
+  - `pk-fills-t15`: P2's size side on the epoch-3 tape, into `research/data/fills_dublin_t15`.

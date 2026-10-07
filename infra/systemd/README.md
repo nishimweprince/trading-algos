@@ -191,3 +191,21 @@ curl -s 127.0.0.1:8050/health/ready                      # both feeds up, all wi
 - **Kill switch:** `touch services/poly-kalshi-service/data/KILL.dev`, `POST /v1/kill`, or `/kill` to the bot. These halt new paper entries only; recording continues.
 - **Read the gates:** `python -m research.readout --journal data/state/dev/journal`.
 - **Restarts:** each restart starts a new hour file (`pk_<day>_<hour>_<session>.gz`). It never appends to one a crash may have left truncated.
+
+## poly-kalshi on the Dublin host (`polymarket`, Azure North Europe)
+
+The poly-kalshi units here assume user `pk` and a `/data` disk. The Dublin host
+runs them as `poly` from `/home/poly/trading-algos`, recording to the OS disk.
+They were installed with:
+
+```sh
+for u in poly-kalshi-service.service pk-status.service pk-unit-alert@.service; do
+  sed -e 's/^User=pk$/User=poly/' -e 's/^Group=pk$/Group=poly/' \
+      -e 's#/home/pk/#/home/poly/#g' -e '/^RequiresMountsFor=\/data$/d' "$u" \
+    | sudo tee /etc/systemd/system/"$u" >/dev/null
+done
+sudo systemctl daemon-reload && sudo systemctl enable --now poly-kalshi-service pk-status
+```
+
+Before this (until 2026-10-07) they were started by hand, and a reboot left the
+tunnel (`poly.nishimweprince.dev` → `127.0.0.1:8051`) answering 502.
