@@ -26,14 +26,20 @@ SCANNED = ["services/*/src", "ipda/src", "lookup-trader/server"]
 
 FORBIDDEN_CONSTRUCTORS = frozenset(
     {
+        "AccountReader",
+        "BinanceFuturesExecution",
+        "BinanceFuturesMarketData",
         "BinanceMarketData",
         "CTraderExecution",
         "CTraderGateway",
         "CTraderMarketData",
+        "FapiRest",
+        "FuturesStreams",
         "MT5Execution",
         "MT5MarketData",
         "MT5Oco",
         "RealMT5Adapter",
+        "TouchQuotes",
     }
 )
 FORBIDDEN_IMPORTS = frozenset({"MetaTrader5", "binance", "ctrader_open_api"})

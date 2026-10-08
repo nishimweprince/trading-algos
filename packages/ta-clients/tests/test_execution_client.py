@@ -312,3 +312,38 @@ async def test_trading_ready_survives_a_transport_error() -> None:
 async def test_list_orders_unwraps_a_bare_array() -> None:
     client, _ = build(json_response(200, [{"order_id": 1}, "junk"]))
     assert await client.list_orders() == [{"order_id": 1}]
+
+
+# --- account controls -------------------------------------------------------------
+
+
+async def test_account_controls_post_to_the_account_routes() -> None:
+    client, seen = build(json_response(200, {"ok": True, "details": {}}))
+    assert (await client.cancel_all("btcusdt")).state is ExecutionState.SUCCEEDED
+    await client.flatten()
+    await client.dead_man(["btcusdt", "ETHUSDT"], 15000)
+    paths = [request.url.path for request in seen]
+    assert paths == [
+        "/v1/accounts/forex-demo/cancel-all",
+        "/v1/accounts/forex-demo/flatten",
+        "/v1/accounts/forex-demo/dead-man",
+    ]
+    assert json.loads(seen[0].content) == {"instrument": "BTCUSDT"}
+    assert json.loads(seen[1].content) == {}
+    assert json.loads(seen[2].content) == {
+        "instruments": ["BTCUSDT", "ETHUSDT"],
+        "countdown_ms": 15000,
+    }
+
+
+async def test_account_control_transport_failure_is_unknown() -> None:
+    def explode(_: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("down")
+
+    client, _ = build(explode)
+    assert (await client.cancel_all()).state is ExecutionState.UNKNOWN
+
+
+async def test_list_accounts_unwraps_the_accounts_key() -> None:
+    client, _ = build(json_response(200, {"accounts": [{"alias": "a"}, "junk"]}))
+    assert await client.list_accounts() == [{"alias": "a"}]

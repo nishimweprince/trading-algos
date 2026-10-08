@@ -201,7 +201,13 @@ class ExecutionService:
         prepared: list[tuple[ExecutionProvider, str, str, Any]],
     ) -> OperationResponse:
         assert isinstance(request, BaseModel)
-        payload_json = request.model_dump_json(exclude_none=False)
+        # OrderRequest omits its unset venue flags so pre-existing payloads keep
+        # their hash; every other request hashes its full dump as it always has.
+        payload_json = (
+            request.canonical_json()
+            if isinstance(request, OrderRequest)
+            else request.model_dump_json(exclude_none=False)
+        )
         payload_hash = hashlib.sha256(payload_json.encode()).hexdigest()
         operation_id: UUID = request.operation_id
         try:

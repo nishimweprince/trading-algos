@@ -105,7 +105,9 @@ def _run_one_shot(args: argparse.Namespace, settings: Settings) -> int | None:
     parent package for a relative import to resolve against.
     """
     if args.validate_config:
-        if settings.gateway_enabled:
+        if "ctrader" not in settings.adapters:
+            print(f"Valid configuration for ADAPTERS={','.join(settings.adapters)}.")
+        elif settings.gateway_enabled:
             environments = sorted({account.environment for account in settings.gateway_accounts})
             print(
                 f"Valid gateway configuration: {len(settings.gateway_accounts)} runtime "

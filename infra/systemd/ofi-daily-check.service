@@ -1,0 +1,18 @@
+# One-shot: check yesterday's (UTC) recordings and send the summary to Telegram.
+# Triggered by ofi-daily-check.timer. Exit 1 marks a day with missing hours,
+# an unrecovered depth break or a backwards timestamp (visible in systemctl).
+[Unit]
+Description=ofi-scalper daily recording check
+Wants=network-online.target
+After=network-online.target notification-service.service
+RequiresMountsFor=/data
+
+[Service]
+Type=oneshot
+User=ofi
+Group=ofi
+WorkingDirectory=/home/ofi/trading-algos/services/ofi-scalper-service
+ExecStart=/home/ofi/trading-algos/.venv/bin/ofi-daily-check --profile dev
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full

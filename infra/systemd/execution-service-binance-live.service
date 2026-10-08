@@ -1,0 +1,26 @@
+# execution-service, profile "binance-live": MAINNET order entry for the OFI
+# scalper's micro-live mode (real money, hard-capped), port 8011, beside the
+# testnet gateway. Holds the sub-account trading key in
+# services/execution-service/.env.binance-live (chmod 600). Not enabled at boot:
+# start it by hand once the key is in place (infra/systemd/README.md, micro-live).
+[Unit]
+Description=execution-service (ADAPTERS=binance_futures, profile binance-live, MAINNET)
+OnFailure=ofi-unit-alert@%n.service
+Wants=network-online.target
+After=network-online.target time-sync.target notification-service.service
+
+[Service]
+Type=simple
+User=ofi
+Group=ofi
+WorkingDirectory=/home/ofi/trading-algos/services/execution-service
+ExecStart=/home/ofi/trading-algos/.venv/bin/execution-service --profile binance-live
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

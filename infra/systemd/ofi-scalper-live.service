@@ -1,0 +1,28 @@
+# OFI scalper, profile "live": MICRO-LIVE (real money, hard-capped in code:
+# config.MICRO_LIVE_CAPS), ETHUSDT only, through the mainnet gateway on 8011.
+# Records nothing (the dev profile records); runs beside the dev scalper, which
+# keeps demo paper trading. Refuses to start without OFI_MICRO_LIVE_ACK and a
+# passing OFI_MODEL_VERSION in services/ofi-scalper-service/.env.live.
+# Kill: touch services/ofi-scalper-service/data/KILL.live, or POST :8031/v1/kill.
+[Unit]
+Description=ofi-scalper-service (profile live, MICRO-LIVE real money)
+OnFailure=ofi-unit-alert@%n.service
+Wants=network-online.target execution-service-binance-live.service
+After=network-online.target time-sync.target execution-service-binance-live.service
+
+[Service]
+Type=simple
+User=ofi
+Group=ofi
+WorkingDirectory=/home/ofi/trading-algos/services/ofi-scalper-service
+ExecStart=/home/ofi/trading-algos/.venv/bin/ofi-scalper-service --profile live
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

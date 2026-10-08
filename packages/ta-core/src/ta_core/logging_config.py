@@ -10,10 +10,14 @@ be the only thing that differed between the two copies.
 
 from __future__ import annotations
 
+import atexit
 import json
 import logging
+import logging.handlers
 import os
+import queue
 import sys
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -64,7 +68,9 @@ class JsonlLogger:
         common case of the directory having been removed; after that the sink
         goes quiet and only the console handler carries events.
         """
-        enriched = {"ts": datetime.now(UTC).isoformat(), **record}
+        self._write({"ts": datetime.now(UTC).isoformat(), **record})
+
+    def _write(self, enriched: dict[str, Any]) -> None:
         line = json.dumps(enriched, default=str, ensure_ascii=True) + "\n"
         for attempt in (0, 1):
             try:
@@ -86,24 +92,86 @@ class JsonlLogger:
             )
 
 
-def configure_logging(level: str, *, name: str = DEFAULT_LOGGER_NAME) -> None:
-    """Configure one JSON console handler without changing Uvicorn's access logs."""
-    global _logger_name
+class BackgroundJsonlLogger(JsonlLogger):
+    """A ``JsonlLogger`` whose writes happen on a thread.
+
+    The caller only stamps the time and enqueues, so a latency-sensitive loop
+    never waits on serialisation or the disk. A full queue drops the event and
+    counts it; it never blocks.
+    """
+
+    def __init__(self, path: Path, queue_limit: int = 100_000) -> None:
+        super().__init__(path)
+        self.dropped = 0
+        self._queue: queue.Queue[dict[str, Any] | None] = queue.Queue(queue_limit)
+        self._thread = threading.Thread(target=self._run, name="events-log", daemon=True)
+        self._thread.start()
+        atexit.register(self.close)
+
+    def append(self, record: dict[str, Any]) -> None:
+        try:
+            self._queue.put_nowait({"ts": datetime.now(UTC).isoformat(), **record})
+        except queue.Full:
+            self.dropped += 1
+
+    def close(self) -> None:
+        if self._thread.is_alive():
+            self._queue.put(None)
+            self._thread.join(5.0)
+
+    def _run(self) -> None:
+        while (item := self._queue.get()) is not None:
+            self._write(item)
+
+
+class _PassThroughQueueHandler(logging.handlers.QueueHandler):
+    """Hand the record over untouched: the listener's JSON formatter needs its extras."""
+
+    def prepare(self, record: logging.LogRecord) -> logging.LogRecord:
+        return record
+
+
+_listener: logging.handlers.QueueListener | None = None
+
+
+def _stop_listener(listener: logging.handlers.QueueListener) -> None:
+    if getattr(listener, "_thread", None) is not None:  # not stopped already
+        listener.stop()
+
+
+def configure_logging(
+    level: str, *, name: str = DEFAULT_LOGGER_NAME, background: bool = False
+) -> None:
+    """Configure one JSON console handler without changing Uvicorn's access logs.
+
+    ``background=True`` formats and writes on a listener thread (stdout to
+    journald can block); the caller only enqueues the record.
+    """
+    global _logger_name, _listener
     _logger_name = name
     logger = get_logger()
     for handler in list(logger.handlers):
         if getattr(handler, _HANDLER_MARKER, False):
             logger.removeHandler(handler)
+    if _listener is not None:
+        _stop_listener(_listener)
+        _listener = None
 
-    handler = logging.StreamHandler(sys.stdout)
-    setattr(handler, _HANDLER_MARKER, True)
+    handler: logging.Handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(JsonConsoleFormatter())
+    if background:
+        records: queue.Queue[logging.LogRecord] = queue.Queue(100_000)
+        _listener = logging.handlers.QueueListener(records, handler)
+        _listener.start()
+        atexit.register(_stop_listener, _listener)
+        handler = _PassThroughQueueHandler(records)
+    setattr(handler, _HANDLER_MARKER, True)
     logger.addHandler(handler)
     logger.setLevel(getattr(logging, level.upper()))
     logger.propagate = False
 
 
-def configure_file_logs(events_log_path: Path) -> JsonlLogger:
+def configure_file_logs(events_log_path: Path, *, background: bool = False) -> JsonlLogger:
     """Route events to an append-only JSONL file, and return the sink.
 
     The sink is returned so a service that also keeps a second, domain-specific
@@ -111,7 +179,9 @@ def configure_file_logs(events_log_path: Path) -> JsonlLogger:
     of reimplementing it.
     """
     global _events_file_log
-    _events_file_log = JsonlLogger(events_log_path)
+    _events_file_log = (
+        BackgroundJsonlLogger(events_log_path) if background else JsonlLogger(events_log_path)
+    )
     return _events_file_log
 
 

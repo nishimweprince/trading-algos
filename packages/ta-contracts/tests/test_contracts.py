@@ -262,3 +262,66 @@ def test_oco_group_request_accepts_account_and_hashes_as_before() -> None:
         == hashlib.sha256(by_profile.model_dump_json().encode()).hexdigest()
     )
     assert dumped.startswith('{"group_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","profile":"hfm"')
+
+
+# --- OrderRequest venue flags (post_only / reduce_only) --------------------------
+
+GOLDEN_ORDER = {
+    "operation_id": "6f2a1d3c-8b74-4e59-9a10-2f5c7d8e4b16",
+    "occurred_at": "2026-10-02T10:00:00+00:00",
+    "source": "ofi_scalper",
+    "instrument": "btcusdt",
+    "execution_type": "limit",
+    "direction": "buy",
+    "targets": [{"account": "binance_testnet", "volume_lots": "0.002"}],
+    "entry_price": "60000.1",
+    "stop_loss": "59990.0",
+    "take_profit": "60010.5",
+    "time_in_force": "gtc",
+    "note": "golden",
+}
+# Captured from the code BEFORE post_only/reduce_only existed (2026-10-02).
+GOLDEN_JSON = (
+    '{"operation_id":"6f2a1d3c-8b74-4e59-9a10-2f5c7d8e4b16","occurred_at":"2026-10-02T10:00:00Z",'
+    '"source":"ofi_scalper","instrument":"BTCUSDT","execution_type":"limit","direction":"buy",'
+    '"targets":[{"account":"binance_testnet","volume_lots":"0.002"}],"entry_price":"60000.1",'
+    '"stop_loss":"59990.0","take_profit":"60010.5","stop_loss_distance":null,'
+    '"take_profit_distance":null,"time_in_force":"gtc","expires_at":null,"note":"golden"}'
+)
+GOLDEN_SHA256 = "1c0a96e7734153cb94856dce403148d2ada02fccfd80ae359ac0b6b04e2b2e07"
+
+
+def test_order_without_flags_hashes_exactly_as_before() -> None:
+    import hashlib
+
+    from ta_contracts.execution import OrderRequest
+
+    canonical = OrderRequest.model_validate(GOLDEN_ORDER).canonical_json()
+    assert canonical == GOLDEN_JSON
+    assert hashlib.sha256(canonical.encode()).hexdigest() == GOLDEN_SHA256
+
+
+def test_set_flags_are_part_of_the_hash() -> None:
+    from ta_contracts.execution import OrderRequest
+
+    plain = OrderRequest.model_validate(GOLDEN_ORDER).canonical_json()
+    maker = OrderRequest.model_validate({**GOLDEN_ORDER, "post_only": True}).canonical_json()
+    exit_ = OrderRequest.model_validate({**GOLDEN_ORDER, "reduce_only": True}).canonical_json()
+    assert '"post_only":true' in maker and '"reduce_only"' not in maker
+    assert '"reduce_only":true' in exit_
+    assert len({plain, maker, exit_}) == 3
+    explicit_false = OrderRequest.model_validate({**GOLDEN_ORDER, "post_only": False})
+    assert '"post_only":false' in explicit_false.canonical_json()
+
+
+def test_post_only_is_limit_only() -> None:
+    import pytest
+    from pydantic import ValidationError
+
+    from ta_contracts.execution import OrderRequest
+
+    market = {k: v for k, v in GOLDEN_ORDER.items() if k != "entry_price"}
+    market["execution_type"] = "market"
+    with pytest.raises(ValidationError, match="post_only"):
+        OrderRequest.model_validate({**market, "post_only": True})
+    OrderRequest.model_validate({**market, "reduce_only": True})  # a market exit is fine
