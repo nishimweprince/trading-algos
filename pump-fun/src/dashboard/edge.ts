@@ -1,5 +1,5 @@
 import type { Config } from '../config/schema.ts';
-import { trackSource } from './queries.ts';
+import { csvEscape, trackSource } from './queries.ts';
 import { positionsModeFilterSql } from '../persistence/modeFilter.ts';
 import type { DB } from '../persistence/db.ts';
 import { bootstrapCI, mean, type Interval } from '../research/stats.ts';
@@ -163,6 +163,62 @@ export function getEdgeAnalytics(
     calibration,
     decision,
   };
+}
+
+/**
+ * Edge panel as CSV: headline `#` comments, one cohort table (risk/suffix/
+ * exit sections), latency percentiles, then model + decision calibration
+ * bins. Same `getEdgeAnalytics` the panel renders — the download and the
+ * screen cannot disagree.
+ */
+export function buildEdgeCsv(
+  db: DB,
+  opts: { track?: 'live' | 'dry'; window?: number; mode?: Config['mode'] } = {},
+): string {
+  const e = getEdgeAnalytics(db, opts);
+  const lines: string[] = [];
+  lines.push(`# track=${e.track} window=${e.window} n=${e.n}`);
+  lines.push(
+    `# expectancy_pct=${e.expectancyPct ? e.expectancyPct.point.toFixed(4) : ''} ` +
+      `ci_lo=${e.expectancyPct ? e.expectancyPct.lo.toFixed(4) : ''} ` +
+      `ci_hi=${e.expectancyPct ? e.expectancyPct.hi.toFixed(4) : ''} ` +
+      `net_sol=${e.netSol} win_rate_pct=${e.winRatePct ?? ''} ` +
+      `fee_pct_of_notional=${e.feePctOfNotional ?? ''} ` +
+      `emergency_share_of_losses_pct=${e.emergencyShareOfLossesPct ?? ''}`,
+  );
+  const headers = ['section', 'cohort', 'n', 'net_sol', 'mean_pct', 'win_rate_pct', 'mean_prob'];
+  lines.push(headers.join(','));
+  const sections: Array<{ section: string; rows: EdgeCohort[] }> = [
+    { section: 'by_risk', rows: e.cohorts.byRisk },
+    { section: 'by_suffix', rows: e.cohorts.bySuffix },
+    { section: 'by_exit', rows: e.cohorts.byExit },
+  ];
+  for (const s of sections) for (const r of s.rows) {
+    const row: Record<string, unknown> = {
+      section: s.section, cohort: r.cohort, n: r.n, net_sol: r.netSol,
+      mean_pct: r.meanPct, win_rate_pct: r.winRatePct, mean_prob: '',
+    };
+    lines.push(headers.map((h) => csvEscape(row[h])).join(','));
+  }
+  for (const l of Object.entries(e.latency)) {
+    const row: Record<string, unknown> = {
+      section: 'latency', cohort: `${l[0]} p50=${l[1].p50} p95=${l[1].p95}`, n: l[1].count,
+      net_sol: '', mean_pct: '', win_rate_pct: '', mean_prob: '',
+    };
+    lines.push(headers.map((h) => csvEscape(row[h])).join(','));
+  }
+  const cals: Array<{ section: string; rows: CalibrationBin[] }> = [
+    { section: 'calibration_model', rows: e.calibration },
+    { section: 'calibration_decision', rows: e.decision.calibration },
+  ];
+  for (const c of cals) for (const b of c.rows) {
+    const row: Record<string, unknown> = {
+      section: c.section, cohort: b.bin, n: b.n, net_sol: '',
+      mean_pct: '', win_rate_pct: b.winRatePct, mean_prob: b.meanProb,
+    };
+    lines.push(headers.map((h) => csvEscape(row[h])).join(','));
+  }
+  return lines.join('\n') + '\n';
 }
 
 /** Predicted vs realized win rate per probability decile. */

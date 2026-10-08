@@ -1,0 +1,3295 @@
+{
+  "generatedAt": "2026-10-04T22:51:25.132Z",
+  "params": {
+    "maxMigrates": 1000,
+    "probeTop": 5,
+    "probeDepth": 100,
+    "slotWindow": 150
+  },
+  "stats": {
+    "signaturesScanned": 2000,
+    "fetched": 1573,
+    "fetchFailed": 0,
+    "failedTx": 427,
+    "nonMigrate": 72,
+    "pages": 2
+  },
+  "sampleCount": 1000,
+  "callersRanked": [
+    {
+      "caller": "9C4nRvhhVquCKATjDCx5FKvNS9PNgNqgyWy9AcoDjYv5",
+      "migrates": 464,
+      "totalSolDeltaLamports": -1090479856,
+      "totalFeeLamports": 89556428,
+      "totalNetOfFeeLamports": -1000923428,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "Gygj9QQby4j2jryqyqBHvLP7ctv2SaANgh4sCb69BUpA",
+      "migrates": 84,
+      "totalSolDeltaLamports": -23947896,
+      "totalFeeLamports": 2943335,
+      "totalNetOfFeeLamports": -21004561,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "92CZnNR1HgGVAFf8UGeVgK6LGQunRaPYQDVuJ7KAFbsn",
+      "migrates": 32,
+      "totalSolDeltaLamports": -49335680,
+      "totalFeeLamports": 1705600,
+      "totalNetOfFeeLamports": -47630080,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "3RnALvN6YRyb8EBU8BGepnYNDpnA6ZENBfoxB8MS73oQ",
+      "migrates": 26,
+      "totalSolDeltaLamports": -40085240,
+      "totalFeeLamports": 1385800,
+      "totalNetOfFeeLamports": -38699440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "F7LqQscxh7NK8S3AJaEZ7vryxvQbqKksQAZKtVgJYwmE",
+      "migrates": 24,
+      "totalSolDeltaLamports": -1283145973,
+      "totalFeeLamports": 1204119933,
+      "totalNetOfFeeLamports": -79026040,
+      "netPositiveCount": 0,
+      "tokenGains": [
+        {
+          "mint": "6sVQpyXusu7Ej9zPfV3LSrLGNG5QVR6AZMTgcivUpump",
+          "deltaRaw": "4741977938399",
+          "decimals": 6
+        },
+        {
+          "mint": "So11111111111111111111111111111111111111112",
+          "deltaRaw": "-57509230191",
+          "decimals": 9
+        },
+        {
+          "mint": "Ec22aivh9SSMJVMQ2j7LQ25JoPri6pACGkaN769epump",
+          "deltaRaw": "6970027084111",
+          "decimals": 6
+        },
+        {
+          "mint": "G939riCWgdnZyRSZwJm44nPr1SocioKcWH41w8JLpump",
+          "deltaRaw": "6970027083952",
+          "decimals": 6
+        },
+        {
+          "mint": "3tes5VMgT9JpcwKT66CtiB9zLmDyqpMtsN5jVBaepump",
+          "deltaRaw": "6970027083952",
+          "decimals": 6
+        },
+        {
+          "mint": "2BFGrFF78rDebruUG9PBjSszi67oV7ZzVMGEjAfWpump",
+          "deltaRaw": "6970027084032",
+          "decimals": 6
+        },
+        {
+          "mint": "55z3QZQnbqWe6ksCyYipHm6RGWupzoEBGNHWXgtNpump",
+          "deltaRaw": "6970027084111",
+          "decimals": 6
+        },
+        {
+          "mint": "62Vq3acGj7jqJCrkyYwPemAw87JjJZQBoJKMEe25pump",
+          "deltaRaw": "6970027084111",
+          "decimals": 6
+        },
+        {
+          "mint": "8XKeJ1fFqvuN7ZsrQFPq6nQtXGj3VMPb1tv9frLqpump",
+          "deltaRaw": "6970027084032",
+          "decimals": 6
+        },
+        {
+          "mint": "H3HxwHJkngf8q8wAp3wPFZpubxx4dfX2xrhmn7UXpump",
+          "deltaRaw": "3630704599735",
+          "decimals": 6
+        },
+        {
+          "mint": "87TbQkkv6fZ58U4acLHYgKso6spfj699AGZrzoPppump",
+          "deltaRaw": "5575201034246",
+          "decimals": 6
+        },
+        {
+          "mint": "4jJiB7Fzptkmbz1RKkNySJsQ212okr9N4f2zyjHypump",
+          "deltaRaw": "6970027084032",
+          "decimals": 6
+        },
+        {
+          "mint": "AFPqvARpQX6bnXdBiTjtVmFco3f5o6fD1iD5vSmEpump",
+          "deltaRaw": "6952681642082",
+          "decimals": 6
+        },
+        {
+          "mint": "9Yt46do4ARt5Mev8fKrz8y3VVJ77znZz9qdSR83fpump",
+          "deltaRaw": "6970027084032",
+          "decimals": 6
+        },
+        {
+          "mint": "BK77PdW4i5ThuoMsStmqYVCpVTSNUzve63iCTjgLpump",
+          "deltaRaw": "5562596891192",
+          "decimals": 6
+        },
+        {
+          "mint": "AYXqgh4Ryy1VwQX2hpKxX1yrNXj4JKehw8WAeC8epump",
+          "deltaRaw": "6970027084190",
+          "decimals": 6
+        },
+        {
+          "mint": "y8mSbDVMqG576bnUGzaUy9QCMqCFVSPxFavVewupump",
+          "deltaRaw": "639887520523",
+          "decimals": 6
+        },
+        {
+          "mint": "GWVuTdm4g9wGRWYxpQqCQ2cuLxcTEiQGYrRcRr7Lpump",
+          "deltaRaw": "1591275058099",
+          "decimals": 6
+        },
+        {
+          "mint": "Fw57o4rn866ABe15AsqyMhJdjbRpJUNLJ4VBFU54pump",
+          "deltaRaw": "6970027084032",
+          "decimals": 6
+        },
+        {
+          "mint": "2WMnisqbTtivE5pyqRDB7GDt935Zg1yphcu5vUYxpump",
+          "deltaRaw": "6970027084032",
+          "decimals": 6
+        },
+        {
+          "mint": "389GhGCfjFZ9TJqrSQDA14kP2LWbcT6RjnH5ubVepump",
+          "deltaRaw": "6970027084032",
+          "decimals": 6
+        },
+        {
+          "mint": "Bh7T3PZT1VL6EyZmLb5nt9XRkF4KtbTV5Ds2MRUEpump",
+          "deltaRaw": "6970027084032",
+          "decimals": 6
+        },
+        {
+          "mint": "Cvfx1WcWgY1Rgcu2zqcsFQMJRdkQRotnXbUm7L9fpump",
+          "deltaRaw": "639887520523",
+          "decimals": 6
+        },
+        {
+          "mint": "F5pFhuAdACbvkdbpQR19WnFMsdYtkws6VVS72C67pump",
+          "deltaRaw": "6970027084032",
+          "decimals": 6
+        }
+      ],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "H2ckWrvX2UcC3a74mkd9jcpvr1tESo27Rjgz16uGWtF5",
+      "migrates": 22,
+      "totalSolDeltaLamports": -33918280,
+      "totalFeeLamports": 1172600,
+      "totalNetOfFeeLamports": -32745680,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "FEUa5TK22AyRyyjKpd2bCx7se1Eczmt7AFxdS6dUfHz4",
+      "migrates": 17,
+      "totalSolDeltaLamports": -1152688480,
+      "totalFeeLamports": 1117385000,
+      "totalNetOfFeeLamports": -35303480,
+      "netPositiveCount": 0,
+      "tokenGains": [
+        {
+          "mint": "5FtuM5g1qYJZw136XSiCVnapoGEcYYtnh2KJcripump",
+          "deltaRaw": "6970027083952",
+          "decimals": 6
+        },
+        {
+          "mint": "So11111111111111111111111111111111111111112",
+          "deltaRaw": "-36000000000",
+          "decimals": 9
+        },
+        {
+          "mint": "DJGsptd7CEMEKrHdmVPastxKcPNSqGJT5K7HWcn5pump",
+          "deltaRaw": "6970027084032",
+          "decimals": 6
+        },
+        {
+          "mint": "71B9WX3CHmqUur4htNtt4XwhT1uYf6CFMZxhsbKHpump",
+          "deltaRaw": "6970027084032",
+          "decimals": 6
+        },
+        {
+          "mint": "9EatdT2N6nsmZh7DiySKtBo4WMr1i6b8LgfVPsV8pump",
+          "deltaRaw": "6970027084032",
+          "decimals": 6
+        },
+        {
+          "mint": "GWauJGtRQvLo9fU6jW62E48DG6PUaAx7a9Dv97vDpump",
+          "deltaRaw": "6970027084111",
+          "decimals": 6
+        },
+        {
+          "mint": "DhQFJXJEBKqRB56AcvCMYKjRQP6p3gvGYP5dpHuPpump",
+          "deltaRaw": "6970027083873",
+          "decimals": 6
+        },
+        {
+          "mint": "35Vy8wqTeiqZGum5ewzPycKW84cDCVRtZHqqHFLgpump",
+          "deltaRaw": "6970027084190",
+          "decimals": 6
+        },
+        {
+          "mint": "9TbHZ1KkFanjuMqBqDnHx6DiG6Qd5gD9wCEvMNsypump",
+          "deltaRaw": "6970027084032",
+          "decimals": 6
+        },
+        {
+          "mint": "ALd1KJ72HyfcHJcH2fSkWGEKc2xDHuhvWtyTR1Etpump",
+          "deltaRaw": "6970027083952",
+          "decimals": 6
+        },
+        {
+          "mint": "6mJFyMprx5y1xAGPEMBTkhUUGonKk4Uj5jWSamEYpump",
+          "deltaRaw": "6970027084032",
+          "decimals": 6
+        },
+        {
+          "mint": "GVHuvtuh8Dhv5rVwmXGjVMCqUNy9E4yH1QgEqwaapump",
+          "deltaRaw": "6970027083952",
+          "decimals": 6
+        },
+        {
+          "mint": "3EMec5v2dTVrHDGoLEzoyzFrBWx6eq4mqYAqoohTpump",
+          "deltaRaw": "6970027084032",
+          "decimals": 6
+        }
+      ],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "FHpcNSe6tb2n15bAdq4BkeYWGyZKFD7yLYrH92ng7wCT",
+      "migrates": 13,
+      "totalSolDeltaLamports": -7249260,
+      "totalFeeLamports": 185500,
+      "totalNetOfFeeLamports": -7063760,
+      "netPositiveCount": 0,
+      "tokenGains": [
+        {
+          "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          "deltaRaw": "2373375",
+          "decimals": 6
+        }
+      ],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "9zAWADf2cWdqJaco6VduFQYF6vxqTcyXzWoLnM7ziUoy",
+      "migrates": 12,
+      "totalSolDeltaLamports": -18500880,
+      "totalFeeLamports": 639600,
+      "totalNetOfFeeLamports": -17861280,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "4YvpGfaqG2nB8J3tFj6JD9QpmRRZqTTEXkNTkWSpDrQJ",
+      "migrates": 10,
+      "totalSolDeltaLamports": -741465640,
+      "totalFeeLamports": 412700000,
+      "totalNetOfFeeLamports": -328765640,
+      "netPositiveCount": 0,
+      "tokenGains": [
+        {
+          "mint": "2rEj69iVwALn6bPTLnV3Gy2FRWdHBpTqta4zt4kwpump",
+          "deltaRaw": "3776721696785",
+          "decimals": 6
+        },
+        {
+          "mint": "So11111111111111111111111111111111111111112",
+          "deltaRaw": "-14200000000",
+          "decimals": 9
+        },
+        {
+          "mint": "GaGoBQFrgCGo3VjkSVNfK4up5Pz3VGLECvvfxx4Wpump",
+          "deltaRaw": "3312189007469",
+          "decimals": 6
+        },
+        {
+          "mint": "8W8hXBka6r3mRQEunqFGyi6BRbSmZk937GH3p3Vvpump",
+          "deltaRaw": "3312189007508",
+          "decimals": 6
+        },
+        {
+          "mint": "2qNBJuMEmEXXwoq1ptYf4nJTHkFJQai3g3gYCZtapump",
+          "deltaRaw": "3312189007508",
+          "decimals": 6
+        },
+        {
+          "mint": "4wwXaBKtomLDQAq6BAZzYeAopMqk8uCqoTrDq6qApump",
+          "deltaRaw": "3312189007469",
+          "decimals": 6
+        },
+        {
+          "mint": "EpjcvRPPkTEsokgNVKiB9MvFamgvBuFAhXecyVcopump",
+          "deltaRaw": "3312189007431",
+          "decimals": 6
+        },
+        {
+          "mint": "3sfF6VyrW9MJwWoFvYC51UK4pPp7P5H4wRPqqHTbpump",
+          "deltaRaw": "3312189007661",
+          "decimals": 6
+        },
+        {
+          "mint": "J2EuZcNMmxCw3jiug5h2JCkwSFxAravdLZyMXUUepump",
+          "deltaRaw": "3223722572414",
+          "decimals": 6
+        },
+        {
+          "mint": "ALd1KJ72HyfcHJcH2fSkWGEKc2xDHuhvWtyTR1Etpump",
+          "deltaRaw": "3220245301756",
+          "decimals": 6
+        },
+        {
+          "mint": "2fpF5XAU3tRwxeFMULifHKT9H5oShsniBnX9P9vspump",
+          "deltaRaw": "3312189007508",
+          "decimals": 6
+        }
+      ],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "AK7qSBRXTHxSDohxfMY9CKKquCnqXxJR39SnvZhPKGwp",
+      "migrates": 7,
+      "totalSolDeltaLamports": -369635000,
+      "totalFeeLamports": 359135000,
+      "totalNetOfFeeLamports": -10500000,
+      "netPositiveCount": 0,
+      "tokenGains": [
+        {
+          "mint": "5FtuM5g1qYJZw136XSiCVnapoGEcYYtnh2KJcripump",
+          "deltaRaw": "6518792304146",
+          "decimals": 6
+        },
+        {
+          "mint": "So11111111111111111111111111111111111111112",
+          "deltaRaw": "-21000000000",
+          "decimals": 9
+        },
+        {
+          "mint": "H3HxwHJkngf8q8wAp3wPFZpubxx4dfX2xrhmn7UXpump",
+          "deltaRaw": "6734723975299",
+          "decimals": 6
+        },
+        {
+          "mint": "87TbQkkv6fZ58U4acLHYgKso6spfj699AGZrzoPppump",
+          "deltaRaw": "6767838160633",
+          "decimals": 6
+        },
+        {
+          "mint": "EoHTB4ZG8kLDy7MLfWGZXkhYzHhjRszXHEXdBtC1pump",
+          "deltaRaw": "6970027083794",
+          "decimals": 6
+        },
+        {
+          "mint": "8LNPFjcui375VSZpNqeziti2w4ykiErkrnDgLtwvpump",
+          "deltaRaw": "6619482176346",
+          "decimals": 6
+        },
+        {
+          "mint": "J2EuZcNMmxCw3jiug5h2JCkwSFxAravdLZyMXUUepump",
+          "deltaRaw": "6970027084032",
+          "decimals": 6
+        },
+        {
+          "mint": "y8mSbDVMqG576bnUGzaUy9QCMqCFVSPxFavVewupump",
+          "deltaRaw": "6480511059745",
+          "decimals": 6
+        }
+      ],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "GePaAUXD4XyCSZnzUjLwFrcWM1rJHtT7powVZPJ6Xjft",
+      "migrates": 6,
+      "totalSolDeltaLamports": -392473132,
+      "totalFeeLamports": 321853942,
+      "totalNetOfFeeLamports": -70619190,
+      "netPositiveCount": 0,
+      "tokenGains": [
+        {
+          "mint": "cWfS3PoFz6sr8Pu4MW3jeFSawXtfmCV1FTJ4ujqpump",
+          "deltaRaw": "5841151927827",
+          "decimals": 6
+        },
+        {
+          "mint": "So11111111111111111111111111111111111111112",
+          "deltaRaw": "-15000000000",
+          "decimals": 9
+        },
+        {
+          "mint": "HotWkBQTAsiXosYKyPmAR6jFN8xNm38UV2Fz1hmepump",
+          "deltaRaw": "5841151927827",
+          "decimals": 6
+        },
+        {
+          "mint": "2vD4GNzzUsVkzAiNHGj8gQo5s6LvoktDWaYuewTjpump",
+          "deltaRaw": "5841151927827",
+          "decimals": 6
+        },
+        {
+          "mint": "3WhhhKvHZthhWgkV9JEGQxP5hApFbxnug5SwQW86pump",
+          "deltaRaw": "5841151927827",
+          "decimals": 6
+        },
+        {
+          "mint": "4mCWXYwh19tDP8iT2pTMJ6Jcw583aWZCpMGF5xwepump",
+          "deltaRaw": "5841151927827",
+          "decimals": 6
+        },
+        {
+          "mint": "BcMvQUrNaqz35GJgTNfVHQzy3sWcUii3cy1arEtJpump",
+          "deltaRaw": "5841151928027",
+          "decimals": 6
+        }
+      ],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "74ykb53UAcijP3gsxkxT5nPXYmDktqh3gBYRvTzqjHyo",
+      "migrates": 3,
+      "totalSolDeltaLamports": -57000,
+      "totalFeeLamports": 27000,
+      "totalNetOfFeeLamports": -30000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "9zehcgPiqoiY2y6JzpBj6oGxKq8Sxi7yaLwXZZLXbJeK",
+      "migrates": 2,
+      "totalSolDeltaLamports": -1009748,
+      "totalFeeLamports": 1009748,
+      "totalNetOfFeeLamports": 0,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "AE7GNW3CtTq7Tov24GxbNZ7wbNmVygQsfiGrCUVgqFAj",
+      "migrates": 2,
+      "totalSolDeltaLamports": -38000,
+      "totalFeeLamports": 18000,
+      "totalNetOfFeeLamports": -20000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "AHzMGVeBodC5EWjwESJtXKzXwjTMkKJztJB8VK1AQqe",
+      "migrates": 2,
+      "totalSolDeltaLamports": -2986880,
+      "totalFeeLamports": 10000,
+      "totalNetOfFeeLamports": -2976880,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "5w27CTJNyL42rNvU4jL9sLEoMRm1A4nSxprNSEW4sN2b",
+      "migrates": 2,
+      "totalSolDeltaLamports": -337364,
+      "totalFeeLamports": 317364,
+      "totalNetOfFeeLamports": -20000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "QD1fkjZjrEeGSPyF4jKEH414CrW7p4JtmUBNKQKrDrY",
+      "migrates": 2,
+      "totalSolDeltaLamports": -38000,
+      "totalFeeLamports": 18000,
+      "totalNetOfFeeLamports": -20000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "S7E6ZYzMux4XSHrTkGH6n6xBLcLV61DQiAGwC89cMdY",
+      "migrates": 2,
+      "totalSolDeltaLamports": -1526440,
+      "totalFeeLamports": 18000,
+      "totalNetOfFeeLamports": -1508440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "7qhYJ6pAMvrVQotnyhat1MAUXfmVxp3iQjewRBkXc9eG",
+      "migrates": 2,
+      "totalSolDeltaLamports": -2986880,
+      "totalFeeLamports": 10000,
+      "totalNetOfFeeLamports": -2976880,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "7nhNsFiibn5S2Jepr7dnkdAf783UeUg8v9TtL9AL2d77",
+      "migrates": 2,
+      "totalSolDeltaLamports": -2986880,
+      "totalFeeLamports": 10000,
+      "totalNetOfFeeLamports": -2976880,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "CrhSK2w7Ptr1jTRJ2KUi7Q8Y8rroJoCJdoVBJDs8q9UL",
+      "migrates": 2,
+      "totalSolDeltaLamports": -2986880,
+      "totalFeeLamports": 10000,
+      "totalNetOfFeeLamports": -2976880,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "3VR6qdiGnL658CUknDbXABfwsHcw6sYxS1Wk6wuG52K3",
+      "migrates": 2,
+      "totalSolDeltaLamports": -3786880,
+      "totalFeeLamports": 810000,
+      "totalNetOfFeeLamports": -2976880,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "CN66XtPh4LvEy5LMMTTMZxjNCGQzo5n6QYVWu32DeaBi",
+      "migrates": 2,
+      "totalSolDeltaLamports": -38000,
+      "totalFeeLamports": 18000,
+      "totalNetOfFeeLamports": -20000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "JCTYxgL2MffvUEwiYgkkmACTEJ5RFZZHHespw9puqswL",
+      "migrates": 2,
+      "totalSolDeltaLamports": -1533162,
+      "totalFeeLamports": 24722,
+      "totalNetOfFeeLamports": -1508440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "4uAxbD1juw1jwno2j2wVcoegShjjeHid1grb8MmwFe1K",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "5bMvsZPEga4V1ZkiNr94shZL8XD1mKcjDcB8WpTcoSWA",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1593440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1588440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "78jQ5n14xmsn8AZnCTWWbVutA4pZMUatF8BPjsAvSuZJ",
+      "migrates": 1,
+      "totalSolDeltaLamports": -21493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -21488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "5wJBqT1iXwo1NYuJa4RpEPfLsarVsZSZkUUvUtZ1Ukg1",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1518440,
+      "totalFeeLamports": 30000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "4ZiZwFQ9KihiDF7QaUtzHhWZWrjP8jpv6L1Mc1UkE1Se",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "7J7pG2EuXhrYBSweh4PRPcGUmW1jPgRjgv1MTd337Fja",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "8zebnNHY2T4xxJwWKDiK7GrEiNAiiaExxFEeBdrTGpTe",
+      "migrates": 1,
+      "totalSolDeltaLamports": -9000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": 0,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "FE8z81V5vSRUUkcTK4eGmWBRHbPCLke9BVzVRcfdmnbk",
+      "migrates": 1,
+      "totalSolDeltaLamports": -11593440,
+      "totalFeeLamports": 105000,
+      "totalNetOfFeeLamports": -11488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "5UBpFt3RYBAobWKDruRYhFmxJ9cUpQd6mbxffMkeQw1b",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "8V3v4JCqsZH3CiP2sdx72tJmjodHH3Ui8hPUKrMUy3d8",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1518440,
+      "totalFeeLamports": 30000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "E9wzvhfZr4JkkpvbrV28TZbdmL5As8bNKYL3j92tNJSh",
+      "migrates": 1,
+      "totalSolDeltaLamports": -21493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -21488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "HkqzoUG13XM8pUw6XFAEQCr1GNkXadj5taR7NcGoGU4y",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "9y7Gv1LbAuD6Nuv3VifMudnU93fkhfTd7pi9dahnSiXh",
+      "migrates": 1,
+      "totalSolDeltaLamports": -415000,
+      "totalFeeLamports": 405000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "GsvXXu8cwH1ct4FUk81RTbAteF5WHozcg1omeFNHg7Hj",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "FbqPobAynGJCwCxgMbgDG5z11fWS8ihvjTY2MWFjpPSh",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1507440,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -1498440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "2nq9kZAGsw9BJBqBBYdD1gQneWm2NBRcQcnTKFvLeNep",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "7HnF5rUxKyqtqEGHEgiLTqhGcLSoEcYcbAQ6knk8TyU4",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1593440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1588440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "H5zmVyFgZ9Z9Y7GiRpnJyjniL88GkaPocnBiXb3tbWZ8",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1498440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1493440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "4LitDPr1D1SQXYyWE1EQtuJgnRmTw1nobSEapM7R1UeR",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "FXw8iYS8wQz5upB3XFu9f8DFEwJDCgwqbHTSkXDmnnjk",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1507440,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -1498440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "6QAL51PJrXMwxLdWAirG79e3ihmeWwa2Wc76bhoQncaJ",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "ARVRe1gBNswuskDJKeZCMQG29gjGCmK2XuEBC6ouDLAL",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "DFgN6FYw38QFWwVMgDG9UfFQeUwPkuVmdhdphddj4iT2",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1518440,
+      "totalFeeLamports": 30000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "5gD1m1D9iqDx7AJtBvotbEFogjndADC4Mn3nv7nGAEjA",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1533440,
+      "totalFeeLamports": 45000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "DiyANQnWP19XGJQC3ZTPcqSsHZr2MMMvByS4X5WCBUdv",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1507440,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -1498440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "7tqvxysP8pthzHwKgrdTpeEhxNFMNtHTMaU6W2urvkZ9",
+      "migrates": 1,
+      "totalSolDeltaLamports": -415000,
+      "totalFeeLamports": 405000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "GwSazdpySTnm4cjyXxAoagdGz7we6LBAmqStHHVqaPo4",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1507440,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -1498440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "8H7PKqqvyPf1DXk3ZExgqPWCENQymmubWXbbe4FJFtzm",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1507440,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -1498440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "8FPqFrcVoFso7STwqBosMDXMz3pL8eYdJ4D7pwE5paah",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "DB1Wy9cepgw8u5hPWVYsx8r8noZRTytvdxaHpAiTk62Z",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "GSXFVEL6pSXddy1LcUGmsBxpfL6T43bpWUQ7iycc3nE9",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "2hqXbEhhwrPXkDSsbeUZeoWiULbgBXEGzqTRtC43ExDv",
+      "migrates": 1,
+      "totalSolDeltaLamports": -9000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": 0,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "EqsrLJpDnC6JzyRXFGtGkWZmpNQ1zCgxWFXuByLgcF1D",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1518440,
+      "totalFeeLamports": 30000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "DijNTsB35UHVMiwPkpTUKNpXCEL5Xr8zDWgirR8goBQZ",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1518440,
+      "totalFeeLamports": 30000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "8e7HjkgVkpc6ZP8rKdQ3GBP8TKuvK4CJ3c9qX2AYc5wp",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "7SPDEqko9DFGKSW5UrpB6F7qRB1QHugSufEtayv4MRpk",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "DHKNqQ1DuQWJukqPtC97LDDccHiL2iapsM3gkFMP9GpD",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "ECauip6UdmnhgzdetY87KFBbjCa3kkSZqf4TeSqf2tnV",
+      "migrates": 1,
+      "totalSolDeltaLamports": -2993441,
+      "totalFeeLamports": 505001,
+      "totalNetOfFeeLamports": -2488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "4AC4ac8pVBz6RPLkyVKL93HHdcnkRVWXtmW43wgnQurt",
+      "migrates": 1,
+      "totalSolDeltaLamports": -11593440,
+      "totalFeeLamports": 105000,
+      "totalNetOfFeeLamports": -11488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "B3evwgcMi5LWRjGNM1XjxYzxk1xWHZUFe1vb2eS3DJG8",
+      "migrates": 1,
+      "totalSolDeltaLamports": -415000,
+      "totalFeeLamports": 405000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "EkVcAha6uAk8ucSmzEMze6ohQJrBe88QxGWptMrDsGab",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "rKqhiedrMPX1UqFgPirW2bCh99oinw1WgPrCwXSAAa5",
+      "migrates": 1,
+      "totalSolDeltaLamports": -21493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -21488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "XJNfhLWjuLQiFfGs9HAX475wtS53dWivguKX9tg3sxg",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "EkKZDGHhj3DoUERkDLTvs1dzBzMTXS6XNSuZnYfCtaAq",
+      "migrates": 1,
+      "totalSolDeltaLamports": -21493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -21488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "3o5tjWrpbDhW4qjmwX2HB6S6R6X86mduR7YtgoywwAeR",
+      "migrates": 1,
+      "totalSolDeltaLamports": -11593440,
+      "totalFeeLamports": 105000,
+      "totalNetOfFeeLamports": -11488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "5xtCJ4kuek3XnRrFYttQvUKP54nHCUMtB3XhF2sw2Lpx",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1497940,
+      "totalFeeLamports": 9500,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "2Hq3K3jDK1GScfxzCM6LkBTgxQ2qHnuDoUSBGaitmbQp",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "2dwsGUzd3w6iCoVi9GMkYzTXQS6S74XvmF1jYe8reu8U",
+      "migrates": 1,
+      "totalSolDeltaLamports": -21493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -21488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "DLgt7DFsUQASVDQXb3qE5UCMFSMP8VWGkQr6nXMvwSQQ",
+      "migrates": 1,
+      "totalSolDeltaLamports": -2234734,
+      "totalFeeLamports": 505001,
+      "totalNetOfFeeLamports": -1729733,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "8TC4Z7tyHJxePxLthEdB6GGZqjeEBTPbZx5XPCSmWXAo",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1507440,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -1498440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "7YWiZSVgBgezrJE2QeqUCERcoan6X6Ywausng8u8xgx3",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1498440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1493440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "3gV5XP6cEhPAyb7nnwbZNF4jRkY4Mi7B3msTMJ1z7jpD",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1593440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1588440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "EGkKcpAPcvvsofKPJnrgboPrqS8BpBuUR5Ht8CzAXLQS",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1507440,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -1498440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "AXmMxJMLBQ131eRPuuTDvc9ioidgRsrLZwN7C1i1PJwd",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "46W7YaN1YJggAWbUFrz1YyQhEeup9cfmvZ1BJw2ba86p",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "DVH4TUsAKpHqokeBpnJn9BSGCFMfXTyVwqEr3y4auzMs",
+      "migrates": 1,
+      "totalSolDeltaLamports": -2061435,
+      "totalFeeLamports": 510001,
+      "totalNetOfFeeLamports": -1551434,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "6YHKK7CAZpimubHPFDYCHTroLxBC6waTqFiT6Zc3471P",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "4xXV5AgzdHggHJ1socufZDicQQVhS86Jeh7SERAPC1a1",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "GAM9mAnEseAxBGVMHf6jkD4gd6Y116jsH5wZhKyKWUN",
+      "migrates": 1,
+      "totalSolDeltaLamports": -41265,
+      "totalFeeLamports": 31265,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "7bDfM7zsKvmoZpq9G1DhkLVBA2Uk4REGcV1YryeNdgX5",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "GwBCYTBhwPRCuahkKP6CMFSNSJ4htD6X9qwCfLkxLgjc",
+      "migrates": 1,
+      "totalSolDeltaLamports": -21493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -21488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "HYkUvFL7j9syVcsP3aSnP9hmZ1s7Ca4hsdNx8bKKZt3h",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1593440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1588440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "9fP4iuCQmMPvCpEvSX8LQD7ZeqPhfdFJPLcCH9HspHBE",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "6oRXJVqRL3gnFYaUeSFsC6vKoc79Gpuak8VRaTAPKVVZ",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "8QNHFJgFqiNCpCtsxeqmsBjhRBeWoahpjFxmDtJ2iZ6R",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "9PerQYcNxbcvzjPDSyedWYth3gvtet9pS4wKg3h2kBfJ",
+      "migrates": 1,
+      "totalSolDeltaLamports": -11593440,
+      "totalFeeLamports": 105000,
+      "totalNetOfFeeLamports": -11488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "6ewmNRJ4ogFfQQ1u4NTtktnbjYe4dhUfK3RWujKnvRpj",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "4w3gjsJKb6opBT4ARmWm8uxsqZ44zxgNjD2zGMoUzNax",
+      "migrates": 1,
+      "totalSolDeltaLamports": -2493440,
+      "totalFeeLamports": 505000,
+      "totalNetOfFeeLamports": -1988440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "Cw4AMv4KZN9odbZNxyxQgWmxqkLQyZmnLXiunpJ9x6YH",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "4sV8M1YcP9CrtjHqXZZPUV4wcGFXxXa7KR35Na59qKTA",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "F6Ngte3UqarScs3uscyRdo5JbUMhR9HioXfjTY2Y29F9",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1518440,
+      "totalFeeLamports": 30000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "2Bw9puwEFAJPLmNwj5bxzwW9fVsstHL1CDJPijaGm3z2",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "AjUyGznu9561s73pjAphpWWBsCiPaxtHUck9hiRVvzGh",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "CRtBYVqrv9H7y7oyph43QfBoU5oYvBMKU8B2vs1qjhtw",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1593440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1588440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "7FDTC4HFiokjrWSnbiBGmT9BL8XGerHmM4FsgUc9dc9s",
+      "migrates": 1,
+      "totalSolDeltaLamports": -21493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -21488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "Dtw8UxRTbKAENW8bRpCoaarTpuTeDiUGKf6jRHoySbgK",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1593440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1588440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "BeQQtFiNPDg6T4LRuD5Xgwf8FEJpzTbcjpYSYLtvBAsw",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "DfHcJbLaXGtHPzEnAM8unxvr6HF9heqkUquDnr4SaBfH",
+      "migrates": 1,
+      "totalSolDeltaLamports": -2493440,
+      "totalFeeLamports": 505000,
+      "totalNetOfFeeLamports": -1988440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "EXNoxZ9ijPn8YqDMoLFNXUi3iVBxT7PLVcFu51ZgYgZN",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "4FGWn6DDVnqyEfaVZZGZEzPFhgHC533mqwg49T6joBqU",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "uD4GmMrAHkj3zHm6UuK2mrDLKbxn1TWPnSujeWJZHve",
+      "migrates": 1,
+      "totalSolDeltaLamports": -196769,
+      "totalFeeLamports": 186769,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "6vXXbBARv8ouSweq77efBsoVqWT43KRE91J4aRboLCK3",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "DFCVJCdnCo2GAahU6FFtxeWbHzY2k7dUNcV6x2b23fuw",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1507450,
+      "totalFeeLamports": 9010,
+      "totalNetOfFeeLamports": -1498440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "6dirX2S3tti1hESJfx2oZjqcnENoBgFnfLMVg7zFn3De",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1498440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1493440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "FmvVUyWdsS49eCK7gWNszSyDZY2NC8LkfGcxM1ke1Kfk",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1593440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1588440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "EMUEP4N6MCd4wA2f8KdJyGYFUpL5zKC5fjNsUuJqPWqL",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1593440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1588440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "EX1u2MNAYrS9HNHQoweGeyUqbvjXjT1enxsisgLM2UaL",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1593440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1588440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "5SkExDr412EqvxezHSuyqwwQMzHymCUWwvahhnRdJsH5",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "GQSFP6bt4qcX9vJLqGNBVPZuHrwrpWsTjgAszuAgYo7Y",
+      "migrates": 1,
+      "totalSolDeltaLamports": -11593440,
+      "totalFeeLamports": 105000,
+      "totalNetOfFeeLamports": -11488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "FpaQeXX2G7snLQJEP3ySuJa1i44suzWiC3VXSw269YqW",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "9aibgu5sBwzosga5VVeonm8uwbWXyxVNtNx1HsEMNShE",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "4Em9cWQ4ewi3FA3H9noay9syh2KP6raxxdMYBunwgMG1",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "8N5hFoZHGJniDKyQbmDcreCxL3PRyVmB7hREi7f9gM1j",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1507440,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -1498440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "5m5HGkQpWYBshsanfTXsRcNWPuzbF7WTjm1KFyiV2Z2y",
+      "migrates": 1,
+      "totalSolDeltaLamports": -2993441,
+      "totalFeeLamports": 505001,
+      "totalNetOfFeeLamports": -2488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "4sYBX5yVi9ZCfiTzBtjLJdMKNJAd1fLytYkA7dKBTgut",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "6KLMkC9SRD8xxTZogkmh2XJCbJCKPKv2JapeDg7ntafk",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "EtAG6QjZsrRjRiBqppYoZ7Uhd9mEx9sUNLfaUp7xVop9",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "9nKcXQW25PM5fvHEgRosLtwHxJDzVGh3HM9bNjxMNSNH",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1593440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1588440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "5bmpMKPQ842ZsNMjyha9tPUBwH89n2BJsnFRqYn1XE27",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "39vAZh2XFpWyqycNSSoCuuU7zmuDeVxNgvCvwMYeqDrn",
+      "migrates": 1,
+      "totalSolDeltaLamports": -2007015,
+      "totalFeeLamports": 505001,
+      "totalNetOfFeeLamports": -1502014,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "6S48V3ABFrB6KripwPQ3abKdD3ok6FkajCbB14ztpsTd",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1593440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1588440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "bVXSGLb26tcECrQzc4QGgFSMJthMe4TTb4MfVrnY28R",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1507440,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -1498440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "5biuCsKjbQgBG6RJThFioPTjjvhBKSWkgwYRmpkhNTf",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19327,
+      "totalFeeLamports": 9327,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "4GZvxWFVbXqs5JYkLQmVCMLp75N7VBnyQ8Xhv8UxYvag",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "xJpB88DUxKYJWtxpGu1LyN5f89RkrfijPjysigLBuTa",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1507440,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -1498440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "GGk8823sqYcbfW6V2TSKfG1T2p1C8ATUU1kE7jCNSQPG",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1593440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1588440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "GKn8KgPnA8rgqG4bVckcVpEQVyrFgo6hSb3waKgEXrLB",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "2o8qA7Q5TYnnBr8KR9rxpH7uJUM6ZhmmHYGDFND9FyAa",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "47jveRaaqJZyUVR5e2ewsqq8hryNrz7ijtZQFKBkPc1F",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "Cj3PkgVnoNiaV66Qw7zQQCbupgRMTvRfCKJ6gRM6vv6E",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1498440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1493440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "6VhEfmkVDzQSug6v7L3QXKt9Lb7vwxSvZgZz1a1L177f",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1541740,
+      "totalFeeLamports": 53300,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "iZsK3fksBiyhhpYxEpyLMRTmnrcEctHNTCB5ofS58wT",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1593440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1588440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "6SBYyCynQrNvVHALxPaQYFiUeAqjH8cefpneAMcWcNYi",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "3nTYsujX7yS6YWNazyqrVQRmzaiA2eGYsk22Bg4Ax5d8",
+      "migrates": 1,
+      "totalSolDeltaLamports": -3004941,
+      "totalFeeLamports": 510001,
+      "totalNetOfFeeLamports": -2494940,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "DU4YeQw7bAL9WQGZkSpebzcJg22L7CgLFrhxV5BK46DH",
+      "migrates": 1,
+      "totalSolDeltaLamports": -2493440,
+      "totalFeeLamports": 505000,
+      "totalNetOfFeeLamports": -1988440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "4Eiao5FGEtJ1gozDSUabniavp3xHdtSEfbw4g7JasGyu",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "7nbms77XNqkGa7E6GjKAUwYxVC9kpHJRRsJxHPo9zrv6",
+      "migrates": 1,
+      "totalSolDeltaLamports": -35974,
+      "totalFeeLamports": 25974,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "CpTmLVfipNdvpqG7j6qETaGK8wf9Wdfj9UkZRacB7Fyj",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "8XXxHQBSyeV95npB34gp5V8ihUDZxpoYheKmaSTEUJUn",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "7DQ88wjgvLrJKuVeZBNUhA8oBRhiVYnx7W1kCe33PLmk",
+      "migrates": 1,
+      "totalSolDeltaLamports": -35974,
+      "totalFeeLamports": 25974,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "FZSkVHLgB1rgb8FXRcp5rDw5p3EQmHJD1LFTxtjPW3ic",
+      "migrates": 1,
+      "totalSolDeltaLamports": -11593440,
+      "totalFeeLamports": 105000,
+      "totalNetOfFeeLamports": -11488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "HmUb1pneFGNFCDjpoNeyoHB2JUQxfDA57mNG4MmQKYg",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "Hr567J49oKh1zACnz1fa7Mqknz7KhDucjW7Aq9a2cSmR",
+      "migrates": 1,
+      "totalSolDeltaLamports": -11593440,
+      "totalFeeLamports": 105000,
+      "totalNetOfFeeLamports": -11488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "5UnpJmubsUJYqQtjNN2u27nHL3GNfF51QcTj14atzZVE",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1593440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1588440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "BL1n4UuxgQxEYxCjtVfwPeWGrDWRL2GXCZukhAaeHiut",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1518440,
+      "totalFeeLamports": 30000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "Bso2DefvrVMx4KBGT4S3tDAEnqzTcKYtTmKDSpuwCtik",
+      "migrates": 1,
+      "totalSolDeltaLamports": -11593440,
+      "totalFeeLamports": 105000,
+      "totalNetOfFeeLamports": -11488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "FGdhCQpdBeBpkr8UKep9SBUmgbqvfKB9FgALoSZrG1zK",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "4AXvQdwsv5wMUboh8PEYoDi4XNa52dRFDdLWti1vriZu",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "7A3AEK3ddsxaPYbcPdEVZ376M12NGs2A5UJa5nvRL9vH",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1005000,
+      "totalFeeLamports": 505000,
+      "totalNetOfFeeLamports": -500000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "A3UkR6R2GD3BZA7kTwLfv2f6mUmfUXuwPh1Xwj5eB8Z9",
+      "migrates": 1,
+      "totalSolDeltaLamports": -11593440,
+      "totalFeeLamports": 105000,
+      "totalNetOfFeeLamports": -11488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "BDAnbMtYzpH3oeqoCEBMazka6p7fV8gR1jXohwaiZrDh",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "ETq2LfpDqPKefnfnDyqUWgUdYA4NqffpLseZy5WY7n3d",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "FcueoMACBDwfKEz2DPoVsPZJqtg569V9TpPrX44qJWFp",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1593440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1588440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "3hMqmDDi3ZXveEPCQVypaVwKSCoGX3yVPrimpghWRXCu",
+      "migrates": 1,
+      "totalSolDeltaLamports": -11593440,
+      "totalFeeLamports": 105000,
+      "totalNetOfFeeLamports": -11488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "2pcDQfY7sZo9czRsJYtwnKrbSEvEfyzWJEtnebsj4YoG",
+      "migrates": 1,
+      "totalSolDeltaLamports": -30164,
+      "totalFeeLamports": 20164,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "6B82sF8kSTJdh1uR61Bj8VFN2uGtP7seREbezEjyKgHw",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "65SHmarUcMLQL3STGgC68NDP4zifqRFGo5spchWcsTrx",
+      "migrates": 1,
+      "totalSolDeltaLamports": -29818,
+      "totalFeeLamports": 19818,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "69AMhj8XEGKwpkRj8s1AhGJwo7LKWxpdaajzbEk6gwHi",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "DY65X7qjS2dRJMwLBmtL3ttPkUDJMpSBysG35YfwZTsc",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1507440,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -1498440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "7QU3RRRZQoLnzacCYEVM4Xze2Lr2C7vH8bSFYTAVjTH7",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "BdtNNK1MY4VdMVSbKCMHhiGj5LS2De1FRqk22gGnpCYH",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "78PBEPzuG8e9m2YLmeURJaBcrD7bxEhnU3tuGrKszejK",
+      "migrates": 1,
+      "totalSolDeltaLamports": -11593440,
+      "totalFeeLamports": 105000,
+      "totalNetOfFeeLamports": -11488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "7riKvqAVyvHL92DzjVdJRbY9fnfoAzxUzoj69riCaycT",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "ERydib28JtvBkkhWxWqNoJFoN3VJP6t9NXDjAGJYVQgu",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1507440,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -1498440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "9K6pf9qnjF5XRBQA48qDniKDjGzByCBVpiUa8DFXa8PY",
+      "migrates": 1,
+      "totalSolDeltaLamports": -2493440,
+      "totalFeeLamports": 505000,
+      "totalNetOfFeeLamports": -1988440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "EQvRLJ8S1WFdYn9jdZoPgc9ZHKpchh7DhXmJNznga1vu",
+      "migrates": 1,
+      "totalSolDeltaLamports": -9500,
+      "totalFeeLamports": 9500,
+      "totalNetOfFeeLamports": 0,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "79JPpHzUmxiV5jzqCcQAfoZWxbB4s3aRPz3XBL5mj6VX",
+      "migrates": 1,
+      "totalSolDeltaLamports": -21493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -21488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "FbUxf9H48tZxGzh6ufxvjSrnXDoJD8Ra1KWZr19nJbHf",
+      "migrates": 1,
+      "totalSolDeltaLamports": -11593440,
+      "totalFeeLamports": 105000,
+      "totalNetOfFeeLamports": -11488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "5nJUWyrJnzrWtJsfgMJe52V3SD3SxsF21DPZ9cUg2vKR",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1507440,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -1498440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "GKxgXUduZeeaCjkk6mpGxiTDwduLdTv8SjpGRLathWdg",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "7pCmUWHaKYbdPZz3fjwEjG9fd8LoSnfGf4WCgbNQyn9f",
+      "migrates": 1,
+      "totalSolDeltaLamports": -11593440,
+      "totalFeeLamports": 105000,
+      "totalNetOfFeeLamports": -11488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "2NQNzbEx5vYyGmLe2ELU5p8J7P4VMg3rnV4VM4CAb4oU",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "2DjFVYk22chSB84S1C1kX6sZooKpXLJpWDSUGGuBBo6Z",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "2DvgojWAw6J4js69WKKftAHYzgFZtcTnuhqQ9K2guevW",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "6Vx5EggXhGXdAgZpTsbSVz1LqRNnEvxaACh8oPtEDrPw",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "DkQjEmwNbZXKjP2KDSqMRmQgwGJnQsgvUncr7crmU86F",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "F5o1JvY8RSUgvtSPo4jydnCGbW1zpiRG2WNoUot3gfhr",
+      "migrates": 1,
+      "totalSolDeltaLamports": -28759,
+      "totalFeeLamports": 18759,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "EtjYH8AwdKabo6fp6xyxKzHvhj6d2L9meTJc6d52UVZb",
+      "migrates": 1,
+      "totalSolDeltaLamports": -28756,
+      "totalFeeLamports": 18756,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "716FYRY7UyuK4AYkktAUt2Vp1rTmCLxeN7AcpLDnMbnh",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1517196,
+      "totalFeeLamports": 18756,
+      "totalNetOfFeeLamports": -1498440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "6RrqtXzavQ2psPY6EK8cycMN1HmWJ1bgc8yfPHXiAsiK",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "4bMT9rfJHLkMtqFuQLXgV1soAuaCAmR8oADexLdqTE9S",
+      "migrates": 1,
+      "totalSolDeltaLamports": -11593440,
+      "totalFeeLamports": 105000,
+      "totalNetOfFeeLamports": -11488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "5fv4KxqZJQ4mSTbZsRfRuvofFodCsF4hVDwiewLUevRP",
+      "migrates": 1,
+      "totalSolDeltaLamports": -50250,
+      "totalFeeLamports": 40250,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "Dt1zt7TEX7eoVUo7G46PKhQKf8GfR1rSVzwM7TghFrpk",
+      "migrates": 1,
+      "totalSolDeltaLamports": -2078937,
+      "totalFeeLamports": 505001,
+      "totalNetOfFeeLamports": -1573936,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "Ff8aihFxktpA7V2B3hwDcrsNeUSEFErDvxetzH4Te1yd",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "7YPE7ze8Pox3q71f6jhPeNtY3Dh3i7nfwhHN1nwHkrdc",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "BFFhEsTDMpRy1XZzuknHx2XdABjDMfppufJPQBeigKu6",
+      "migrates": 1,
+      "totalSolDeltaLamports": -11593440,
+      "totalFeeLamports": 105000,
+      "totalNetOfFeeLamports": -11488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "JBY3imtyHJnaZAJASyrbUAdAnqBz5eSYXeutqJTzuCUT",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "77R27L2Sh22v77BWBFuDLxmzuefZQwQT3ifcmvBpfFvN",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "EtTZ4q8LSehzeYCBt28MkG58JTREfjhCBhgj29y5Tw7b",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1005000,
+      "totalFeeLamports": 505000,
+      "totalNetOfFeeLamports": -500000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "DuXvauScbhVHBeS3GM8AmjnB1wKvStY6AUoz4oRgwU3p",
+      "migrates": 1,
+      "totalSolDeltaLamports": -11593440,
+      "totalFeeLamports": 105000,
+      "totalNetOfFeeLamports": -11488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "DCRf2zSk8CefdrDfFvaLk9J7CgQ7Mug5aUtfHFDyZeUp",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1498440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1493440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "83mzQRMx7VuUHtGbYpLnifwmkEcsCRiVbxWGHrsoLjwM",
+      "migrates": 1,
+      "totalSolDeltaLamports": -2278441,
+      "totalFeeLamports": 505001,
+      "totalNetOfFeeLamports": -1773440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "ZMwiDwkveYeStpcaMTCxZd2H316bknqGFwzaENVdweU",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1507440,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -1498440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "8Ax3bmHJc2gKDDo3jSqs5WHNShU6MnUR31AnaeND3L1a",
+      "migrates": 1,
+      "totalSolDeltaLamports": -24145,
+      "totalFeeLamports": 14145,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "24fuUNa5M15qTq4n2g62yHQCvPsnvJuBkRRxxDNrgcvA",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1597440,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -1588440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "8XUXvJ7CfmViducYRSRwZMgWbS8jreA7mB5pS7JqUAfF",
+      "migrates": 1,
+      "totalSolDeltaLamports": -11593440,
+      "totalFeeLamports": 105000,
+      "totalNetOfFeeLamports": -11488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "BDzfSffgjY8G55L1BEjX4HDNroSCASXUyPsDxWuFMZET",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "7wb2UVXkivqm8eRhJ2Rx4Yhz8u7HsjexxEfqCgDE33mt",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "63FDaUpT71SjdC2MoBkG6aWysLo7syWwe83HrPujeESr",
+      "migrates": 1,
+      "totalSolDeltaLamports": -23451,
+      "totalFeeLamports": 13451,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "5nyctapnVArrQwpBWkkhok7abPFD8T7FP8ZhuSeXctAi",
+      "migrates": 1,
+      "totalSolDeltaLamports": -50000,
+      "totalFeeLamports": 50000,
+      "totalNetOfFeeLamports": 0,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "CTy88zCZUvQoCVuKwdUNHSp2Aeyx34Su2Y27KKH2HFRj",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "mUvVbdTP7nzcrZ7bkVCzfUMRNwRCBnoU7AqVgzxKyBT",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "2PB3aW6gg7nz3zQws9yS3CNjkTuVWukG9LU93PDeRixP",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "64LhoJyA3AcCpLmDtLSujjrpxuG6Q8DV3VxZXdqXjLSG",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1507440,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -1498440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "7VPn3L5JvjkGWuF7bpXRqVFCcDMHsarZTitRfBEm2G8J",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "C4vkXcRsUnYk5bvzF9RQvmzNk75kHeTjywW92orX7oFc",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1498440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1493440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "5UqaGix8ScKKj1G2SE9snQmQMygFPT35yJbFQnySrQZr",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "BCMUgsm3jEsdYeD4YwWqTewusZH3mWHddDKdcSe3Fc4k",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "HANcjmXUgZ5as9nUFcKC7ang9hwJcMYE7fCF5LrXZf4j",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1497440,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "DQMegnYbcDqRgLDwCLZk2CkLP1HSzbMVAsFtofPKB99U",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "E7f33v5y147VEQtJD6EbBMkubUhPUnxZArqa9TQAb2PL",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "857jSwa2U5TykBVxqqUXPn4bjWPaSHKaZx8z4VBHuRBc",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "8VcxAbztRZnC6ur98Dm3cpNVtU5DW5sm5VbLG5ksr7HX",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "Hc9nUJJ14y1CNnNk3M4fvnE3gBoVbeMGcTegfcHemPc4",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "8KryrkmhDvbpD1hhcJicExghQ8wjX7s7i1Md8FsFijx6",
+      "migrates": 1,
+      "totalSolDeltaLamports": -11593440,
+      "totalFeeLamports": 105000,
+      "totalNetOfFeeLamports": -11488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "93d2Dr7oJYK11Va24qfkff6kzYxsWhck8jqpgw2UzCUJ",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1507440,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -1498440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "5Szt1Y4hfkVBWBgLnhFjpADxi1XBEAZZYd6n3LuSTPKn",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "CKe8qDrhTUaHBcPxyx6BePCpFbrcdzKR7HuzLdg28MUd",
+      "migrates": 1,
+      "totalSolDeltaLamports": -2992095,
+      "totalFeeLamports": 505001,
+      "totalNetOfFeeLamports": -2487094,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "AistZdcmpjtXt69ESt32qDoRGkXZA3WAJRRz7dSqs7HY",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1510940,
+      "totalFeeLamports": 12500,
+      "totalNetOfFeeLamports": -1498440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "e8gbpsK2GLugqyqGMuajsvWQDymJuYS1eZqy9Yohoj1",
+      "migrates": 1,
+      "totalSolDeltaLamports": -2996203,
+      "totalFeeLamports": 505001,
+      "totalNetOfFeeLamports": -2491202,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "J12VyoakxtwqXZnBgtC5Fj5nE7aL8zSwWRRZji5S7zvz",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "C1EvVafVPvv5o4SXfvZ1Tnp2AYfJH5W765kbC5MbE2Lc",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "Ars2BGhFxJTNBHViBDPL3MMU1EXizfvRtj8mNWwseAZ8",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "4Q6Wrywfs1UDJxWTtTZtEGvoY5AyhYL9GR7Py8wAsPfH",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "2bqaCYWNzED1oYNbBWg6F3gMrmoKNA8dT9uwMXfVX3fC",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1507440,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -1498440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "4Mi3RwKZ3WiFSaf9zie6TBgyZ21Y1P8zcgsnm7oCan9W",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "GS713NcQetvtn1MV5Z15TsEXvS8MeHvW7GzkhzdwCmXN",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "6fDn4mXuckkQsJEQNkfHcxPoz7qPRbmKEVftbWB6XFD4",
+      "migrates": 1,
+      "totalSolDeltaLamports": -23683984,
+      "totalFeeLamports": 510001,
+      "totalNetOfFeeLamports": -23173983,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "HKJMv21tcEExsR4vmackHx95EUxebnrCqn2vxFtZdnEf",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "Gfzr6FujjfzqywAUisxLLbcMF8jVCrCpqTLnsLWh9n14",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "Esb1dmZMuTvp3MtXj69owg6rHKHK5TfBBLTQNCujiAxN",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1507440,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -1498440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "Gf9Cjn171iu5s6qMcTHqE5HuFuo9rZqv3LrT2tVopRHH",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "ibwUhRpqtdbJysERvQF9EYGS79LQc1zZDRyC538ZzpC",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "BWuY1t1gsmH8f8uEy2AEpVhutfVmQgqBZWXM3EezGrjR",
+      "migrates": 1,
+      "totalSolDeltaLamports": -2110745,
+      "totalFeeLamports": 505001,
+      "totalNetOfFeeLamports": -1605744,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "AWmEqjcAbD5iSEpEQiKL73wMtafCSKp7NU98SXSAiV2x",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "4SSMJQh8eq7uXpkmRCVXBvEpwpqs1Zy6tswAqP78ti8P",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "3x2KRyDWWJSZGXTCUoEpKGRScZrY1gSHbiNgLsoba2ke",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "6hwsCpyUmRmigWaeHVLuecWPTej818hopqrb8eyqqF8o",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "Hi8oe3ZNeqE2qWEGbxxP6xrMBv3zmVa534AJ2G1rhU8y",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "H1TucRPUrwN8KsstPfBjCWvzcja4U18v8U2VnPn4FwDA",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1497940,
+      "totalFeeLamports": 9500,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "HLzQyy13KHZnQRzRFK98gTdDANk694AxYtorDuQAjfQV",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "5qoUxduW6ussBwLwdzLNYnZdcWtMAiRvcXRYaspWMBq3",
+      "migrates": 1,
+      "totalSolDeltaLamports": -2068895,
+      "totalFeeLamports": 505001,
+      "totalNetOfFeeLamports": -1563894,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "BPFCJYPB2Bx59ba8EKdKp869Bpc3uMHLiHA5y6AbeT9j",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "6kL5TLCc8jrieomsFPdv4Jnv765sYRwN9rBAhvUaq3Ef",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1593440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1588440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "2795EwV52e2q5ku616hgzUAPF7T3uDGoHa3XajTVGihE",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "GCHBg8JTEWxt5wFezdZn1xMLgoH5RZ7Cb9VLVj5FkZe9",
+      "migrates": 1,
+      "totalSolDeltaLamports": -2027487,
+      "totalFeeLamports": 505001,
+      "totalNetOfFeeLamports": -1522486,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "CZQAiopYS2rZot1LBK9YtyJTbKnYE7ABSX5vTVoWZkRX",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "6kEh1wcjQLUoFD9GqzBZSm798YM9wSUNuFUjPVKJGHFr",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "4LgeaZTwa7VMVHREnMkF2zAN9NQ4gTMNKrTNMYfVhUdN",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "5oWctRdsedSbNmGFK7CtAUidsqW1qwBNww76SXB8piAw",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "CftPeLPpa3H5gHHaJKC63fnLh9Y7sKgAsUM6CrDasH9q",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1518440,
+      "totalFeeLamports": 30000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "AGfahugE2QFvND3yszcTNkMtJohsxUM7Y8kw4DTaczJb",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "7s5a4ScvZCcc7Hncqe8Sgj2CUNdCNNc48NEmaGJvgwiy",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "J9tXoEr6DeatTJxrF3mQWqwrbeFSD7bpea7jaWbhvAEZ",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "Gdymc9sXbBmUQPkxgt7cJE71PusbiMJ77Vv6x2sdb7t4",
+      "migrates": 1,
+      "totalSolDeltaLamports": -2047941,
+      "totalFeeLamports": 505001,
+      "totalNetOfFeeLamports": -1542940,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "8haQrMVaboTMMM1zahkxU58Cr3u1tKvGSUMxJ9gZ4Md9",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "DteJGTg5qaboJdj6uswSpNEeEynRA6PwP3VuSNyhMm16",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1518440,
+      "totalFeeLamports": 30000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "FVE8FQgE2UfTLxHhpndYHmRctNVLzcK4rYPbPS3EnKbb",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "8QuyBPc9KUzcespMdNCJAGpQia3wTk4VjVyhS5omij9C",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1541740,
+      "totalFeeLamports": 53300,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "2KhKWs8TQsWYSvo9dtPv64MpWhgYz8D7KTA6VUcBvfTh",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "AidTHRu1ZdLxbDEWHTTsDWZue84yemmJohRENdrgKYUE",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "4D9tuunbrr2XFUQVbGjm7FiK7nZSNnEf5awCG9J5rnGt",
+      "migrates": 1,
+      "totalSolDeltaLamports": -22500,
+      "totalFeeLamports": 12500,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "6nmS9MZhHuDENdxsrpajfbpmxkLQbLTtqMCo9gJZhAy4",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1498440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1493440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "HeHyBp8337831VkNHaWCCUiJFHXfzQdTtFMbhrR9sFfw",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "LfEcaUf77iEhnz6gFpLqYgDb5Uk6Ekc5n69wu7Qa9Uw",
+      "migrates": 1,
+      "totalSolDeltaLamports": -3587720,
+      "totalFeeLamports": 60000,
+      "totalNetOfFeeLamports": -3527720,
+      "netPositiveCount": 0,
+      "tokenGains": [
+        {
+          "mint": "So11111111111111111111111111111111111111112",
+          "deltaRaw": "-670649694",
+          "decimals": 9
+        },
+        {
+          "mint": "7Wg9kFRVCTpFGzWgXa8Pg1yCsf9QmLcGep9Wwwp7pump",
+          "deltaRaw": "1600000000000",
+          "decimals": 6
+        }
+      ],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "4F1feioDgABbkhXmLgeWgs6Ux3fkSZCT4Ez8A1Fuo9Nj",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1498440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1493440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "2CcZVtDdCMbP7xPv8EsyeUH8jTESui5wdKVXPbenZarq",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "CVfAQ6MKXf553m293cYzgLcBS72zYQVmrfWqTFm842pq",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "GQ9T8HgA5UeRHDRys2QacedB3sqUVXs93oyx9SWNPC1S",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "GSHLExKmct9fa8tMs38WbbGCGFgxj7K2WCmaiLXb4AgP",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "EdxVnRfHABMReTvgGDiaj7renZGxFg4keAC7jge6Qid5",
+      "migrates": 1,
+      "totalSolDeltaLamports": -2019265,
+      "totalFeeLamports": 505001,
+      "totalNetOfFeeLamports": -1514264,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "7FxG2wLi8GtEXDz2Nc7EfLMjVaNmDHg53VT3TYzNyEtm",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "F7ApfcPVvjsooRcHiHq3SvaU6CGaP1iJhMjzRbTUAdqn",
+      "migrates": 1,
+      "totalSolDeltaLamports": -19000,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -10000,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "4yvtoGsk9c5xSPAphtfREGz3k5xxP5bvCq3A6T1pCssV",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1507440,
+      "totalFeeLamports": 9000,
+      "totalNetOfFeeLamports": -1498440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "F8SD3Czx6JLkN3QxJWTjqtaaD5QLxuqsKvQoAZhquJ32",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1493440,
+      "totalFeeLamports": 5000,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    },
+    {
+      "caller": "8pMGFdXqYSG5DNqfQcccM5pM6etk5nnx9Tx7Zz8o56VH",
+      "migrates": 1,
+      "totalSolDeltaLamports": -1541740,
+      "totalFeeLamports": 53300,
+      "totalNetOfFeeLamports": -1488440,
+      "netPositiveCount": 0,
+      "tokenGains": [],
+      "unattributedTokenRows": 0
+    }
+  ],
+  "probes": [
+    {
+      "caller": "9C4nRvhhVquCKATjDCx5FKvNS9PNgNqgyWy9AcoDjYv5",
+      "migratesWon": 464,
+      "historyScanned": 100,
+      "completionBuys": [],
+      "postMigrateBuys": [],
+      "incentiveClaims": [],
+      "hadAnyBuy": false
+    },
+    {
+      "caller": "Gygj9QQby4j2jryqyqBHvLP7ctv2SaANgh4sCb69BUpA",
+      "migratesWon": 84,
+      "historyScanned": 95,
+      "completionBuys": [],
+      "postMigrateBuys": [],
+      "incentiveClaims": [],
+      "hadAnyBuy": true
+    },
+    {
+      "caller": "92CZnNR1HgGVAFf8UGeVgK6LGQunRaPYQDVuJ7KAFbsn",
+      "migratesWon": 32,
+      "historyScanned": 100,
+      "completionBuys": [
+        {
+          "signature": "oU4vpjz9L79GxhsXTvHL8DDpG5YDoM4DLWyyk7tj2rCK3qp4HtCmfSzJrPwP5vANvUsJwTaGmp2fBiNC7RpnVAN",
+          "slot": 453388956,
+          "mint": "HmFhFSgi4X76ZmnH8F9WQvWY4dAuv4mj1dQGmnPxqhZC",
+          "slotsBeforeMigrate": 0
+        },
+        {
+          "signature": "4MDKeRPtuDQojq9nvvnM2HVpUfPZ9aKp9Hkagy1vwvq6aXJ5FwJkHPayao12WpGnrm6k5jVgGP6zQChtQVYa7Bk7",
+          "slot": 453385797,
+          "mint": "BkhNaZuULsotS54desFdfTefmFj4zXKfw4425h1Jdp1H",
+          "slotsBeforeMigrate": 0
+        },
+        {
+          "signature": "4n1f3u9DnunNGTMwq9uU8mfF2bpekzLSyiQwAweuvUUvAeZhhNH49WLw5VPTqzorioHFZ8Q1m4KKD7nT8jFdZbYy",
+          "slot": 453382380,
+          "mint": "7MkURjNDL9UAay7XVXsqrdoKu3DiiYki6ZknfRNLMUQh",
+          "slotsBeforeMigrate": 0
+        },
+        {
+          "signature": "3ubTkHLCJH3wxtijwrpU7ebM9DzYvFvVKEJgq5YcHa7oCRNyszMdK5XZBLWAXszzfeUGc1JQnQ6psQqwwD68cnMW",
+          "slot": 453380176,
+          "mint": "Hjs1ewbMYzsdUs2QhPvY2tx7o4twGsJHyzkpipToBbty",
+          "slotsBeforeMigrate": 0
+        },
+        {
+          "signature": "3kBDAS1LpkzwDVCptDcjCrpTQG6bKTw2hifAcXAj86iHEJq7oDAz6WWCNw8stp6JBNzCrATEuzYcYXHfy43K6FPt",
+          "slot": 453372528,
+          "mint": "AqHnbuG4ujo4DqtN686GJujiRfBdpab97MYuGJ2dc4Bx",
+          "slotsBeforeMigrate": 0
+        },
+        {
+          "signature": "2w1Ei6tH1cHmKbqREW3NPHJhP3j8bi8jBRNMi5yyeTs5zYDyf7iMYoQp8CkwE8T6XD1EN68f6EtPcKfQKcfMMgHA",
+          "slot": 453369728,
+          "mint": "GDrwKbnKfLvjyFnvJajhDTZWtHJdWXRa1sxBXMwmpetp",
+          "slotsBeforeMigrate": 0
+        }
+      ],
+      "postMigrateBuys": [],
+      "incentiveClaims": [],
+      "hadAnyBuy": true
+    },
+    {
+      "caller": "3RnALvN6YRyb8EBU8BGepnYNDpnA6ZENBfoxB8MS73oQ",
+      "migratesWon": 26,
+      "historyScanned": 100,
+      "completionBuys": [
+        {
+          "signature": "1idpG1tXg8cbPaq3Mv5rWsSnft7NbdYmV1AUtfC82FqvxTK5NignKCGZbSnB1vcRrufcaCPcUJR7V5nyQwUszqW",
+          "slot": 453392820,
+          "mint": "H9D6mNL5tmJVkej8tYeuHeGqHPPhcrjoZYWfXvWLeL6e",
+          "slotsBeforeMigrate": 0
+        },
+        {
+          "signature": "3pKq1KkWcHCt9F2rPQikFA8XrUDNpfPGLsYoXQbMEuaYnDJ3f5mP8GsageQPzd6cxcjn6ubuJ93cUzuDFjpbbdfE",
+          "slot": 453382844,
+          "mint": "En3QXSyDyAHK693cRgaLj1gbSDZVkZFdHj3a87GruiwU",
+          "slotsBeforeMigrate": 0
+        },
+        {
+          "signature": "5AzxzVuLMBtqTwMNv4VPZMVSvpuYrkhnjrziX4h3qf8dTxcJmTLAtWn7gzBobgP5Aj1geJPEtSsx5XQLtXwriLAZ",
+          "slot": 453379217,
+          "mint": "8xU4KJPKYcVpxcdQ894nH6B59ZsvePFRBZgc58mgj8JB",
+          "slotsBeforeMigrate": 0
+        },
+        {
+          "signature": "UN2Dyt4zrw88HeQ1ahZpMQg4LATsmFDovM1rngJDL4DLmHFcovqHHp39mx9f9Z514AjPLPbRGcunXSyE93Ho5GY",
+          "slot": 453375988,
+          "mint": "3VnKetJZTkUFEQv5ixtSLWanZVAEspm7C3dBXRx6rJww",
+          "slotsBeforeMigrate": 0
+        },
+        {
+          "signature": "3KUht3dYRkxkWSxDvTb2sGYJynDmkbkrNWaAwzeMDrUmCHQU4uhWc6W3RmHDBfGHMnSfeN4e4pMqzy8CP4499P7w",
+          "slot": 453369944,
+          "mint": "4FpBgHpWZbr6Gtfr4USMbathiFFNuF7jAcHF5W3C87kr",
+          "slotsBeforeMigrate": 0
+        },
+        {
+          "signature": "3tYDo4uYFasQgPimq6EE2r2nieUAdg5DsxVBvXxDSheiWW3rvRyNqXGaUqRTD673UU9CMvRBY12tS4Dhh4EfUSzZ",
+          "slot": 453365512,
+          "mint": "GbXnEiqMjXe5ck9HyX3N9rLqAfYzYhy5SX6GEoFxGbma",
+          "slotsBeforeMigrate": 0
+        }
+      ],
+      "postMigrateBuys": [],
+      "incentiveClaims": [],
+      "hadAnyBuy": true
+    },
+    {
+      "caller": "F7LqQscxh7NK8S3AJaEZ7vryxvQbqKksQAZKtVgJYwmE",
+      "migratesWon": 24,
+      "historyScanned": 92,
+      "completionBuys": [
+        {
+          "signature": "21TEFSf5TSGsg6qBbaXSVAFT8Zeim2Gfw3hj3fFbMnLmaVNNgW8dbEVxyrsztjTcQ9wZu7g9S8JBKpUsxrvJ5wNc",
+          "slot": 453393735,
+          "mint": "6sVQpyXusu7Ej9zPfV3LSrLGNG5QVR6AZMTgcivUpump",
+          "slotsBeforeMigrate": 0
+        }
+      ],
+      "postMigrateBuys": [],
+      "incentiveClaims": [],
+      "hadAnyBuy": true
+    }
+  ]
+}

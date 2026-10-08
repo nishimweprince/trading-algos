@@ -43,3 +43,39 @@ describe('JitoTxSender', () => {
     await expect(sender.send(new Uint8Array([1]))).rejects.toThrow(/HTTP 429/);
   });
 });
+
+describe('JitoTxSender tip accounts never block a send once cached', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('returns the stale list at once and refreshes in the background', async () => {
+    let release: () => void = () => {};
+    let calls = 0;
+    const fetch = vi.fn(async () => {
+      calls++;
+      if (calls > 1) await new Promise<void>((r) => (release = r)); // the refresh hangs
+      return new Response(JSON.stringify({ jsonrpc: '2.0', result: [calls === 1 ? 'tip-a' : 'tip-b'], id: 1 }));
+    });
+    vi.stubGlobal('fetch', fetch);
+    const sender = new JitoTxSender({ blockEngineUrl: 'https://mainnet.block-engine.jito.wtf' });
+    await expect(sender.getTipAccount(1_000)).resolves.toBe('tip-a');
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.now() + 5_000); // TTL expired
+    // Resolves from the cache even though the refresh fetch has not returned.
+    await expect(sender.getTipAccount(1_000)).resolves.toBe('tip-a');
+    expect(fetch).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+    release();
+    await sender.refreshTipAccounts();
+    await expect(sender.getTipAccount(60_000)).resolves.toBe('tip-b');
+  });
+
+  it('keeps the previous list when a refresh fails', async () => {
+    let fail = false;
+    vi.stubGlobal('fetch', vi.fn(async () => (fail ? new Response('nope', { status: 500 }) : new Response(JSON.stringify({ jsonrpc: '2.0', result: ['tip-a'], id: 1 })))));
+    const sender = new JitoTxSender({ blockEngineUrl: 'https://mainnet.block-engine.jito.wtf' });
+    await sender.refreshTipAccounts();
+    fail = true;
+    await sender.refreshTipAccounts();
+    await expect(sender.getTipAccount(0)).resolves.toBe('tip-a');
+  });
+});

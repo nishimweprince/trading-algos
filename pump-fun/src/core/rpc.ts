@@ -471,6 +471,38 @@ export class RpcClient {
     };
   }
 
+  /** Raw getTransaction (encoding: json); null when not yet visible. */
+  async getTransactionJson(signature: string, commitment: 'confirmed' | 'finalized' = 'confirmed'): Promise<unknown> {
+    return this.call<unknown>('getTransaction', [signature, { commitment, maxSupportedTransactionVersion: MAX_SUPPORTED_TX_VERSION, encoding: 'json' }]);
+  }
+
+  /**
+   * Every account a transaction references — static keys, then ALT-loaded
+   * writable and readonly — plus its token-balance mints. The racer resolves a
+   * bonding curve to its mint from these: a curve can be written by a tx that
+   * moves no tokens (creator-fee sweeps), so token balances alone miss it.
+   * Empty when the tx is not yet visible.
+   */
+  async getTransactionAccountKeys(signature: string, commitment: 'confirmed' | 'finalized' = 'confirmed'): Promise<string[]> {
+    const result = await this.call<{
+      transaction?: { message?: { accountKeys?: string[] } };
+      meta: {
+        loadedAddresses?: { writable?: string[]; readonly?: string[] };
+        postTokenBalances?: Array<{ mint: string }>;
+        preTokenBalances?: Array<{ mint: string }>;
+      } | null;
+    } | null>('getTransaction', [signature, { commitment, maxSupportedTransactionVersion: MAX_SUPPORTED_TX_VERSION, encoding: 'json' }]);
+    if (!result?.meta) return [];
+    return [
+      ...new Set([
+        ...(result.transaction?.message?.accountKeys ?? []),
+        ...(result.meta.loadedAddresses?.writable ?? []),
+        ...(result.meta.loadedAddresses?.readonly ?? []),
+        ...[...(result.meta.postTokenBalances ?? []), ...(result.meta.preTokenBalances ?? [])].map((b) => b.mint),
+      ]),
+    ];
+  }
+
   /**
    * Signature history for an address, newest first (work plan 2026-09-25 P3:
    * post-migration flow stats and manipulation features).

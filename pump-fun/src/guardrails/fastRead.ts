@@ -34,7 +34,7 @@ export interface FastSnapshot {
   mintInfo: MintInfo | null;
   readMs: number;
   attempts: number;
-  reservesFrom: 'rpc' | 'tx' | 'rpc_reread';
+  reservesFrom: 'rpc' | 'push' | 'tx' | 'rpc_reread';
   /** A buy state was built and parked for the executor. */
   swapStatePrefetched: boolean;
   /** Served from the curve-completion pre-arm (pool pushed by LaserStream): no RPC read. */
@@ -112,9 +112,9 @@ export class FastPoolReader {
       }
       return got;
     };
-    // Pre-armed: the pool is pushed by LaserStream and the rest was prefetched
-    // at curve completion — no round trip. Vaults are not prefetched (they do
-    // not exist before the migrate tx); reserves come from its post balances.
+    // Pre-armed: the pool and its vaults are pushed by LaserStream and the
+    // rest was prefetched at arm time — no round trip. A vault push not yet
+    // seen falls back to the migrate tx's post balances below.
     // Not pushed yet: race the push against the RPC read, first one wins.
     const usable = Boolean(armed && armed.mintAccount && armed.poolKey === poolKey);
     let preArmed = false;
@@ -167,7 +167,7 @@ export class FastPoolReader {
     }
     let baseReserve = baseAcct ? decodeTokenAccountAmount(baseAcct.data) : 0n;
     let quoteReserveLamports = quoteAcct ? decodeTokenAccountAmount(quoteAcct.data) : 0n;
-    let reservesFrom: FastSnapshot['reservesFrom'] = 'rpc';
+    let reservesFrom: FastSnapshot['reservesFrom'] = preArmed ? 'push' : 'rpc';
     if (quoteReserveLamports < LAGGING_VAULT_LAMPORTS) {
       const tx = reservesFromTx(g, poolKey, mint);
       if (tx && tx.quote >= LAGGING_VAULT_LAMPORTS) {

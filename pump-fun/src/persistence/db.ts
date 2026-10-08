@@ -458,6 +458,99 @@ CREATE TABLE IF NOT EXISTS dry_run_coverage_events (
   created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_dry_run_coverage_time ON dry_run_coverage_events(created_at, kind);
+
+CREATE TABLE IF NOT EXISTS racer_events (
+  mint                TEXT NOT NULL,
+  kind                TEXT NOT NULL,  -- would-fire | migrated | expired (first-fire-only per mint+kind)
+  slot                INTEGER,
+  cost_sol            REAL,
+  real_token_reserves TEXT,
+  lead_slots          INTEGER,
+  buy_leg_ms          REAL,
+  buy_leg_ok          INTEGER,         -- 1 | 0 | NULL (not measured)
+  created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (mint, kind)
+);
+CREATE INDEX IF NOT EXISTS idx_racer_events_time ON racer_events(created_at, kind);
+
+CREATE TABLE IF NOT EXISTS racer_paper (
+  mint          TEXT NOT NULL PRIMARY KEY,
+  pool_address  TEXT,
+  entry_price   REAL,
+  entry_slot    INTEGER,
+  size_sol      REAL NOT NULL,
+  horizons_json TEXT NOT NULL,  -- [{ sec, price, pnlPct }]
+  created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Racer v2 (stream-driven; racer_events / racer_paper above are the legacy
+-- poller's and are no longer written). All *_slot columns are chain slots
+-- carried by the stream updates themselves.
+CREATE TABLE IF NOT EXISTS racer_curves (
+  mint            TEXT NOT NULL PRIMARY KEY,
+  curve           TEXT,
+  admit_slot      INTEGER,
+  admit_cost_sol  REAL,
+  fire_slot       INTEGER,
+  fire_cost_sol   REAL,
+  buy_leg_ms      REAL,
+  buy_leg_ok      INTEGER,         -- 1 | 0 | NULL (not measured)
+  complete_slot   INTEGER,
+  outcome         TEXT,            -- NULL (open) | migrated | complete-no-pool | expired
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_racer_curves_time ON racer_curves(created_at, outcome);
+-- Trader racer gate: poll of open fired curves (outcome NULL, fire_slot set).
+CREATE INDEX IF NOT EXISTS idx_racer_curves_open_fire ON racer_curves(outcome, fire_slot);
+
+-- Every migrate attempt seen on the stream: landed, failed, or a no-op on an already migrated curve.
+CREATE TABLE IF NOT EXISTS racer_migrate_txs (
+  signature         TEXT NOT NULL PRIMARY KEY,
+  mint              TEXT,
+  slot              INTEGER,
+  ok                INTEGER NOT NULL,  -- tx succeeded
+  landed            INTEGER NOT NULL,  -- succeeded AND moved balances (a no-op on a migrated curve is ok=1, landed=0)
+  caller            TEXT,
+  curve_buy_before  INTEGER NOT NULL DEFAULT 0,
+  pool_buy_after    INTEGER NOT NULL DEFAULT 0,
+  created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_racer_migrate_txs_mint ON racer_migrate_txs(mint, landed);
+
+-- One row per landed migration.
+CREATE TABLE IF NOT EXISTS racer_migrations (
+  mint              TEXT NOT NULL PRIMARY KEY,
+  signature         TEXT NOT NULL,
+  migrate_slot      INTEGER,
+  caller            TEXT,
+  tracked           INTEGER NOT NULL,  -- 1 when the curve was admitted before it migrated
+  admit_slot        INTEGER,
+  fire_slot         INTEGER,
+  complete_slot     INTEGER,
+  curve_buy_before  INTEGER NOT NULL DEFAULT 0,
+  pool_buy_after    INTEGER NOT NULL DEFAULT 0,
+  bundled_tokens    TEXT,
+  pool_address      TEXT,
+  open_price        REAL,
+  reach_price       REAL,
+  reach_quote_sol   REAL,
+  created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_racer_migrations_time ON racer_migrations(created_at);
+
+CREATE TABLE IF NOT EXISTS racer_paper_tracks (
+  mint            TEXT NOT NULL PRIMARY KEY,
+  pool_address    TEXT,
+  entry_slot      INTEGER,
+  size_sol        REAL NOT NULL,
+  open_price      REAL,
+  open_quote_sol  REAL,
+  reach_price     REAL NOT NULL,
+  reach_quote_sol REAL NOT NULL,
+  horizons_json   TEXT NOT NULL,  -- [{ sec, price, quoteSol, pnlOpenPct, pnlReachPct }]
+  created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
 `;
 
 export interface OpenDbOptions {
@@ -490,6 +583,48 @@ export function openDb(opts: OpenDbOptions): DB {
 
 /** Additive, idempotent column migrations for tables created before them. */
 function migrate(db: DB): void {
+  addColumnIfMissing(db, 'racer_paper_tracks', 'entries_json', 'TEXT'); // { open, reach, slot1, … } entry marks
+  addColumnIfMissing(db, 'racer_paper_tracks', 'armed', 'INTEGER'); // 1 = base vault armed before the migrate
+  addColumnIfMissing(db, 'racer_paper_tracks', 'live_cost_sol', 'REAL'); // round-trip cost charged to realistic entries
+  addColumnIfMissing(db, 'racer_paper_tracks', 'live_cost_source', 'TEXT'); // config | measured (+1-slot buyers' fees + tips)
+  addColumnIfMissing(db, 'racer_paper_tracks', 'entry_model_version', 'INTEGER'); // null = legacy, unverified entry model
+  addColumnIfMissing(db, 'racer_paper_tracks', 'entry_quality', 'TEXT'); // verified | late-armed | missing-anchor
+  addColumnIfMissing(db, 'racer_paper_tracks', 'same_slot_depletion_pct', 'REAL'); // observed base-vault depletion after migrate
+  addColumnIfMissing(db, 'racer_paper_tracks', 'entry_features_json', 'TEXT'); // immutable v1 decision-time snapshot
+  addColumnIfMissing(db, 'racer_paper_tracks', 'path_json', 'TEXT'); // ordered observed pool states and rule results
+  addColumnIfMissing(db, 'racer_paper_tracks', 'path_results_json', 'TEXT'); // compact query path; raw states stay in path_json
+  addColumnIfMissing(db, 'racer_paper_tracks', 'wallet_balance_sol', 'REAL'); // real wallet balance the track was sized from
+  addColumnIfMissing(db, 'racer_paper_tracks', 'sizing_reason', 'TEXT'); // ok | sized-by-balance | below-floor | no-wallet | balance-unreadable
+  addColumnIfMissing(db, 'racer_paper_tracks', 'open_quality', 'TEXT'); // ok | rejected (null = legacy, derive from marks)
+  addColumnIfMissing(db, 'racer_paper_tracks', 'open_reject_reason', 'TEXT'); // non-positive | open-above-reach | implausible-drain | slot-drift
+  addColumnIfMissing(db, 'racer_paper_tracks', 'fill_p_json', 'TEXT'); // { leg: { p, costSol } } trailing fill model at entry (null = unpriced)
+  addColumnIfMissing(db, 'racer_paper_tracks', 'landing_weights_json', 'TEXT'); // { w1,w2,w3,tail,n } landing distribution (null = point feasible leg)
+  addColumnIfMissing(db, 'racer_paper_tracks', 'screening_json', 'TEXT'); // guardrail-engine verdict over the synthesized candidate (null = unscreened)
+  addColumnIfMissing(db, 'racer_paper_tracks', 'live_cost_buy_fee_sol', 'REAL'); // measured buy network fee (route-independent)
+  addColumnIfMissing(db, 'racer_paper_tracks', 'live_cost_buy_tip_sol', 'REAL'); // measured buy tip (theirs, not ours)
+  db.exec(`UPDATE racer_paper_tracks SET entry_quality = 'legacy-unverified'
+           WHERE entry_model_version IS NULL AND entry_quality IS NULL`);
+  addColumnIfMissing(db, 'racer_migrations', 'pool_owner', 'TEXT'); // base-vault authority from the migrate tx
+  addColumnIfMissing(db, 'racer_migrations', 'quote_mint', 'TEXT'); // WSOL on canonical pools; other = not SOL-priced
+  addColumnIfMissing(db, 'racer_migrations', 'unpriced_reason', 'TEXT'); // why no paper track: non-wsol-quote | thin-pool | no-virtual-quote | no-vaults
+  addColumnIfMissing(db, 'racer_migrations', 'receipt_slot', 'INTEGER'); // heartbeat slot when the landed migrate reached the racer
+  addColumnIfMissing(db, 'racer_migrations', 'send_ready_us', 'REAL'); // probe: receipt → signed buy bytes
+  addColumnIfMissing(db, 'racer_migrations', 'feasible_slot', 'INTEGER'); // earliest modeled landing slot, floored at migrate + 1
+  addColumnIfMissing(db, 'racer_migrations', 'feasible_slot_raw', 'INTEGER'); // same, unfloored (≤ migrate slot = it was still in progress)
+  addColumnIfMissing(db, 'racer_migrations', 'initial_quote_depth_sol', 'REAL'); // reconstructed opening effective depth, if known
+  addColumnIfMissing(db, 'racer_migrations', 'observed_quote_depth_sol', 'REAL'); // post-migrate effective depth used by thin-pool gate
+  addColumnIfMissing(db, 'racer_migrations', 'depth_threshold_sol', 'REAL'); // gate in force for this migration
+  addColumnIfMissing(db, 'racer_migrations', 'open_reject_reason', 'TEXT'); // open mark rejected: see racer_paper_tracks.open_reject_reason
+  addColumnIfMissing(db, 'racer_migrations', 'coin_creator', 'TEXT'); // curve creator captured pre-migrate (null = unresolved; H8 creator clause skipped)
+  db.exec(`CREATE TABLE IF NOT EXISTS racer_pool_buy_attempts (
+    signature TEXT NOT NULL PRIMARY KEY, pool_address TEXT NOT NULL, slot INTEGER NOT NULL,
+    ok INTEGER NOT NULL, buyer_owner TEXT, quote_volume_sol REAL, network_fee_sol REAL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  ); CREATE INDEX IF NOT EXISTS idx_racer_pool_buy_slot ON racer_pool_buy_attempts(pool_address, slot);`);
+  addColumnIfMissing(db, 'racer_pool_buy_attempts', 'buyer_owner', 'TEXT');
+  addColumnIfMissing(db, 'racer_pool_buy_attempts', 'quote_volume_sol', 'REAL');
+  addColumnIfMissing(db, 'racer_pool_buy_attempts', 'network_fee_sol', 'REAL');
+  addColumnIfMissing(db, 'racer_pool_buy_attempts', 'tip_sol', 'REAL'); // measured tip on this attempt (null = unfetched; feeds tip→fill)
   addColumnIfMissing(db, 'positions', 'raw_base_amount', 'TEXT'); // actual on-chain tokens held (bigint as string)
   addColumnIfMissing(db, 'positions', 'pricing_json', 'TEXT'); // serialized PoolPricingRef, for crash recovery
   addColumnIfMissing(db, 'positions', 'execution_json', 'TEXT'); // send/confirm/reconciliation details
@@ -661,12 +796,19 @@ function migrate(db: DB): void {
            WHERE outcome_version IS NULL AND net_pnl_sol IS NOT NULL`);
 }
 
-function addColumnIfMissing(db: DB, table: string, column: string, type: string): void {
+export function addColumnIfMissing(db: DB, table: string, column: string, type: string): void {
   // table_xinfo, not table_info: generated columns (pricing_version) are
   // hidden from table_info, which re-added them on every second open.
   const cols = db.prepare(`PRAGMA table_xinfo(${table})`).all() as Array<{ name: string }>;
   if (!cols.some((c) => c.name === column)) {
-    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    try {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    } catch (err) {
+      // Several processes (racer, dashboard, trader) migrate the same file
+      // at boot; on a fresh DB another one can add the column between the
+      // check above and this ALTER. That outcome is exactly what we wanted.
+      if (!(err instanceof Error && /duplicate column name/i.test(err.message))) throw err;
+    }
   }
 }
 

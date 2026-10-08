@@ -287,7 +287,11 @@ export class ExitSupervisor {
     }
   }
 
-  private recordSample(kind: 'exit_trigger_to_send' | 'exit_send_to_landed', ms: number, mint: string): void {
+  private recordSample(
+    kind: 'exit_trigger_to_send' | 'exit_send_to_landed' | 'exit_build_us' | 'exit_fresh_build_fallback',
+    ms: number,
+    mint: string,
+  ): void {
     if (!Number.isFinite(ms) || ms < 0) return;
     try {
       this.repos.recordLatencySample({ kind, latencyMs: ms, mint });
@@ -307,8 +311,12 @@ export class ExitSupervisor {
     const reserves = args.liveReserves?.() ?? null;
     if (reserves && typeof this.executor.buildExitTx === 'function') {
       try {
+        const buildStart = process.hrtime.bigint();
         const bytes = await this.executor.buildExitTx(intent.baseMint, raw, slippagePct, reserves);
-        if (bytes) return this.executor.broadcastSignedExit(bytes, intent.baseMint, landed);
+        if (bytes) {
+          this.recordSample('exit_build_us', Number(process.hrtime.bigint() - buildStart) / 1_000, intent.mint);
+          return this.executor.broadcastSignedExit(bytes, intent.baseMint, landed);
+        }
       } catch (err) {
         this.log.warn('trigger-time exit build failed — falling back', { mint: intent.mint, err });
       }
@@ -318,7 +326,8 @@ export class ExitSupervisor {
       const tier = slippagePct >= this.emergencySlippage() ? args.ladder.emergency() : args.ladder.pick(slippagePct);
       if (tier) return this.executor.broadcastSignedExit(tier.bytes, intent.baseMint, landed);
     }
-    // 3. Fresh build (one state read).
+    // 3. Fresh build (one state read). Counted: this is the RPC-reading path.
+    this.recordSample('exit_fresh_build_fallback', 1, intent.mint);
     const opts = typeof this.executor.exitSendOpts === 'function' ? this.executor.exitSendOpts(landed) : undefined;
     return this.executor.sellAndConfirm(intent.poolAddress, intent.baseMint, raw, slippagePct, opts);
   }

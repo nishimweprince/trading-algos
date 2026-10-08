@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { PublicKey } from '@solana/web3.js';
 import { canonicalPumpPoolPda } from '@pump-fun/pump-swap-sdk';
 import { base58Encode, base58Decode } from '../src/core/base58.ts';
@@ -8,6 +11,7 @@ import { deriveAta } from '../src/core/ata.ts';
 import { GuardrailEngine } from '../src/guardrails/engine.ts';
 import { FastPoolReader, reservesFromTx } from '../src/guardrails/fastRead.ts';
 import { PreArmer } from '../src/guardrails/preArm.ts';
+import { checkRacerFire, RacerFireFeed } from '../src/guardrails/racerGate.ts';
 import { BONDING_CURVE_DISCRIMINATOR, deriveBondingCurvePda } from '../src/enrichment/curve.ts';
 import { GuardrailPipeline } from '../src/guardrails/pipeline.ts';
 import { reviveEnrichment, replayRow, candidateFromRow } from '../src/research/screenReplay.ts';
@@ -641,5 +645,85 @@ describe('PreArmer + FastPoolReader', () => {
     const armer = new PreArmer({ endpoint: '', rpc: chain.rpc, config: cfg });
     armer.ingest(completion(chain.mint));
     expect(armer.stats).toMatchObject({ completions: 1, unknownCurve: 1, armed: 0 });
+  });
+
+  it('armMint (racer fire) arms with no launch or completion seen, idempotently', () => {
+    const chain = fakeChain();
+    const armer = new PreArmer({ endpoint: '', rpc: chain.rpc, config: cfg });
+    armer.armMint(chain.mint, 600_000);
+    armer.armMint(chain.mint, 600_000);
+    expect(armer.stats).toMatchObject({ armed: 1, armedOnFire: 1 });
+    expect(armer.peek(chain.mint)?.watchKeys).toEqual(expect.arrayContaining([chain.pool, chain.quoteVault, chain.baseVault]));
+  });
+
+  it('prices a pre-armed verdict from pushed vaults, so a same-slot pump stays visible to H7', async () => {
+    const chain = fakeChain();
+    const armer = new PreArmer({ endpoint: '', rpc: chain.rpc, config: cfg });
+    armer.armMint(chain.mint, 600_000);
+    await new Promise((r) => setTimeout(r, 0)); // prefetch
+    const prefetchCalls = chain.calls.length;
+    const [poolAcct, baseAcct] = await chain.rpc.getMultipleAccountsBase64([chain.pool, chain.baseVault]);
+    chain.calls.length = prefetchCalls;
+    const push = (pubkey: string, owner: string, data: string) => armer.ingest({ account: { account: { pubkey, owner, data, lamports: 1 } } });
+    push(chain.pool, PROGRAM_IDS.PUMP_SWAP, poolAcct!.data);
+    push(chain.baseVault, PROGRAM_IDS.TOKEN, baseAcct!.data);
+    push(chain.quoteVault, PROGRAM_IDS.TOKEN, tokenAccountData(232_000_000_000n)); // pumped after the migrate tx
+
+    const r = await new FastPoolReader({ rpc: chain.rpc, retryDelaysMs: [0], preArmer: armer, sleep: noSleep }).read(migrated(chain));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(chain.calls).toHaveLength(prefetchCalls); // still zero RPC on the hot path
+    expect(r.snapshot.preArmed).toBe(true);
+    expect(r.snapshot.reservesFrom).toBe('push');
+    expect(r.snapshot.pool.quoteReserveLamports).toBe(232_000_000_000n); // not the tx's 67.4 SOL
+  });
+});
+
+describe('racer gate (R1)', () => {
+  const fresh = () => new Repositories(openDb({ path: ':memory:', memory: true }));
+  const live = ConfigSchema.parse({ mode: 'live', rpc: { primaryHttp: 'http://x' } });
+
+  it('vetoes a migration the racer never fired on and accepts one it did', () => {
+    const repos = fresh();
+    const engine = new GuardrailEngine(live, repos, undefined, [checkRacerFire]);
+    const c = fastCandidate();
+    const before = engine.evaluate(c);
+    expect(before.verdict).toBe('veto');
+    expect(before.vetoReasons).toEqual(['R1']);
+
+    repos.upsertRacerCurve({ mint: c.graduation.mint, curve: null, admitSlot: 1, fireSlot: 7 });
+    const after = engine.evaluate(c);
+    expect(after.verdict).toBe('accept');
+    expect(after.hardChecks.at(-1)).toMatchObject({ id: 'R1', status: 'pass' });
+  });
+
+  it('is not part of the shared check set (the racer screen stays ungated)', () => {
+    const ids = new GuardrailEngine(live, fresh()).evaluate(fastCandidate()).hardChecks.map((c) => c.id);
+    expect(ids).not.toContain('R1');
+  });
+
+  it('fire feed: one callback per newly fired open curve', () => {
+    let open = ['A', 'B'];
+    const fired: string[] = [];
+    const feed = new RacerFireFeed({ repos: { openRacerFires: () => open }, pollMs: 100, onFire: (m) => fired.push(m) });
+    feed.poll();
+    open = ['B', 'C'];
+    feed.poll();
+    feed.poll();
+    expect(fired).toEqual(['A', 'B', 'C']);
+  });
+
+  it('reads fires written by another connection to the same DB file', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'racer-gate-'));
+    const path = join(dir, 'g.db');
+    const racer = new Repositories(openDb({ path }));
+    const trader = new Repositories(openDb({ path }));
+    expect(trader.racerFireSlot('M')).toBeNull();
+    racer.upsertRacerCurve({ mint: 'M', curve: null, admitSlot: 1, fireSlot: 9 });
+    expect(trader.racerFireSlot('M')).toBe(9);
+    expect(trader.openRacerFires()).toEqual(['M']);
+    racer.upsertRacerCurve({ mint: 'M', curve: null, outcome: 'migrated' });
+    expect(trader.openRacerFires()).toEqual([]);
+    expect(trader.racerFireSlot('M')).toBe(9);
   });
 });

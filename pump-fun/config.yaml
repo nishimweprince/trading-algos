@@ -12,9 +12,11 @@
 # live again is WALLET_FLOOR, STREAM_DOWN and KILL_SWITCH. Untracked wallet
 # tokens are now auto-sold (execution.orphanSweepSec).
 # Hot-reload is NOT supported — restart to apply changes.
-# 2026-10-04 (feat/fra-lean): dry-run in Frankfurt until the pool replay and
-# a dry-run window show an edge after fees. Going live is an operator call.
-mode: dry-run # paper | dry-run | live
+# 2026-10-06 (operator): LIVE. Wallet 0.214 SOL at cutover; every entry is
+# exactly 15 % of the current in-memory balance (fees/headroom aside — see
+# entry + wallet.gasHeadroomSol). DB wiped after backup to
+# data/backup/pre-live-20261006-0918/.
+mode: live # paper | dry-run | live
 
 # Verify pinned program IDs exist on-chain at startup. Needs a reachable RPC;
 # set false for offline boots / CI.
@@ -22,11 +24,11 @@ assertProgramIdsOnChain: true
 
 wallet:
   keypairEnvVar: WALLET_PRIVATE_KEY
-  # WALLET_FLOOR = this alone: a hard stop on the TOTAL balance (2026-10-04,
-  # operator: "$4" = 0.033 SOL at ~$120/SOL — re-derive if SOL moves a lot).
-  # Above it an open only needs gasHeadroomSol left after the trade, so the
-  # last trade may take the wallet under $4; the breaker stops the next one.
-  balanceFloorSol: 0.033
+  # WALLET_FLOOR threshold removed 2026-10-06 (operator; wallet ~$22): 0 =
+  # no balance floor. An open still needs gasHeadroomSol left after the
+  # trade, and an unreadable balance still blocks entries (fail closed).
+  # Was 0.033 SOL ("$4", 2026-10-04).
+  balanceFloorSol: 0
   gasHeadroomSol: 0.003 # ATA rent 0.00204 + fees
   # Idle-only chain resync of the in-memory balance (seconds).
   resyncSec: 300
@@ -155,14 +157,15 @@ detector:
 heliusSender:
   enabled: true
   url: http://fra-sender.helius-rpc.com/fast
-  # 2026-10-04: BUYS go out on Sender Max (staked + Jito auction) to compete
-  # for the migration slot. Tip = Jito landed-tip p75 x 1.1, clamped to
-  # [0.001, 0.003] SOL — 2.3-7 % of a 0.043 SOL buy; the pool replay must
-  # clear it before going live. EXITS stay staked-only at the 5,000-lamport
-  # minimum (exitSwqosOnly) so stops and TPs don't pay the Max tip too.
-  swqosOnly: false
+  # 2026-10-06 (operator): BUYS staked-only (SWQoS) at the 5,000-lamport
+  # minimum, like exits. The Sender Max tip (>= 0.001 SOL) was ~4 % of a
+  # 0.026 SOL buy to compete for S+0, which is worth ~1 % at the median
+  # (racer, n=406: S+1 mid vs open p50 +1.0 %, p75 +3.6 %); we already
+  # landed S+0 in 6/13 live buys, the same rate as outside buyers. Watch
+  # the S+0 share and failed buys; revert = swqosOnly false + min 1000000.
+  swqosOnly: true
   exitSwqosOnly: true
-  minTipLamports: 1000000
+  minTipLamports: 5000
   tipCapLamports: 3000000
   tipPercentile: 75
   tipBufferPct: 10
@@ -186,27 +189,25 @@ entry:
   # dry-run showed a ~0.003 SOL round-trip fee, so fee drag at base size
   # is ~7%.
   # Rungs are explicit percents (LIVE_RISK_WALLET_PCT is no longer read here),
-  # resolved against the live wallet with a minAbsoluteSol clamp:
-  #   min 5%  = 0.0120 SOL -> clamps to 0.04 — momentum floor effectively flat
-  #   base 19% = 0.0456 SOL — score 1.0 × full inflow
-  #   max 22%  = 0.0528 SOL — hard cap per position
-  # Absolute sizes match the tuned 0.04-0.054 band; re-derive the percents if
-  # the wallet is re-funded to a materially different balance.
-  # COMPOUNDING (2026-10-04, operator): every entry is exactly 20 % of the
+  # resolved against the live wallet with a minAbsoluteSol clamp. At the
+  # 0.214 SOL cutover wallet, 15 % = 0.0321 SOL per entry.
+  # COMPOUNDING (2026-10-06, operator): every entry is exactly 15 % of the
   # available in-memory balance. min = base = max, so the score / momentum /
-  # decision multipliers are all clamped back to 20 %. The balance moves with
+  # decision multipliers are all clamped back to 15 %. The balance moves with
   # every trade (reserved at send, reconciled from on-chain actuals), so each
   # trade compounds the last. (Relaxed-risk keeps its own 5 % cap.)
-  minSizeWalletPct: 20
-  baseSizeWalletPct: 20
-  maxSizeWalletPct: 20
+  # Fees are aside: the 15 % is buy notional; priority fees / tips / ATA rent
+  # come on top, and canFundEntry requires gasHeadroomSol left after the trade.
+  minSizeWalletPct: 15
+  baseSizeWalletPct: 15
+  maxSizeWalletPct: 15
   # 0.03 -> 0.04 (work plan 2026-09-25 P2.4, F12): fixed tx cost ~0.0004 SOL
   # per round trip must stay <= 1 % of notional. Sizes that would land below
   # this are now SKIPPED (SIZE_BELOW_FLOOR), never shrunk under it.
-  # 0.04 -> 0.006 (2026-10-04): 20 % of the $4 floor, so compounding can run
-  # down to the floor. Fixed costs (~0.0004 SOL/round trip) are ~6 % of
-  # notional at this size — accepted by the operator.
-  minAbsoluteSol: 0.006
+  # 0.006 -> 0.005 (2026-10-06): 15 % of the $4 floor (0.033 SOL), so
+  # compounding stays exact down to the floor. Fixed costs (~0.0004 SOL/round
+  # trip) are ~8 % of notional at this size — accepted by the operator.
+  minAbsoluteSol: 0.005
   # 5 (+8 retry) -> ONE 20% tier (2026-09-28). Every dry-run entry after the
   # fast-path reset failed: fresh graduations moved +9 / +12.5 / +18 / +19 %
   # in the ~1 s confirm window, past the 8% bound (sim) and 6004 in the buy
@@ -214,7 +215,10 @@ entry:
   # the dry-run simulator now uses the same single bound. CAUTION: on
   # 2026-09-16 fills 10-25% above the quote became the 3-15 s stops — watch
   # entryMoveFromDetectPct vs pnl in the new stats before trusting this.
-  maxSlippagePct: 20
+  # 2026-10-06 (operator): 20 -> 30. 4/21 live buys failed 6004 (fills 39-44 %
+  # over the open). Racer replay: the 20-30 % move band is small (n=5) and
+  # negative; 30 adds ~2 % more fills.
+  maxSlippagePct: 30
   buyRetrySlippageTiers: []
   # Entry move gate (2026-09-18). The buy is quoted ~1-2 s after the verdict's
   # pool snapshot, inside the sniper window: the first post-fix live entry
@@ -242,6 +246,16 @@ entry:
     maxPriceUpPct: 25
     maxSingleSellPoolPct: 8
     minUniqueBuyers: 0
+  # 2026-10-06 (operator): trade only migrations the racer would have fired
+  # on (completion cost <= racer.maxCompletionCostSol while the curve was
+  # open; ~30 % of migrations). R1 is a local SQLite point read at verdict
+  # time; each fire also pre-arms the pool + vault push so the verdict needs
+  # no RPC read. Requires pump-desk-racer running — no fires, no entries.
+  racerGate:
+    enabled: true
+    pollMs: 100
+    armOnFire: true
+    fireArmTtlMs: 600000
 
 guardrails:
   # FAST PATH (2026-09-28). Detection → one processed getMultipleAccounts →
@@ -251,6 +265,12 @@ guardrails:
   # knobs, the minEntryScore gate and RugCheck. See guardrails/engine.ts.
   # H6 (creator holdings) and H13 (creator funding cluster) removed 2026-10-04.
   minPoolSol: 25 # H7
+  # H7 ceiling (2026-10-06), on real vault SOL: a canonical migration opens
+  # at ~68 SOL real (~85 effective incl. virtual). Pools read above this were
+  # pumped inside the migrate slot by a bundled (usually creator-called)
+  # buy — S+1 entries paid 8-230x the open and every one ended in
+  # EMERGENCY_EXIT. 100 SOL real ≈ 1.9x the open price.
+  maxPoolSol: 100 # H7
   maxBuyImpactPct: 3 # H7
   # The fast read retries while the RPC node lags the gRPC feed (<= 1 slot).
   fastReadRetryDelaysMs: [0, 50, 100, 200]
@@ -317,17 +337,27 @@ exits:
   tp0Pct: 22 # inert while tp0Enabled is false
   tp0SellFraction: 0.5
   tp0MoveStopToPct: 8
-  tp1Pct: 15 # full exit — see replay table above
+  # 2026-10-06 (operator): TP 50, NO stop loss (hardStopPct 100 -> stop
+  # price 0, never fires), trailing arms at 50 (= TP, so effectively off).
+  # Exits left: TP 50, time stop, emergency (LP drain / creator dump /
+  # large sell). Racer replay (227 verified S+1 tracks, pools <= 100 SOL,
+  # live costs, 0.03 SOL, 300 s paths): -4.7 %/trade (CI -11.9..+2.5) with
+  # emergency exits off, -10.2 % with the LP-drain rule on; 53 % of trades
+  # miss +50 % in 5 min and those median -52 %. Earlier today: TP15/SL15
+  # (-11.3 %), TP30/SL25 (-8.1 %).
+  tp1Pct: 50 # full exit
   tp1SellFraction: 1
   tp2Pct: 100
   # Trailing arms earlier (20->12) and tighter (12->8; high-vol 10->6) to capture
   # the fast roll-overs instead of surrendering 20-30 points from the high.
-  trailingArmPct: 12
+  # 2026-10-06 (operator): trailing off — arming at tp1Pct means the full
+  # TP1 exit fires first; it only matters if tp1SellFraction < 1.
+  trailingArmPct: 50
   trailingGapPct: 8
   trailingGapHighVolPct: 6
   # Hard stop tightened 20->15. VALID ONLY WITH WS7 fast exits — a tight stop over
   # slow (3.9-9s) exits just realizes the slippage more often.
-  hardStopPct: 15
+  hardStopPct: 100 # 2026-10-06 operator: no stop loss (stop price 0)
   tp1MoveStopToPct: 20 # after TP1, move remainder stop to +20%
   timeStopMinutes: 10 # winners resolve fast; the lone TIME_STOP loss held 15m
   # Dead-money exit (LIVE_PILOT_PLAN §4 S1): close a position with no partial
@@ -354,13 +384,17 @@ exits:
   # (60–90 SOL pools only, vs 25 SOL then) makes 15 % ≈ 9–13 SOL, well above
   # ordinary exit flow. Watch emergency share of loss (< 25 % target) and the
   # MAE-0 false-fire count in the first 48 h.
-  emergencyLpDropPct: 15 # was 35
+  # 2026-10-06 (operator): ALL emergency exits OFF — the whole position is
+  # risked anyway (no stop loss). LP_PULL off (0), CREATOR_DUMP off,
+  # LARGE_SELL off (0). Exits left: TP 50, time stop, blind guard, kill
+  # switch. Rugs are now held to the time stop.
+  emergencyLpDropPct: 0 # off (0 = disabled; was 15)
   lpDropWindowTicks: 10 # ~5 s of reserve history at pricePollMs 500 (was 40)
   lpDropWindowMs: 5000 # time-based window wins: push ticks arrive per swap now
-  creatorDumpEnabled: true # in-position dev-dump monitor
+  creatorDumpEnabled: false # off 2026-10-06 (in-position dev-dump monitor)
   creatorDumpThresholdPct: 20 # was 50: creator selling >= 20 % of holdings fires EMERGENCY_EXIT
   # One tick-to-tick sell taking >= 8 % of pool SOL exits immediately (LARGE_SELL).
-  largeSellPoolPct: 8
+  largeSellPoolPct: 0 # off 2026-10-06 (0 = disabled; was 8)
   # Barrier mode (P3.5). Stays fixed until `npm run research:exitgrid` shows a
   # volatility configuration whose WALK-FORWARD CI lower bound is > 0 after
   # fees (never an in-sample pick — F8). Then set mode: volatility + its k1/k2.
@@ -610,6 +644,9 @@ execution:
   # time-to-fill.
   buyConfirmTimeoutMs: 4000
   buyConfirmPollMs: 250
+  # 2026-10-06: a buy counts as landed at 'processed' (poll or wallet push),
+  # as exits do — every live buy so far waited ~290-560 ms for 'confirmed'.
+  buyLandAtProcessed: true
   # Simulate every buy slippage tier concurrently and send only the tightest
   # that passed, instead of discovering a 6004 one serial round at a time (each
   # round = fresh state read + assemble + simulate, inside the moving window).
@@ -655,9 +692,9 @@ fees:
   # Jito tip per tx. 0 while the `jito` block above is commented out; set it
   # (e.g. 0.0001) in the same change that re-enables Jito.
   jitoTipSolPerTx: 0
-  # Sender Max buy tip (entry only), ~Jito landed p75 x 1.1 clamped to
-  # [0.001, 0.003] SOL — modelled at its 0.001 floor in dry-run PnL.
-  buyTipSol: 0.0011
+  # Buy tip (entry only), modelled in dry-run PnL: the SWQoS-only minimum
+  # since 2026-10-06 (was 0.0011, the Sender Max floor).
+  buyTipSol: 0.000005
   # Charge constant-product impact on paper / twin fills (buy impact at entry,
   # sell impact per exit fill from the tick's reserves). Recorded separately as
   # slippage_sol; net PnL subtracts it. Without it the twin fills at the mid
@@ -671,7 +708,7 @@ fees:
   planCacheMs: 3000
   # Priority-fee floor/cap (µLamports per CU). Floor raised from the old 50k so
   # exits don't sit for slots waiting on a cheap tx while price crashes.
-  priorityFloorMicroLamports: 500000 # ~0.000125 SOL at 250k CU (raised 2026-10-04 for slot competition)
+  priorityFloorMicroLamports: 100000 # ~0.000025 SOL at 250k CU (2026-10-06: 500k -> 100k; S+0 is worth ~1 % median)
   # Helius estimate scoped to PumpSwap + WSOL (our contention), 'veryHigh' ≈ p95;
   # p90 when falling back to getRecentPrioritizationFees.
   priorityLevel: veryHigh
@@ -767,8 +804,8 @@ risk:
   # entries. KILL_SWITCH is what an unresolved exit or an unsellable orphan
   # engages — it latches until /resume.
   disableAllBreakers: false
-  # 2 concurrent positions. With 20 % compounding the second open is 20 % of
-  # the remaining 80 %, so at most 36 % of the wallet is deployed at once.
+  # 2 concurrent positions. With 15 % compounding the second open is 15 % of
+  # the remaining 85 %, so at most 27.75 % of the wallet is deployed at once.
   # WALLET_FLOOR = balanceFloorSol (0.033 SOL ≈ $4); each open also needs
   # wallet - size >= wallet.gasHeadroomSol.
   # Re-tightened 3 -> 2 (2026-09-28 live reload; 3 was dry-run stats only).
@@ -837,3 +874,22 @@ webhooks:
 #   positions.pricePollMs: 500             # stays as the liveness fallback
 #   exits.lpDropWindowTicks: 40            # re-check once ticks are per-slot
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Migration-racer measurement worker (pump-desk-racer, src/racer-worker.ts).
+# Zero sends: its own LaserStream subscription (rpc.primaryGrpc) streams
+# near-complete curves + every migrate attempt; RPC (rpc.enrichmentHttp)
+# only for curve→mint lookups, virtual-quote and horizon pool reads.
+# Plan: .agents/plans/2026-10-05-racer-measurement-fidelity.md.
+# ---------------------------------------------------------------------------
+racer:
+  enabled: true
+  streamBandValues: 12 # stream curves with < 12·2^40 raw tokens left (≈5.2 SOL to complete)
+  admitCostSol: 5
+  maxCompletionCostSol: 0.5 # would-fire ceiling
+  curveFeeBps: 125
+  completeNoPoolSec: 120
+  paperHorizonsSec: [30, 60, 300]
+  paperSizeSol: 0.1
+  maxOpenDrainShare: 0.75 # reject backed-out opens implying a bigger bundled drain
+  maxOpenSlotDrift: 20 # reject opens disagreeing with the first slot mark by more than 20x

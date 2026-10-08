@@ -7,6 +7,7 @@ import { logger } from '../core/logger.ts';
 import { Enricher } from '../enrichment/index.ts';
 import type { Candidate, EnrichmentData, ScreenTimings } from '../enrichment/types.ts';
 import { GuardrailEngine } from './engine.ts';
+import { checkRacerFire } from './racerGate.ts';
 import type { RiskManager } from '../risk/manager.ts';
 import type { ShadowTracker } from './shadow.ts';
 import { computePrice } from '../positions/pricing.ts';
@@ -99,7 +100,7 @@ export class GuardrailPipeline {
       momentumWindowBucketsMs: g.momentumWindowBucketsMs,
       ...(g.momentumTxStatsEnabled ? { momentumTxStats: { maxTx: g.momentumTxStatsMaxTx } } : {}),
     });
-    this.engine = new GuardrailEngine(deps.config, deps.repos, deps.risk);
+    this.engine = new GuardrailEngine(deps.config, deps.repos, deps.risk, deps.config.entry.racerGate.enabled ? [checkRacerFire] : []);
     this.reader = new FastPoolReader({
       rpc: deps.fastRpc ?? deps.rpc,
       retryDelaysMs: g.fastReadRetryDelaysMs,
