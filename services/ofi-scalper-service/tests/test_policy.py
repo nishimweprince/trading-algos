@@ -153,6 +153,23 @@ def test_unfilled_entry_ends_the_cycle() -> None:
     assert cycle.exit_reason == "entry_unfilled" and cycle.entry_filled == 0
 
 
+def test_a_rejected_entry_waits_out_the_reentry_cooldown() -> None:
+    from dataclasses import replace
+
+    policy = SymbolPolicy("BTCUSDT", replace(PARAMS, reentry_cooldown_ms=5000), BTC)
+    (place,) = policy.on_sample(ctx(T0)).actions
+    # Rejected at once (post-only would cross): the signal is still on.
+    policy.on_update(place.cycle_id, "entry", Decimal(0), None, True, T0 + 50 * MS)
+    assert policy.on_sample(ctx(T0 + 100 * MS)).actions == []
+    assert policy.on_sample(ctx(T0 + 4900 * MS)).actions == []
+    (again,) = policy.on_sample(ctx(T0 + 5100 * MS)).actions
+    assert isinstance(again, Place) and again.leg == "entry"
+    # Without a cooldown (the default) the next sample re-enters: research parity.
+    policy, place = entered()
+    policy.on_update(place.cycle_id, "entry", Decimal(0), None, True, T0 + 50 * MS)
+    assert len(policy.on_sample(ctx(T0 + 100 * MS)).actions) == 1
+
+
 def test_partial_fill_keeps_the_filled_part() -> None:
     policy, place = entered()
     policy.on_update(place.cycle_id, "entry", Decimal("0.001"), 60000.0, False, T0 + 100 * MS)

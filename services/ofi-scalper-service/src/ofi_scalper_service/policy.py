@@ -69,12 +69,17 @@ class PolicyParams:
     entry_timeout_ms: int = 1000
     time_stop_mult: float = 2.0
     max_close_attempts: int = 3
+    # No new entry this long after a cycle ends. A signal that stays on (a held
+    # rule) would otherwise re-enter on every grid step after each rejection.
+    reentry_cooldown_ms: int = 0
 
     def __post_init__(self) -> None:
         if not 0 < self.threshold < 1:
             raise ValueError("policy.threshold must be in (0, 1)")
         if self.horizon_s <= 0 or self.barrier_bp <= 0 or self.entry_timeout_ms <= 0:
             raise ValueError("policy horizon_s, barrier_bp and entry_timeout_ms must be > 0")
+        if self.reentry_cooldown_ms < 0:
+            raise ValueError("policy reentry_cooldown_ms must be >= 0")
         if self.buffer_bp < 0 or self.time_stop_mult <= 0 or self.max_close_attempts < 1:
             raise ValueError("policy buffer_bp >= 0, time_stop_mult > 0, max_close_attempts >= 1")
 
@@ -304,6 +309,7 @@ class SymbolPolicy:
         self.phase = Phase.FLAT
         self.cycle: Cycle | None = None
         self.finished: list[Cycle] = []
+        self.cooldown_until_ns = 0
 
     # --- samples -------------------------------------------------------------------
 
@@ -318,7 +324,7 @@ class SymbolPolicy:
 
     def _maybe_enter(self, ctx: Context) -> Step:
         scores = ctx.scores
-        if scores is None:
+        if scores is None or ctx.t_ns < self.cooldown_until_ns:
             return Step()
         side: Side = "buy" if scores.up >= scores.down else "sell"
         p, p_opp = (scores.up, scores.down) if side == "buy" else (scores.down, scores.up)
@@ -512,6 +518,7 @@ class SymbolPolicy:
         cycle = self.cycle
         assert cycle is not None
         cycle.exit_ns = t_ns
+        self.cooldown_until_ns = t_ns + self.params.reentry_cooldown_ms * NS_PER_MS
         self.finished.append(cycle)
         self.cycle = None
         self.phase = Phase.FLAT

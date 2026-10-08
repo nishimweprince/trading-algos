@@ -22,7 +22,7 @@ Otherwise ``none`` is 1. Off-grid (burst) samples are scored against the
 current state but do not update it, so the rule sees the same statistics in a
 replay as live.
 
-    ofi-rules-model --profile dev                # writes <OFI_MODEL_DIR>/rules-v1
+    ofi-rules-model --profile dev --version rules-v2   # <OFI_MODEL_DIR>/rules-v2
     ofi-rules-model --profile dev --version rules-v2 --z-entry 4 --barrier-bp 15
 """
 
@@ -59,6 +59,7 @@ DEFAULT_POLICY: dict[str, Any] = {
     "buffer_bp": 2.0,
     "entry_timeout_ms": 1500,
     "time_stop_mult": 2.0,
+    "reentry_cooldown_ms": 5000,
 }
 
 
@@ -204,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
         prog="ofi-rules-model", description="Write a rule model directory (ungated)."
     )
     parser.add_argument("--profile", default=None)
-    parser.add_argument("--version", default="rules-v1")
+    parser.add_argument("--version", default="rules-v2")
     parser.add_argument("--model-dir", type=Path, default=None)
     defaults = RuleParams()
     for name in ("z_entry", "halflife_s", "warmup_s", "imbalance_min", "max_spread_ticks"):
@@ -216,6 +217,9 @@ def main(argv: list[str] | None = None) -> int:
     for name in ("horizon_s", "threshold", "barrier_bp", "buffer_bp", "time_stop_mult"):
         parser.add_argument(f"--{name.replace('_', '-')}", type=float, default=DEFAULT_POLICY[name])
     parser.add_argument("--entry-timeout-ms", type=int, default=DEFAULT_POLICY["entry_timeout_ms"])
+    parser.add_argument(
+        "--reentry-cooldown-ms", type=int, default=DEFAULT_POLICY["reentry_cooldown_ms"]
+    )
     args = parser.parse_args(argv)
 
     model_dir = args.model_dir
@@ -237,6 +241,7 @@ def main(argv: list[str] | None = None) -> int:
         "buffer_bp": args.buffer_bp,
         "entry_timeout_ms": args.entry_timeout_ms,
         "time_stop_mult": args.time_stop_mult,
+        "reentry_cooldown_ms": args.reentry_cooldown_ms,
     }
     try:
         path = write_rules_model(model_dir, args.version, rules=rules.as_dict(), policy=policy)
