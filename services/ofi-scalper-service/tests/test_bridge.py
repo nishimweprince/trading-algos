@@ -119,6 +119,23 @@ def test_shadow_post_only_that_would_cross_is_rejected(tmp_path: Path) -> None:
     bridge.on_sample(sample(T0, bid=60000.1, ask=60000.0), GATE_ON)
     assert bridge.policies["BTCUSDT"].phase is Phase.FLAT
     assert bridge.counts["cycles_unfilled"] == 1
+    assert bridge.reject_backoff == {}  # an expired post-only is not a refusal
+
+
+def test_shadow_entry_timeout_does_not_back_off(tmp_path: Path) -> None:
+    dial = Dial()
+    bridge, _ = shadow_bridge(tmp_path, dial)
+    dial.set(up=0.8, down=0.05)
+    bridge.on_sample(sample(T0), GATE_ON)
+    step = 100_000_000
+    t = T0
+    while bridge.counts.get("cycles_unfilled", 0) == 0:  # rests until its timeout
+        t += step
+        bridge.on_sample(sample(t), GATE_ON)
+        assert t - T0 < 10 * S
+    assert bridge.reject_backoff == {}
+    bridge.on_sample(sample(t + step), GATE_ON)
+    assert bridge.policies["BTCUSDT"].phase is Phase.ENTRY_RESTING  # enters again at once
 
 
 def test_shadow_stop_closes_at_the_bid(tmp_path: Path) -> None:
@@ -481,3 +498,39 @@ async def test_a_stale_demo_quote_blocks_entries_but_not_exits(testnet) -> None:
     bridge.quotes.age_ms = 100
     bridge.on_sample(sample(T0 + S), GATE_ON)
     assert bridge.book.recent_signals[-1]["action"] == "enter"
+
+
+async def test_a_rejected_entry_backs_off_instead_of_retrying_every_step(testnet) -> None:
+    gateway, dial = FakeGateway(submit_mode="reject"), Dial()
+    bridge, risk = await testnet(gateway, dial=dial)
+    clock = bridge.clock_ns
+    dial.set(up=0.8, down=0.05)
+    bridge.on_sample(sample(T0), GATE_ON)
+    await until(lambda: bridge.reject_backoff.get("BTCUSDT", (0, 0))[0] == 1)
+    posts = lambda: sum(1 for _, path, _ in gateway.calls if path == "/v1/orders")  # noqa: E731
+    assert posts() == 1 and risk.halt is None
+
+    # The signal holds: the next grid steps inside the 1 s cooldown send nothing.
+    for k in range(1, 6):
+        bridge.on_sample(sample(T0 + k * 100_000_000), GATE_ON)
+    assert posts() == 1
+    assert bridge.policies["BTCUSDT"].phase.value == "flat"
+
+    # After the cooldown it tries again; a second rejection doubles the wait.
+    clock.now += 1_100_000_000
+    bridge.on_sample(sample(T0 + 2_000_000_000), GATE_ON)
+    await until(lambda: bridge.reject_backoff["BTCUSDT"][0] == 2)
+    assert posts() == 2
+    streak, until_ns = bridge.reject_backoff["BTCUSDT"]
+    assert until_ns - clock.now > 1_500_000_000  # ~2 s
+    assert bridge.status()["reject_backoff"]["BTCUSDT"]["in_a_row"] == 2
+    assert bridge.counts["entry_rejected"] == 2
+
+    # An entry that is accepted (here: placed, then cancelled unfilled) clears it.
+    gateway.submit_mode = "ok"
+    clock.now += 2_100_000_000
+    bridge.on_sample(sample(T0 + 5_000_000_000), GATE_ON)
+    await until(lambda: len(gateway.orders()) == 1)
+    gateway.settle(gateway.op_for("entry"), "cancelled")
+    await until(lambda: "BTCUSDT" not in bridge.reject_backoff)
+    assert risk.halt is None

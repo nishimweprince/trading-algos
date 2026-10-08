@@ -74,6 +74,9 @@ __all__ = [
 SOURCE = "ofi_scalper"
 NS = 1_000_000_000
 TERMINAL = {"filled", "closed", "partially_filled_final", "cancelled", "rejected"}
+# Unfilled endings that are not a refusal by the venue: no entry back-off after these.
+# A post-only order that would take expires on Binance too; it is not rejected.
+NOT_REFUSED = {"cancelled", "post_only_would_take", "not_submitted"}
 QUOTE_MAX_AGE_MS = 2_000
 # A post-only entry priced from an older touch tends to cross in the fast moves
 # signals fire on, and Binance expires it at once. Exits and marks keep 2 s.
@@ -479,6 +482,8 @@ class ExecutionBridge:
         # control that succeeds resets them: only an unbroken run halts.
         self.consecutive_control_unknown = 0
         self.position_mismatch: str | None = None
+        # symbol -> (rejected entries in a row, no new entry before this t_ns)
+        self.reject_backoff: dict[str, tuple[int, int]] = {}
         self._halt_handled = False
         self._marks: dict[str, dict[str, float]] = {}
         self._funding: dict[str, dict[str, Any]] = {}
@@ -798,6 +803,9 @@ class ExecutionBridge:
             and self.quotes.get(symbol, ENTRY_QUOTE_MAX_AGE_MS) is None
         ):
             return "stale_venue_quote"
+        backoff = self.reject_backoff.get(symbol)
+        if backoff is not None and self.clock_ns() < backoff[1]:
+            return "reject_cooldown"
         return None
 
     # --- actions -----------------------------------------------------------------------
@@ -912,6 +920,8 @@ class ExecutionBridge:
             order.terminal = True
             if order.state not in TERMINAL and order.state != "refused":
                 order.state = "rejected" if Decimal(order.executed) == 0 and reason else "done"
+            if order.leg == "entry":
+                self._note_entry_outcome(order, t_ns)
         policy = self.policies.get(order.symbol)
         if policy is None:
             return
@@ -922,6 +932,35 @@ class ExecutionBridge:
         self.execute(actions, t_ns)
         self._collect(order.symbol, t_ns)
         self.persist()
+
+    def _note_entry_outcome(self, order: TrackedOrder, t_ns: int) -> None:
+        """Back off after a rejected entry, so a persistent refusal (a gateway cap, a
+        filter, the balance) is not retried on every 100 ms grid step."""
+        if order.state != "rejected" or order.reason in NOT_REFUSED:
+            self.reject_backoff.pop(order.symbol, None)
+            return
+        streak = self.reject_backoff.get(order.symbol, (0, 0))[0] + 1
+        base = getattr(self.settings, "reject_cooldown_ms", 1_000)
+        ceiling = getattr(self.settings, "reject_cooldown_max_ms", 60_000)
+        wait_ms = min(base * 2 ** min(streak - 1, 30), ceiling)
+        self.reject_backoff[order.symbol] = (streak, t_ns + wait_ms * 1_000_000)
+        self.count("entry_rejected")
+        log_event(
+            "ofi_entry_rejected",
+            level=logging.WARNING if streak < 5 else logging.ERROR,
+            symbol=order.symbol,
+            cycle_id=order.cycle_id,
+            reason=order.reason,
+            in_a_row=streak,
+            cooldown_ms=wait_ms,
+            mode=self.mode.value,
+        )
+        if streak == 5:
+            self.alerts.send(
+                f"entry-rejected-{order.symbol}",
+                f"OFI: {order.symbol} entries keep being rejected",
+                [f"{streak} in a row, last: {order.reason}", f"next try in {wait_ms / 1000:.0f} s"],
+            )
 
     # --- unknowns and halts --------------------------------------------------------------
 
@@ -1146,6 +1185,10 @@ class ExecutionBridge:
             "position_mismatch": self.position_mismatch,
             "consecutive_unknown": self.consecutive_unknown,
             "consecutive_control_unknown": self.consecutive_control_unknown,
+            "reject_backoff": {
+                symbol: {"in_a_row": n, "until_ns": until}
+                for symbol, (n, until) in self.reject_backoff.items()
+            },
             "ungated": self._ungated(),
             "dead_man_armed": self.dead_man_armed,
             "policy": {s: p.snapshot() for s, p in self.policies.items()},

@@ -47,6 +47,7 @@ class FakeGateway:
     ready: bool = True
     wallet: str = "1000"
     # POST /v1/orders: "ok" | "drop" (arrives, response lost) | "down" (never arrives)
+    # | "reject" (422, as for a volume over the gateway's MAX_VOLUME_LOTS)
     submit_mode: str = "ok"
     operations: dict[str, dict[str, Any]] = field(default_factory=dict)
     payloads: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -119,6 +120,16 @@ class FakeGateway:
         if path == "/v1/orders":
             if self.submit_mode == "down":
                 raise httpx.ConnectError("gateway down")
+            if self.submit_mode == "reject":
+                return httpx.Response(
+                    422,
+                    json={
+                        "error": {
+                            "code": "volume_exceeds_limit",
+                            "message": f"{body['targets'][0]['volume_lots']} > MAX_VOLUME_LOTS",
+                        }
+                    },
+                )
             op = body["operation_id"]
             self.payloads[op] = body
             self.next_order_id += 1

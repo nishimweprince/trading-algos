@@ -112,6 +112,14 @@ class Settings(BaseServiceSettings, NotificationSettings, BinanceFuturesSettings
     max_consecutive_unknown: int = Field(
         default=3, ge=1, validation_alias="OFI_MAX_CONSECUTIVE_UNKNOWN"
     )
+    # After a rejected entry the symbol waits this long before entering again,
+    # doubling per rejection in a row up to the maximum.
+    reject_cooldown_ms: int = Field(
+        default=1_000, ge=100, validation_alias="OFI_REJECT_COOLDOWN_MS"
+    )
+    reject_cooldown_max_ms: int = Field(
+        default=60_000, ge=100, validation_alias="OFI_REJECT_COOLDOWN_MAX_MS"
+    )
     dead_man_ms: int = Field(default=15_000, ge=5_000, validation_alias="OFI_DEAD_MAN_MS")
     fill_poll_ms: int = Field(default=200, ge=20, validation_alias="OFI_FILL_POLL_MS")
     # Demo trading's own book: testnet orders are priced from it (signals are not).

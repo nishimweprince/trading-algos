@@ -52,7 +52,9 @@ Under launchd: `infra/launchd/install.sh --service ofi-scalper-service dev`.
   own fills passes.
 - **Bridge** (`execution_bridge.py`): every order passes `RiskState.check_order`
   first. UNKNOWN outcomes are reconciled through the gateway, never resubmitted;
-  `OFI_MAX_CONSECUTIVE_UNKNOWN` in a row halts. A halt (kill switch, loss
+  `OFI_MAX_CONSECUTIVE_UNKNOWN` in a row halts. A rejected entry blocks that
+  symbol for `OFI_REJECT_COOLDOWN_MS`, doubling per rejection in a row up to
+  `OFI_REJECT_COOLDOWN_MAX_MS` (5 in a row also alerts). A halt (kill switch, loss
   limits, execution fault) cancels all, closes every cycle reduce-only, then
   flattens as a backstop. In testnet the dead-man (`countdownCancelAll`,
   `OFI_DEAD_MAN_MS`) is re-armed every 5 s, state survives restarts in
