@@ -49,6 +49,20 @@ func main() {
 	client := &http.Client{Timeout: 3 * time.Second}
 	go poll(ctx, client, c, traderURL, obsURL, probeFile)
 
+	srv := &http.Server{Addr: addr, Handler: newMux(c), ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second}
+	go func() {
+		<-ctx.Done()
+		srv.Close()
+	}()
+	log.Info("status started", "addr", addr)
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Error("http", "err", err)
+		os.Exit(1)
+	}
+}
+
+func newMux(c *cache) *http.ServeMux {
 	tmpl := template.Must(template.New("page").Parse(pageHTML))
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -60,22 +74,72 @@ func main() {
 		w.Header().Set("Cache-Control", "no-store")
 		json.NewEncoder(w).Encode(c.summary())
 	})
+	// Every performance metric as one downloadable JSON file, without the
+	// individual events (the shadow run's recent trades become a count).
+	mux.HandleFunc("GET /api/metrics", func(w http.ResponseWriter, r *http.Request) {
+		now := time.Now().UTC()
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Disposition",
+			`attachment; filename="leadlag-metrics-`+now.Format("20060102T150405Z")+`.json"`)
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		enc.Encode(c.metrics(now))
+	})
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		tmpl.Execute(w, map[string]string{"Version": version})
 	})
-	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second}
-	go func() {
-		<-ctx.Done()
-		srv.Close()
-	}()
-	log.Info("status started", "addr", addr)
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Error("http", "err", err)
-		os.Exit(1)
+	return mux
+}
+
+// metrics is the download: the cached trader, observer and probe documents,
+// with lists of individual events replaced by their counts.
+func (c *cache) metrics(now time.Time) map[string]any {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	age := func(t time.Time) any {
+		if t.IsZero() {
+			return nil
+		}
+		return now.Sub(t).Round(time.Millisecond).Seconds()
 	}
+	return map[string]any{
+		"generated_at": now.Format(time.RFC3339), "status_version": version,
+		"source_age_s": map[string]any{"trader": age(c.traderAt), "observer": age(c.obsAt)},
+		"errors":       map[string]string{"trader": c.traderEr, "observer": c.obsEr},
+		"trader":       withoutEvents(c.trader),
+		"observer":     decode(c.observer),
+		"probe":        decode(c.probe),
+	}
+}
+
+// withoutEvents decodes the trader document and replaces the shadow run's
+// list of recent trades with its length.
+func withoutEvents(raw json.RawMessage) any {
+	doc, ok := decode(raw).(map[string]any)
+	if !ok {
+		return nil
+	}
+	if sh, ok := doc["shadow"].(map[string]any); ok {
+		if recent, ok := sh["recent"].([]any); ok {
+			sh["recent_trades_omitted"] = len(recent)
+		}
+		delete(sh, "recent")
+	}
+	return doc
+}
+
+func decode(raw json.RawMessage) any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var v any
+	if json.Unmarshal(raw, &v) != nil {
+		return nil
+	}
+	return v
 }
 
 // summary is what the page's script renders.
