@@ -2,6 +2,10 @@
 
 This is shadow-only recording. The host makes no signed calls that trade and has no order path.
 
+Sections 1–7 describe the **dedicated** AWS host the measurements are meant for. To run next to other
+services on an existing machine (as on the ofi-scalper VM), follow [Shared host](#shared-host) instead;
+it reuses §3–4 with the differences listed there.
+
 ## What runs where
 
 | Unit | Process | Address | CPUs | Priority |
@@ -196,6 +200,118 @@ idle priority on CPUs 0–1 and resumes if interrupted. The candidate list is sa
   24-hour values into `research/PREREG.md` before M3, because they set when an archive trade counts as
   observable.
 
+## Shared host
+
+leadlag also runs next to other services on one machine. It runs this way on the ofi-scalper VM (Azure,
+2026-10-08), which records order books and paper-trades on Binance demo. The recorder, observer and status
+page are the same; what changes is that the host isn't leadlag's alone.
+
+| | Dedicated (§1–7) | Shared host (ofi VM) |
+|---|---|---|
+| Machine | c7i.xlarge in the measured AWS AZ | Azure Standard_D4ads_v6, 4 vCPU / 16 GB, **japanwest (Osaka)** |
+| CPUs | trader alone on 2–3; `system.conf` moves everything else to 0–1 | nothing pinned; trader at normal priority |
+| Data | separate 500 GB volume at `/data` | `/data` is a directory on the 247 GB root disk, shared with the ofi recordings |
+| Clock | chrony on Amazon Time Sync | chrony on Hyper-V's PTP clock (`PHC0`), already ~0.2 µs; leave it |
+| cloudflared | own tunnel, local `config.yml` | the existing tunnel is remotely managed (token): add a public hostname in the dashboard |
+
+**What to skip from §3:** the AZ probe (§1), `mkfs` and the fstab entry, the chrony source (Amazon Time
+Sync exists only on EC2), and the `CPUAffinity=0 1` change to `/etc/systemd/system.conf`. That change
+would squeeze every other service on the host onto two CPUs. Without `push.sh`, the `ll` sudoers line
+isn't needed either.
+
+**Install and start** (build on the host, Go from go.dev with its sha256 checked, as in §3):
+
+```sh
+sudo adduser --disabled-password --gecos "" ll
+sudo install -d -o ll -g ll -m 750 /home/ll/leadlag /home/ll/leadlag/releases /home/ll/leadlag/jobs
+sudo install -d -o ll -g ll /data/leadlag /data/leadlag/tape /data/leadlag/archive
+# build, install the release and point `current` at it: "Without push.sh" in §3
+# config: /home/ll/leadlag/.env from deploy/env/.env.example (ll, mode 600)
+sudo deploy/install.sh --shared-host
+sudo systemctl enable --now leadlag-observer leadlag leadlag-status
+```
+
+`--shared-host` adds drop-ins (`deploy/systemd/shared-host/`):
+- They clear `CPUAffinity`, and run the trader at Nice 0, so it never outranks a live trading process next
+  to it.
+- They cap `leadlag-research@` jobs at 4 GB (`MemoryMax`, `OOMScoreAdjust=900`), so the OOM killer picks a
+  research job before a recorder.
+- They don't install the cloudflared priority drop-in, so an existing tunnel keeps its settings.
+
+**Probe:** run it once and keep the result for the page:
+
+```sh
+sudo systemd-run --unit=leadlag-probe --uid=ll --gid=ll --nice=10 \
+  /home/ll/leadlag/current/llprobe --duration 30m --out /home/ll/leadlag/probe.json
+```
+
+It costs about 64 request weight per minute against the IP's 2400. The ofi-scalper budgets 1200 of those,
+so the two fit together. Off EC2, llprobe reads Azure's IMDS and labels the host `azure:<region>`.
+
+**Publish the page (remotely managed tunnel):** in Zero Trust → Networks → Tunnels → the host's tunnel →
+Public Hostname → Add, set `ll.<your-domain>` → `http://127.0.0.1:8062`. Then create the Access
+application as in §5, before sharing the link. Nothing changes on the host.
+
+**Disk budget:**
+- The tape takes 0.2–0.3 GB/day per symbol, so the default 14 symbols take 3–4 GB/day.
+- The ofi recorder adds about 4 GB/day (6 symbols, full depth).
+- That is roughly 8 GB/day together, against about 230 GB free: around **4 weeks**, and less once
+  `fetch-screen` adds its tens of GB.
+- Taping pauses at 90% full (`LL_DISK_MAX_PCT`), before the ofi recorder's 10 GB floor, so the ofi
+  recordings are the last to stop.
+- Attach a data disk at `/data`, or shorten `LL_FOLLOWERS`, before running the archive jobs or a long
+  recording.
+
+**Memory:** the trader's heap is about 75 MB (`GOMEMLIMIT=1GiB`), and the status page is capped at 256 MB.
+The ofi research pipeline can use up to 10 GB on its own. Run leadlag research jobs only when it isn't
+running.
+
+**What its numbers mean:**
+- Binance's matching engine is in AWS ap-northeast-1 (Tokyo), and this VM is in Osaka.
+- Feed lag and REST round trips here describe Osaka → Tokyo, not the AWS host that `research/PREREG.md`
+  freezes L* and δ from:
+  - **δ** (the aggTrade publication delay, `E − T`) is measured at the exchange and carries over.
+  - **L*** (from the REST RTT) does not.
+- The trader shares the CPUs with Python services, so engine and receive → done percentiles are noisier
+  than on the dedicated host.
+- Treat a shared host as a **recorder and status page**. Keep the M4 L* and the M5 shadow (G5) on the
+  measured AWS host, or amend PREREG for this host before computing any statistic from it.
+
+**Shadow mode (exploratory, `research/PREREG.md` Part 2):**
+
+```sh
+sudo install -o ll -g ll -m 600 deploy/env/shadow.example.json /home/ll/leadlag/shadow.json   # set latency_ms from the probe
+# in /home/ll/leadlag/.env: LL_MODE=shadow and LL_SHADOW_PARAMS=/home/ll/leadlag/shadow.json
+sudo systemctl restart leadlag-observer leadlag leadlag-status
+journalctl -u leadlag -n 5 --no-pager | grep "shadow engine"          # run, params sha256, latency
+```
+
+- Signals start after the detector's 30-minute warm-up.
+- Every completed trade goes through the ring to the observer, which appends it to
+  `/data/leadlag/shadow/<UTC day>.jsonl` (`LL_JOURNAL_DIR`). The trader still never writes to disk.
+- The page's Shadow panel shows totals, per-follower results and the last trades, labelled exploratory.
+- `curl -XPOST localhost:8060/v1/halt` stops new entries; open positions still close at their horizon.
+- `sudo systemctl start leadlag-research@shadow-verify.service` replays the tape with the same params,
+  only for the runs whose hello carries their sha256. It fails if the replayed trades differ from the
+  journal.
+- A halt isn't on the tape, so check a halted run's journal by hand.
+
+**First numbers on the ofi VM (2026-10-08, 14 symbols, ofi research running):**
+
+| Measure | ofi VM (azure:japanwest) | AWS Tokyo (README, 2026-10-07) |
+|---|---|---|
+| REST warm RTT p50 / p99 | 10.75 / 442 ms | 3.7 ms p50 |
+| bookTicker recv − E p50 / p99 | 4.9 / 9.7 ms | 1.2–2.2 / 2–5 ms |
+| aggTrade recv − E p50 / p99 (BTC) | 5.4 / 6.9 ms | — |
+| aggTrade publish delay E − T p90 (BTC / ETH) | 151 / 152 ms | ≈ 150 ms |
+| Clock offset (Binance − local) | +0.75 ms | −0.09 ms |
+| Engine p99 (60 s) | 27.6 µs idle, 55 µs during ofi research | 21.5 µs |
+| Ring drops / tape holes / id gaps (first 31 min, 4.8 M events) | 0 / 0 / 0 | 0 / 0 / 0 |
+| Tape growth | ≈ 4.3 GB/day (14 symbols) | 3–4 GB/day estimate |
+
+- `E − T` matches AWS, because Binance sets it: this host's δ is valid.
+- The round trip is about 3× AWS's: L here is 20 ms against L* = 5 ms on AWS.
+
 ## Day to day
 
 | Task | How |
@@ -203,7 +319,8 @@ idle priority on CPUs 0–1 and resumes if interrupted. The candidate list is sa
 | Logs | `journalctl -u leadlag -f` (and `-u leadlag-observer`, `-u leadlag-status`) |
 | Upgrade | `LL_HOST=ll@<eip> deploy/push.sh` from the Mac. It restarts observer → trader → status. |
 | Roll back | `ln -sfn /home/ll/leadlag/releases/<rev> /home/ll/leadlag/current && sudo systemctl restart leadlag-observer leadlag leadlag-status` |
-| Halt (no effect in record mode; stops new shadow entries in M5) | `curl -XPOST localhost:8060/v1/halt` over SSH; `…/v1/resume` |
+| Halt (no effect in record mode; stops new shadow entries) | `curl -XPOST localhost:8060/v1/halt` over SSH; `…/v1/resume` |
+| Shadow trades | `/data/leadlag/shadow/<day>.jsonl`; check against the tape with `systemctl start leadlag-research@shadow-verify.service` |
 | Disk | The page shows usage. Taping pauses at `LL_DISK_MAX_PCT` (90%) and resumes 5 points lower; the trader keeps running. |
 | Tape on another machine | `rsync -av ll@<eip>:/data/leadlag/tape/<day> .` then `leadlag --replay <day>` |
 | Status page down | `systemctl status leadlag-status cloudflared`. The trader doesn't depend on either. |

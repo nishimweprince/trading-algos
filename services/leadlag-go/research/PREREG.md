@@ -122,3 +122,60 @@ Other horizons, the ETH events and the sensitivity grid are reported but don't r
 quote tape.
 
 **Out of scope for G1:** fees, fills and the decision rule. Those are M4 (gates G2–G4).
+
+---
+
+## Part 2: exploratory shadow trading (written 2026-10-08, before any shadow trade)
+
+### 2.1 Why, and what it may not be used for
+
+The plan runs shadow trading only after M4 freezes the parameters (README, Sequencing). This part starts
+an **exploratory** shadow run before G1, to exercise the live path (signal → simulated taker fill →
+exit → record) and see the live signal rate. The cost is that its trades are observed before the gates.
+So:
+
+- Every trade carries `"exploratory": true` and the run label **`explore-1`**.
+- No exploratory trade, or anything computed from one, is used for the screen, the freeze, G1, G2–G4 or
+  G5, or to choose any parameter of a later part. The M3/M4 work in Part 1 and later parts uses only the
+  archive.
+- G5 (live shadow, ≥ 3 weeks, n ≥ 200) still starts at the M4 freeze, with the frozen parameters, on the
+  measured AWS Tokyo host.
+- Changing any value below means a new part and a new run label. Results under one label are never
+  pooled with another's.
+
+### 2.2 The fixed run (`explore-1`)
+
+| Item | Value | Source |
+|---|---|---|
+| Host | the ofi VM, Azure **japanwest (Osaka)**, shared with the ofi services | DEPLOY.md, Shared host |
+| Leaders | BTCUSDT, ETHUSDT, each with its own detector; both trade, reported per leader | Part 1 §1.1 (BTC primary) |
+| Followers | the 12 recorded followers in `LL_FOLLOWERS` (SOL, XRP, DOGE, SUI, BNB, ZEC, NEAR, UNI, ENA, WLD, 1000PEPE, ADA) | not screened; reported per follower |
+| Event | `research.PrimaryDetector()`: W 500 ms, θ 3, cooldown 1 s, half-life 30 min, warm-up 30 min, gap reset 10 min | Part 1 §1.4 primaries |
+| Signal time | the receive time of the leader trade that crossed θ (live receipt already includes Binance's publish delay δ) | Part 1 §1.2 |
+| Latency `L` | **20 ms**: the smallest Part 1 grid value at or above this host's warm REST RTT p50 (10.75 ms) + 2 ms. AWS's L* = 5 ms stays the G1 value | probe 2026-10-08 14:44–15:14 UTC |
+| Entry | first event received at or after signal + `L`: taker buy at the follower's ask (sell at its bid) from the latest bookTicker | taker strategy (README) |
+| Skips | the follower already has a pending or open position; no quote; quote older than 1 s; crossed book; trader halted | |
+| Exit | first event received at or after entry + **1000 ms**, taker at the opposite side | Part 1 §1.5 primary horizon |
+| Size | **$25** notional per trade, quantity = 25 / entry price (not rounded to the lot step; bp results are unaffected) | user decision |
+| Fees | **5 bp per side** (VIP 0, no BNB discount): 10 bp per round trip | Part 1 §1.6 hurdle basis |
+
+Each trade records the leader, follower, direction, z, signal/entry/exit receive times, prices, the entry
+spread, gross and net bp and net USD. The trader sends it through the ring to the observer, which
+appends it to `/data/leadlag/shadow/<UTC day>.jsonl`. Replaying the tape with the same params file
+(matched by sha256) must reproduce every trade (`deploy/jobs/shadow-verify.sh`).
+
+### 2.3 Reported, not decided
+
+Per follower, per leader and in total: trades, mean gross and net bp, hit rate, t-statistic of net bp,
+net USD, and skips by reason. These are descriptive. No pass/fail rule applies to `explore-1`.
+
+### 2.4 Steps skipped by starting now
+
+- The README's sequencing rule (no exploratory shadow before the M4 freeze), deliberately waived under
+  §2.1.
+- M3: δ from 24 h of tape (shadow doesn't need it live), the screen, the freeze, G1.
+- M4: the policy design, fill-model validation, the backtest, validation and held-out windows, G2–G4
+  (not yet defined), the parameter freeze, and the actual fee tier.
+- Host: the AWS AZ probe and the dedicated c7i host. Numbers here describe Osaka → Tokyo with an unpinned
+  trader.
+- The exit rule is a fixed 1 s time exit with no stop or take-profit: a measurement, not a strategy.

@@ -17,10 +17,10 @@ mainnet book produce P&L. A separate, read-only stats page is published through 
 | Milestone | Scope | State |
 |---|---|---|
 | M1 | Archive fetch, verify and pack (`llfetch`), deterministic multi-symbol merger | done |
-| M2 | Live ingest + recorder, observer, status page, `llprobe`, EC2 deploy kit | built; deploy pending the host |
+| M2 | Live ingest + recorder, observer, status page, `llprobe`, EC2 deploy kit | built; running on the ofi VM (shared host) while the AWS host is down |
 | M3 | Flow features, screen, event study, placebo → gate G1 | — |
 | M4 | Policy, fill model, backtest, prereg freeze, validation, held-out → G2–G4 | — |
-| M5 | Live shadow with the frozen parameters → G5 | — |
+| M5 | Live shadow with the frozen parameters → G5 | engine built; **exploratory** run `explore-1` live (PREREG Part 2, counts toward no gate); G5 starts at the M4 freeze |
 
 ## Layout
 
@@ -31,6 +31,7 @@ cmd/leadlag-status     read-only page :8062 (the only thing behind cloudflared)
 cmd/llprobe            latency probe: REST RTT, cold connects, feed lag, aggTrade publish delay
 cmd/llfetch            archive downloader: plan | fetch | verify | candidates
 internal/live          Hub (one lock; dedupe; digest), record engine, tape replay
+internal/shadow        shadow engine: leader flow events → simulated taker fills on the live book → journal
 internal/ws            reconnecting combined-stream client (receive stamp at frame completion)
 internal/parse         zero-allocation aggTrade / bookTicker decoder
 internal/ipc           SPSC byte ring + record protocol + producer (never blocks the hot path)
