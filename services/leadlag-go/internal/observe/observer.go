@@ -65,6 +65,7 @@ type Observer struct {
 
 	frames, parseErr uint64
 
+	closed     bool     // Close ran: late records must not open new files
 	jf         *os.File // today's journal file
 	jday       string
 	journals   uint64
@@ -234,7 +235,7 @@ func (o *Observer) Handle(typ byte, body []byte) error {
 // journal appends one record to the day's file. A failure is reported in the
 // stats and never stops the observer (the tape still lets a replay rebuild it).
 func (o *Observer) journal(now int64, body []byte) {
-	if o.cfg.JournalDir == "" {
+	if o.cfg.JournalDir == "" || o.closed {
 		return
 	}
 	day := time.Unix(0, now).UTC().Format(time.DateOnly)
@@ -328,7 +329,7 @@ func (o *Observer) aggregate(recv int64, frame []byte) {
 // tape runs f on the writer if taping is on; a write error pauses taping
 // rather than killing the observer (statistics keep flowing).
 func (o *Observer) tape(f func(*tape.Writer) error) error {
-	if !o.tapeOn || o.w == nil {
+	if o.closed || !o.tapeOn || o.w == nil {
 		return nil
 	}
 	if err := f(o.w); err != nil {
@@ -373,6 +374,7 @@ func (o *Observer) Housekeep() {
 func (o *Observer) Close() error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	o.closed = true
 	if o.jf != nil {
 		o.jf.Close()
 		o.jf = nil

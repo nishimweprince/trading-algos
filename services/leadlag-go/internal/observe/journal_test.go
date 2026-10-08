@@ -39,3 +39,19 @@ func TestJournalRecordsGoToTheDaysFile(t *testing.T) {
 		t.Fatal("a journal without a directory must still be counted")
 	}
 }
+
+// Records that arrive after Close (the trader's last frames during a restart)
+// must not open a new tape file: the next observer would collide with it.
+func TestNoTapeFileOpensAfterClose(t *testing.T) {
+	dir := t.TempDir()
+	o := New(Config{TapeDir: dir})
+	if err := o.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.Handle(ipc.TypeHello, []byte(`{"pid":1,"symbols":["BTCUSDT"]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if files, _ := filepath.Glob(filepath.Join(dir, "*", "*.jsonl.zst")); len(files) != 0 {
+		t.Fatalf("a closed observer opened %v", files)
+	}
+}

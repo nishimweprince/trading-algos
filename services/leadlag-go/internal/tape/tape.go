@@ -14,9 +14,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -160,8 +162,18 @@ func (w *Writer) rotate(atNs int64) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	w.path = filepath.Join(dir, fmt.Sprintf("%02d-%d.jsonl.zst", t.Hour(), time.Now().Unix()))
-	f, err := os.OpenFile(w.path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	// The name carries the opening second. Two writers can open the same hour
+	// within one second (an observer restart), so a taken name moves to the
+	// next free number instead of failing: O_EXCL never overwrites a file.
+	var f *os.File
+	var err error
+	for n := time.Now().Unix(); ; n++ {
+		w.path = filepath.Join(dir, fmt.Sprintf("%02d-%d.jsonl.zst", t.Hour(), n))
+		f, err = os.OpenFile(w.path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+		if !errors.Is(err, fs.ErrExist) {
+			break
+		}
+	}
 	if err != nil {
 		return err
 	}
