@@ -15,9 +15,10 @@ from typing import Any
 
 from .backtest import DayJob, Latency, VariantSpec, aggregate, run_days
 from .cv import Split, period_of
+from .scores import load_table
 from .train import Candidate
 
-__all__ = ["MIN_TRADES", "THRESHOLDS", "select"]
+__all__ = ["MIN_TRADES", "THRESHOLDS", "score_diagnostics", "select"]
 
 THRESHOLDS = (0.45, 0.50, 0.55, 0.60, 0.65, 0.70)
 MIN_TRADES = 30
@@ -25,6 +26,52 @@ MIN_TRADES = 30
 
 def _name(candidate: Candidate, threshold: float) -> str:
     return f"h{candidate.horizon_s:g}-t{threshold:.2f}"
+
+
+def score_diagnostics(
+    candidates: list[Candidate],
+    days: list[str],
+    thresholds: tuple[float, ...],
+    *,
+    maker_bp: float,
+    buffer_bp: float = 0.0,
+) -> list[dict[str, Any]]:
+    """Why an arm can or cannot trade, from its out-of-fold scores alone.
+
+    The policy enters only when p >= threshold and (p - p_opposite) x barrier
+    >= 2 x maker fee + buffer, so with a small barrier no realistic p passes.
+    Per arm: the scores clearing each condition and both, the probability gap
+    the cost needs, and how high p gets (p99, max).
+    """
+    cost_bp = 2 * maker_bp + buffer_bp
+    rows: list[dict[str, Any]] = []
+    for c in candidates:
+        table = load_table([c.oof_dir() / f"{day}.parquet" for day in days])
+        if table.empty:
+            continue
+        up, down = table["up"], table["down"]
+        p = up.where(up >= down, down)
+        gap = (p - down.where(up >= down, up)).abs()
+        edge_ok = gap * c.barrier_bp >= cost_bp
+        for t in thresholds:
+            above = p >= t
+            rows.append(
+                {
+                    "name": _name(c, t),
+                    "horizon_s": c.horizon_s,
+                    "barrier_bp": c.barrier_bp,
+                    "threshold": t,
+                    "scores": int(len(table)),
+                    "above_threshold": int(above.sum()),
+                    "edge_ok": int(edge_ok.sum()),
+                    "entries_possible": int((above & edge_ok).sum()),
+                    "gap_needed": round(cost_bp / c.barrier_bp, 4),
+                    "gap_max": round(float(gap.max()), 4),
+                    "p_p99": round(float(p.quantile(0.99)), 4),
+                    "p_max": round(float(p.max()), 4),
+                }
+            )
+    return rows
 
 
 def select(
@@ -83,6 +130,7 @@ def select(
         "days": days,
         "chosen": chosen,
         "grid": sorted(grid, key=lambda r: -r["mean_daily_net_usd"]),
+        "diagnostics": score_diagnostics(candidates, days, thresholds, maker_bp=common["maker_bp"]),
     }
     out.mkdir(parents=True, exist_ok=True)
     (out / "selection.json").write_text(json.dumps(selection, indent=2))

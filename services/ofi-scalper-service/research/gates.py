@@ -332,6 +332,58 @@ def _report_md(version: str, split: Split, gates: dict[str, dict[str, Any]], agg
     return "\n".join(lines) + "\n"
 
 
+def _no_candidate_md(split: Split, selection: dict[str, Any]) -> str:
+    """Why selection found nothing: the trade counts and what the scores allow."""
+    lines = [
+        f"# {split.run}: no candidate to evaluate",
+        "",
+        "No horizon/threshold reached the minimum trade count on the validation "
+        f"periods ({', '.join(selection.get('days') or [])}), so the held-out period "
+        "was not touched.",
+        "",
+    ]
+    diagnostics = selection.get("diagnostics") or []
+    by_horizon: dict[float, dict[str, Any]] = {}
+    for row in diagnostics:
+        by_horizon.setdefault(row["horizon_s"], row)  # the lowest threshold comes first
+    if by_horizon:
+        lines += [
+            "An entry needs p >= threshold **and** (p - p_opposite) x barrier >= the "
+            "maker round trip, i.e. a probability gap of at least `gap_needed`.",
+            "",
+            "| horizon | barrier bp | gap needed | gap max | p99 of p | max p | "
+            "scores >= lowest threshold | pass the cost | both |",
+            "|---|---|---|---|---|---|---|---|---|",
+            *[
+                f"| {h:g} s | {r['barrier_bp']} | {r['gap_needed']} | {r['gap_max']} | "
+                f"{r['p_p99']} | {r['p_max']} | {r['above_threshold']} | {r['edge_ok']} | "
+                f"{r['entries_possible']} |"
+                for h, r in sorted(by_horizon.items())
+            ],
+            "",
+        ]
+        if all(r["gap_max"] < r["gap_needed"] for r in by_horizon.values()):
+            lines += [
+                "**No score at any horizon can pay the round trip**: the barrier is too "
+                "small for the fees, whatever the data. A later run needs a wider barrier "
+                "and a longer horizon (the rule model uses 12 bp over 60 s), not just more "
+                "days.",
+                "",
+            ]
+    grid = selection.get("grid") or []
+    if grid:
+        lines += [
+            "| arm | trades | net USD | mean net bp |",
+            "|---|---|---|---|",
+            *[
+                f"| {r['name']} | {r['trades']} | {r['net_usd']} | {r['mean_net_bp']} |"
+                for r in sorted(grid, key=lambda r: (r["horizon_s"], r["threshold"]))
+            ],
+            "",
+        ]
+    return "\n".join(lines)
+
+
 def evaluate(
     split: Split,
     selection: dict[str, Any],
@@ -348,11 +400,7 @@ def evaluate(
 ) -> dict[str, Any]:
     chosen = selection.get("chosen")
     if chosen is None:
-        report = (
-            f"# {split.run}: no candidate to evaluate\n\nNo horizon/threshold reached "
-            "the minimum trade count on the validation periods, so the held-out period "
-            "was not touched.\n"
-        )
+        report = _no_candidate_md(split, selection)
         (research_dir / "REPORT.md").write_text(report)
         return {"passed": False, "evaluated": False, "report": str(research_dir / "REPORT.md")}
     candidate = Candidate.load(Path(chosen["candidate"]))

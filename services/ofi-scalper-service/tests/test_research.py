@@ -346,3 +346,37 @@ def test_entry_timeout_sensitivity_compares_5s_with_3s() -> None:
     assert out["5000ms"]["trades"] == 6 and out["3000ms"]["trades"] == 5
     assert "time_to_fill_ms" in out["3000ms"]
     assert out["shorter_no_worse"] is False  # one trade fewer, same edge each
+
+
+def test_score_diagnostics_show_a_barrier_too_small_for_the_fees(tmp_path: Path) -> None:
+    import pandas as pd
+
+    from research.cv import Split
+    from research.gates import _no_candidate_md
+    from research.selection import score_diagnostics
+
+    class FakeCandidate:
+        horizon_s, barrier_bp = 30.0, 6.0
+
+        def oof_dir(self) -> Path:
+            return tmp_path
+
+    pd.DataFrame(
+        {
+            "symbol": ["BTCUSDT"] * 3,
+            "t_ns": [1, 2, 3],
+            "up": [0.50, 0.10, 0.05],
+            "down": [0.10, 0.30, 0.05],
+            "none": [0.40, 0.60, 0.90],
+        }
+    ).to_parquet(tmp_path / "2026-10-04.parquet")
+    rows = score_diagnostics([FakeCandidate()], ["2026-10-04"], (0.45,), maker_bp=2.0)
+    (row,) = rows
+    assert row["above_threshold"] == 1 and row["entries_possible"] == 0
+    assert row["gap_needed"] == round(4 / 6, 4) and row["gap_max"] == 0.4
+    assert row["p_max"] == 0.5
+
+    split = Split("shallow-1", "day", ("2026-10-03", "2026-10-04"), ("2026-10-05",), {}, False, "")
+    report = _no_candidate_md(split, {"days": ["2026-10-04"], "diagnostics": rows, "grid": []})
+    assert "No score at any horizon can pay the round trip" in report
+    assert "| 30 s | 6.0 |" in report

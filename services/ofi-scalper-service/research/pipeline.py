@@ -26,7 +26,7 @@ from .cv import load_or_create_split
 from .dataset import HORIZONS_S
 from .gates import evaluate
 from .replay import _write_rows, find_session, hour_files, replay_rows
-from .selection import select
+from .selection import THRESHOLDS, score_diagnostics, select
 from .train import Candidate, train_candidate
 
 __all__ = ["eligible_days", "ensure_features", "main"]
@@ -182,6 +182,11 @@ def main(argv: list[str] | None = None) -> int:
     selection_path = research_dir / "candidates" / run / "selection.json"
     if selection_path.is_file():
         selection = json.loads(selection_path.read_text())
+        if "diagnostics" not in selection:  # written before diagnostics existed
+            selection["diagnostics"] = score_diagnostics(
+                candidates, selection["days"], THRESHOLDS, maker_bp=common["maker_bp"]
+            )
+            selection_path.write_text(json.dumps(selection, indent=2))
     else:
         selection = select(
             candidates,
