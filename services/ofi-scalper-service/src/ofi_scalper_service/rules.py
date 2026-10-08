@@ -15,15 +15,17 @@ The rule, per symbol, on 100 ms grid samples:
   ``imbalance_min``, trade flow (``tfi_feature``) agrees in sign, and the spread
   is at most ``max_spread_ticks``. **Down** is the mirror image.
 - A firing is held for ``hold_ms`` so the resting entry is not cancelled as
-  "decay" on the next sample; the opposite firing replaces it at once.
+  "decay" on the next sample; the opposite firing replaces it at once. The
+  hold must cover the policy's ``entry_timeout_ms``, or the decay cancel ends
+  every entry at ``hold_ms`` and the timeout never applies.
 
 While held, the side scores ``confidence`` and the rest goes to ``none``.
 Otherwise ``none`` is 1. Off-grid (burst) samples are scored against the
 current state but do not update it, so the rule sees the same statistics in a
 replay as live.
 
-    ofi-rules-model --profile dev --version rules-v2   # <OFI_MODEL_DIR>/rules-v2
-    ofi-rules-model --profile dev --version rules-v2 --z-entry 4 --barrier-bp 15
+    ofi-rules-model --profile dev --version rules-v4   # <OFI_MODEL_DIR>/rules-v4
+    ofi-rules-model --profile dev --version rules-v5 --z-entry 4 --barrier-bp 15
 """
 
 from __future__ import annotations
@@ -57,7 +59,7 @@ DEFAULT_POLICY: dict[str, Any] = {
     "threshold": 0.5,
     "barrier_bp": 12.0,
     "buffer_bp": 2.0,
-    "entry_timeout_ms": 1500,
+    "entry_timeout_ms": 5000,  # 1.5 s almost never filled at the touch (2026-10-08)
     "time_stop_mult": 2.0,
     "reentry_cooldown_ms": 5000,
 }
@@ -72,7 +74,7 @@ class RuleParams:
     imbalance_min: float = 0.6
     tfi_feature: str | None = "tfi_5000ms"
     max_spread_ticks: float = 2.0
-    hold_ms: int = 1500
+    hold_ms: int = 5000  # = the default entry timeout (see the module docstring)
     confidence: float = 1.0
 
     def __post_init__(self) -> None:
@@ -205,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
         prog="ofi-rules-model", description="Write a rule model directory (ungated)."
     )
     parser.add_argument("--profile", default=None)
-    parser.add_argument("--version", default="rules-v2")
+    parser.add_argument("--version", default="rules-v4")
     parser.add_argument("--model-dir", type=Path, default=None)
     defaults = RuleParams()
     for name in ("z_entry", "halflife_s", "warmup_s", "imbalance_min", "max_spread_ticks"):
@@ -243,6 +245,13 @@ def main(argv: list[str] | None = None) -> int:
         "time_stop_mult": args.time_stop_mult,
         "reentry_cooldown_ms": args.reentry_cooldown_ms,
     }
+    if args.hold_ms < args.entry_timeout_ms:
+        print(
+            f"--hold-ms {args.hold_ms} < --entry-timeout-ms {args.entry_timeout_ms}: entries "
+            f"will be cancelled as decay after {args.hold_ms} ms; raise --hold-ms to match",
+            file=sys.stderr,
+        )
+        return 2
     try:
         path = write_rules_model(model_dir, args.version, rules=rules.as_dict(), policy=policy)
     except FileExistsError:

@@ -39,7 +39,15 @@ import pandas as pd
 
 from ofi_scalper_service.model import write_model
 
-from .backtest import DayJob, Latency, VariantSpec, aggregate, run_days
+from .backtest import (
+    ENTRY_TIMEOUT_MS,
+    SHORTER_ENTRY_TIMEOUT_MS,
+    DayJob,
+    Latency,
+    VariantSpec,
+    aggregate,
+    run_days,
+)
 from .cv import Split, period_of, record_holdout_use
 from .train import Candidate, score_final
 
@@ -231,6 +239,33 @@ def latency_sensitivity(agg: dict[str, dict[str, Any]]) -> dict[str, Any]:
     return out
 
 
+def entry_timeout_sensitivity(agg: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Held-out results at the research entry timeout and the shorter one.
+
+    Informational: it decides whether the next run (and the live policy) can wait
+    less for a maker fill without giving up trades or edge.
+    """
+    out: dict[str, Any] = {}
+    variants = ((ENTRY_TIMEOUT_MS, "base"), (SHORTER_ENTRY_TIMEOUT_MS, "timeout_short"))
+    for timeout_ms, name in variants:
+        if name in agg:
+            summary = agg[name]["summary"]
+            out[f"{timeout_ms}ms"] = {
+                "net_usd": agg[name]["stats"]["net_usd"],
+                "trades": summary["trades"],
+                "mean_net_bp": summary["mean_net_bp"],
+                "maker_fill_rate": summary["maker_fill_rate"],
+                "time_to_fill_ms": summary.get("time_to_fill_ms"),
+            }
+    long_, short = out.get(f"{ENTRY_TIMEOUT_MS}ms"), out.get(f"{SHORTER_ENTRY_TIMEOUT_MS}ms")
+    if long_ and short:
+        out["shorter_no_worse"] = bool(
+            short["net_usd"] >= long_["net_usd"]
+            and (short["mean_net_bp"] or 0.0) >= (long_["mean_net_bp"] or 0.0)
+        )
+    return out
+
+
 def _stress_days(features_dir: Path, days: list[str], count: int) -> list[str]:
     """The most volatile days (median rv_60s_bp) among those given."""
     ranked = []
@@ -332,6 +367,15 @@ def evaluate(
         VariantSpec("pessimistic", str(candidate.path), "final", threshold, "pessimistic", 1.0),
         VariantSpec("latency_2x", str(candidate.path), "final", threshold, "queue", 2.0),
         VariantSpec("latency_0_5x", str(candidate.path), "final", threshold, "queue", 0.5),
+        VariantSpec(
+            "timeout_short",
+            str(candidate.path),
+            "final",
+            threshold,
+            "queue",
+            1.0,
+            entry_timeout_ms=SHORTER_ENTRY_TIMEOUT_MS,
+        ),
     )
     jobs = [DayJob(day, str(record_dir), runs, latency, **common) for day in held_out]
     stress_days = _stress_days(
@@ -350,7 +394,7 @@ def evaluate(
         "threshold": threshold,
         "barrier_bp": candidate.barrier_bp,
         "buffer_bp": 0.0,
-        "entry_timeout_ms": 1000,
+        "entry_timeout_ms": ENTRY_TIMEOUT_MS,
         "time_stop_mult": 2.0,
     }
     verdict = {
@@ -368,6 +412,7 @@ def evaluate(
         "fees_bp": {"maker": common["maker_bp"], "taker": common["taker_bp"]},
         "selection": chosen,
         "latency_sensitivity": latency_sensitivity(agg),
+        "entry_timeout_sensitivity": entry_timeout_sensitivity(agg),
         "cv_brier": {k: v["brier"] for k, v in cv["calibrated"].items()},
         "data": candidate.meta.get("data", {}),
     }

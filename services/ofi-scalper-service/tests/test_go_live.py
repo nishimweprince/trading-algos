@@ -87,11 +87,11 @@ def test_on_writes_the_rule_model_and_validates_then_off_reverts(service_dir: Pa
     assert go_live.main(["on", "--profile", "t"]) == 0
     env = read_env(service_dir / ".env.t")
     assert env["OFI_EXECUTION_MODE"] == "testnet" and env["OFI_SHADOW_MIRROR"] == "true"
-    assert env["OFI_MODEL_VERSION"] == "rules-v2" and env["OFI_ALLOW_UNGATED"] == "true"
-    assert (service_dir / "models" / "rules-v2" / "manifest.json").is_file()
+    assert env["OFI_MODEL_VERSION"] == "rules-v4" and env["OFI_ALLOW_UNGATED"] == "true"
+    assert (service_dir / "models" / "rules-v4" / "manifest.json").is_file()
     assert list(service_dir.glob(".env.t.bak-*"))
     out = capsys.readouterr().out
-    assert "shadow mirror on the live feed" in out and "rules-v2 (rules, ungated)" in out
+    assert "shadow mirror on the live feed" in out and "rules-v4 (rules, ungated)" in out
     assert "execution-service: NOT ready" in out  # nothing listens on :9
 
     assert go_live.main(["off", "--profile", "t"]) == 0

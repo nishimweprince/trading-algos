@@ -330,3 +330,19 @@ def test_latency_sensitivity_reports_bp_gained_at_half_latency() -> None:
     out = latency_sensitivity(agg)
     assert out["0.5x"]["trades"] == 6 and out["1x"]["trades"] == 5
     assert out["bp_per_trade_gained_at_0.5x"] == round(0.1 / 180 * 10_000, 3)
+
+
+def test_entry_timeout_sensitivity_compares_5s_with_3s() -> None:
+    from research.backtest import ENTRY_TIMEOUT_MS, SHORTER_ENTRY_TIMEOUT_MS
+    from research.gates import entry_timeout_sensitivity
+
+    assert (ENTRY_TIMEOUT_MS, SHORTER_ENTRY_TIMEOUT_MS) == (5000, 3000)
+    long_wait = {"2026-10-06": [_trade("BTCUSDT", 0.2)] * 6}
+    short_wait = {"2026-10-06": [_trade("BTCUSDT", 0.2)] * 5}
+    agg = {}
+    agg.update(aggregate(_results(long_wait, "base"), capital_usd=500.0))
+    agg.update(aggregate(_results(short_wait, "timeout_short"), capital_usd=500.0))
+    out = entry_timeout_sensitivity(agg)
+    assert out["5000ms"]["trades"] == 6 and out["3000ms"]["trades"] == 5
+    assert "time_to_fill_ms" in out["3000ms"]
+    assert out["shorter_no_worse"] is False  # one trade fewer, same edge each

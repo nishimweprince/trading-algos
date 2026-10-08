@@ -147,7 +147,7 @@ def test_manifest_features_must_be_the_rules_inputs(tmp_path: Path) -> None:
 def test_rules_cli_writes_a_loadable_model(tmp_path: Path, capsys) -> None:
     args = ["--model-dir", str(tmp_path), "--z-entry", "4", "--barrier-bp", "15"]
     assert rules_main(args) == 0
-    model = load_model(tmp_path, "rules-v2", require_pass=False)
+    model = load_model(tmp_path, "rules-v4", require_pass=False)
     assert (
         model.policy.barrier_bp == 15
         and model.policy.reentry_cooldown_ms == 5000
@@ -211,3 +211,12 @@ def test_real_money_never_loads_an_ungated_model(tmp_path: Path) -> None:
     assert forced.execution_mode is ExecutionMode.MICRO_LIVE
     with pytest.raises(ModelError, match="ungated"):
         load_pinned_model(forced)
+
+
+def test_the_hold_must_cover_the_entry_timeout(tmp_path) -> None:
+    from ofi_scalper_service.rules import main
+
+    assert RuleParams().hold_ms >= 5000
+    assert main(["--model-dir", str(tmp_path), "--version", "short", "--hold-ms", "1500"]) == 2
+    assert not (tmp_path / "short").exists()
+    assert main(["--model-dir", str(tmp_path), "--version", "ok"]) == 0

@@ -96,3 +96,23 @@ def test_background_appender_writes_records_off_the_caller(tmp_path) -> None:
     rows = JsonlDaily(tmp_path / "signals").read("2026-09-21")
     assert [r["i"] for r in rows] == list(range(50)) and writer.dropped == 0
     book.close()
+
+
+def test_time_to_fill_and_the_fill_rate_each_timeout_would_keep() -> None:
+    from ofi_scalper_service.trades import time_to_fill
+
+    fills = []
+    for seconds in (0.4, 1.5, 2.5, 4.0):
+        c = cycle(60048.0, "take_profit")
+        c.entry_fill_ns = T0 + int(seconds * S)
+        fills.append(record(c))
+    assert [r["fill_ms"] for r in fills] == [400.0, 1500.0, 2500.0, 4000.0]
+    unfilled = record(cycle(60048.0, "take_profit"))
+    unfilled.update(filled=False, fill_ms=None)
+    out = time_to_fill([*fills, unfilled])
+    assert out["n"] == 4 and out["max"] == 4000.0
+    assert out["fill_rate_within_ms"] == {"1000": 0.2, "2000": 0.4, "3000": 0.6, "5000": 0.8}
+    assert summarise(fills)["time_to_fill_ms"]["p50"] == 2500.0
+    assert time_to_fill([])["fill_rate_within_ms"]["3000"] is None
+    lines = _trading_lines(summarise(fills))
+    assert any(line.startswith("time to fill p50/p90") and "3s 75%" in line for line in lines)

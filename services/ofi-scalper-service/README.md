@@ -116,7 +116,7 @@ and bridge:
 .venv/bin/ofi-go-live --profile dev off --restart     # back to demo controls only
 ```
 
-`on` writes `models/rules-v2` if it is missing, sets `OFI_EXECUTION_MODE=testnet`,
+`on` writes `models/rules-v4` if it is missing, sets `OFI_EXECUTION_MODE=testnet`,
 `OFI_MODEL_VERSION`, `OFI_ALLOW_UNGATED` and `OFI_SHADOW_MIRROR=true` in
 `.env.<profile>` (backup next to it), and keeps the change only if the settings
 and the model load as the service will load them. It then checks
@@ -126,10 +126,12 @@ to a trained model instead; a model without a gates pass is still ungated.
 - **The rule** (`rules.py`): `ofi_int_5000ms` z-scored against its own
   exponentially weighted mean and variance (5 min half-life, 5 min warm-up);
   up at `z >= 3.5` with touch imbalance `>= 0.6`, trade flow `tfi_5000ms > 0`
-  and spread `<= 2` ticks (down mirrored), held 1.5 s so the resting entry is
+  and spread `<= 2` ticks (down mirrored), held 5 s (`hold_ms`, at least the entry timeout) so the resting entry is
   not cancelled as decay. Policy: 60 s horizon, 12 bp barrier, 2 bp buffer,
-  1.5 s entry timeout, 120 s time stop, 5 s re-entry cooldown after any cycle (rules-v1 lacked it and re-entered every 100 ms after demo rejections). Write variants with
-  `ofi-rules-model --version rules-v3 --z-entry 4 --barrier-bp 15`.
+  5 s entry timeout and 5 s hold (rules-v1/v2 used 1.5 s; trades record `fill_ms`
+  to tune it), 120 s time stop, 5 s re-entry cooldown after any cycle (rules-v1
+  lacked it and re-entered every 100 ms after demo rejections). Write variants with
+  `ofi-rules-model --version rules-v5 --z-entry 4 --barrier-bp 15`.
 - **Shadow mirror** (`OFI_SHADOW_MIRROR`, testnet only): a second bridge in
   shadow mode on the mainnet feed with its own simulated account and risk
   state. Feed pauses and the kill switch reach it; demo execution faults do

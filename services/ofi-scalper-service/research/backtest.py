@@ -89,6 +89,15 @@ class Latency:
         return cls(feed_ms=max(float(feed), 0.0), order_ms=order_rtt_ms / 2)
 
 
+# The policy's entry timeout in research. 1 s left a post-only entry at the touch
+# almost never filled on a momentum signal (live demo and shadow, 2026-10-08), so
+# research starts at 5 s and also runs 3 s on the held-out period (informational,
+# ``entry_timeout_sensitivity`` in gates.json) to decide whether the shorter wait
+# keeps the fills and the edge.
+ENTRY_TIMEOUT_MS = 5000
+SHORTER_ENTRY_TIMEOUT_MS = 3000
+
+
 @dataclass(frozen=True)
 class VariantSpec:
     name: str
@@ -98,7 +107,7 @@ class VariantSpec:
     queue_model: str = "queue"
     latency_multiple: float = 1.0
     buffer_bp: float = 0.0
-    entry_timeout_ms: int = 1000
+    entry_timeout_ms: int = ENTRY_TIMEOUT_MS
     time_stop_mult: float = 2.0
 
 
@@ -293,6 +302,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--threshold", type=float, required=True)
     parser.add_argument("--queue", choices=("pessimistic", "queue"), default="queue")
     parser.add_argument("--latency-mult", type=float, default=1.0)
+    parser.add_argument("--entry-timeout-ms", type=int, default=ENTRY_TIMEOUT_MS)
     parser.add_argument("--order-rtt-ms", type=float, default=None)
     parser.add_argument("--jobs", type=int, default=1)
     parser.add_argument("--out", type=Path, default=None)
@@ -309,6 +319,7 @@ def main(argv: list[str] | None = None) -> int:
         args.threshold,
         queue_model=args.queue,
         latency_multiple=args.latency_mult,
+        entry_timeout_ms=args.entry_timeout_ms,
     )
     common = job_settings(settings)
     jobs = [

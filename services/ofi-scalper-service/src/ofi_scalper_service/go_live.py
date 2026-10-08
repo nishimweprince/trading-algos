@@ -45,7 +45,9 @@ __all__ = ["KEYS", "apply_env", "main", "plan", "read_env"]
 KEYS = ("OFI_EXECUTION_MODE", "OFI_MODEL_VERSION", "OFI_ALLOW_UNGATED", "OFI_SHADOW_MIRROR")
 MARK = "# ofi-go-live"
 # rules-v1 had no re-entry cooldown: on demo it re-entered every 100 ms after rejections.
-DEFAULT_RULES_VERSION = "rules-v2"
+# rules-v4 adds the 5 s entry timeout and hold (rules-v2/v3 exist on the VM with other
+# parameters; model directories are hash-pinned, so a name is never reused).
+DEFAULT_RULES_VERSION = "rules-v4"
 
 
 def read_env(path: Path) -> dict[str, str]:

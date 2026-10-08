@@ -120,6 +120,16 @@ def trading_summary(state_dir: Path, day: date) -> dict[str, Any] | None:
     return summarise_trades(trades, signals)
 
 
+def _fill_line(fill: dict[str, Any] | None) -> str:
+    if not fill or not fill.get("n"):
+        return "time to fill: no fills"
+    within = fill["fill_rate_within_ms"]
+    rates = ", ".join(
+        f"{int(ms) // 1000}s {rate:.0%}" for ms, rate in within.items() if rate is not None
+    )
+    return f"time to fill p50/p90 {fill['p50']}/{fill['p90']} ms; fill rate by timeout: {rates}"
+
+
 def _trading_lines(report: dict[str, Any]) -> list[str]:
     def pct(value: float | None) -> str:
         return "n/a" if value is None else f"{value * 100:.1f}%"
@@ -133,6 +143,7 @@ def _trading_lines(report: dict[str, Any]) -> list[str]:
         f"Mid move after fill 1/5/30s (bp): {adverse.get('1s')} / {adverse.get('5s')} / "
         f"{adverse.get('30s')}; Brier {report['brier']}; "
         f"entry RTT p50/p99 {report['entry_rtt_ms']['p50']}/{report['entry_rtt_ms']['p99']} ms",
+        _fill_line(report.get("time_to_fill_ms")),
         f"Exits: {report['exit_reasons']}",
     ]
 

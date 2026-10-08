@@ -178,6 +178,10 @@ def trade_record(
         "entry_qty": str(cycle.entry_filled),
         "entry_price": entry_avg,
         "entry_at": _iso(cycle.entry_fill_ns),
+        # Signal to first entry fill; the policy's entry timeout runs on the same clock.
+        "fill_ms": None
+        if cycle.entry_fill_ns is None
+        else round((cycle.entry_fill_ns - cycle.signal_ns) / 1e6, 1),
         "exit_price": exit_avg,
         "exit_at": _iso(cycle.exit_ns),
         "exit_reason": cycle.exit_reason,
@@ -243,6 +247,29 @@ def _pct(values: list[float], q: float) -> float | None:
     return round(ordered[min(len(ordered) - 1, int(q * len(ordered)))], 3)
 
 
+# Entry timeouts the fill-time report answers for: would a shorter wait keep the fills?
+FILL_CHECKPOINTS_MS = (1000, 2000, 3000, 5000)
+
+
+def time_to_fill(entries: list[dict[str, Any]]) -> dict[str, Any]:
+    """Signal-to-fill times of filled entries, and the fill rate each shorter entry
+    timeout would have left (fills at or under it / all entries; an upper bound on
+    what that timeout keeps, since the decay and block cancels are unchanged)."""
+    times = [t["fill_ms"] for t in entries if t.get("fill_ms") is not None]
+    return {
+        "n": len(times),
+        "p50": _pct(times, 0.5),
+        "p90": _pct(times, 0.9),
+        "max": round(max(times), 1) if times else None,
+        "fill_rate_within_ms": {
+            str(limit): round(sum(1 for x in times if x <= limit) / len(entries), 4)
+            if entries
+            else None
+            for limit in FILL_CHECKPOINTS_MS
+        },
+    }
+
+
 def summarise(trades: list[dict[str, Any]], signals: list[dict[str, Any]] | None = None) -> dict:
     """The daily report: P&L, fees, win rate, fill rate, adverse selection, Brier."""
     entries = [t for t in trades if t.get("entry_qty_ordered")]
@@ -262,6 +289,7 @@ def summarise(trades: list[dict[str, Any]], signals: list[dict[str, Any]] | None
         "win_rate": round(len(wins) / len(done), 4) if done else None,
         "largest_loss_usd": round(min(net), 4) if net and min(net) < 0 else 0.0,
         "mean_net_bp": round(sum(t["net_bp"] for t in done) / len(done), 3) if done else None,
+        "time_to_fill_ms": time_to_fill(entries),
         "exit_reasons": {},
         "adverse_bp_mean": {},
         "entry_rtt_ms": {
