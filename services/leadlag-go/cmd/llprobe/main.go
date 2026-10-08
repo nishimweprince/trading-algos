@@ -364,29 +364,71 @@ func (p *probe) countErr(k string) {
 	p.mu.Unlock()
 }
 
-// imds reads the AZ id, AZ name and instance type via IMDSv2; empty off EC2.
+// imds reads the AZ id, AZ name and instance type from the cloud's metadata
+// service: EC2's IMDSv2, else Azure's IMDS (azID "azure:<region>[-<zone>]").
+// Empty when neither answers.
 func imds() (azID, az, itype string) {
-	c := &http.Client{Timeout: 500 * time.Millisecond}
-	req, _ := http.NewRequest(http.MethodPut, "http://169.254.169.254/latest/api/token", nil)
-	req.Header.Set("X-aws-ec2-metadata-token-ttl-seconds", "60")
+	return imdsAt("http://169.254.169.254", &http.Client{Timeout: 500 * time.Millisecond})
+}
+
+func imdsAt(base string, c *http.Client) (azID, az, itype string) {
+	if azID, az, itype = awsIMDS(base, c); azID != "" || az != "" {
+		return azID, az, itype
+	}
+	return azureIMDS(base, c)
+}
+
+// fetch returns the body of a 200 answer only: other clouds answer EC2's
+// paths with error documents, which must never be read as values.
+func fetch(c *http.Client, req *http.Request) (string, bool) {
 	resp, err := c.Do(req)
 	if err != nil {
+		return "", false
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		return "", false
+	}
+	return string(b), true
+}
+
+func awsIMDS(base string, c *http.Client) (azID, az, itype string) {
+	req, _ := http.NewRequest(http.MethodPut, base+"/latest/api/token", nil)
+	req.Header.Set("X-aws-ec2-metadata-token-ttl-seconds", "60")
+	tok, ok := fetch(c, req)
+	if !ok {
 		return "", "", ""
 	}
-	tok, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
 	get := func(path string) string {
-		r, _ := http.NewRequest(http.MethodGet, "http://169.254.169.254/latest/meta-data/"+path, nil)
-		r.Header.Set("X-aws-ec2-metadata-token", string(tok))
-		resp, err := c.Do(r)
-		if err != nil {
-			return ""
-		}
-		defer resp.Body.Close()
-		b, _ := io.ReadAll(resp.Body)
-		return string(b)
+		r, _ := http.NewRequest(http.MethodGet, base+"/latest/meta-data/"+path, nil)
+		r.Header.Set("X-aws-ec2-metadata-token", tok)
+		v, _ := fetch(c, r)
+		return v
 	}
 	return get("placement/availability-zone-id"), get("placement/availability-zone"), get("instance-type")
+}
+
+func azureIMDS(base string, c *http.Client) (azID, az, itype string) {
+	req, _ := http.NewRequest(http.MethodGet, base+"/metadata/instance/compute?api-version=2021-02-01", nil)
+	req.Header.Set("Metadata", "true")
+	body, ok := fetch(c, req)
+	if !ok {
+		return "", "", ""
+	}
+	var m struct {
+		Location string `json:"location"`
+		Zone     string `json:"zone"`
+		VMSize   string `json:"vmSize"`
+	}
+	if json.Unmarshal([]byte(body), &m) != nil || m.Location == "" {
+		return "", "", ""
+	}
+	azID = "azure:" + m.Location
+	if m.Zone != "" {
+		azID += "-" + m.Zone
+	}
+	return azID, m.Location, m.VMSize
 }
 
 func printReport(r *Report) {
