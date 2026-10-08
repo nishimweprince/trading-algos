@@ -129,6 +129,12 @@ class Settings(BaseServiceSettings, NotificationSettings, BinanceFuturesSettings
     # Shadow mode's simulated account, so the loss and drawdown halts are exercised.
     shadow_equity_usd: float = Field(default=500.0, gt=0, validation_alias="OFI_SHADOW_EQUITY_USD")
     micro_live_ack: str | None = Field(default=None, validation_alias="OFI_MICRO_LIVE_ACK")
+    # Symbols research trains, backtests and gates on, and whose recordings decide
+    # whether a day is clean. Others (added to trade) are recorded and reported
+    # but neither block a research day nor enter the training data.
+    research_symbols_csv: str = Field(
+        default="BTCUSDT,ETHUSDT", validation_alias="OFI_RESEARCH_SYMBOLS"
+    )
     micro_live_symbols_csv: str = Field(
         default="ETHUSDT", validation_alias="OFI_MICRO_LIVE_SYMBOLS"
     )
@@ -217,6 +223,10 @@ class Settings(BaseServiceSettings, NotificationSettings, BinanceFuturesSettings
             if token.strip():
                 ids.add(int(token.strip()))
         return frozenset(ids)
+
+    @property
+    def research_symbols(self) -> tuple[str, ...]:
+        return tuple(t.strip().upper() for t in self.research_symbols_csv.split(",") if t.strip())
 
     @property
     def trading_symbols(self) -> tuple[str, ...]:

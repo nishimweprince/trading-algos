@@ -249,3 +249,29 @@ def test_daily_summary_flags_missing_hours_and_breaks(tmp_path: Path) -> None:
     assert btc["unrecovered_breaks"] == 1
     assert not summary["ok"] and len(summary["problems"]) == 2
     assert summarise(tmp_path, date(2026, 10, 3))["problems"] == ["no recordings at all"]
+
+
+def test_a_symbol_added_midday_does_not_spoil_the_research_day(tmp_path: Path) -> None:
+    from datetime import UTC, date, datetime
+
+    from ofi_scalper_service.daily_check import summarise
+    from research.replay import hour_files
+
+    for symbol, hours in (("BTCUSDT", range(24)), ("SOLUSDT", range(12, 24))):
+        day_dir = tmp_path / symbol / "20261008"
+        day_dir.mkdir(parents=True)
+        for hour in hours:
+            frames = [(1, depth_frame(symbol, 1, 5, 0))]
+            write_gz(day_dir / f"{symbol}_20261008_{hour:02d}.gz", frames)
+    day = date(2026, 10, 8)
+    assert not summarise(tmp_path, day)["ok"]  # every symbol counts by default
+    research = summarise(tmp_path, day, ("BTCUSDT",))
+    assert research["ok"] and research["problems"] == []
+    assert research["symbols"]["SOLUSDT"]["research"] is False
+    assert research["symbols"]["SOLUSDT"]["missing_hours"] == list(range(12))
+
+    start = datetime(2026, 10, 8, 12, tzinfo=UTC)
+    assert {p.parent.parent.name for p in hour_files(tmp_path, start, 1)} == {"BTCUSDT", "SOLUSDT"}
+    assert {p.parent.parent.name for p in hour_files(tmp_path, start, 1, ("btcusdt",))} == {
+        "BTCUSDT"
+    }

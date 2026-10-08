@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import sys
 from collections import defaultdict
+from collections.abc import Iterable
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -38,7 +39,10 @@ __all__ = ["run", "summarise", "write_summary"]
 HOURS = 24
 
 
-def summarise(record_dir: Path, day: date) -> dict[str, Any]:
+def summarise(record_dir: Path, day: date, symbols: Iterable[str] | None = None) -> dict[str, Any]:
+    """One UTC day's recordings. With ``symbols``, only those can make the day
+    unclean (research's symbols); the rest are reported with ``research: false``."""
+    counted = None if symbols is None else {s.upper() for s in symbols}
     stamp = day.strftime("%Y%m%d")
     files = sorted(record_dir.glob(f"*/{stamp}/*.gz"))
     symbols: dict[str, dict[str, Any]] = defaultdict(
@@ -100,6 +104,10 @@ def summarise(record_dir: Path, day: date) -> dict[str, Any]:
         entry["missing_hours"] = missing
         entry["mb"] = round(entry.pop("bytes") / 1e6, 1)
         out["symbols"][symbol] = entry
+        if counted is not None:
+            entry["research"] = symbol in counted
+            if symbol not in counted:
+                continue
         if missing:
             problems.append(f"{symbol}: {len(missing)} missing hour(s) {missing[:6]}")
         if entry["unrecovered_breaks"]:
@@ -178,7 +186,7 @@ def run(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     settings = load_or_exit(load_settings, args.profile)
     day = args.date or (datetime.now(UTC).date() - timedelta(days=1))
-    summary = summarise(settings.record_dir, day)
+    summary = summarise(settings.record_dir, day, settings.research_symbols)
     summary["trading"] = trading_summary(settings.state_dir, day)
     write_summary(settings.state_dir, summary)
     print(json.dumps(summary, indent=2))

@@ -84,13 +84,18 @@ def merged_lines(paths: Iterable[Path]) -> Iterator[tuple[int, str]]:
     return heapq.merge(*(read_lines(path) for path in paths), key=lambda row: row[0])
 
 
-def hour_files(record_dir: Path, start: datetime, hours: int) -> list[Path]:
-    """Every symbol's file (and _CONTROL's) for ``hours`` UTC hours from ``start``."""
+def hour_files(
+    record_dir: Path, start: datetime, hours: int, symbols: Iterable[str] | None = None
+) -> list[Path]:
+    """Every symbol's file (and _CONTROL's) for ``hours`` UTC hours from ``start``;
+    with ``symbols``, only theirs (and _CONTROL's)."""
+    wanted = None if symbols is None else {s.upper() for s in symbols} | {"_CONTROL"}
     files: list[Path] = []
     for offset in range(hours):
         stamp = start + timedelta(hours=offset)
         day, hour = stamp.strftime("%Y%m%d"), stamp.strftime("%H")
-        files += sorted(record_dir.glob(f"*/{day}/*_{day}_{hour}.gz"))
+        found = sorted(record_dir.glob(f"*/{day}/*_{day}_{hour}.gz"))
+        files += [p for p in found if wanted is None or p.parent.parent.name in wanted]
     return files
 
 

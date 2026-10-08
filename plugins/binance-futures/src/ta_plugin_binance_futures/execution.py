@@ -610,9 +610,13 @@ class BinanceFuturesExecution:
 
     def _quantity(self, symbol: str, lots: Decimal, *, market: bool) -> Decimal:
         f = self.filters[symbol]
-        cap = getattr(self.settings, "max_volume_lots", None)
+        per_symbol = getattr(self.settings, "binance_futures_max_volume_lots", None) or {}
+        cap = per_symbol.get(symbol, getattr(self.settings, "max_volume_lots", None))
         if cap is not None and lots > cap:
-            raise ServiceError(422, "volume_exceeds_limit", f"{lots} > MAX_VOLUME_LOTS {cap}")
+            name = "MAX_VOLUME_LOTS"
+            if symbol in per_symbol:
+                name = f"BINANCE_FUTURES_MAX_VOLUME_LOTS[{symbol}]"
+            raise ServiceError(422, "volume_exceeds_limit", f"{lots} > {name} {cap}")
         step = f.market_lot_step if market else f.lot_step
         low, high = (f.market_min_qty, f.market_max_qty) if market else (f.min_qty, f.max_qty)
         if not _multiple(lots, step):

@@ -159,7 +159,7 @@ def run_day(job: DayJob) -> dict[str, Any]:
     logging.disable(logging.WARNING)
     record_dir = Path(job.record_dir)
     start = datetime.fromisoformat(job.day).replace(tzinfo=UTC)
-    paths = hour_files(record_dir, start, 24)
+    paths = hour_files(record_dir, start, 24, job.overrides.get("symbols"))
     variants = _variants(job)
     shadow = ShadowConfig(
         limits=job.limits,
@@ -281,6 +281,7 @@ def job_settings(settings: Any) -> dict[str, Any]:
         "taker_bp": taker,
         "shadow_equity_usd": settings.shadow_equity_usd,
         "overrides": {
+            "symbols": settings.research_symbols,
             "grid_ms": settings.grid_ms,
             "burst_trades": settings.burst_trades,
             "stale_book_ms": settings.stale_book_ms,

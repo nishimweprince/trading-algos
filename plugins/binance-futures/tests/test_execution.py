@@ -427,3 +427,44 @@ def test_a_fill_reported_with_avg_price_zero_is_priced_from_cum_quote() -> None:
     unfilled = {**row, "executedQty": "0", "cumQuote": "0"}
     assert _Order.from_rest(unfilled).avg_price == 0
 
+
+async def test_a_per_symbol_volume_cap_replaces_the_global_one(fake) -> None:
+    request = order()
+    symbol = request.instrument
+    lots = Decimal(str(request.targets[0].volume_lots))
+    for overrides, code in (
+        # The global cap alone would refuse it; the symbol's own cap allows it.
+        ({"max_volume_lots": lots / 2, "binance_futures_max_volume_lots": {symbol: lots}}, None),
+        ({"max_volume_lots": lots, "binance_futures_max_volume_lots": {symbol: lots / 2}}, "x"),
+        ({"max_volume_lots": lots / 2, "binance_futures_max_volume_lots": {"OTHER": lots}}, "x"),
+    ):
+        provider, http, _ = build(fake, **overrides)
+        provider.attach_ledger(FakeLedger())
+        await provider.start()
+        assert await provider.wait_ready(2.0)
+        if code is None:
+            await provider.prepare(
+                OperationAction.PLACE_ORDER, request, request.targets[0], "c" * 32
+            )
+        else:
+            with pytest.raises(ServiceError) as caught:
+                await provider.prepare(
+                    OperationAction.PLACE_ORDER, request, request.targets[0], "c" * 32
+                )
+            assert caught.value.code == "volume_exceeds_limit"
+        await provider.close()
+        await http.aclose()
+
+
+def test_volume_caps_parse_and_reject_bad_pairs() -> None:
+    from ta_plugin_binance_futures.settings import BinanceFuturesSettingsMixin
+
+    s = BinanceFuturesSettingsMixin(BINANCE_FUTURES_MAX_VOLUME_LOTS="btcusdt=0.01, DOGEUSDT=600")
+    assert s.binance_futures_max_volume_lots == {
+        "BTCUSDT": Decimal("0.01"),
+        "DOGEUSDT": Decimal("600"),
+    }
+    assert BinanceFuturesSettingsMixin().binance_futures_max_volume_lots == {}
+    for bad in ("BTCUSDT", "BTCUSDT=0", "BTCUSDT=x", "=1"):
+        with pytest.raises(ValueError):
+            BinanceFuturesSettingsMixin(BINANCE_FUTURES_MAX_VOLUME_LOTS=bad)

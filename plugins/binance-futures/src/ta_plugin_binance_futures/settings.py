@@ -8,6 +8,7 @@ are only ever used for read-only signed calls (fee rates, account config).
 
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
 from typing import Literal
 
 from pydantic import Field, SecretStr, field_validator
@@ -118,6 +119,12 @@ class BinanceFuturesSettingsMixin(BaseSettings):
     binance_futures_require_isolated: bool = Field(
         default=True, validation_alias="BINANCE_FUTURES_REQUIRE_ISOLATED"
     )
+    # Per-symbol order quantity caps in base units, "BTCUSDT=0.01,DOGEUSDT=600".
+    # One MAX_VOLUME_LOTS cannot fit coins whose prices differ 100,000x; a symbol
+    # listed here uses its own cap, the rest fall back to MAX_VOLUME_LOTS.
+    binance_futures_max_volume_lots_csv: str = Field(
+        default="", validation_alias="BINANCE_FUTURES_MAX_VOLUME_LOTS"
+    )
     binance_futures_recv_window_ms: int = Field(
         default=5000, gt=0, le=60000, validation_alias="BINANCE_FUTURES_RECV_WINDOW_MS"
     )
@@ -157,6 +164,12 @@ class BinanceFuturesSettingsMixin(BaseSettings):
             return None
         return value
 
+    @field_validator("binance_futures_max_volume_lots_csv")
+    @classmethod
+    def valid_volume_caps(cls, value: str) -> str:
+        _parse_caps(value)
+        return value
+
     @field_validator("binance_futures_book_ticker", mode="before")
     @classmethod
     def blank_book_ticker_is_auto(cls, value: object) -> object:
@@ -186,6 +199,10 @@ class BinanceFuturesSettingsMixin(BaseSettings):
         return "binance_testnet" if self.binance_futures_env == "testnet" else "binance"
 
     @property
+    def binance_futures_max_volume_lots(self) -> dict[str, Decimal]:
+        return _parse_caps(self.binance_futures_max_volume_lots_csv)
+
+    @property
     def binance_futures_symbols(self) -> tuple[str, ...]:
         """Upper-cased, de-duplicated, in configured order."""
         seen: dict[str, None] = {}
@@ -193,3 +210,19 @@ class BinanceFuturesSettingsMixin(BaseSettings):
             if token.strip():
                 seen[token.strip().upper()] = None
         return tuple(seen)
+
+
+def _parse_caps(value: str) -> dict[str, Decimal]:
+    caps: dict[str, Decimal] = {}
+    for token in value.split(","):
+        if not token.strip():
+            continue
+        symbol, sep, qty = token.partition("=")
+        try:
+            cap = Decimal(qty.strip())
+        except InvalidOperation:
+            cap = Decimal(0)
+        if not sep or not symbol.strip() or cap <= 0:
+            raise ValueError(f"expected SYMBOL=quantity pairs, got {token.strip()!r}")
+        caps[symbol.strip().upper()] = cap
+    return caps

@@ -33,14 +33,19 @@ __all__ = ["eligible_days", "ensure_features", "main"]
 
 
 def eligible_days(
-    record_dir: Path, days: list[str], *, host_tag: str, book_mode: str = "diff"
+    record_dir: Path,
+    days: list[str],
+    *,
+    host_tag: str,
+    book_mode: str = "diff",
+    symbols: tuple[str, ...] | None = None,
 ) -> tuple[list[str], dict[str, str]]:
     """Days the gates may use: complete, clean, recorded on the right host and mode."""
     keep: list[str] = []
     excluded: dict[str, str] = {}
     for day in days:
         d = date.fromisoformat(day)
-        summary = day_summary(record_dir, d)
+        summary = day_summary(record_dir, d, symbols)
         if not summary["ok"]:
             excluded[day] = "; ".join(summary["problems"])
             continue
@@ -49,6 +54,7 @@ def eligible_days(
             json.loads(p.read_text()).get("host")
             for p in record_dir.glob(f"*/{stamp}/*.gz.json")
             if not p.parent.parent.name.startswith("_")
+            and (symbols is None or p.parent.parent.name in symbols)
         }
         if hosts != {host_tag}:
             excluded[day] = f"recorded on {sorted(h or '?' for h in hosts)}, need {host_tag}"
@@ -68,7 +74,7 @@ def _features_day(args: tuple[str, str, str, dict[str, Any]]) -> str:
     start = datetime.fromisoformat(day).replace(tzinfo=UTC)
     end_ns = int((start + timedelta(days=1)).timestamp() * 1e9)
     rows, _ = replay_rows(
-        hour_files(Path(record_dir), start, 24),
+        hour_files(Path(record_dir), start, 24, overrides.get("symbols")),
         session=find_session(Path(record_dir), start),
         keep=lambda r: r["t_ns"] < end_ns,
         **overrides,
@@ -130,7 +136,10 @@ def main(argv: list[str] | None = None) -> int:
     end = args.end or (datetime.now(UTC).date() - timedelta(days=1))
     start = args.start or _first_recorded_day(record_dir) or end
     days, excluded = eligible_days(
-        record_dir, days_between(start, end), host_tag=args.host_tag or settings.host_tag
+        record_dir,
+        days_between(start, end),
+        host_tag=args.host_tag or settings.host_tag,
+        symbols=settings.research_symbols,
     )
     _say("eligible_days", eligible=len(days), excluded=excluded)
     split = load_or_create_split(
@@ -139,6 +148,7 @@ def main(argv: list[str] | None = None) -> int:
     _say("split", tier=tier, walk_forward=split.walk_forward, held_out=split.holdout)
 
     overrides = {
+        "symbols": settings.research_symbols,
         "grid_ms": settings.grid_ms,
         "burst_trades": settings.burst_trades,
         "stale_book_ms": settings.stale_book_ms,
