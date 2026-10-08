@@ -12,7 +12,10 @@ For each ``.gz`` file (or every one under a directory) it checks:
 
 A file that ends mid-stream (the hour still being written, or a crash) is
 reported with ``truncated: true`` and checked up to the cut; the lines before
-it are valid, so that alone is not a failure.
+it are valid, so that alone is not a failure. A member left unfinished by a
+killed process, with later members after it, is skipped and counted in
+``corrupt``; the depth chain across it is checked as usual (the restarted
+process fetched a fresh snapshot).
 
 Prints one JSON report per file and exits 1 if any file has a backwards
 timestamp or a depth break that was never recovered.
@@ -21,12 +24,14 @@ timestamp or a depth break that was never recovered.
 from __future__ import annotations
 
 import argparse
-import gzip
 import json
 import re
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
+
+from .recordings import ReadState, recorded_lines
 
 __all__ = ["check_file", "run"]
 
@@ -47,12 +52,12 @@ def check_file(path: Path) -> dict[str, Any]:
         "partial_skipped": 0,
         "max_silence_ms": 0.0,
         "truncated": False,
+        "corrupt": 0,
     }
     report["_awaiting"] = {}
-    try:
-        _scan(path, report)
-    except EOFError:
-        report["truncated"] = True
+    state = ReadState()
+    _scan(recorded_lines(path, state), report)
+    report["truncated"], report["corrupt"] = state.truncated, state.corrupt
     report["unrecovered_breaks"] = sum(
         1 for snap in report.pop("_awaiting").values() if snap is None
     )
@@ -60,63 +65,62 @@ def check_file(path: Path) -> dict[str, Any]:
     return report
 
 
-def _scan(path: Path, report: dict[str, Any]) -> None:
+def _scan(lines: Iterator[str], report: dict[str, Any]) -> None:
     last_ns: int | None = None
     last_u: dict[str, int] = {}
     # symbol -> snapshot id, or None (no snapshot yet); read back by check_file.
     awaiting: dict[str, int | None] = report.setdefault("_awaiting", {})
     last_trade: dict[str, int] = {}
     last_partial: dict[str, int] = {}
-    with gzip.open(path, "rt", encoding="utf-8") as handle:
-        for line in handle:
-            report["lines"] += 1
-            stamp, _, text = line.rstrip("\n").partition(" ")
-            try:
-                recv_ns = int(stamp)
-                frame = json.loads(text)
-            except ValueError:
-                report["unparsed"] += 1
-                continue
-            if last_ns is not None:
-                if recv_ns < last_ns:
-                    report["backwards"] += 1
-                report["max_silence_ms"] = max(report["max_silence_ms"], (recv_ns - last_ns) / 1e6)
-            last_ns = recv_ns
-            stream = str(frame.get("stream", ""))
-            data = frame.get("data", {})
-            symbol = stream.split("@", 1)[0].upper()
-            if stream.endswith("@depthSnapshot"):
-                report["snapshots"] += 1
-                awaiting[symbol] = int(data["lastUpdateId"])
-                continue
-            kind = data.get("e") if isinstance(data, dict) else None
-            if kind == "depthUpdate" and _PARTIAL.search(stream):
-                report["partial_snapshots"] += 1
-                if symbol in last_partial and int(data["pu"]) != last_partial[symbol]:
-                    report["partial_skipped"] += 1
-                last_partial[symbol] = int(data["u"])
-            elif kind == "depthUpdate":
-                first, final, prev = int(data["U"]), int(data["u"]), int(data["pu"])
-                if symbol in awaiting:
-                    snap = awaiting[symbol]
-                    if snap is None or final < snap:
-                        continue
-                    if first <= snap <= final:
-                        del awaiting[symbol]
-                        last_u[symbol] = final
-                        continue
-                    continue  # this snapshot was stale; the live process fetched another
-                if symbol in last_u and prev != last_u[symbol]:
-                    report["depth_breaks"] += 1
-                    awaiting[symbol] = None
-                    last_u.pop(symbol)
+    for line in lines:
+        report["lines"] += 1
+        stamp, _, text = line.partition(" ")
+        try:
+            recv_ns = int(stamp)
+            frame = json.loads(text)
+        except ValueError:
+            report["unparsed"] += 1
+            continue
+        if last_ns is not None:
+            if recv_ns < last_ns:
+                report["backwards"] += 1
+            report["max_silence_ms"] = max(report["max_silence_ms"], (recv_ns - last_ns) / 1e6)
+        last_ns = recv_ns
+        stream = str(frame.get("stream", ""))
+        data = frame.get("data", {})
+        symbol = stream.split("@", 1)[0].upper()
+        if stream.endswith("@depthSnapshot"):
+            report["snapshots"] += 1
+            awaiting[symbol] = int(data["lastUpdateId"])
+            continue
+        kind = data.get("e") if isinstance(data, dict) else None
+        if kind == "depthUpdate" and _PARTIAL.search(stream):
+            report["partial_snapshots"] += 1
+            if symbol in last_partial and int(data["pu"]) != last_partial[symbol]:
+                report["partial_skipped"] += 1
+            last_partial[symbol] = int(data["u"])
+        elif kind == "depthUpdate":
+            first, final, prev = int(data["U"]), int(data["u"]), int(data["pu"])
+            if symbol in awaiting:
+                snap = awaiting[symbol]
+                if snap is None or final < snap:
                     continue
-                last_u[symbol] = final
-            elif kind == "aggTrade":
-                trade_id = int(data["a"])
-                if symbol in last_trade and trade_id != last_trade[symbol] + 1:
-                    report["agg_trade_gaps"] += 1
-                last_trade[symbol] = trade_id
+                if first <= snap <= final:
+                    del awaiting[symbol]
+                    last_u[symbol] = final
+                    continue
+                continue  # this snapshot was stale; the live process fetched another
+            if symbol in last_u and prev != last_u[symbol]:
+                report["depth_breaks"] += 1
+                awaiting[symbol] = None
+                last_u.pop(symbol)
+                continue
+            last_u[symbol] = final
+        elif kind == "aggTrade":
+            trade_id = int(data["a"])
+            if symbol in last_trade and trade_id != last_trade[symbol] + 1:
+                report["agg_trade_gaps"] += 1
+            last_trade[symbol] = trade_id
 
 
 def run(argv: list[str] | None = None) -> None:

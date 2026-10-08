@@ -156,6 +156,52 @@ def test_gapcheck_reports_a_truncated_file_without_failing(tmp_path: Path) -> No
     assert check_file(whole)["truncated"] is False
 
 
+def test_a_member_left_by_a_killed_process_is_skipped_not_fatal(tmp_path: Path) -> None:
+    import io
+
+    from ofi_scalper_service.recordings import ReadState, read_lines, recorded_lines
+
+    def frames(first: int, last: int) -> str:
+        return "".join(
+            f"{n} {agg_trade_frame('BTCUSDT', n, '1', '1', False)}\n" for n in range(first, last)
+        )
+
+    # The killed process: flushed (as the recorder does every few seconds), then
+    # wrote on until zlib emitted more blocks, and was killed with no trailer.
+    raw = io.BytesIO()
+    killed = gzip.GzipFile(fileobj=raw, mode="wb")
+    killed.write(frames(1, 100).encode())
+    killed.flush()
+    killed.write(frames(100, 3000).encode())
+    path = tmp_path / "hour.gz"
+    path.write_bytes(raw.getvalue()[:-3])
+    with gzip.open(path, "at", encoding="utf-8") as later:  # the restarted process
+        later.write(frames(5000, 5100))
+
+    state = ReadState()
+    stamps = [int(line.split(" ", 1)[0]) for line in recorded_lines(path, state)]
+    assert stamps[:99] == list(range(1, 100))  # everything up to the last flush
+    assert stamps[-100:] == list(range(5000, 5100))  # and every line after the kill
+    assert stamps == sorted(set(stamps))  # nothing invented or repeated at the cut
+    assert state.corrupt == 1 and not state.truncated
+    assert [ns for ns, _ in read_lines(path)] == stamps
+
+    report = check_file(path)
+    assert report["corrupt"] == 1 and report["lines"] == len(stamps)
+    assert report["agg_trade_gaps"] == 1 and report["ok"]
+
+
+def test_a_file_that_is_only_damage_reads_as_nothing(tmp_path: Path) -> None:
+    from ofi_scalper_service.recordings import ReadState, recorded_lines
+
+    path = tmp_path / "junk.gz"
+    path.write_bytes(b"\x1f\x8b\x08" + bytes(range(256)) * 4)
+    state = ReadState()
+    assert list(recorded_lines(path, state)) == [] and state.corrupt == 0
+    (tmp_path / "empty.gz").write_bytes(b"")
+    assert list(recorded_lines(tmp_path / "empty.gz")) == []
+
+
 def test_disk_guard_pauses_below_floor_and_resumes_with_headroom(tmp_path: Path) -> None:
     from types import SimpleNamespace
 

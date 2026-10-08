@@ -220,7 +220,8 @@ class Recorder:
             current = None
         if current is None:
             path.parent.mkdir(parents=True, exist_ok=True)
-            # Append: a restart within the hour adds a gzip member, still one valid file.
+            # Append: a restart within the hour adds a gzip member. After a SIGKILL the
+            # previous member is unfinished; recordings.recorded_lines skips past it.
             handle = gzip.open(path, "at", encoding="utf-8", compresslevel=6)
             current = _Open(path, hour, handle)
             self._open[symbol] = current

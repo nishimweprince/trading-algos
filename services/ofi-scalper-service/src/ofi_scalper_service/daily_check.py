@@ -52,6 +52,7 @@ def summarise(record_dir: Path, day: date) -> dict[str, Any]:
             "partial_skipped": 0,
             "backwards": 0,
             "truncated": 0,
+            "corrupt": 0,
             "max_silence_ms": 0.0,
         }
     )
@@ -65,6 +66,7 @@ def summarise(record_dir: Path, day: date) -> dict[str, Any]:
         entry["hours"].add(int(hour))
         entry["bytes"] += path.stat().st_size
         entry["truncated"] += int(report["truncated"])
+        entry["corrupt"] += report["corrupt"]
         entry["max_silence_ms"] = max(entry["max_silence_ms"], report["max_silence_ms"])
         for key in (
             "lines",
