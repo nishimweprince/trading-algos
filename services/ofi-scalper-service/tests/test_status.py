@@ -361,9 +361,36 @@ async def test_nothing_secret_reaches_a_viewer(tmp_path: Path) -> None:
     _research_files(tmp_path)
     write_summary(tmp_path / "state", daily("2026-10-01"))
     async with await client_for(settings, scalper_status()) as client:
-        text = (await client.get("/api/summary")).text + (await client.get("/")).text
+        text = (
+            (await client.get("/api/summary")).text
+            + (await client.get("/")).text
+            + (await client.get("/api/export")).text
+        )
     for sentinel in SENTINELS:
         assert sentinel not in text, sentinel
+    assert str(tmp_path) not in text  # no filesystem paths in any response
+
+
+async def test_export_is_one_json_download_with_a_live_snapshot(tmp_path: Path) -> None:
+    settings = settings_for(tmp_path)
+    write_summary(tmp_path / "state", daily("2026-10-01"))
+    async with await client_for(settings, scalper_status()) as client:
+        response = await client.get("/api/export")
+        page = (await client.get("/")).text
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/json")
+    disposition = response.headers["content-disposition"]
+    assert disposition.startswith('attachment; filename="ofi-export-') and disposition.endswith(
+        '.json"'
+    )
+    doc = response.json()
+    assert {"meta", "performance", "signal_counts", "trades", "daily", "research", "live"} <= set(
+        doc
+    )
+    assert doc["meta"]["recordings_included"] is False and "signals" not in doc
+    assert doc["live"]["health"]["scalper_reachable"] is True
+    assert doc["daily"]["2026-10-01"]["ok"] is True
+    assert 'href="api/export"' in page
 
 
 async def test_scalper_down_is_shown_not_fatal(tmp_path: Path) -> None:

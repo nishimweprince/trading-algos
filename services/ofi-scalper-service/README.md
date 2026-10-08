@@ -211,6 +211,11 @@ depth break).
 - **Daily check:** `ofi-daily-check --profile dev [--date YYYY-MM-DD]` runs
   gapcheck over a UTC day and sends a per-symbol summary (hours, MB, breaks,
   trade gaps); `infra/systemd/ofi-daily-check.timer` runs it at 00:20 UTC.
+- **Analysis export:** `ofi-export --profile dev --out export.json` writes
+  performance, signals, trades, daily reports, bridge, drills, latency and
+  the pinned model as one JSON document (recordings excluded, no secrets).
+  `--days N` keeps the last N UTC days, `--no-shadow` skips the shadow
+  bridge, `--compact` writes without indentation.
 
 On Linux, run it under systemd: see [infra/systemd/README.md](../../infra/systemd/README.md).
 

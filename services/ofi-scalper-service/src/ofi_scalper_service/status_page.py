@@ -81,7 +81,8 @@ footer { max-width: 1200px; margin: 0 auto; padding: 8px 16px 32px; color: var(-
   <h1>OFI scalper: status</h1>
   <p>Binance USD&#9416;-M BTCUSDT / ETHUSDT &middot; read-only view for colleagues
      &middot; <span id="mode"></span></p>
-  <p><span id="state" class="chip"></span></p>
+  <p><span id="state" class="chip"></span>
+     &middot; <a href="api/export" download>Download export (JSON)</a></p>
 </header>
 <nav><div id="tabs">
   <a href="#overview" class="on">Overview</a><a href="#data">Data collection</a>

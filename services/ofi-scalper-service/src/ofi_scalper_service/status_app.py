@@ -9,6 +9,7 @@ Cloudflare Access in front (infra/cloudflare/README.md).
 | ``GET /`` | the page |
 | ``GET /api/summary`` | roadmap, collection, health, research, trading |
 | ``GET /api/history`` | the last 24 h of one-minute health points |
+| ``GET /api/export`` | everything for analysis as one JSON download (``export.py``) |
 | ``GET /health/live`` | process up |
 
 There is no write route of any kind. The scalper's status is read server-side
@@ -22,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -37,6 +39,7 @@ from ta_core.logging_config import configure_logging, log_event
 
 from . import status as builders
 from .config import ExecutionMode, Settings, load_settings
+from .export import build_export, export_filename, scrub_paths
 from .status_page import STATUS_HTML
 
 __all__ = ["LOGGER_NAME", "create_status_app", "run"]
@@ -219,6 +222,38 @@ def create_status_app(
     @app.get("/api/history")
     async def history_route() -> dict[str, Any]:
         return {"points": history.series()}
+
+    @app.get("/api/export")
+    async def export_route() -> Response:
+        """One JSON file for analysis: the ofi-export document (performance,
+        trades, signal counts, daily reports, research...) plus a live snapshot
+        built from the same allowlisted panels as the page. No recordings."""
+        if state["fetched_at"] is None and fetcher is not None:
+            await refresh()
+        document, unit_states = await asyncio.gather(
+            asyncio.to_thread(build_export, settings, settings.profile),
+            asyncio.to_thread(unit_cache.get),
+        )
+        document["live"] = scrub_paths(
+            {
+                "health": builders.health(
+                    state["status"],
+                    unit_states,
+                    fetched_at=state["fetched_at"],
+                    last_ok_at=state["last_ok_at"],
+                ),
+                "execution": builders.execution(
+                    state["status"], model_dir=settings.model_dir, state_dir=settings.state_dir
+                ),
+            }
+        )
+        return Response(
+            content=json.dumps(document, indent=2, default=str),
+            media_type="application/json",
+            headers={
+                "Content-Disposition": f'attachment; filename="{export_filename(settings.profile)}"'
+            },
+        )
 
     return app
 
