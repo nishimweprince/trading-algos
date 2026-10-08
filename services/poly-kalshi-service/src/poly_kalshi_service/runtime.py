@@ -21,6 +21,11 @@ Loops:
   ``discover_lead_seconds``) the next one are identified for every asset,
   writing each identity to the tape as a control line before subscribing to
   its ids. Alerts if a window is still unidentified 30 s after it opened.
+- **Kalshi closure**: before a stale-feed or unidentified-window alert, ask
+  Kalshi whether it is trading (cached ``KALSHI_STATUS_S``). During its weekly
+  closure nothing is listed and both feeds go quiet: those alerts are held and
+  one message marks the closure and one the reopening. Discovery keeps
+  running, so the first window after the reopening is found on time.
 - **resolutions**: each venue's outcome for every closed window, polled until
   known, written as control lines (the engine settles paper positions from
   Polymarket's). Polymarket's ``market_resolved`` WS event usually beats it.
@@ -66,6 +71,7 @@ DISCOVER_STAGGER_S = 0.25
 # at startup (and again once the books are warm) is frozen out of the scans.
 GC_THRESHOLD = (20_000, 20, 100)
 GC_REFREEZE_AFTER_S = 60.0
+KALSHI_STATUS_S = 30.0
 
 
 _gc_metrics: list[Metrics] = []
@@ -120,6 +126,8 @@ class Runtime:
         self._tasks: set[asyncio.Task[Any]] = set()
         self._discover_failed: dict[tuple[str, int], float] = {}
         self._resolution_given_up: set[tuple[str, int, str]] = set()
+        self.kalshi_closed = False
+        self._kalshi_status_at: float | None = None
         self.started_ns: int | None = None
         self.lines = 0
         self.cpu_pct: float | None = None
@@ -314,14 +322,47 @@ class Runtime:
                 else:
                     await self.poly.recycle()
         sec_into = now - targets[0]
+        if self.kalshi_closed:
+            await self._kalshi_is_closed(now)  # notices the reopening
         if sec_into > 30:
             missing = [a for a in self.settings.assets if targets[0] not in self.engine.windows[a]]
-            if missing:
+            if missing and not await self._kalshi_is_closed(now):
                 self.alerts.send(
                     "unidentified",
                     "poly-kalshi: window not identified",
                     [f"open_unix={targets[0]} assets={','.join(missing)}"],
                 )
+
+    async def _kalshi_is_closed(self, now: float) -> bool:
+        """Kalshi's trading status, asked only when an alert is due; an error reads as open."""
+        if self.discovery is None:
+            return False
+        if self._kalshi_status_at is not None and now - self._kalshi_status_at < KALSHI_STATUS_S:
+            return self.kalshi_closed
+        self._kalshi_status_at = now
+        try:
+            closed = not await self.discovery.kalshi_trading_active()
+        except Exception as exc:  # noqa: BLE001 - the alert goes out as before
+            log_event(
+                "kalshi_status_failed",
+                level=logging.WARNING,
+                error=f"{type(exc).__name__}: {exc}"[:200],
+            )
+            closed = False
+        if closed != self.kalshi_closed:
+            self.kalshi_closed = closed
+            log_event("kalshi_closed" if closed else "kalshi_reopened")
+            self.alerts.send(
+                "kalshi_closed" if closed else "kalshi_reopened",
+                f"poly-kalshi: Kalshi {'closed' if closed else 'reopened'}",
+                [
+                    "trading_active=false: no windows listed, feed and window alerts held"
+                    if closed
+                    else "trading_active=true: alerts resume"
+                ],
+                always=True,
+            )
+        return closed
 
     # --- resolutions ------------------------------------------------------------
 
@@ -421,7 +462,7 @@ class Runtime:
             last = self.engine.last_by_venue.get(venue)
             started = self.started_ns or now_ns
             age = (now_ns - (last or started)) / NS
-            if age > stale:
+            if age > stale and not await self._kalshi_is_closed(now_ns / NS):
                 self.alerts.send(
                     f"stale:{venue}",
                     f"poly-kalshi: {'Kalshi' if venue == 'k' else 'Polymarket'} feed stale",
@@ -489,6 +530,7 @@ class Runtime:
             else {"enabled": self.observer is not None, "in": "observer"},
             "observer": self.observer.stats() if self.observer else {"enabled": False},
             "alerts": {"recent": self.alerts.sent[-10:], "suppressed": self.alerts.suppressed},
+            "kalshi_closed": self.kalshi_closed,
             "engine": self.engine.status(),
             "recent": list(self.engine.recent)[-50:][::-1],
         }

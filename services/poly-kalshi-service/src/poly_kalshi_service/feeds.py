@@ -51,6 +51,7 @@ __all__ = ["KalshiFeed", "KalshiSigner", "PolyBoltFeed", "PolyFeed", "PolyShards
 
 Emit = Callable[[str, str], None]
 WsConnect = Callable[..., contextlib.AbstractAsyncContextManager[Any]]
+IDLE_POLL_S = 0.5
 
 
 @contextlib.asynccontextmanager
@@ -100,6 +101,7 @@ class KalshiSigner:
 
 class _WsFeed:
     venue = "?"
+    IDLE_WITHOUT_WANTED = False  # stay disconnected while nothing is wanted
 
     def __init__(
         self,
@@ -143,6 +145,9 @@ class _WsFeed:
     async def run(self) -> None:
         backoff = 1.0
         while True:
+            if self.IDLE_WITHOUT_WANTED and not self.wanted:
+                await asyncio.sleep(IDLE_POLL_S)
+                continue
             try:
                 async with self._open() as ws:
                     self._ws = ws
@@ -321,6 +326,10 @@ class KalshiFeed(_WsFeed):
 class PolyFeed(_WsFeed):
     venue = "p"
     PING_SECONDS = 10.0
+    # Polymarket closes a socket that subscribes to nothing after ~10 s with
+    # 1008 "invalid subscription payload": a reconnect every 10 s through
+    # Kalshi's weekly closure (2026-10-08).
+    IDLE_WITHOUT_WANTED = True
 
     def __init__(self, url: str, emit: Emit, *, shard: int | None = None, **kwargs: Any) -> None:
         super().__init__(url, emit, **kwargs)

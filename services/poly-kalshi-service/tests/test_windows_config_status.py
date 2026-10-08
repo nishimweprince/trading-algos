@@ -172,3 +172,74 @@ def test_status_pick_is_an_allowlist() -> None:
         assert leak not in text
     assert picked["assets"]["BTC"]["traded"] is True
     assert picked["counters"] == {"fills": 1}
+
+
+async def test_kalshi_trading_active_reads_the_exchange_status() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v2/exchange/status"
+        return httpx.Response(200, json={"exchange_active": True, "trading_active": False})
+
+    discovery, http = _discovery(handler)
+    assert await discovery.kalshi_trading_active() is False
+    await http.aclose()
+
+
+async def test_kalshi_closure_holds_window_and_feed_alerts(tmp_path: Path) -> None:
+    from conftest import make_engine
+
+    from poly_kalshi_service.alerts import Alerts
+    from poly_kalshi_service.runtime import KALSHI_STATUS_S, NS, Runtime
+
+    trading = [False]
+    status_calls = [0]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/exchange/status"):
+            status_calls[0] += 1
+            return httpx.Response(200, json={"trading_active": trading[0]})
+        return httpx.Response(200, json=[] if request.url.host == "g.test" else {"markets": []})
+
+    discovery, http = _discovery(handler)
+    settings = make_settings(tmp_path)
+    clock = [(OPEN + 40) * NS]
+    alerts = Alerts(None)
+    runtime = Runtime(
+        settings, engine=make_engine(tmp_path, assets=settings.assets), discovery=discovery,
+        kalshi=None, poly=None, alerts=alerts, clock_ns=lambda: clock[0],
+    )  # fmt: skip
+    await runtime.window_tick()
+    await runtime.window_tick()  # cached: one status query
+    assert runtime.kalshi_closed and status_calls[0] == 1
+    assert [k for k, _ in alerts.sent] == ["kalshi_closed"]
+    assert runtime.status()["kalshi_closed"] is True
+
+    trading[0] = True
+    clock[0] += int(KALSHI_STATUS_S * NS)
+    await runtime.window_tick()  # still unidentified, but Kalshi is open: alert as before
+    await http.aclose()
+    assert not runtime.kalshi_closed
+    assert [k for k, _ in alerts.sent] == ["kalshi_closed", "kalshi_reopened", "unidentified"]
+
+
+async def test_a_failed_status_query_does_not_hold_alerts(tmp_path: Path) -> None:
+    from conftest import make_engine
+
+    from poly_kalshi_service.alerts import Alerts
+    from poly_kalshi_service.runtime import NS, Runtime
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/exchange/status"):
+            return httpx.Response(503)
+        return httpx.Response(200, json=[] if request.url.host == "g.test" else {"markets": []})
+
+    discovery, http = _discovery(handler)
+    settings = make_settings(tmp_path)
+    alerts = Alerts(None)
+    runtime = Runtime(
+        settings, engine=make_engine(tmp_path, assets=settings.assets), discovery=discovery,
+        kalshi=None, poly=None, alerts=alerts, clock_ns=lambda: (OPEN + 40) * NS,
+    )  # fmt: skip
+    await runtime.window_tick()
+    await http.aclose()
+    assert not runtime.kalshi_closed
+    assert [k for k, _ in alerts.sent] == ["unidentified"]

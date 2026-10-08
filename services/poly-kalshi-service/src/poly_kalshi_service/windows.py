@@ -8,7 +8,10 @@ the same 900-second grid (checked 2026-10-06):
   the taker fee. Resolves on Chainlink's 60 s TWAP stream (Up if >= start).
 - Kalshi: series ``KX<ASSET>15M``; the market whose ``close_time`` is
   ``open_unix + 900``. Listed ahead of time with status ``initialized``.
-  Resolves on the 60 s average of CF Benchmarks' RTI.
+  Resolves on the 60 s average of CF Benchmarks' RTI. Kalshi closes every
+  Thursday 03:00-05:00 ET (``/exchange/schedule``): no 15-minute markets
+  exist for those eight windows and ``/exchange/status`` says
+  ``trading_active: false`` (seen 2026-10-08).
 
 ``Discovery`` does the HTTP. The resulting ``Window`` is written to the tape as
 a control line, so a replay knows exactly which ids were live when.
@@ -187,6 +190,11 @@ class Discovery:
         if prices:
             log_event("poly_outcome_unclear", level=logging.WARNING, prices=prices)
         return None
+
+    async def kalshi_trading_active(self) -> bool:
+        """False while Kalshi is closed (its weekly Thursday 03:00-05:00 ET closure)."""
+        body = await self._get(f"{self._kalshi}/exchange/status")
+        return bool(body.get("trading_active", True))
 
     async def kalshi_outcome(self, window: Window) -> str | None:
         body = await self._get(f"{self._kalshi}/markets/{window.kalshi_ticker}")

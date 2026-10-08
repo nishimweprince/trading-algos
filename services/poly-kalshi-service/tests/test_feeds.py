@@ -142,9 +142,12 @@ async def test_poly_initial_subscribe_then_operations_and_pong_is_dropped() -> N
         "wss://p.test/ws/market", lambda v, t: emitted.append((v, t)), ws_connect=connect
     )
     task = asyncio.create_task(feed.run())
+    await asyncio.sleep(0.05)
+    assert not connect.sockets  # no socket while nothing is wanted (Polymarket drops it)
+    await feed.set_wanted({"a", "b"})
     await connect.opened.wait()
     socket = connect.sockets[0]
-    await feed.set_wanted({"a", "b"})
+    await _until(lambda: socket.sent)
     await feed.set_wanted({"b", "c"})
     first, add, remove = socket.sent
     assert first == {"assets_ids": ["a", "b"], "type": "market", "custom_feature_enabled": True}
