@@ -246,6 +246,9 @@ type Reader struct {
 	f     *os.File
 	zr    *zstd.Decoder
 	br    *bufio.Reader
+	// Truncated: the last file ended mid-stream (the hour still being
+	// written); everything before its cut was read.
+	Truncated bool
 }
 
 // Files lists tape files under dir (recursively), sorted by name, which is
@@ -297,11 +300,24 @@ func (r *Reader) Next(l *Line) error {
 		if err == bufio.ErrBufferFull {
 			return fmt.Errorf("tape: line longer than %d bytes", r.br.Size())
 		}
+		// The newest file is normally still open: its stream ends mid-frame and
+		// its last line may be cut. That is the end of the tape, not an error.
+		// In any earlier file it is.
+		cut := (err != nil && err != io.EOF && truncation(err)) || (err == io.EOF && len(b) > 0)
+		if cut && len(r.files) == 0 {
+			r.Truncated = true
+			r.closeFile()
+			return io.EOF
+		}
 		if err != nil && err != io.EOF {
 			return err
 		}
 		return decodeLine(b, l)
 	}
+}
+
+func truncation(err error) bool {
+	return errors.Is(err, io.ErrUnexpectedEOF) || strings.Contains(err.Error(), "unexpected EOF")
 }
 
 func decodeLine(b []byte, l *Line) error {

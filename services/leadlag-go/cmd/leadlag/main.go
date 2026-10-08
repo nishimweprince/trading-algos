@@ -415,7 +415,11 @@ func runReplay(path, shadowParams, shadowTrades string, shadowAll bool) error {
 	for i, s := range segs {
 		fmt.Printf("pid %-8d build %-10s start %s  frames %10d events %10d digest %016x gaps %d complete %t\n",
 			s.PID, s.Build, time.Unix(0, s.StartNs).UTC().Format(time.RFC3339), s.Frames, s.Events, s.Digest, s.Gaps, s.Complete)
+		if s.OpenTail {
+			fmt.Printf("  open tail: the run continues past the tape (last receive %s)\n", time.Unix(0, s.LastNs).UTC().Format(time.RFC3339Nano))
+		}
 		if sh, ok := engines[i]; ok {
+			fmt.Printf("  tape_end_ns %d\n", s.LastNs)
 			t := sh.Total.Summarize()
 			fmt.Printf("  shadow signals %d trades %d mean net %.3f bp hit %.3f t %.2f net $%.4f\n",
 				sh.Signals, t.N, t.MeanNet, t.HitRate, t.TStat, t.NetUSD)

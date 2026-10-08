@@ -6,8 +6,8 @@
 # taped events and their receive times, so replaying the tape with the same
 # params (only the runs that used them) must reproduce the same trades. Writes
 # replay-<run>.jsonl and .txt next to the journal and fails on a mismatch.
-# A run still in progress has trades whose exits are not taped yet: run it
-# after a restart, or expect the replay to trail the journal by a few trades.
+# A run in progress has its newest trades' exits still in the open tape file:
+# live trades that exit after the tape's end count as pending, not mismatches.
 set -euo pipefail
 bin=/home/ll/leadlag/current
 params="${LL_SHADOW_PARAMS:-/home/ll/leadlag/shadow.json}"
@@ -20,10 +20,15 @@ python3 - "$out" "$run" <<'PY'
 import glob, json, sys
 out, run = sys.argv[1], sys.argv[2]
 key = lambda t: (t["follower"], t["signal_recv_ns"], t["entry_recv_ns"], t["exit_recv_ns"], t["net_bp"])
-live = sorted(key(t) for f in sorted(glob.glob(f"{out}/[0-9]*.jsonl")) for t in map(json.loads, open(f)) if t.get("run") == run)
+ends = [int(l.split()[1]) for l in open(f"{out}/replay-{run}.txt") if l.strip().startswith("tape_end_ns")]
+tape_end = max(ends, default=0)
+live_all = sorted(key(t) for f in sorted(glob.glob(f"{out}/[0-9]*.jsonl")) for t in map(json.loads, open(f)) if t.get("run") == run)
+live = [t for t in live_all if t[3] <= tape_end]  # t[3] = exit_recv_ns
+pending = len(live_all) - len(live)
 replayed = sorted(key(t) for t in map(json.loads, open(f"{out}/replay-{run}.jsonl")))
 missing = [t for t in live if t not in set(replayed)]
 extra = [t for t in replayed if t not in set(live)]
-print(f"run {run}: live journal {len(live)} trades, replay {len(replayed)}, live-only {len(missing)}, replay-only {len(extra)}")
+print(f"run {run}: live journal {len(live_all)} trades ({pending} exit after the tape's end), replay {len(replayed)}, "
+      f"live-only {len(missing)}, replay-only {len(extra)}")
 sys.exit(1 if missing or extra else 0)
 PY

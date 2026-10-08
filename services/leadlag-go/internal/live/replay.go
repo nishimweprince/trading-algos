@@ -26,6 +26,9 @@ type Segment struct {
 	Hellos   int      `json:"hellos"`
 	LastNs   int64    `json:"last_recv_ns"`
 	Complete bool     `json:"complete"` // no gaps and a single hello (no observer reconnect)
+	// OpenTail: the tape ends inside this run's still-open file, so the run
+	// continues beyond LastNs.
+	OpenTail bool `json:"open_tail"`
 }
 
 // Replay runs tape files through fresh hubs (one per trader run) and returns
@@ -89,5 +92,8 @@ func Replay(files []string, newEngine func(h ipc.Hello) Engine) ([]Segment, erro
 		}
 	}
 	finish()
+	if r.Truncated && len(segs) > 0 {
+		segs[len(segs)-1].OpenTail = true
+	}
 	return segs, nil
 }
