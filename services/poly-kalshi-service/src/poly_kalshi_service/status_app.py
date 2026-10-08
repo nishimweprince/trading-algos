@@ -91,6 +91,7 @@ def pick(status: dict[str, Any] | None) -> dict[str, Any] | None:
         "build": status.get("build"),
         "config": status.get("config"),
         "host": status.get("host"),
+        "kalshi_closed": bool(status.get("kalshi_closed")),
         "params": status.get("params"),
         "assets": {
             name: _keep(
@@ -379,6 +380,7 @@ def create_status_app(
         return {
             "fetched_at": state["live_at"],
             "service_up": state["live"] is not None,
+            "kalshi_closed": bool(live.get("kalshi_closed")),
             "params": live.get("params"),
             "feed_age_s": live.get("feed_age_s"),
             "rates": state["rates"],

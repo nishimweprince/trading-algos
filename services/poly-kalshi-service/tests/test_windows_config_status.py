@@ -172,6 +172,8 @@ def test_status_pick_is_an_allowlist() -> None:
         assert leak not in text
     assert picked["assets"]["BTC"]["traded"] is True
     assert picked["counters"] == {"fills": 1}
+    assert picked["kalshi_closed"] is False
+    assert pick({**status, "kalshi_closed": True})["kalshi_closed"] is True
 
 
 async def test_kalshi_trading_active_reads_the_exchange_status() -> None:

@@ -53,6 +53,7 @@ h3.section { font-size:12px; text-transform:uppercase; letter-spacing:.08em; col
 .alerts { border:1px solid var(--line); border-radius:8px; padding:8px 12px; margin:4px 0 4px; background:var(--panel); }
 .alerts.ok { color:var(--good); } .alerts.bad { border-color:var(--bad); }
 .alerts ul { margin:0; padding-left:18px; } .alerts li { color:var(--bad); }
+.alerts.paused { border-color:var(--warn); color:var(--warn); } .alerts.paused ul { margin-top:6px; }
 .good { color:var(--good); } .bad { color:var(--bad); } .warn { color:var(--warn); } .muted { color:var(--muted); }
 </style>
 </head>
@@ -149,7 +150,7 @@ async function tick() {
   FETCHED.summary = body.fetched_at;
   const dataAge = body.fetched_at ? Math.round(Date.now() / 1000 - body.fetched_at) : null;
   put("sub", live
-    ? `<b>${esc(live.mode)}</b> · ${esc(live.host)} · gap ≥ ${f(live.params.gap_threshold)} · cap ${f(live.params.max_entry_px)} · $${f(live.params.notional_usd, 0)} · ${live.risk && live.risk.halted ? '<span class="bad">HALTED</span>' : '<span class="good">running</span>'} · <span class="muted" title="results epoch (PK_RESULTS_EPOCH) and code build; results shown are this epoch only">epoch ${esc(live.epoch)} · ${esc((live.build || "").slice(0, 8))}${body.excluded_records ? ` · ${body.excluded_records} older records excluded` : ""}</span>`
+    ? `<b>${esc(live.mode)}</b> · ${esc(live.host)} · gap ≥ ${f(live.params.gap_threshold)} · cap ${f(live.params.max_entry_px)} · $${f(live.params.notional_usd, 0)} · ${live.risk && live.risk.halted ? '<span class="bad">HALTED</span>' : live.kalshi_closed ? '<span class="warn">paused: Kalshi closed</span>' : '<span class="good">running</span>'} · <span class="muted" title="results epoch (PK_RESULTS_EPOCH) and code build; results shown are this epoch only">epoch ${esc(live.epoch)} · ${esc((live.build || "").slice(0, 8))}${body.excluded_records ? ` · ${body.excluded_records} older records excluded` : ""}</span>`
     : '<span class="bad">service unreachable</span>');
   const money = (v) => v == null ? "–" : (v < 0 ? "−$" : "$") + f(Math.abs(v));
   const L = (live && live.ledger) || {}, cap = L.start_cash, dd = res.drawdown || {};
@@ -187,10 +188,11 @@ async function tick() {
     ["unidentified windows", (DQ.unidentified_windows ?? 0) + (cnt.windows_unidentified ? ` · ${cnt.windows_unidentified} live` : ""), DQ.unidentified_windows ? "warn" : ""],
     ["engine errors", cnt.engine_errors ?? 0, cnt.engine_errors ? "bad" : ""],
     ["awaiting settlement · oldest", `${L.open_positions ?? 0} · ${L.oldest_open_age_s == null ? "–" : f(L.oldest_open_age_s, 0) + "s"}`, L.oldest_open_age_s > 600 ? "warn" : ""]]));
-  const issues = [];
+  const issues = [], closed = !!(live && live.kalshi_closed);
   if (!live) issues.push("service unreachable");
   else {
-    for (const [name, key] of [["Kalshi", "kalshi"], ["Polymarket", "poly"]]) {
+    // While Kalshi is closed, quiet feeds, missing books and unidentified windows are expected.
+    if (!closed) for (const [name, key] of [["Kalshi", "kalshi"], ["Polymarket", "poly"]]) {
       const fd = (live.feeds || {})[key] || {}, ag = (live.feed_age_s || {})[key === "kalshi" ? "k" : "p"];
       if (!fd.connected) issues.push(`${name} feed down`); else if (ag > 10) issues.push(`${name} feed stale (${f(ag, 0)}s)`);
     }
@@ -198,13 +200,13 @@ async function tick() {
     if (live.risk && live.risk.kill_file_present) issues.push("kill file present");
     if (crossedNow) issues.push(`${crossedNow} asset(s) with a crossed book`);
     const LEG = { kalshi: "Kalshi", poly_yes: "Poly YES", poly_no: "Poly NO" };
-    for (const [name, a] of Object.entries(live.assets || {})) {
+    if (!closed) for (const [name, a] of Object.entries(live.assets || {})) {
       if (!a.identified || a.sec_into == null || a.sec_into < 20) continue;  // books arrive after the roll
       for (const [leg, l] of Object.entries(a.legs || {})) {
         if (l && ["no_snapshot", "no_book", "not_updated"].includes(l.state)) issues.push(`${name}: ${LEG[leg] || leg} ${WHY[l.state] || l.state}`);
       }
     }
-    const unid = assetsNow.filter((a) => !a.identified).length; if (unid) issues.push(`${unid} asset(s) without an identified window`);
+    const unid = assetsNow.filter((a) => !a.identified).length; if (unid && !closed) issues.push(`${unid} asset(s) without an identified window`);
     if (L.rejects) issues.push(`${L.rejects} balance reject(s)`);
     if (live.recorder && live.recorder.disk_paused) issues.push("recorder paused: disk low");
     if (dataAge > 30) issues.push(`data ${dataAge}s old`);
@@ -212,12 +214,15 @@ async function tick() {
     const hostLoad = live.host_load || {};
     if (hostLoad.cpu_pct > 85) issues.push(`trader CPU at ${f(hostLoad.cpu_pct, 0)}%: the host may be too small for the feeds`);
   }
-  $("alerts").className = "alerts " + (issues.length ? "bad" : "ok");
-  put("alerts", issues.length ? "<ul>" + issues.map((i) => `<li>${esc(i)}</li>`).join("") + "</ul>" : "✓ all clear: feeds up, books sane, no halts or rejects");
+  const list = issues.length ? "<ul>" + issues.map((i) => `<li>${esc(i)}</li>`).join("") + "</ul>" : "";
+  $("alerts").className = "alerts " + (closed ? "paused" : issues.length ? "bad" : "ok");
+  put("alerts", closed ? esc(kalshiClosure()) + list : list || "✓ all clear: feeds up, books sane, no halts or rejects");
   const feeds = (live && live.feeds) || {}, age = (live && live.feed_age_s) || {};
   const hl = (live && live.host_load) || {};
-  put("feeds", kv([["Kalshi", (feeds.kalshi && feeds.kalshi.connected ? "up" : "DOWN") + ` · ${f(age.k, 1)}s`, feeds.kalshi && feeds.kalshi.connected ? "good" : "bad"],
-    ["Polymarket", (feeds.poly && feeds.poly.connected ? "up" : "DOWN") + ` · ${f(age.p, 1)}s`, feeds.poly && feeds.poly.connected ? "good" : "bad"],
+  const feedRow = (name, fd, ag, quiet) => fd && fd.connected
+    ? [name, (closed ? `up, ${quiet}` : "up") + ` · ${f(ag, 1)}s`, closed ? "warn" : "good"]
+    : [name, (closed ? `idle, ${quiet}` : "DOWN") + ` · ${f(ag, 1)}s`, closed ? "warn" : "bad"];
+  put("feeds", kv([feedRow("Kalshi", feeds.kalshi, age.k, "Kalshi closed"), feedRow("Polymarket", feeds.poly, age.p, "no markets while Kalshi is closed"),
     ["Kalshi seq gaps", feeds.kalshi ? feeds.kalshi.seq_gaps : "–"], ["recorder lines", live && live.recorder ? live.recorder.lines_written : "–"],
     ["disk free", live && live.recorder ? f(live.recorder.disk_free_gb, 1) + " GB" : "–"],
     ["process CPU · load (cores)", hl.cpu_pct == null ? "–" : `${f(hl.cpu_pct, 0)}% · ${f(hl.load1, 2)} (${hl.cpus ?? "–"})`, hl.cpu_pct > 85 ? "bad" : hl.cpu_pct > 60 ? "warn" : ""],
@@ -306,6 +311,15 @@ async function tick() {
       <td>${esc(r.type === "decision" ? r.action + " " + r.side + (r.blocked ? " (" + r.blocked + ")" : "") : r.side)}</td><td>${f(r.vwap ?? r.entry_px, 3)}</td>
       <td>${f(r.shares ?? r.contracts, 0)}</td><td>${f(r.gap, 3)}</td><td class="${r.pnl == null ? "" : r.pnl < 0 ? "bad" : "good"}">${f(r.pnl)}</td></tr>`).join(""));
 }
+// Kalshi closes every Thursday 03:00-05:00 ET; any other trading_active=false is unscheduled.
+function kalshiClosure() {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short", hour: "numeric", minute: "numeric", hourCycle: "h23" })
+    .formatToParts(new Date()).map((p) => [p.type, p.value]));
+  const hr = Number(parts.hour), left = (5 - hr) * 60 - Number(parts.minute);
+  if (parts.weekday === "Thu" && hr >= 3 && hr < 5)
+    return `Kalshi closed: scheduled weekly closure, Thursday 03:00–05:00 ET. No markets are listed, so nothing is traded and the feeds are quiet. Trading resumes by itself in about ${left} min.`;
+  return "Kalshi is not trading (unscheduled pause reported by Kalshi). No markets are listed, so nothing is traded. Trading resumes by itself when Kalshi reopens.";
+}
 function phase(sec, early, late) {
   if (sec == null) return ["–", "muted"];
   if (sec < early) return [`${f(sec, 0)}s · early`, "muted"];
@@ -349,7 +363,9 @@ async function stateTick() {
   const rows = Object.entries(body.assets || {});
   put("mkstate", '<colgroup><col style="width:4.5%"><col style="width:7%"><col style="width:13%"><col style="width:13%"><col style="width:11%"><col style="width:5.5%"><col style="width:6.5%"><col style="width:5.5%"><col style="width:9%"><col style="width:8%"><col style="width:5%"><col style="width:12%"></colgroup>' + "<tr><th>asset</th><th>window</th><th title='bid–ask (mid)'>Kalshi YES</th><th title='bid–ask (mid)'>Poly YES</th><th title='bid–ask'>Poly NO</th><th>Δ</th><th></th><th>to thr.</th><th>rule now</th><th>age K·Y·N ms</th><th>max |Δ|</th><th>this window</th></tr>" +
     (rows.length ? rows.map(([n, a]) => {
-      if (!a.identified) return `<tr><td>${esc(n)}</td><td colspan="11" class="bad">window not identified</td></tr>`;
+      if (!a.identified) return body.kalshi_closed
+        ? `<tr><td>${esc(n)}</td><td colspan="11" class="warn">no market listed: Kalshi closed</td></tr>`
+        : `<tr><td>${esc(n)}</td><td colspan="11" class="bad">window not identified</td></tr>`;
       const [ph, phc] = phase(a.sec_into, early, late), g = a.gap, pv = a.preview || {}, d = a.decision, ag = a.age_ms || {};
       const to = g == null ? "–" : Math.abs(g) >= thr ? '<span class="good">crossed</span>' : f(thr - Math.abs(g), 3);
       const rule = pv.action === "enter" ? `<span class="pill enter">enter ${esc(pv.side)} ${f(pv.entry_px, 2)}</span>`

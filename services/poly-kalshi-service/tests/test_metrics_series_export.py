@@ -189,5 +189,7 @@ def test_status_shows_delta_rule_preview_and_book_ages(tmp_path: Path) -> None:
 def test_state_route_is_small(tmp_path: Path) -> None:
     with _status_app(tmp_path, []) as client:
         body = client.get("/api/state").json()
-    assert set(body) == {"fetched_at", "service_up", "params", "feed_age_s", "rates", "assets"}
+    assert set(body) == {
+        "fetched_at", "service_up", "kalshi_closed", "params", "feed_age_s", "rates", "assets"
+    }  # fmt: skip
     assert body["params"]["gap_threshold"] == 0.2
