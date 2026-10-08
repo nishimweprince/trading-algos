@@ -465,6 +465,12 @@ export interface OpenDbOptions {
   path: string;
   /** Use an in-memory DB (tests). Ignores path. */
   memory?: boolean;
+  /**
+   * SQLITE busy wait, ms. The trader, research worker and dashboard share one
+   * WAL file; without a timeout a concurrent write throws SQLITE_BUSY. Keep it
+   * short in the trader (DatabaseSync blocks the event loop while waiting).
+   */
+  busyTimeoutMs?: number;
 }
 
 export function openDb(opts: OpenDbOptions): DB {
@@ -475,6 +481,7 @@ export function openDb(opts: OpenDbOptions): DB {
   // WAL is a no-op for :memory: but harmless.
   db.exec('PRAGMA journal_mode = WAL');
   db.exec('PRAGMA synchronous = NORMAL');
+  db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(opts.busyTimeoutMs ?? 200))}`);
   db.exec('PRAGMA foreign_keys = ON');
   db.exec(SCHEMA);
   migrate(db);
@@ -620,6 +627,16 @@ function migrate(db: DB): void {
   addColumnIfMissing(db, 'positions', 'fees_sol_actual', 'REAL');
   addColumnIfMissing(db, 'positions', 'wallet_pnl_sol', 'REAL');
   addColumnIfMissing(db, 'positions', 'model_pnl_sol', 'REAL');
+  // 2026-10-04: marks before this priced PumpSwap pools on the vault alone
+  // (no virtual quote reserve) and read ~22 % low, so MFE/MAE, exit reasons
+  // and per-trade edge on those rows describe the bug, not the market.
+  // Version 2 = pricing_json carries virtualQuoteLamports. Derived, never written.
+  addColumnIfMissing(
+    db,
+    'positions',
+    'pricing_version',
+    "INTEGER GENERATED ALWAYS AS (CASE WHEN pricing_json LIKE '%virtualQuoteLamports%' THEN 2 ELSE 1 END) VIRTUAL",
+  );
   // Wallet cash events outside a trade's PnL: ATA rent locked by buys and
   // reclaimed by the sweeper, plus periodic balance snapshots (reconciliation).
   db.exec(`CREATE TABLE IF NOT EXISTS wallet_events (
@@ -632,13 +649,22 @@ function migrate(db: DB): void {
     created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_wallet_events_kind_time ON wallet_events(kind, created_at)`);
+  // Cross-process runtime state (feat/fra-lean WS4c): the trader publishes its
+  // in-memory risk snapshot here so the standalone dashboard can show it.
+  db.exec(`CREATE TABLE IF NOT EXISTS runtime_state (
+    key         TEXT PRIMARY KEY,
+    json        TEXT NOT NULL,
+    updated_at  INTEGER NOT NULL      -- epoch ms
+  )`);
   db.exec(`UPDATE shadow_outcomes
            SET outcome_version = 'exit_fsm_v1'
            WHERE outcome_version IS NULL AND net_pnl_sol IS NOT NULL`);
 }
 
 function addColumnIfMissing(db: DB, table: string, column: string, type: string): void {
-  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  // table_xinfo, not table_info: generated columns (pricing_version) are
+  // hidden from table_info, which re-added them on every second open.
+  const cols = db.prepare(`PRAGMA table_xinfo(${table})`).all() as Array<{ name: string }>;
   if (!cols.some((c) => c.name === column)) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
   }

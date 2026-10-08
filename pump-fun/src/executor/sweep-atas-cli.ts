@@ -3,6 +3,7 @@
  *   npm run wallet:sweep-atas            # list only (dry run)
  *   npm run wallet:sweep-atas -- --execute   # close them (sends transactions)
  */
+import { persistOwnSignaturesTo } from '../core/ownSignatures.ts';
 import { Connection } from '@solana/web3.js';
 import { loadConfig, ConfigError } from '../config/load.ts';
 import { Wallet } from './wallet.ts';
@@ -25,6 +26,8 @@ async function main(): Promise<void> {
     console.log('dry run — pass --execute to close them');
     return;
   }
+  // Allow-list our signatures so the running bot's foreign-signer guard does not trip.
+  persistOwnSignaturesTo(config.guard.allowListPath);
   const r = await sweepEmptyTokenAccounts(connection, wallet, { priorityMicroLamports: config.fees.priorityFloorMicroLamports });
   // eslint-disable-next-line no-console
   console.log(`closed ${r.closed}/${r.found}, reclaimed ${(r.lamportsReclaimed / 1e9).toFixed(5)} SOL`, r.signatures, r.errors);

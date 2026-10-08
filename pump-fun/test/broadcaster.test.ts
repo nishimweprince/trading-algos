@@ -237,3 +237,29 @@ describe('Broadcaster slot stamping', () => {
     expect(plain.slotsToLand).toBeUndefined();
   });
 });
+
+describe('onDispatched hook (2026-10-04: bookkeeping after the send, not before)', () => {
+  it('fires once the sends have started and before confirmation resolves', async () => {
+    const order: string[] = [];
+    const s = sender('helius-sender');
+    s.send.mockImplementation(async () => {
+      order.push('send');
+      return { signature: 'sig' };
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const b = new Broadcaster('live', [s], {
+      confirmSignature: vi.fn(async () => {
+        await gate;
+        order.push('confirmed');
+        return { confirmationStatus: 'confirmed' as const, slot: 10, err: null };
+      }),
+    });
+    const p = b.broadcast(TX, 'buy', { skipSimulation: true, onDispatched: () => order.push('dispatched') });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(order).toEqual(['send', 'dispatched']);
+    release();
+    await p;
+    expect(order).toEqual(['send', 'dispatched', 'confirmed']);
+  });
+});

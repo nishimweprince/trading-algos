@@ -50,6 +50,7 @@ const CODE_TO_STATUS: Record<EntryVetoCode, LiveStatus> = {
   MAX_RELAXED: 'blocked_relaxed_cap',
   RISK_BREAKER: 'blocked_breaker',
   KILL_SWITCH: 'blocked_kill_switch',
+  ENTRY_HALT: 'blocked_kill_switch',
 };
 
 /**
@@ -278,6 +279,7 @@ export class DryRunTracker {
       atMs: atMs ?? this.now(),
       baseReserve: extra?.baseReserve ?? 0n,
       quoteReserveLamports: extra?.quoteReserveLamports ?? 0n,
+      virtualQuoteLamports: 0n,
       ...(extra?.creatorBaseBalance !== undefined ? { creatorBaseBalance: extra.creatorBaseBalance } : {}),
     });
   }
@@ -323,7 +325,7 @@ export class DryRunTracker {
       // a fresh readOnce: that would cost an RPC round-trip on the accept hot
       // path and make entryDrag a measure of two reads taken at different
       // milliseconds rather than of execution.
-      const entryPrice = computePrice(pricing.baseReserve, pricing.quoteReserveLamports, pricing.baseDecimals);
+      const entryPrice = computePrice(pricing.baseReserve, pricing.quoteReserveLamports, pricing.baseDecimals, pricing.virtualQuoteLamports);
       if (!(entryPrice > 0)) {
         // Undecodable/empty vaults on the event. One async fallback read, then
         // give up and record the coverage gap rather than mispricing the twin.
@@ -350,6 +352,7 @@ export class DryRunTracker {
         baseVault: pricing.baseVault,
         quoteVault: pricing.quoteVault,
         baseDecimals: pricing.baseDecimals,
+        virtualQuoteLamports: pricing.virtualQuoteLamports,
       });
       if (!fresh || !(fresh.price > 0)) {
         this.coverage('skipped_missing_pricing', mint);
@@ -404,6 +407,7 @@ export class DryRunTracker {
       baseVault: pricing.baseVault,
       quoteVault: pricing.quoteVault,
       baseDecimals: pricing.baseDecimals,
+      virtualQuoteLamports: pricing.virtualQuoteLamports,
       ...(creatorAta ? { creatorAta } : {}),
     };
 
@@ -424,7 +428,7 @@ export class DryRunTracker {
       samples: 0,
       fillCount: 0,
       // Buy impact at entry, from the reserves the entry was priced off.
-      slippageSol: this.config.fees.modelPaperSlippage ? buyImpactSol(sizeSol, pricing.quoteReserveLamports) : 0,
+      slippageSol: this.config.fees.modelPaperSlippage ? buyImpactSol(sizeSol, pricing.quoteReserveLamports + pricing.virtualQuoteLamports) : 0,
       exitTriggerToConfirmMs: null,
       timeToMfeMs: null,
       timeToMaeMs: null,

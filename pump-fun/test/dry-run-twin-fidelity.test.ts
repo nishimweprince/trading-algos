@@ -34,7 +34,7 @@ const ENTRY = 1e-7;
 const CREATOR = '11111111111111111111111111111111';
 const MINT = 'So11111111111111111111111111111111111111112';
 
-const pricing = (): PoolPricingRef => ({
+const pricing = (): PoolPricingRef => ({ virtualQuoteLamports: 0n,
   poolAddress: 'pool',
   baseMint: MINT,
   baseVault: 'base-vault',

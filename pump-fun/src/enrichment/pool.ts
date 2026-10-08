@@ -20,6 +20,16 @@ import type { RpcClient } from '../core/rpc.ts';
  *   171  pool_quote_token_account Pubkey   (SOL reserve vault)
  *   203  lp_supply  u64               (internal accounting field, NOT circulating LP)
  *   211  coin_creator Pubkey          (dev wallet; default == non-canonical)
+ *   243  is_mayhem_mode bool
+ *   244  is_cashback_coin bool
+ *   245  virtual_quote_reserves i128  (lamports; 0 on legacy / non-boost pools)
+ *   261  creator_fee_bps u64
+ *
+ * virtual_quote_reserves (SDK v1.20 IDL, verified 2026-10-04 against live
+ * pools: 67.41 SOL in the vault + 17.58 SOL virtual) is added to the quote
+ * vault by the program for PRICING only — payouts are capped at the real
+ * vault. Every price / impact / proceeds estimate must use
+ * `effectiveQuoteLamports`; liquidity measures stay on the real vault.
  */
 
 const OFF = {
@@ -33,6 +43,7 @@ const OFF = {
   quote_vault: 171,
   lp_supply: 203,
   coin_creator: 211,
+  virtual_quote_reserves: 245,
 } as const;
 
 const POOL_DISCRIMINATOR = 'f19a6d0411b16dbc';
@@ -51,8 +62,10 @@ export interface PoolInfo {
   isCanonical: boolean;
   /** Raw base-token units held in the base vault. */
   baseReserve: bigint;
-  /** Lamports held in the quote (WSOL) vault. */
+  /** Lamports held in the quote (WSOL) vault — real liquidity. */
   quoteReserveLamports: bigint;
+  /** Pool's virtual quote reserve (lamports); priced on top of the vault, never paid out. */
+  virtualQuoteLamports: bigint;
   /**
    * Circulating SPL supply of lp_mint (0 == burned). Research only since the
    * fast path: a canonical migration burns the LP, and the fast read does not
@@ -63,8 +76,19 @@ export interface PoolInfo {
   reread?: boolean;
 }
 
+/** Real SOL in the quote vault — the liquidity measure (floors, population band). */
 export function quoteReserveSol(pool: PoolInfo): number {
   return Number(pool.quoteReserveLamports) / LAMPORTS_PER_SOL;
+}
+
+/** Vault + virtual quote reserve: what the program prices against. */
+export function effectiveQuoteLamports(quoteReserveLamports: bigint, virtualQuoteLamports: bigint): bigint {
+  return quoteReserveLamports + virtualQuoteLamports;
+}
+
+/** Effective quote reserve in SOL (price / impact / proceeds math). */
+export function effectiveQuoteSol(pool: Pick<PoolInfo, 'quoteReserveLamports' | 'virtualQuoteLamports'>): number {
+  return Number(effectiveQuoteLamports(pool.quoteReserveLamports, pool.virtualQuoteLamports)) / LAMPORTS_PER_SOL;
 }
 
 export const BURN_OWNERS: ReadonlySet<string> = new Set([INCINERATOR, DEFAULT_PUBKEY]);
@@ -90,6 +114,20 @@ interface DecodedPool {
   quoteVault: string;
   creator: string;
   coinCreator: string;
+  virtualQuoteLamports: bigint;
+}
+
+/**
+ * i128 LE at `virtual_quote_reserves`; 0n for buffers that predate the field.
+ * A negative value is not a meaningful reserve — clamp to 0n.
+ */
+export function decodeVirtualQuote(buf: Buffer): bigint {
+  const o = OFF.virtual_quote_reserves;
+  if (buf.length < o + 16) return 0n;
+  const lo = buf.readBigUInt64LE(o);
+  const hi = buf.readBigInt64LE(o + 8);
+  const v = (hi << 64n) + lo;
+  return v > 0n ? v : 0n;
 }
 
 /** Decode + validate a Pool account. Returns null if it is not a valid PumpSwap pool. */
@@ -112,6 +150,7 @@ export function decodePool(base64Data: string, owner: string, poolAddress: strin
     quoteVault: pk(OFF.quote_vault),
     creator: pk(OFF.creator),
     coinCreator: pk(OFF.coin_creator),
+    virtualQuoteLamports: decodeVirtualQuote(buf),
   };
 }
 

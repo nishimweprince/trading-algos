@@ -10,6 +10,7 @@ import { GuardrailEngine } from './engine.ts';
 import type { RiskManager } from '../risk/manager.ts';
 import type { ShadowTracker } from './shadow.ts';
 import { computePrice } from '../positions/pricing.ts';
+import { effectiveQuoteSol } from '../enrichment/pool.ts';
 import { momentumSizeFactor } from './scoring.ts';
 import { canFundEntry, computeEntrySizeSol } from '../config/sizing.ts';
 import { extractStrategyFeatures } from '../dashboard/features.ts';
@@ -24,6 +25,7 @@ import type { FeatureInput } from '../research/featureSpec.ts';
 import type { EntryDecider, EntryDecision } from '../decision/entryDecider.ts';
 import type { EntryStateInput } from '../decision/entryState.ts';
 import { FastPoolReader } from './fastRead.ts';
+import type { PreArmer } from './preArm.ts';
 import type { AmmConfigCache, PrefetchedSwapStates } from '../executor/swapState.ts';
 
 /**
@@ -54,6 +56,7 @@ export class GuardrailPipeline {
   private readonly decision: EntryDecider | undefined;
   private readonly log = logger.child({ mod: 'guardrails' });
   private unsubscribe: (() => void) | null = null;
+  private readonly researchInProcess: boolean;
 
   constructor(deps: {
     config: Config;
@@ -71,13 +74,20 @@ export class GuardrailPipeline {
     user?: string;
     swapStates?: PrefetchedSwapStates;
     ammConfigs?: AmmConfigCache;
-    /** Start of the launch stream's unbroken coverage window (Detector.launchCoverageSinceMs). */
-    launchCoverageSinceMs?: () => number | null;
+    /** Curve-completion pre-arm (guardrails/preArm.ts). */
+    preArmer?: PreArmer;
+    /**
+     * false in the 'trader' role: background enrichment, features, shadow
+     * tracking and the decision model's shadow call run in the research
+     * worker instead (researchRecorded), off the trading event loop.
+     */
+    researchInProcess?: boolean;
   }) {
     this.config = deps.config;
     this.bus = deps.bus;
     this.repos = deps.repos;
     this.risk = deps.risk;
+    this.researchInProcess = deps.researchInProcess ?? true;
     this.shadow = deps.shadow;
     this.decision = deps.decision;
     const g = deps.config.guardrails;
@@ -89,20 +99,14 @@ export class GuardrailPipeline {
       momentumWindowBucketsMs: g.momentumWindowBucketsMs,
       ...(g.momentumTxStatsEnabled ? { momentumTxStats: { maxTx: g.momentumTxStatsMaxTx } } : {}),
     });
-    this.engine = new GuardrailEngine(deps.config, deps.repos, deps.risk, deps.launchCoverageSinceMs);
+    this.engine = new GuardrailEngine(deps.config, deps.repos, deps.risk);
     this.reader = new FastPoolReader({
       rpc: deps.fastRpc ?? deps.rpc,
       retryDelaysMs: g.fastReadRetryDelaysMs,
       ...(deps.user ? { user: deps.user } : {}),
       ...(deps.swapStates ? { swapStates: deps.swapStates } : {}),
       ...(deps.ammConfigs ? { ammConfigs: deps.ammConfigs } : {}),
-      launchCreator: (mint) => {
-        try {
-          return deps.repos.launchByMint(mint)?.creator ?? null;
-        } catch {
-          return null;
-        }
-      },
+      ...(deps.preArmer ? { preArmer: deps.preArmer, poolRaceMs: deps.config.entry.preArm.poolWaitMs } : {}),
     });
     this.features = new FeatureEngine({ rpc: deps.rpc, repos: deps.repos, config: g.features });
     this.rpc = deps.rpc;
@@ -165,10 +169,10 @@ export class GuardrailPipeline {
       const s = read.snapshot;
       enrichment.pool = s.pool;
       if (s.mintInfo) enrichment.mintInfo = s.mintInfo;
-      if (s.creatorHolding) enrichment.creatorHolding = s.creatorHolding;
       timings.fastReadMs = s.readMs;
       timings.fastReadAttempts = s.attempts;
       timings.reservesFrom = s.reservesFrom;
+      timings.preArmed = s.preArmed;
     } else {
       // Carried to P0 as its fail reason.
       enrichment.unknowns.push(`pool:${read.reason}`);
@@ -242,6 +246,9 @@ export class GuardrailPipeline {
       feedSource: candidate.graduation.feedSource,
       venue: candidate.graduation.venue,
       ...(candidate.graduation.detectedAtMs !== undefined ? { detectedAtMs: candidate.graduation.detectedAtMs } : {}),
+      detectedAtNs: candidate.graduation.receivedAtNs,
+      ...(candidate.enrichment.timings?.preArmed !== undefined ? { preArmed: candidate.enrichment.timings.preArmed } : {}),
+      ...(candidate.graduation.slot ? { graduationSlot: candidate.graduation.slot } : {}),
       entrySoftScore: verdict.softScore,
       pricing: {
         poolAddress: pool.poolAddress,
@@ -251,6 +258,7 @@ export class GuardrailPipeline {
         baseDecimals: candidate.enrichment.mintInfo?.decimals ?? 6,
         baseReserve: pool.baseReserve,
         quoteReserveLamports: pool.quoteReserveLamports,
+        virtualQuoteLamports: pool.virtualQuoteLamports,
         creator: pool.coinCreator,
         baseIsToken2022: candidate.enrichment.mintInfo?.isToken2022 ?? false,
       },
@@ -291,7 +299,7 @@ export class GuardrailPipeline {
           level: 'info',
           message: `⛔ veto ${short(g.mint)} — ${verdict.vetoReasons.join(', ') || 'guardrail'}`,
         });
-        this.shadowTrackVeto(candidate, verdict.vetoReasons, verdict.highVolatility);
+        if (this.researchInProcess) this.shadowTrackVeto(candidate, verdict.vetoReasons, verdict.highVolatility);
       } else {
         this.bus.emit('alert', {
           level: 'info',
@@ -304,8 +312,31 @@ export class GuardrailPipeline {
 
     await Promise.all([
       this.runConfirmPhase(candidate, verdict).catch((err) => this.log.debug('confirm phase failed', { mint: g.mint, err })),
-      this.config.guardrails.backgroundEnrichment
+      this.config.guardrails.backgroundEnrichment && this.researchInProcess
         ? this.researchEnrich(candidate, verdict, screenStarted).catch((err) =>
+            this.log.debug('research enrichment failed', { mint: g.mint, err }),
+          )
+        : Promise.resolve(),
+    ]);
+  }
+
+  /**
+   * Research worker entry: everything afterVerdict does off the trading path
+   * for a verdict the trader already recorded — shadow tracking of vetoes,
+   * confirm-phase arms, background enrichment, features and the decision
+   * model's shadow call. Never emits openPosition.
+   */
+  async researchRecorded(candidate: Candidate, verdict: CandidateVerdict): Promise<void> {
+    const g = candidate.graduation;
+    candidate.enrichment.timings ??= {};
+    if (verdict.verdict === 'veto') this.shadowTrackVeto(candidate, verdict.vetoReasons, verdict.highVolatility);
+    const shadowOnly: CandidateVerdict = verdict.verdict === 'accept' && this.config.entry.mode === 'confirm'
+      ? { ...verdict, verdict: 'veto' } // the trader owns the live confirm entry; arms only here
+      : verdict;
+    await Promise.all([
+      this.runConfirmPhase(candidate, shadowOnly).catch((err) => this.log.debug('confirm phase failed', { mint: g.mint, err })),
+      this.config.guardrails.backgroundEnrichment
+        ? this.researchEnrich(candidate, verdict, Date.now()).catch((err) =>
             this.log.debug('research enrichment failed', { mint: g.mint, err }),
           )
         : Promise.resolve(),
@@ -354,6 +385,12 @@ export class GuardrailPipeline {
     const slow = await this.enricher.enrich(g);
     timings.enrichMs = Date.now() - enrichStarted;
     if (slow.enrichment.holders) e.holders = slow.enrichment.holders;
+    // Creator share is research-only since H6 left the fast path (2026-10-04).
+    if (!e.creatorHolding && e.pool && e.holders) {
+      const coinCreator = e.pool.coinCreator;
+      const share = e.holders.holders.filter((h) => h.owner === coinCreator).reduce((sum, h) => sum + h.share, 0);
+      e.creatorHolding = { creator: coinCreator, share };
+    }
     if (slow.enrichment.metadata) e.metadata = slow.enrichment.metadata;
     if (slow.enrichment.dasAuthorities) e.dasAuthorities = slow.enrichment.dasAuthorities;
     if (slow.enrichment.dasCreators) e.dasCreators = slow.enrichment.dasCreators;
@@ -454,7 +491,7 @@ export class GuardrailPipeline {
       return;
     }
     const baseDecimals = candidate.enrichment.mintInfo?.decimals ?? 6;
-    const baselinePrice = computePrice(pool.baseReserve, pool.quoteReserveLamports, baseDecimals);
+    const baselinePrice = computePrice(pool.baseReserve, pool.quoteReserveLamports, baseDecimals, pool.virtualQuoteLamports);
     if (!(baselinePrice > 0)) {
       this.shadow.noteSkippedMissingPricing(candidate.graduation.mint);
       return;
@@ -466,13 +503,15 @@ export class GuardrailPipeline {
       primaryVetoCode: vetoReasons[0] ?? null,
       vetoCodes: vetoReasons,
       baselinePrice,
-      quoteReserveSol: Number(pool.quoteReserveLamports) / 1e9,
+      // Impact / proceeds reserve: vault + virtual (what the program prices against).
+      quoteReserveSol: effectiveQuoteSol(pool),
       highVolatility,
       poolRef: {
         mint: candidate.graduation.mint,
         baseVault: pool.baseVault,
         quoteVault: pool.quoteVault,
         baseDecimals,
+        virtualQuoteLamports: pool.virtualQuoteLamports,
       },
       sessionId: session?.id ?? null,
       configHash: session?.configHash ?? null,
@@ -497,7 +536,7 @@ export class GuardrailPipeline {
     const delays = [...arms, ...(entryDelay !== null ? [entryDelay] : [])];
     if (!delays.length) return;
     const baseDecimals = candidate.enrichment.mintInfo?.decimals ?? 6;
-    const startPrice = computePrice(pool.baseReserve, pool.quoteReserveLamports, baseDecimals);
+    const startPrice = computePrice(pool.baseReserve, pool.quoteReserveLamports, baseDecimals, pool.virtualQuoteLamports);
     if (!(startPrice > 0)) return;
     const observer = new ConfirmObserver({
       read: (ref) => this.confirmReader.readOnce(ref),
@@ -505,7 +544,7 @@ export class GuardrailPipeline {
       pollMs: entryDelay !== null ? this.config.entry.confirm.pollMs : 1_000,
     });
     await observer.observe(
-      { baseVault: pool.baseVault, quoteVault: pool.quoteVault, baseDecimals },
+      { baseVault: pool.baseVault, quoteVault: pool.quoteVault, baseDecimals, virtualQuoteLamports: pool.virtualQuoteLamports },
       { price: startPrice, quoteReserveLamports: pool.quoteReserveLamports },
       delays,
       async (o) => {
@@ -528,13 +567,15 @@ export class GuardrailPipeline {
       primaryVetoCode: code,
       vetoCodes: [...(code ? [code] : []), ...verdict.vetoReasons],
       baselinePrice: o.endPrice,
-      quoteReserveSol: Number(pool.quoteReserveLamports) / 1e9,
+      // Impact / proceeds reserve: vault + virtual (what the program prices against).
+      quoteReserveSol: effectiveQuoteSol(pool),
       highVolatility: verdict.highVolatility,
       poolRef: {
         mint: candidate.graduation.mint,
         baseVault: pool.baseVault,
         quoteVault: pool.quoteVault,
         baseDecimals: candidate.enrichment.mintInfo?.decimals ?? 6,
+        virtualQuoteLamports: pool.virtualQuoteLamports,
       },
       sessionId: session?.id ?? null,
       configHash: session?.configHash ?? null,

@@ -32,6 +32,8 @@ describe('strategy week report', () => {
     seedClosed(db, 'mintB', -0.01, 'STOP_LOSS', 65, false);
     seedClosed(db, 'mintC', -0.015, 'TRAILING_STOP', 70, true, 30);
     seedClosed(db, 'mintD', 0.005, 'TIME_STOP', 62, false);
+    // Priced before the virtual-reserve fix: excluded from strategy analytics.
+    seedClosed(db, 'mintOld', -0.01, 'STOP_LOSS', 65, false, 5, true);
 
     db.prepare(
       `INSERT INTO position_fills (mint, trigger, fraction, gain_pct, pnl_sol)
@@ -97,18 +99,22 @@ function seedClosed(
   score: number,
   hv: boolean,
   leftOnTable = 5,
+  vaultOnlyPricing = false,
 ): void {
   db.prepare(
     `INSERT INTO positions (
        mint, entry_price, size_sol, state, pnl_sol, net_pnl_sol, fees_sol, pnl_pct, exit_reason,
        entry_soft_score, high_volatility, mfe_pct, mae_pct, left_on_table_pct, hold_ms,
-       mode, opened_at, closed_at, momentum_window_ms, detect_to_open_ms
+       mode, opened_at, closed_at, momentum_window_ms, detect_to_open_ms, pricing_json
      ) VALUES (
        ?, 1, 0.03, 'CLOSED', ?, ?, 0.001, ?, ?,
        ?, ?, ?, -5, ?, 8000,
-       'live', datetime('now'), datetime('now'), 500, 1200
+       'live', datetime('now'), datetime('now'), 500, 1200, ?
      )`,
-  ).run(mint, net, net, (net / 0.03) * 100, exit, score, hv ? 1 : 0, leftOnTable + (net / 0.03) * 100, leftOnTable);
+  ).run(
+    mint, net, net, (net / 0.03) * 100, exit, score, hv ? 1 : 0, leftOnTable + (net / 0.03) * 100, leftOnTable,
+    vaultOnlyPricing ? JSON.stringify({ poolAddress: 'p' }) : JSON.stringify({ poolAddress: 'p', virtualQuoteLamports: '0' }),
+  );
 }
 
 function minimalCandidate(): Candidate {

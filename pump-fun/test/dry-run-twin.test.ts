@@ -278,7 +278,7 @@ const paranoidRpc = new Proxy(
   },
 ) as unknown as RpcClient;
 
-const twinPricing = (): PoolPricingRef => ({
+const twinPricing = (): PoolPricingRef => ({ virtualQuoteLamports: 0n,
   poolAddress: 'pool',
   baseMint: 'mint',
   baseVault: 'base-vault',

@@ -273,6 +273,7 @@ export class ShadowTracker {
       baseReserve: 0n,
       quoteReserveLamports:
         quoteReserveSol !== undefined ? BigInt(Math.round(quoteReserveSol * 1e9)) : 0n,
+      virtualQuoteLamports: 0n,
     });
   }
 
@@ -291,14 +292,15 @@ export class ShadowTracker {
         st.path.push({
           tMs: tick.atMs - st.startedMs,
           price: tick.price,
-          quoteReserveSol: tick.quoteReserveLamports > 0n ? Number(tick.quoteReserveLamports) / 1e9 : null,
+          quoteReserveSol: tick.quoteReserveLamports > 0n ? Number(tick.quoteReserveLamports + tick.virtualQuoteLamports) / 1e9 : null,
         });
       }
       if (tick.price > st.peak) st.peak = tick.price;
       if (tick.price < st.trough) st.trough = tick.price;
       st.samples++;
       st.lastPrice = tick.price;
-      if (tick.quoteReserveLamports > 0n) st.latestQuoteSol = Number(tick.quoteReserveLamports) / 1e9;
+      // Effective (vault + virtual) quote: impact / proceeds reserve.
+      if (tick.quoteReserveLamports > 0n) st.latestQuoteSol = Number(tick.quoteReserveLamports + tick.virtualQuoteLamports) / 1e9;
 
       // Deferred honest entry: open on the first tick at/after entryDueMs.
       // Peak/MFE stay measured from baselinePrice — they describe the coin.

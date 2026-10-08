@@ -1,7 +1,8 @@
 import type { RpcClient } from '../core/rpc.ts';
 import type { Mint, Address } from '../core/types.ts';
 import { LAMPORTS_PER_SOL } from '../core/constants.ts';
-import { decodeTokenAccountAmount } from '../enrichment/pool.ts';
+import { decodeTokenAccountAmount, decodeVirtualQuote, fetchPumpSwapPool } from '../enrichment/pool.ts';
+import type { PoolPricingRef } from '../core/types.ts';
 import { logger } from '../core/logger.ts';
 import { withTimeout, TimeoutError } from '../executor/timeout.ts';
 
@@ -14,13 +15,48 @@ type AccountRead = Awaited<ReturnType<RpcClient['getMultipleAccountsBase64']>>[n
  * control. On the free tier we poll the vaults; the paid gRPC feed would give
  * per-slot updates as a drop-in later.
  *
- * Price is SOL per whole token: (quoteLamports / 1e9) / (baseReserve / 10^dec).
+ * Price is SOL per whole token:
+ *   ((vaultLamports + virtualQuoteLamports) / 1e9) / (baseReserve / 10^dec)
+ *
+ * The virtual quote reserve is REQUIRED: PumpSwap prices against vault +
+ * virtual (enrichment/pool.ts). Pricing from the vault alone read 21.7 % low
+ * on every 2026-10 graduation and stopped out every position on its first
+ * tick. Pass 0n only for a pool that genuinely has none.
  */
-export function computePrice(baseReserve: bigint, quoteReserveLamports: bigint, baseDecimals: number): number {
+export function computePrice(
+  baseReserve: bigint,
+  quoteReserveLamports: bigint,
+  baseDecimals: number,
+  virtualQuoteLamports: bigint,
+): number {
   if (baseReserve === 0n) return 0;
-  const quoteSol = Number(quoteReserveLamports) / LAMPORTS_PER_SOL;
+  const quoteSol = Number(quoteReserveLamports + virtualQuoteLamports) / LAMPORTS_PER_SOL;
   const baseTokens = Number(baseReserve) / 10 ** baseDecimals;
   return baseTokens === 0 ? 0 : quoteSol / baseTokens;
+}
+
+/**
+ * Parse a persisted `pricing_json`. safeJson writes bigints as strings, so the
+ * reserve fields are revived to bigint here (mixing a string into bigint math
+ * concatenates). `virtualQuoteKnown` is false for rows written before the
+ * field existed — the caller must re-read the pool before pricing.
+ */
+export function revivePoolPricing(json: string): { pricing: PoolPricingRef; virtualQuoteKnown: boolean } {
+  const raw = JSON.parse(json) as Record<string, unknown>;
+  const big = (v: unknown): bigint => {
+    if (typeof v === 'bigint') return v;
+    if (typeof v === 'number' && Number.isFinite(v)) return BigInt(Math.trunc(v));
+    if (typeof v === 'string' && /^-?\d+$/.test(v)) return BigInt(v);
+    return 0n;
+  };
+  const virtualQuoteKnown = raw.virtualQuoteLamports !== undefined && raw.virtualQuoteLamports !== null;
+  const pricing = {
+    ...(raw as unknown as PoolPricingRef),
+    baseReserve: big(raw.baseReserve),
+    quoteReserveLamports: big(raw.quoteReserveLamports),
+    virtualQuoteLamports: big(raw.virtualQuoteLamports),
+  };
+  return { pricing, virtualQuoteKnown };
 }
 
 export interface PoolRef {
@@ -28,6 +64,8 @@ export interface PoolRef {
   baseVault: Address;
   quoteVault: Address;
   baseDecimals: number;
+  /** Pool's virtual quote reserve (lamports), read once from the pool account. */
+  virtualQuoteLamports: bigint;
   /** Creator's base-token ATA — monitored for dev-dump (batched into the same fetch). */
   creatorAta?: Address;
 }
@@ -36,7 +74,12 @@ export interface PriceTick {
   mint: Mint;
   price: number;
   baseReserve: bigint;
+  /**
+   * REAL vault lamports. Exit builders hand this to the SDK, which adds the
+   * pool's virtual reserve itself — never put the effective quote here.
+   */
   quoteReserveLamports: bigint;
+  virtualQuoteLamports: bigint;
   atMs: number;
   /** Creator base-token balance this tick (undefined when unregistered/absent). */
   creatorBaseBalance?: bigint;
@@ -69,7 +112,9 @@ export interface PriceIngest {
 export interface PriceRead {
   price: number;
   baseReserve: bigint;
+  /** Real vault lamports (see PriceTick). */
   quoteReserveLamports: bigint;
+  virtualQuoteLamports: bigint;
 }
 
 export interface PricePollerOptions {
@@ -157,6 +202,40 @@ export class PricePoller {
     this.deadlineMs = opts.deadlineMs ?? 0;
   }
 
+  /** Full pricing for a mint's canonical PumpSwap pool (untracked-fill adoption). */
+  async readPoolPricing(mint: string, baseDecimals: number, baseIsToken2022: boolean): Promise<PoolPricingRef | null> {
+    try {
+      const pool = await fetchPumpSwapPool(this.rpc, mint);
+      if (!pool) return null;
+      return {
+        poolAddress: pool.poolAddress,
+        baseMint: pool.baseMint,
+        baseVault: pool.baseVault,
+        quoteVault: pool.quoteVault,
+        baseDecimals,
+        baseReserve: pool.baseReserve,
+        quoteReserveLamports: pool.quoteReserveLamports,
+        virtualQuoteLamports: pool.virtualQuoteLamports,
+        creator: pool.coinCreator,
+        baseIsToken2022,
+      };
+    } catch (err) {
+      this.log.warn('pool pricing read failed', { mint, err });
+      return null;
+    }
+  }
+
+  /** The pool account's virtual quote reserve; null when the pool can't be read. */
+  async readVirtualQuote(poolAddress: string): Promise<bigint | null> {
+    try {
+      const acct = await this.rpc.getAccountInfoBase64(poolAddress, this.commitment);
+      return acct ? decodeVirtualQuote(Buffer.from(acct.data, 'base64')) : null;
+    } catch (err) {
+      this.log.warn('pool virtual-reserve read failed', { poolAddress, err });
+      return null;
+    }
+  }
+
   setHandler(handler: (tick: PriceTick) => void): void {
     this.onTick = handler;
   }
@@ -193,7 +272,7 @@ export class PricePoller {
     return { ...this.stats };
   }
 
-  async readOnce(ref: Pick<PoolRef, 'baseVault' | 'quoteVault' | 'baseDecimals'>): Promise<PriceRead | null> {
+  async readOnce(ref: Pick<PoolRef, 'baseVault' | 'quoteVault' | 'baseDecimals' | 'virtualQuoteLamports'>): Promise<PriceRead | null> {
     try {
       const [baseAcct, quoteAcct] = await this.rpc.getMultipleAccountsBase64(
         [ref.baseVault, ref.quoteVault],
@@ -209,9 +288,10 @@ export class PricePoller {
       const baseReserve = decodeTokenAccountAmount(baseAcct.data);
       const quoteReserveLamports = decodeTokenAccountAmount(quoteAcct.data);
       return {
-        price: computePrice(baseReserve, quoteReserveLamports, ref.baseDecimals),
+        price: computePrice(baseReserve, quoteReserveLamports, ref.baseDecimals, ref.virtualQuoteLamports),
         baseReserve,
         quoteReserveLamports,
+        virtualQuoteLamports: ref.virtualQuoteLamports,
       };
     } catch (err) {
       this.log.warn('single price read failed', { err });
@@ -293,7 +373,7 @@ export class PricePoller {
         }
         const baseReserve = decodeTokenAccountAmount(baseAcct.data);
         const quoteReserveLamports = decodeTokenAccountAmount(quoteAcct.data);
-        const price = computePrice(baseReserve, quoteReserveLamports, ref.baseDecimals);
+        const price = computePrice(baseReserve, quoteReserveLamports, ref.baseDecimals, ref.virtualQuoteLamports);
         const creatorAcct = map.creator !== null ? accts[map.creator] : null;
         const creatorBaseBalance = creatorAcct ? decodeTokenAccountAmount(creatorAcct.data) : undefined;
         this.onTick({
@@ -301,6 +381,7 @@ export class PricePoller {
           price,
           baseReserve,
           quoteReserveLamports,
+          virtualQuoteLamports: ref.virtualQuoteLamports,
           atMs,
           source: 'poll',
           readStartedAtMs,

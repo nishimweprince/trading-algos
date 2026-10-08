@@ -21,11 +21,11 @@ class FakePoller {
   start() {}
   stop() {}
   tick(mint: string, price: number, atMs: number) {
-    this.handler({ mint, price, baseReserve: 0n, quoteReserveLamports: 0n, atMs });
+    this.handler({ virtualQuoteLamports: 0n, mint, price, baseReserve: 0n, quoteReserveLamports: 0n, atMs });
   }
 }
 
-const pricing = (): PoolPricingRef => ({
+const pricing = (): PoolPricingRef => ({ virtualQuoteLamports: 0n,
   poolAddress: 'pool',
   baseMint: 'mint',
   baseVault: 'b',

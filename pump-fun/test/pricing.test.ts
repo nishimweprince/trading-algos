@@ -40,7 +40,7 @@ class FakeRpc {
 }
 
 function ref(mint: string, withCreator = false): PoolRef {
-  return {
+  return { virtualQuoteLamports: 0n,
     mint,
     baseVault: `${mint}-base`,
     quoteVault: `${mint}-quote`,
@@ -88,7 +88,7 @@ describe('PricePoller commitment', () => {
     const read = await poller.readOnce(ref('A'));
 
     expect(rpc.calls[0]!.commitment).toBe('processed');
-    expect(read?.price).toBe(computePrice(1_000_000_000n, 5_000_000_000n, 6));
+    expect(read?.price).toBe(computePrice(1_000_000_000n, 5_000_000_000n, 6, 0n));
   });
 });
 
@@ -211,6 +211,6 @@ describe('PricePoller starvation', () => {
 
 describe('computePrice', () => {
   it('returns 0 on an empty base reserve — the value the suspect-tick guard rejects', () => {
-    expect(computePrice(0n, 5_000_000_000n, 6)).toBe(0);
+    expect(computePrice(0n, 5_000_000_000n, 6, 0n)).toBe(0);
   });
 });

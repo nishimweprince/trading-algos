@@ -112,7 +112,7 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
     if (state) opts.state = state;
     if (limit !== undefined) opts.limit = limit;
     if (track) opts.track = track;
-    return c.json(listPositions(deps.db, opts));
+    return c.json(listPositions(deps.db, { ...opts, mode: deps.config.mode }));
   });
   app.get('/api/shadow-outcomes', (c) => {
     const range = parseAnalyticsRange(c.req.query('range'));
@@ -233,7 +233,7 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
     const rawWindow = parseLimit(c.req.query('window'));
     const window = rawWindow === undefined ? undefined : Math.min(1_000, Math.max(2, Math.floor(rawWindow)));
     return c.json({
-      ...getEdgeAnalytics(deps.db, { ...(track ? { track } : {}), ...(window !== undefined ? { window } : {}) }),
+      ...getEdgeAnalytics(deps.db, { ...(track ? { track } : {}), ...(window !== undefined ? { window } : {}), mode: deps.config.mode }),
       monitor: deps.getRiskSnapshot?.()?.edge ?? null,
     });
   });
@@ -244,7 +244,7 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
   app.get('/api/reports/trades.csv', (c) => {
     const range = parseAnalyticsRange(c.req.query('range'));
     const track = parseDataTrack(c.req.query('track'));
-    const csv = buildTradeBlotterCsv(deps.db, { ...(range ? { range } : {}), ...(track ? { track } : {}) });
+    const csv = buildTradeBlotterCsv(deps.db, { ...(range ? { range } : {}), ...(track ? { track } : {}), mode: deps.config.mode });
     return new Response(csv, {
       headers: {
         'content-type': 'text/csv; charset=utf-8',

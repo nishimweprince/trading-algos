@@ -25,7 +25,7 @@ class FakePoller {
   stop() { this.registered.clear(); }
   get size() { return this.registered.size; }
   tick(mint: string, price: number, atMs: number) {
-    this.handler({ mint, price, baseReserve: 0n, quoteReserveLamports: 100n, atMs });
+    this.handler({ virtualQuoteLamports: 0n, mint, price, baseReserve: 0n, quoteReserveLamports: 100n, atMs });
   }
 }
 
@@ -47,7 +47,7 @@ const cfg = ConfigSchema.parse({
 const RAW_AT_STALE_PRICE = 2_500_000_000_000n;
 const RAW_AFTER_TP1 = 625_000_000_000n;
 
-const pricing = (): PoolPricingRef => ({
+const pricing = (): PoolPricingRef => ({ virtualQuoteLamports: 0n,
   poolAddress: 'pool',
   baseMint: 'mint',
   baseVault: 'base-vault',
@@ -79,7 +79,11 @@ describe('PositionManager live execution', () => {
     let resolveBuy!: (r: BroadcastResult) => void;
     const buyPromise = new Promise<BroadcastResult>((resolve) => { resolveBuy = resolve; });
     const executor: Partial<Executor> = {
-      buyAndConfirm: vi.fn(async () => buyPromise),
+      // The real broadcaster fires onDispatched as soon as the sends start.
+      buyAndConfirm: vi.fn(async (_p: string, _m: string, _s: number, _r?: unknown, opts?: { onDispatched?: () => void }) => {
+        opts?.onDispatched?.();
+        return buyPromise;
+      }) as unknown as Executor['buyAndConfirm'],
       reconcileTokenBalance: vi.fn(async () => RAW_AT_STALE_PRICE),
       buildExitLadder: vi.fn(() => ({ refresh: vi.fn(async () => undefined) }) as never),
     };
@@ -134,7 +138,7 @@ describe('PositionManager live execution', () => {
     await flush();
     await flush();
 
-    expect(updates.map((u) => u.state)).toEqual(['PENDING_ENTRY', 'FAILED']);
+    expect(updates.map((u) => u.state)).toEqual(['FAILED']) // nothing was dispatched, so no PENDING row;
     // The persisted row and the bus event must agree.
     expect(repos.latestOpenPositions()).toHaveLength(0);
     mgr.stop();
@@ -154,8 +158,8 @@ describe('PositionManager live execution', () => {
     await flush();
     await flush();
 
-    expect(buyAndConfirm).toHaveBeenCalledWith(ref.poolAddress, ref.baseMint, 0.25, ref);
-    expect(updates.map((u) => u.state)).toEqual(['PENDING_ENTRY', 'FAILED']);
+    expect(buyAndConfirm).toHaveBeenCalledWith(ref.poolAddress, ref.baseMint, 0.25, ref, { landed: undefined, onDispatched: expect.any(Function) });
+    expect(updates.map((u) => u.state)).toEqual(['FAILED']) // gated before any send: no PENDING row;
     expect(repos.latestOpenPositions()).toHaveLength(0);
     const skip = alerts.find((a) => a.message.includes('skipped'));
     expect(skip?.level).toBe('warn');

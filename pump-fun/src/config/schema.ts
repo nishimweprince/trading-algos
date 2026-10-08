@@ -71,7 +71,12 @@ const RpcConfig = z
     // normally points at the same Helius URL — it exists so reads stay on
     // Helius even if fallbackHttp[0] ever points elsewhere. When omitted,
     // index.ts uses fallbackHttp[0] or primaryHttp.
+    // Research reads (enrichment, features, cluster warm, shadow). Point it at
+    // a SEPARATE Helius key so research bursts can never 429 the trade key
+    // that carries confirms, pricing and the fast screen.
     enrichmentHttp: z.string().min(1).optional(),
+    // Requests/second cap for the research client (0 = unlimited).
+    researchMaxRps: z.number().nonnegative().default(40),
     // Independent READ endpoints, tried in order when the primary is
     // rate-limited or down. Reads are idempotent, so failover is safe.
     //
@@ -123,6 +128,10 @@ const HeliusSenderConfig = z
     // true = SWQoS-only (min tip 5,000 lamports); false = Max (staked + Jito,
     // min 1,000,000 lamports — ~5 % of a 0.04 SOL round trip).
     swqosOnly: z.boolean().default(true),
+    // Exits ride their own Sender route. true = staked-only at the 5,000-
+    // lamport minimum even when buys use Max: a stop or TP must land, but a
+    // 0.001 SOL tip on every exit would double the round-trip cost.
+    exitSwqosOnly: z.boolean().default(true),
     apiKeyEnvVar: z.string().optional(),
     minTipLamports: z.number().int().positive().default(5_000),
     tipCapLamports: z.number().int().positive().default(2_000_000),
@@ -130,6 +139,9 @@ const HeliusSenderConfig = z
     tipPercentile: z.union([z.literal(50), z.literal(75), z.literal(95)]).default(75),
     tipBufferPct: nonNeg.default(10),
     tipFloorUrl: z.string().url().default('https://bundles.jito.wtf/api/v1/bundles/tip_floor'),
+    // GET <origin>/ping on this cadence keeps the Sender socket open and warm,
+    // so the buy never pays a TCP+TLS handshake (0 = off).
+    warmPingMs: z.number().int().nonnegative().default(15_000),
   })
   .strict()
   .refine((h) => h.swqosOnly || h.minTipLamports >= 1_000_000, {
@@ -233,6 +245,22 @@ const EntryConfig = z
     // detection. confirm = watch the pool for confirm.delayMs and buy only
     // when flow confirms.
     mode: z.enum(['immediate', 'confirm']).default('immediate'),
+    // Curve-completion pre-arm (guardrails/preArm.ts): prefetch the mint and
+    // wallet ATAs and push-subscribe the future pool account, so the fast
+    // screen needs no RPC read when the migration lands.
+    preArm: z
+      .object({
+        enabled: z.boolean().default(true),
+        ttlMs: z.number().int().positive().default(60_000),
+        // How long a pending pool push may still beat the RPC read, which
+        // starts at once — the race ends when either lands.
+        poolWaitMs: z.number().int().nonnegative().default(1_000),
+        maxTrackedLaunches: z.number().int().positive().default(200_000),
+        // Launches table rows (newest first) loaded into the curve map at boot.
+        bootLaunches: z.number().int().nonnegative().default(50_000),
+      })
+      .strict()
+      .default({}),
     confirm: z
       .object({
         delayMs: z.number().int().positive().default(15_000),
@@ -267,10 +295,8 @@ const GuardrailsConfig = z
     // from ONE processed-commitment getMultipleAccounts plus local state; the
     // checks that needed indexers or simulations (H1-H5, H9, H11, the soft
     // score gate, RugCheck) were removed — see engine.ts for why each went.
-    creatorHoldingsCapPct: pct.default(5),
     minPoolSol: nonNeg.default(25),
     maxBuyImpactPct: pct.default(3),
-    creatorMaxLaunches7d: z.number().int().nonnegative().default(3),
     // Fast read retry schedule (ms before each attempt) for a pool the RPC
     // node has not seen yet (it lags the gRPC feed by a slot at most).
     fastReadRetryDelaysMs: z.array(z.number().int().nonnegative()).min(1).default([0, 50, 100, 200]),
@@ -308,16 +334,12 @@ const GuardrailsConfig = z
       .object({
         enabled: z.boolean().default(false),
         requirePumpSuffix: z.boolean().default(true),
-        minMintAgeMs: z.number().int().nonnegative().default(30_000),
-        minPoolSol: nonNeg.default(60),
-        maxPoolSol: positive.default(90),
-        unknownAgePolicy: z.enum(['veto', 'allow']).default('veto'),
       })
       .strict()
       .default({}),
     // Manipulation features (work plan 2026-09-25 P3.3), computed by the
-    // background enrichment for research. H13 only enforces the creator
-    // cluster, and only from the precomputed cache (clusterWarm).
+    // background enrichment for research; none of them veto (H13 removed
+    // 2026-10-04); clusterWarm feeds the cluster feature only.
     features: z
       .object({
         enabled: z.boolean().default(false),
@@ -329,9 +351,6 @@ const GuardrailsConfig = z
             // A wallet with this many signatures or more is a hub (exchange):
             // its first funder is unreachable and it is never clustered through.
             maxSigs: z.number().int().positive().default(1_000),
-            // Veto when the creator's funding cluster launched more than
-            // guardrails.creatorMaxLaunches7d coins in 7 days.
-            veto: z.boolean().default(true),
           })
           .strict()
           .default({}),
@@ -768,6 +787,9 @@ const FeesConfig = z
     // use. Keep 0 while the `jito` block is commented out; re-enabling Jito is
     // then this one line plus the block, not a fee-model re-tune.
     jitoTipSolPerTx: nonNeg.default(0),
+    // Sender Max buy tip, SOL, charged once per trade (entry only) in paper /
+    // dry-run / twin accounting. Match heliusSender's typical buy tip.
+    buyTipSol: nonNeg.default(0),
     // Charge constant-product price impact on paper / twin fills (buy impact at
     // entry from the pool reserves, sell impact on every exit from the tick's
     // reserves). Without it the twin fills at the mid and the live-vs-twin Δ
@@ -780,6 +802,11 @@ const FeesConfig = z
     // crashing — the #1 cause of stops realizing far worse than configured.
     priorityFloorMicroLamports: z.number().int().nonnegative().default(250_000),
     priorityCapMicroLamports: z.number().int().positive().default(5_000_000),
+    // Helius getPriorityFeeEstimate level (scoped to the PumpSwap program and
+    // WSOL — the accounts our swaps contend on), and the percentile used when
+    // falling back to getRecentPrioritizationFees.
+    priorityLevel: z.enum(['medium', 'high', 'veryHigh']).default('medium'),
+    priorityPercentile: z.number().int().min(1).max(99).default(75),
     // Prefer Helius getPriorityFeeEstimate (medium level) over the
     // getRecentPrioritizationFees p75. Best-effort: unavailable methods or
     // endpoints silently fall back to the p75 path. Set false to force p75.
@@ -922,6 +949,16 @@ const ExecutionConfig = z
      */
     sentBuyResolveMs: z.number().int().positive().default(90_000),
     sentBuyPollMs: z.number().int().positive().default(1_000),
+    // Upper bound for resolving a sent buy when the wallet stream was NOT up
+    // across the send (so "not seen" proves nothing). Tokens arriving after it
+    // are still adopted from the wallet stream.
+    sentBuyHardMaxMs: z.number().int().positive().default(600_000),
+    // Adopt wallet token increases the bot did not open (late-landing buys,
+    // anything bought outside a tracked entry) as positions with exits armed.
+    adoptUntrackedFills: z.boolean().default(true),
+    // Wait this long after the wallet tx before adopting, so an in-flight
+    // entry can claim its own fill first.
+    adoptUntrackedDelayMs: z.number().int().nonnegative().default(1_500),
     /**
      * Wallet orphan reconciler: every N seconds (and at boot) any non-zero
      * token balance the position manager is not tracking is sold back to SOL.
@@ -937,6 +974,11 @@ const ExecutionConfig = z
 
 const RiskConfig = z
   .object({
+    // Dry-run wallet size: 'virtual' assumes 1 SOL (works with an unfunded or
+    // ephemeral key); 'chain' seeds the ledger from the real on-chain balance
+    // once at boot, so dry-run sizes — and simulates — exactly what live would
+    // trade with this wallet. Simulated PnL then moves the ledger as usual.
+    dryRunWalletSource: z.enum(['virtual', 'chain']).default('virtual'),
     // Master switch for every entry-gating circuit breaker (Section 8:
     // DAILY_LOSS, CONSECUTIVE_LOSSES, EMERGENCY_EXITS, WALLET_FLOOR,
     // STREAM_DOWN, KILL_SWITCH, plus the H10 KILL-file sentinel). Testing
@@ -1000,6 +1042,23 @@ const PersistenceConfig = z
   .object({
     dbPath: z.string().default('./data/scalper.db'),
     priceTickRetentionDays: z.number().int().positive().default(7),
+  })
+  .strict();
+
+/**
+ * Foreign-signer guard (positions/signerGuard.ts): a wallet tx our key paid
+ * for that this process never signed halts new entries — two instances on
+ * one wallet must never trade silently again.
+ */
+const GuardConfig = z
+  .object({
+    enabled: z.boolean().default(true),
+    // Allow-list operator CLIs append their signatures to.
+    allowListPath: z.string().default('./data/guard-allow.txt'),
+    // Grace before judging a tx (allow-list write races the stream).
+    graceMs: z.number().int().nonnegative().default(2_000),
+    // Startup audit: recent wallet signatures checked against the DB.
+    startupLookback: z.number().int().nonnegative().max(1000).default(50),
   })
   .strict();
 
@@ -1143,6 +1202,15 @@ export const ConfigSchema = z
     alerts: AlertsConfig.default({}),
     persistence: PersistenceConfig.default({}),
     dashboard: DashboardConfig.default({}),
+    guard: GuardConfig.default({}),
+    // Process role (feat/fra-lean WS4c). 'all' = everything in one process
+    // (tests, local dev). 'trader' = detection, fast screen, execution, exits
+    // only — no research reads, shadow or dashboard on its event loop.
+    // 'research' = src/research-worker.ts. PUMPDESK_ROLE overrides.
+    runtime: z
+      .object({ role: z.enum(['all', 'trader', 'research']).default('all') })
+      .strict()
+      .default({}),
     webhooks: WebhooksConfig.default({}),
     programs: ProgramOverrides,
   })

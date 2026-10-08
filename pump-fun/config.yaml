@@ -12,7 +12,9 @@
 # live again is WALLET_FLOOR, STREAM_DOWN and KILL_SWITCH. Untracked wallet
 # tokens are now auto-sold (execution.orphanSweepSec).
 # Hot-reload is NOT supported — restart to apply changes.
-mode: live # paper | dry-run | live
+# 2026-10-04 (feat/fra-lean): dry-run in Frankfurt until the pool replay and
+# a dry-run window show an edge after fees. Going live is an operator call.
+mode: dry-run # paper | dry-run | live
 
 # Verify pinned program IDs exist on-chain at startup. Needs a reachable RPC;
 # set false for offline boots / CI.
@@ -49,12 +51,14 @@ rpc:
   # out, so every buy AND every exit went through the single Helius sender —
   # a Helius rate-limit or regional blip could not stop entries only, it
   # stopped exits. Blank-safe: an unfilled SECONDARY_HTTP_URL leaves it unset.
-  secondaryHttp: ${SECONDARY_HTTP_URL}
-  # Dedicated READ endpoint for enrichment (pool GPA, holders, DAS getAsset,
-  # wallet getBalance). Helius serves DAS + indexed GPA on the primary itself,
-  # so this points at the same Helius URL — it exists so reads stay on Helius
-  # even if fallbackHttp[0] ever points at another provider.
-  enrichmentHttp: ${HELIUS_HTTP_URL}
+  # secondaryHttp REMOVED 2026-10-04: the Alchemy key behind it was out of
+  # monthly quota during the 2026-10-03 stuck buys and only added 429s. Helius
+  # Sender (below) is the second send path now.
+  # Research READ endpoint (enrichment, features, cluster warm, shadow) on a
+  # SEPARATE Helius key, so research bursts can never 429 the trade key that
+  # carries confirms, pricing and the fast screen (2026-10-03).
+  enrichmentHttp: ${HELIUS_RESEARCH_HTTP_URL}
+  researchMaxRps: 40
   # Independent READ endpoints, tried in order when the primary is rate-limited
   # or down. Reads are idempotent, so failover is safe.
   #
@@ -85,9 +89,9 @@ rpc:
   # SECONDARY_HTTP_URL was ever attempted. 900ms leaves room for one failover
   # hop within budget on the common single-endpoint-hiccup case.
   readTimeoutMs: 900
-  fallbackHttp:
-    - ${SECONDARY_HTTP_URL} # your own key (Alchemy / QuickNode / Ankr) — see .env
-    - ${TERTIARY_HTTP_URL} # optional third provider
+  # No third-party fallbacks (2026-10-04): the exhausted Alchemy key was worse
+  # than none. Add a keyed provider here only with paid headroom.
+  fallbackHttp: []
     # Keyless public endpoints REMOVED from the live config (2026-09-17).
     # Guardrail and exit reads now run at 'processed' commitment; a shared
     # public node can be slots behind, which turns into a wrong H5/H7 verdict
@@ -96,9 +100,13 @@ rpc:
     # paper/dev, never here.
 
 detector:
-  pumpportalEnabled: true # free migration feed (default)
-  pumpportalNewTokenEnabled: true # S0 observe-only: persist launches to `launches`; never screened/traded
-  heliusWsEnabled: true # direct on-chain redundancy (logsSubscribe; reuses HELIUS_HTTP_URL key)
+  # 2026-10-04: LaserStream (Frankfurt) is the only detection feed. It wins
+  # every race from this host; PumpPortal (incl. its new-token firehose) and
+  # Helius WS only added JSON parsing, dedupe and DB writes to the trader's
+  # event loop. The LaserStream launch filter still feeds pre-arm + launches.
+  pumpportalEnabled: false
+  pumpportalNewTokenEnabled: false
+  heliusWsEnabled: false
   heliusAtlasEnabled: true # Atlas transactionSubscribe first (Business plan); auto-falls-back to logsSubscribe when the server rejects it
   # Official Helius SDK feed (auto-reconnect + slot replay; needs a plan that
   # covers mainnet gRPC — Business+). Additive + self-disabling while
@@ -116,7 +124,8 @@ detector:
   # creations gives H12 every launch's exact creation slot with no PumpPortal
   # relay lag, plus a continuous-coverage window for mints it never saw.
   laserstreamLaunchesEnabled: true
-  confirmOnChain: true # verify migration tx landed via primaryHttp
+  # Off 2026-10-04: a getTransaction per graduation that never gated anything.
+  confirmOnChain: false
   dedupeTtlMs: 300000 # 5 min cross-feed dedupe window
   reconnectBaseMs: 500
   reconnectMaxMs: 30000
@@ -136,6 +145,28 @@ detector:
     # portal threshold to avoid a spurious authority-rotation alert.
     onChainMissedGraduations: 5 # on-chain feeds missed 5 consecutive pumpportal graduations → alert
   maxStaleSlots: 150 # drop replayed migrations older than ~60 s vs the slot clock
+
+# Helius Sender (2026-10-04): every 2026-10 buy landed through plain RPC — no
+# staked connection reached the leader. Sender fans the tx over staked
+# (SWQoS) routes; swqosOnly keeps the tip at the 5,000-lamport minimum
+# (~0.07 % of a 0.0067 SOL buy). Frankfurt endpoint, co-located with the VM.
+# Regional Sender endpoints are plain HTTP only (no TLS handshake to pay; the
+# payload is an already-signed tx and no API key is sent).
+heliusSender:
+  enabled: true
+  url: http://fra-sender.helius-rpc.com/fast
+  # 2026-10-04: BUYS go out on Sender Max (staked + Jito auction) to compete
+  # for the migration slot. Tip = Jito landed-tip p75 x 1.1, clamped to
+  # [0.001, 0.003] SOL — 2.3-7 % of a 0.043 SOL buy; the pool replay must
+  # clear it before going live. EXITS stay staked-only at the 5,000-lamport
+  # minimum (exitSwqosOnly) so stops and TPs don't pay the Max tip too.
+  swqosOnly: false
+  exitSwqosOnly: true
+  minTipLamports: 1000000
+  tipCapLamports: 3000000
+  tipPercentile: 75
+  tipBufferPct: 10
+  warmPingMs: 15000
 
 # Jito bundle submission DISABLED 2026-09-14 (tips removed per operator
 # request): the whole block stays commented out so sends are RPC-only and no
@@ -218,19 +249,16 @@ guardrails:
   # (folded into P0, the canonical pump.fun migration proof), H4 sellability
   # probe, H5 holder concentration, the unknowns / relaxed-risk tolerance
   # knobs, the minEntryScore gate and RugCheck. See guardrails/engine.ts.
-  creatorHoldingsCapPct: 8 # H6, from the creator's ATA (creator named by the launch feed)
+  # H6 (creator holdings) and H13 (creator funding cluster) removed 2026-10-04.
   minPoolSol: 25 # H7
   maxBuyImpactPct: 3 # H7
-  creatorMaxLaunches7d: 3 # H13, over the precomputed funding cluster
   # The fast read retries while the RPC node lags the gRPC feed (<= 1 slot).
   fastReadRetryDelaysMs: [0, 50, 100, 200]
   # Holders / DAS / early flow / manipulation features still run — AFTER the
   # verdict and any buy, for research, shadow and the decision model only.
   backgroundEnrichment: true
-  # H13 precompute: resolve every new launch's creator funding root in the
-  # background (LIFO, bounded). RPC cost: ~2-8 calls per NEW creator (repeat
-  # creators are cached), ~0.3 launches/s. Off = H13 only sees creators the
-  # background enrichment already resolved on an earlier graduation.
+  # Creator funding-root precompute (research worker): feeds the cluster
+  # research feature. No longer a veto (H13 removed 2026-10-04).
   clusterWarm: { enabled: true, maxConcurrent: 2, maxQueue: 500 }
   # Relaxed-risk knobs: the engine no longer produces relaxed accepts; these
   # still apply to relaxed positions recovered from before the fast path.
@@ -251,22 +279,18 @@ guardrails:
   momentumWindowBucketsMs: [0, 250, 500, 1000, 2000]
   momentumTxStatsEnabled: true
   momentumTxStatsMaxTx: 25
-  # H12 canonical-graduation population (P2.2, F10; veto-review segment A):
-  # only `pump`-suffix mints >= 30 s old at migration with a 60–90 SOL pool.
-  # Non-`pump` mints were 26 % of trades at WR 37.5 % / −5.9 %/trade.
+  # H12 canonical-graduation population: `pump`-suffix mints only (non-`pump`
+  # mints were 26 % of trades at WR 37.5 % / −5.9 %/trade). The mint-age and
+  # 60–90 SOL pool-band rules were removed 2026-10-04.
   population:
     enabled: true
     requirePumpSuffix: true
-    minMintAgeMs: 30000
-    minPoolSol: 60
-    maxPoolSol: 90
-    unknownAgePolicy: veto
   # Manipulation features (P3.3): recorded by the background enrichment for
-  # the learned filter. Only the funding-cluster cap vetoes (H13, from cache).
+  # research and the learned filter. None of them veto.
   features:
     enabled: true
     budgetMs: 2500
-    cluster: { enabled: true, hops: 2, maxSigs: 1000, veto: true }
+    cluster: { enabled: true, hops: 2, maxSigs: 1000 }
     curve: { enabled: true, maxPages: 4, maxCreationTx: 20, washSampleTx: 40 }
     copycat: { enabled: true }
     snipers: { enabled: true, windowSec: 10, minCoins: 3 }
@@ -631,6 +655,9 @@ fees:
   # Jito tip per tx. 0 while the `jito` block above is commented out; set it
   # (e.g. 0.0001) in the same change that re-enables Jito.
   jitoTipSolPerTx: 0
+  # Sender Max buy tip (entry only), ~Jito landed p75 x 1.1 clamped to
+  # [0.001, 0.003] SOL — modelled at its 0.001 floor in dry-run PnL.
+  buyTipSol: 0.0011
   # Charge constant-product impact on paper / twin fills (buy impact at entry,
   # sell impact per exit fill from the tick's reserves). Recorded separately as
   # slippage_sol; net PnL subtracts it. Without it the twin fills at the mid
@@ -644,7 +671,11 @@ fees:
   planCacheMs: 3000
   # Priority-fee floor/cap (µLamports per CU). Floor raised from the old 50k so
   # exits don't sit for slots waiting on a cheap tx while price crashes.
-  priorityFloorMicroLamports: 250000 # ~0.0000625 SOL at 250k CU
+  priorityFloorMicroLamports: 500000 # ~0.000125 SOL at 250k CU (raised 2026-10-04 for slot competition)
+  # Helius estimate scoped to PumpSwap + WSOL (our contention), 'veryHigh' ≈ p95;
+  # p90 when falling back to getRecentPrioritizationFees.
+  priorityLevel: veryHigh
+  priorityPercentile: 90
   priorityCapMicroLamports: 5000000 # ~0.00125 SOL at 250k CU (protection)
 
 # Experiment discipline (work plan 2026-09-25 P3.6). One change per config
@@ -723,6 +754,9 @@ simulator:
   useExecutorSimulation: true
 
 risk:
+  # 2026-10-04: dry-run sizes from the REAL wallet balance (seeded once at
+  # boot), so its buy simulations use the size live would trade.
+  dryRunWalletSource: chain
   # Master switch for every entry-gating circuit breaker (DAILY_LOSS,
   # CONSECUTIVE_LOSSES, EMERGENCY_EXITS, WALLET_FLOOR, STREAM_DOWN,
   # KILL_SWITCH, plus the H10 KILL-file sentinel). When true, canEnter()

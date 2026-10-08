@@ -7,7 +7,6 @@ import { deriveBondingCurvePda } from '../src/enrichment/curve.ts';
 import { imageFingerprint, nameFingerprint, copycatFeatures } from '../src/enrichment/features/copycat.ts';
 import { funderFromTx, creatorCluster } from '../src/enrichment/features/cluster.ts';
 import { sniperFeatures } from '../src/enrichment/features/snipers.ts';
-import { checkManipulation } from '../src/guardrails/checks/manipulation.ts';
 import { openDb } from '../src/persistence/db.ts';
 import { Repositories } from '../src/persistence/repositories.ts';
 import { ConfigSchema } from '../src/config/schema.ts';
@@ -361,40 +360,6 @@ describe('snipers', () => {
     const f = sniperFeatures(repos, MINT, swaps, { windowSec: 10, minCoins: 3 });
     expect(f).toMatchObject({ earlyBuyers: 2, knownSnipers: 1 });
     expect(f.sniperBuyShare).toBeCloseTo(0.75, 9);
-  });
-});
-
-describe('H13 funding cluster (cache only)', () => {
-  const COIN_CREATOR = 'CoinCreator';
-  const ctx = (repos: Repositories, cfg: Record<string, unknown> = {}): CheckContext => ({
-    candidate: {
-      graduation: { mint: MINT, venue: 'pumpswap', poolAddress: '', slot: 1, feedSource: 'pumpportal', receivedAtNs: 0n },
-      enrichment: { unknowns: [], elapsedMs: 0, pool: { coinCreator: COIN_CREATOR } as NonNullable<Candidate['enrichment']['pool']> },
-    },
-    config: ConfigSchema.parse({ guardrails: { creatorMaxLaunches7d: 3, features: { enabled: true, ...cfg } } }),
-    repos,
-    mode: 'dry-run',
-    walletSol: 0,
-  });
-  const clustered = (launches: number) => {
-    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
-    repos.upsertWalletFunder(COIN_CREATOR, 'F', 'Root');
-    for (let i = 0; i < launches; i++) repos.recordLaunch({ mint: `L${i}`, feedSource: 'laserstream', receivedAtNs: 0n, creator: COIN_CREATOR });
-    return repos;
-  };
-
-  it('vetoes a cached funding cluster over creatorMaxLaunches7d', () => {
-    expect(checkManipulation(ctx(clustered(9)))).toMatchObject({ status: 'fail', reason: 'creator_cluster' });
-  });
-
-  it('passes under the cap, and never walks the funding graph itself', () => {
-    expect(checkManipulation(ctx(clustered(2))).status).toBe('pass');
-    const empty = new Repositories(openDb({ path: ':memory:', memory: true }));
-    expect(checkManipulation(ctx(empty))).toMatchObject({ status: 'pass', reason: 'not_checked' });
-  });
-
-  it('is off with the cluster veto off', () => {
-    expect(checkManipulation(ctx(clustered(9), { cluster: { veto: false } })).status).toBe('pass');
   });
 });
 

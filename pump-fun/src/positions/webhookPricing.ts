@@ -92,9 +92,10 @@ export class WebhookPriceIngest implements PriceIngest {
       if (base === undefined || quote === undefined) continue;
       const tick: PriceTick = {
         mint: ref.mint,
-        price: computePrice(base, quote, ref.baseDecimals),
+        price: computePrice(base, quote, ref.baseDecimals, ref.virtualQuoteLamports),
         baseReserve: base,
         quoteReserveLamports: quote,
+        virtualQuoteLamports: ref.virtualQuoteLamports,
         atMs: at,
       };
       if (ref.creatorAta) {

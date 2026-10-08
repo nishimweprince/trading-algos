@@ -7,6 +7,7 @@ import { deriveAta } from '../core/ata.ts';
 import { decodePool, decodeTokenAccountAmount, type PoolInfo } from '../enrichment/pool.ts';
 import { decodeMint, type MintInfo } from '../enrichment/mint.ts';
 import { buildSwapState, type AmmConfigCache, type PrefetchedSwapStates, type RawAccountRead } from '../executor/swapState.ts';
+import type { PreArmer } from './preArm.ts';
 
 /**
  * Fast screen read (detection → verdict in one round trip).
@@ -15,7 +16,6 @@ import { buildSwapState, type AmmConfigCache, type PrefetchedSwapStates, type Ra
  * they go out as ONE getMultipleAccounts at `processed`:
  *
  *   canonical pool PDA · base mint · quote vault · base vault (SPL + 2022)
- *   · creator ATA (SPL + 2022, when the launch feed named the creator)
  *   · the wallet's WSOL + base ATAs (SPL + 2022, dry-run/live)
  *
  * Both token-program variants are requested because the mint's program is
@@ -32,13 +32,13 @@ export interface FastSnapshot {
   pool: PoolInfo;
   /** Null when the mint account did not come back (P0 fails). */
   mintInfo: MintInfo | null;
-  /** Creator share of supply, when the launch feed's creator IS the pool's coin_creator. */
-  creatorHolding?: { creator: string; share: number };
   readMs: number;
   attempts: number;
   reservesFrom: 'rpc' | 'tx' | 'rpc_reread';
   /** A buy state was built and parked for the executor. */
   swapStatePrefetched: boolean;
+  /** Served from the curve-completion pre-arm (pool pushed by LaserStream): no RPC read. */
+  preArmed: boolean;
 }
 
 export type FastReadResult =
@@ -53,8 +53,10 @@ export interface FastReaderDeps {
   user?: string;
   swapStates?: PrefetchedSwapStates;
   ammConfigs?: AmmConfigCache;
-  /** Creator named by the launch feed, if the mint's creation was seen. */
-  launchCreator?: (mint: string) => string | null;
+  /** Curve-completion pre-arm; when it holds this mint's pool, the read is skipped. */
+  preArmer?: Pick<PreArmer, 'peek' | 'waitForPool' | 'release'>;
+  /** How long a pending pool push may still beat the RPC read (pre-arm race). */
+  poolRaceMs?: number;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
 }
@@ -80,7 +82,7 @@ export class FastPoolReader {
     const started = this.now();
     const mint = g.mint;
     const poolKey = canonicalPumpPoolPda(new PublicKey(mint)).toBase58();
-    const creator = this.deps.launchCreator?.(mint) ?? null;
+    const armed = this.deps.preArmer?.peek(mint) ?? null;
     const user = this.deps.user;
 
     const keys = {
@@ -89,7 +91,6 @@ export class FastPoolReader {
       quoteVault: deriveAta(poolKey, WSOL_MINT, false),
       baseVaultSpl: deriveAta(poolKey, mint, false),
       baseVault22: deriveAta(poolKey, mint, true),
-      ...(creator ? { creatorSpl: deriveAta(creator, mint, false), creator22: deriveAta(creator, mint, true) } : {}),
       ...(user && this.userWsolAta
         ? { userWsol: this.userWsolAta, userBaseSpl: deriveAta(user, mint, false), userBase22: deriveAta(user, mint, true) }
         : {}),
@@ -99,14 +100,43 @@ export class FastPoolReader {
 
     let accts: Record<string, RawAccountRead | null> = {};
     let attempts = 0;
-    for (const delayMs of this.deps.retryDelaysMs) {
-      if (delayMs > 0) await this.sleep(delayMs);
-      attempts++;
-      const res = await this.deps.rpc.getMultipleAccountsBase64(addresses, 'processed').catch(() => null);
-      if (!res) continue;
-      accts = Object.fromEntries(names.map((n, i) => [n, res[i] ?? null]));
-      if (accts.pool) break;
+    const rpcRead = async (): Promise<Record<string, RawAccountRead | null>> => {
+      let got: Record<string, RawAccountRead | null> = {};
+      for (const delayMs of this.deps.retryDelaysMs) {
+        if (delayMs > 0) await this.sleep(delayMs);
+        attempts++;
+        const res = await this.deps.rpc.getMultipleAccountsBase64(addresses, 'processed').catch(() => null);
+        if (!res) continue;
+        got = Object.fromEntries(names.map((n, i) => [n, res[i] ?? null]));
+        if (got.pool) break;
+      }
+      return got;
+    };
+    // Pre-armed: the pool is pushed by LaserStream and the rest was prefetched
+    // at curve completion — no round trip. Vaults are not prefetched (they do
+    // not exist before the migrate tx); reserves come from its post balances.
+    // Not pushed yet: race the push against the RPC read, first one wins.
+    const usable = Boolean(armed && armed.mintAccount && armed.poolKey === poolKey);
+    let preArmed = false;
+    if (usable && armed?.pool) {
+      preArmed = true;
+    } else if (usable && armed && this.deps.preArmer) {
+      const readP = rpcRead();
+      const pushed = await Promise.race([
+        readP.then(() => false),
+        this.deps.preArmer.waitForPool(mint, this.deps.poolRaceMs ?? 1_000),
+      ]);
+      if (pushed && armed.pool) preArmed = true;
+      else accts = await readP;
+    } else {
+      accts = await rpcRead();
     }
+    if (preArmed && armed) {
+      const byAddr = (addr: string): RawAccountRead | null =>
+        addr === armed.poolKey ? armed.pool : addr === mint ? armed.mintAccount : (armed.accounts.get(addr) ?? null);
+      accts = Object.fromEntries(names.map((n) => [n, byAddr(keys[n]!)]));
+    }
+    if (armed) this.deps.preArmer?.release(mint, preArmed);
     const readMs = () => this.now() - started;
     if (!accts.pool) {
       return { ok: false, reason: 'pool_not_found', detail: `no account at canonical pool ${short(poolKey)} after ${attempts} reads`, readMs: readMs(), attempts };
@@ -146,7 +176,8 @@ export class FastPoolReader {
         reservesFrom = 'tx';
       } else if (!tx) {
         // No tx balances to fall back on: one re-read a slot later (rare).
-        await this.sleep(VAULT_REREAD_DELAY_MS);
+        // Pre-armed reads never read the vaults, so read them now instead.
+        if (!preArmed) await this.sleep(VAULT_REREAD_DELAY_MS);
         const [b, q] = await this.deps.rpc.getMultipleAccountsBase64([decoded.baseVault, decoded.quoteVault], 'processed');
         if (b) baseReserve = decodeTokenAccountAmount(b.data);
         if (q) quoteReserveLamports = decodeTokenAccountAmount(q.data);
@@ -161,12 +192,7 @@ export class FastPoolReader {
       quoteReserveLamports,
     };
 
-    const snapshot: FastSnapshot = { pool, mintInfo, readMs: 0, attempts, reservesFrom, swapStatePrefetched: false };
-    if (creator && mintInfo && mintInfo.supply > 0n && creator === decoded.coinCreator) {
-      const ata = is2022 ? accts.creator22 : accts.creatorSpl;
-      const held = ata ? decodeTokenAccountAmount(ata.data) : 0n;
-      snapshot.creatorHolding = { creator, share: Number(held) / Number(mintInfo.supply) };
-    }
+    const snapshot: FastSnapshot = { pool, mintInfo, readMs: 0, attempts, reservesFrom, swapStatePrefetched: false, preArmed };
 
     const configs = this.deps.ammConfigs?.get();
     if (user && configs && this.deps.swapStates && mintAcct && this.userWsolAta) {

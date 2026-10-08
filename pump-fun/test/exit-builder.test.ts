@@ -117,7 +117,7 @@ describe('ExitSupervisor uses the trigger-time builder with the live-price slipp
     const bus = new TypedBus();
     const mgr = new PositionManager({ config: cfg, bus, repos: new Repositories(openDb({ path: ':memory:', memory: true })), poller: poller as unknown as PricePoller, executor: executor as never });
     mgr.start();
-    const pricing = { poolAddress: 'pool', baseMint: 'mint', baseVault: 'bv', quoteVault: 'qv', baseDecimals: 6, baseReserve: 10n ** 15n, quoteReserveLamports: 10n ** 11n };
+    const pricing = { poolAddress: 'pool', baseMint: 'mint', baseVault: 'bv', quoteVault: 'qv', baseDecimals: 6, baseReserve: 10n ** 15n, quoteReserveLamports: 10n ** 11n, virtualQuoteLamports: 0n };
     return { executor, buildExitTx, sellAndConfirm, poller, bus, mgr, pricing, triggerPrice };
   }
   const settle = async () => {
@@ -130,7 +130,7 @@ describe('ExitSupervisor uses the trigger-time builder with the live-price slipp
     h.bus.emit('openPosition', { mint: 'M', sizeSol: 0.02, highVolatility: false, pricing: h.pricing });
     await settle();
     expect(h.executor.primeExitState).toHaveBeenCalledWith('mint', 'pool');
-    h.poller.handler({ mint: 'M', price: 2e-9, baseReserve: 4n * 10n ** 15n, quoteReserveLamports: 8n * 10n ** 9n, atMs: 1000 });
+    h.poller.handler({ virtualQuoteLamports: 0n, mint: 'M', price: 2e-9, baseReserve: 4n * 10n ** 15n, quoteReserveLamports: 8n * 10n ** 9n, atMs: 1000 });
     await settle();
     expect(h.buildExitTx).toHaveBeenCalledWith('mint', 2_500_000_000_000n, 20, { baseReserve: 4n * 10n ** 15n, quoteReserveLamports: 8n * 10n ** 9n });
     expect(h.sellAndConfirm).not.toHaveBeenCalled();
@@ -142,7 +142,7 @@ describe('ExitSupervisor uses the trigger-time builder with the live-price slipp
     const h = run(1e-8);
     h.bus.emit('openPosition', { mint: 'M', sizeSol: 0.02, highVolatility: false, pricing: h.pricing });
     await settle();
-    h.poller.handler({ mint: 'M', price: 2e-8, baseReserve: 10n ** 15n, quoteReserveLamports: 10n ** 13n, atMs: 1000 }); // +150 %: past any TP default
+    h.poller.handler({ virtualQuoteLamports: 0n, mint: 'M', price: 2e-8, baseReserve: 10n ** 15n, quoteReserveLamports: 10n ** 13n, atMs: 1000 }); // +150 %: past any TP default
     await settle();
     expect((h.buildExitTx.mock.calls[0] as unknown[])[2]).toBe(8);
     h.mgr.stop();
@@ -152,7 +152,7 @@ describe('ExitSupervisor uses the trigger-time builder with the live-price slipp
     const h = run(2e-9);
     h.bus.emit('openPosition', { mint: 'M', sizeSol: 0.02, highVolatility: false, pricing: h.pricing });
     await settle();
-    h.poller.handler({ mint: 'M', price: 2e-9, baseReserve: 0n, quoteReserveLamports: 0n, atMs: 1000 });
+    h.poller.handler({ virtualQuoteLamports: 0n, mint: 'M', price: 2e-9, baseReserve: 0n, quoteReserveLamports: 0n, atMs: 1000 });
     await settle();
     expect(h.buildExitTx).not.toHaveBeenCalled();
     expect(h.sellAndConfirm).toHaveBeenCalled();

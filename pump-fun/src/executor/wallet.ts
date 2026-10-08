@@ -1,4 +1,6 @@
-import { Keypair } from '@solana/web3.js';
+import { recordOwnSignature } from '../core/ownSignatures.ts';
+import { base58Encode } from '../core/base58.ts';
+import { Keypair, type VersionedTransaction } from '@solana/web3.js';
 import { readSecret } from '../config/load.ts';
 import { registerSecret, logger } from '../core/logger.ts';
 import { base58Decode } from '../core/base58.ts';
@@ -21,6 +23,17 @@ export class Wallet {
   readonly keypair: Keypair;
   readonly publicKey: string;
   readonly ephemeral: boolean;
+
+  /**
+   * Sign with the trading key and record the signature as ours, so the
+   * foreign-signer guard can tell this process's transactions from anyone
+   * else's that our key paid for. Every signing site must use this.
+   */
+  sign(tx: VersionedTransaction): void {
+    tx.sign([this.keypair]);
+    const sig = tx.signatures[0];
+    if (sig) recordOwnSignature(base58Encode(sig));
+  }
 
   private constructor(keypair: Keypair, ephemeral: boolean) {
     this.keypair = keypair;

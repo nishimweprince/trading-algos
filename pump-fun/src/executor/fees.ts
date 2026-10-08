@@ -1,5 +1,7 @@
 import type { RpcClient } from '../core/rpc.ts';
 import type { Config } from '../config/schema.ts';
+import { PROGRAM_IDS, WSOL_MINT } from '../core/constants.ts';
+import { SENDER_MIN_TIP_LAMPORTS } from './heliusSender.ts';
 
 /**
  * Priority fee + Jito tip strategy (Section 7.1). Priority fee targets the p75
@@ -16,10 +18,15 @@ export interface FeePlan {
   /**
    * Tip in lamports: to Helius Sender's tip accounts when heliusSender is
    * enabled, else to Jito's (0 when neither is configured). Name kept for the
-   * existing call sites.
+   * existing call sites. This is the BUY tip.
    */
   jitoTipLamports: number;
+  /** Tip for exits (Sender exit route: the swqos-only minimum unless exitSwqosOnly is false). */
+  exitTipLamports: number;
 }
+
+/** Accounts our swaps contend on — scopes the priority-fee estimate to PumpSwap traffic. */
+export const FEE_SCOPE_ACCOUNTS: readonly string[] = [PROGRAM_IDS.PUMP_SWAP, WSOL_MINT];
 
 interface TipFloorRow {
   ema_landed_tips_50th_percentile?: number;
@@ -39,21 +46,25 @@ export async function buildFeePlan(
     // Prefer the Helius account-aware estimate (medium level); fall back to the
     // getRecentPrioritizationFees p75 when it is disabled or unavailable (e.g.
     // non-Helius endpoints, devnet where the method is disabled).
-    const estimate = config.fees.useHeliusFeeEstimate ? await rpc.getPriorityFeeEstimate?.() : undefined;
+    const estimate = config.fees.useHeliusFeeEstimate
+      ? await rpc.getPriorityFeeEstimate?.([...FEE_SCOPE_ACCOUNTS], config.fees.priorityLevel)
+      : undefined;
     if (typeof estimate === 'number' && estimate > 0) {
       priority = Math.max(floor, estimate);
     } else {
-      const fees = (await rpc.getRecentPrioritizationFees()).filter((f) => f > 0);
+      const fees = (await rpc.getRecentPrioritizationFees([...FEE_SCOPE_ACCOUNTS])).filter((f) => f > 0);
       // Never bid below the configured floor — a p75 that undershoots the floor
       // during a quiet slot would leave an exit too cheap to land promptly.
-      if (fees.length > 0) priority = Math.max(floor, percentile(fees, 75));
+      if (fees.length > 0) priority = Math.max(floor, percentile(fees, config.fees.priorityPercentile));
     }
   } catch {
     // Fall back to the floor; never block a trade on fee telemetry.
   }
+  const buyTip = config.heliusSender.enabled ? await buildSenderTipLamports(config) : await buildJitoTipLamports(config);
   return {
     priorityMicroLamports: Math.min(priority, capMicroLamports),
-    jitoTipLamports: config.heliusSender.enabled ? await buildSenderTipLamports(config) : await buildJitoTipLamports(config),
+    jitoTipLamports: buyTip,
+    exitTipLamports: config.heliusSender.enabled && config.heliusSender.exitSwqosOnly ? SENDER_MIN_TIP_LAMPORTS.swqosOnly : buyTip,
   };
 }
 

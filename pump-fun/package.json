@@ -15,6 +15,8 @@
     "prestart:prod": "npm run dashboard:build",
     "start:prod": "node --experimental-strip-types src/index.ts",
     "start:bot": "node --experimental-strip-types src/index.ts",
+    "start:trader": "PUMPDESK_ROLE=trader node --experimental-strip-types --max-semi-space-size=64 src/index.ts",
+    "start:research": "PUMPDESK_ROLE=research node --experimental-strip-types src/research-worker.ts",
     "pm2:start": "pm2 start ecosystem.config.cjs",
     "pm2:stop": "pm2 stop pump-desk-main",
     "dev": "node --experimental-strip-types --watch --watch-path=./src --watch-path=./config.yaml src/index.ts",
@@ -36,6 +38,7 @@
     "research:decision": "node --experimental-strip-types src/research/decision-cli.ts",
     "research:vetoes": "node --experimental-strip-types src/research/veto-cohorts-cli.ts",
     "research:screen-replay": "node --experimental-strip-types src/research/screen-replay-cli.ts",
+    "research:pool-replay": "node --experimental-strip-types src/research/pool-replay-cli.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -52,6 +55,7 @@
     "helius-laserstream": "^0.8.5",
     "hono": "^4.10.7",
     "preact": "^10.27.2",
+    "undici": "^7.30.0",
     "yaml": "^2.7.0",
     "zod": "^3.24.1"
   },

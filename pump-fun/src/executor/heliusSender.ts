@@ -47,13 +47,27 @@ export function randomSenderTipAccount(rng: () => number = Math.random): string 
 
 export class HeliusSenderTxSender implements TxSender {
   readonly name = 'helius-sender';
+  /** Staked-only route (`?swqos_only=true`) vs Max (staked + Jito). */
+  readonly swqosOnly: boolean;
   private readonly url: string;
   private readonly fetchImpl: typeof fetch;
 
   constructor(opts: { url: string; swqosOnly: boolean; apiKey?: string | undefined; fetchImpl?: typeof fetch }) {
+    this.swqosOnly = opts.swqosOnly;
     this.url = heliusSenderUrl(opts.url, { swqosOnly: opts.swqosOnly, apiKey: opts.apiKey });
     if (opts.apiKey) registerSecret(opts.apiKey);
     this.fetchImpl = opts.fetchImpl ?? fetch;
+  }
+
+  /** Keep the connection warm: Sender answers GET /ping without auth or cost. */
+  async warm(): Promise<boolean> {
+    try {
+      const res = await this.fetchImpl(`${new URL(this.url).origin}/ping`, { method: 'GET' });
+      await res.text().catch(() => undefined);
+      return res.ok;
+    } catch {
+      return false;
+    }
   }
 
   async simulate(): Promise<{ err: unknown; logs: string[] }> {

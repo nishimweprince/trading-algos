@@ -3,6 +3,9 @@ import { loadConfig } from '../config/load.ts';
 import { logger } from '../core/logger.ts';
 import { openDb } from '../persistence/db.ts';
 import { assertDashboardExposureSafe, createDashboardApp } from './server.ts';
+import { Repositories } from '../persistence/repositories.ts';
+import type { RiskSnapshot } from '../risk/manager.ts';
+import { RISK_SNAPSHOT_KEY, RISK_SNAPSHOT_MAX_AGE_MS } from '../risk/manager.ts';
 
 const log = logger.child({ mod: 'dashboard-standalone' });
 
@@ -11,7 +14,14 @@ async function main(): Promise<void> {
   assertDashboardExposureSafe(config);
 
   const db = openDb({ path: config.persistence.dbPath });
-  const app = createDashboardApp({ config, db });
+  // The risk manager lives in the trader process; it publishes its snapshot to
+  // runtime_state every few seconds. Stale (trader down) reads as offline.
+  const repos = new Repositories(db);
+  const app = createDashboardApp({
+    config,
+    db,
+    getRiskSnapshot: () => repos.getRuntimeState<RiskSnapshot>(RISK_SNAPSHOT_KEY, RISK_SNAPSHOT_MAX_AGE_MS),
+  });
   const server = serve({
     fetch: app.fetch,
     hostname: config.dashboard.host,

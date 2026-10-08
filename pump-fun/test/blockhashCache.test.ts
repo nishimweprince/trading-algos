@@ -121,8 +121,9 @@ describe('assembleSignedSwapTx blockhash provider', () => {
       wallet: {
         keypair: kp,
         assertWhitelisted: () => {},
+        sign: (tx: { sign(k: unknown[]): void }) => tx.sign([kp]),
       } as never,
-      feePlan: { priorityMicroLamports: 250_000, jitoTipLamports: 0 },
+      feePlan: { priorityMicroLamports: 250_000, jitoTipLamports: 0, exitTipLamports: 0 },
       blockhashProvider: provider,
     });
 
@@ -138,8 +139,8 @@ describe('assembleSignedSwapTx blockhash provider', () => {
 
     await assembleSignedSwapTx([], {
       connection,
-      wallet: { keypair: kp, assertWhitelisted: () => {} } as never,
-      feePlan: { priorityMicroLamports: 250_000, jitoTipLamports: 0 },
+      wallet: { keypair: kp, assertWhitelisted: () => {}, sign: (tx: { sign(k: unknown[]): void }) => tx.sign([kp]) } as never,
+      feePlan: { priorityMicroLamports: 250_000, jitoTipLamports: 0, exitTipLamports: 0 },
     });
 
     expect(state.calls).toBe(1);

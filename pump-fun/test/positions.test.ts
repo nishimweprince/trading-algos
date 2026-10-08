@@ -9,11 +9,11 @@ const CFG = ConfigSchema.parse({}).exits;
 describe('computePrice', () => {
   it('is SOL per whole token', () => {
     // 1e9 tokens (decimals 6 -> 1e15 base units), 100 SOL reserve
-    const price = computePrice(10n ** 15n, 100n * 10n ** 9n, 6);
+    const price = computePrice(10n ** 15n, 100n * 10n ** 9n, 6, 0n);
     expect(price).toBeCloseTo(100 / 1e9, 15);
   });
   it('is zero for an empty base reserve', () => {
-    expect(computePrice(0n, 100n, 6)).toBe(0);
+    expect(computePrice(0n, 100n, 6, 0n)).toBe(0);
   });
 });
 
@@ -37,7 +37,7 @@ describe('PricePoller.readOnce', () => {
     };
     const poller = new PricePoller(rpc as never, 1000);
 
-    const read = await poller.readOnce({ baseVault: 'base', quoteVault: 'quote', baseDecimals: 6 });
+    const read = await poller.readOnce({ virtualQuoteLamports: 0n, baseVault: 'base', quoteVault: 'quote', baseDecimals: 6 });
 
     expect(queried).toEqual([['base', 'quote']]);
     expect(read?.price).toBeCloseTo(2e-7, 15);

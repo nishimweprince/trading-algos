@@ -1,3 +1,6 @@
+import type { Config } from '../config/schema.ts';
+import { trackSource } from './queries.ts';
+import { positionsModeFilterSql } from '../persistence/modeFilter.ts';
 import type { DB } from '../persistence/db.ts';
 import { bootstrapCI, mean, type Interval } from '../research/stats.ts';
 import { latencyPercentiles } from './analytics.ts';
@@ -71,11 +74,13 @@ function hasColumn(db: DB, table: string, column: string): boolean {
 
 export function getEdgeAnalytics(
   db: DB,
-  opts: { track?: 'live' | 'dry'; window?: number; seed?: number; iterations?: number } = {},
+  opts: { track?: 'live' | 'dry'; window?: number; seed?: number; iterations?: number; mode?: Config['mode'] } = {},
 ): EdgeAnalytics {
   const track = opts.track ?? 'live';
   const window = opts.window ?? 100;
-  const table = track === 'dry' ? 'dry_run_positions' : 'positions';
+  const src = trackSource(track, opts.mode);
+  const table = src.table;
+  const mf = src.table === 'positions' ? positionsModeFilterSql(src.mode) : '';
   const col = (name: string, fallback = 'NULL') => (hasColumn(db, table, name) ? name : fallback);
   // A shadow decision can land after the position rows were written: fall back to the candidate row.
   const decisionProbSql = hasColumn(db, table, 'decision_prob')
@@ -88,7 +93,7 @@ export function getEdgeAnalytics(
                 exit_reason AS exitReason, ${col('relaxed_risk')} AS relaxed, ${col('model_prob')} AS modelProb,
                 ${decisionProbSql} AS decisionProb
            FROM ${table}
-          WHERE state = 'CLOSED' AND pnl_sol IS NOT NULL AND size_sol > 0
+          WHERE state = 'CLOSED' AND pnl_sol IS NOT NULL AND size_sol > 0${mf}
           ORDER BY julianday(COALESCE(closed_at, created_at)) DESC, rowid DESC
           LIMIT ?`,
       )

@@ -2,26 +2,27 @@ import type { Config } from '../config/schema.ts';
 import type { TypedBus } from '../core/bus.ts';
 import type { Repositories } from '../persistence/repositories.ts';
 import type { Mint, Position, PoolPricingRef, ExitTrigger } from '../core/types.ts';
-import { LAMPORTS_PER_SOL } from '../core/constants.ts';
+import { LAMPORTS_PER_SOL, PROGRAM_IDS, WSOL_MINT } from '../core/constants.ts';
 import { logger } from '../core/logger.ts';
 import { PaperPosition, type Fill } from './position.ts';
 import { baseReserveWhole, buyImpactSol, estimatePaperFees, estimatePaperFeesTiered, sellImpactSol, type FeeLeg } from './paperFees.ts';
 import { FeeModel } from './feeModel.ts';
 import { PendingExit, Simulator } from './simulator.ts';
-import { computePrice, type PoolRef, type PriceIngest, type PricePoller, type PriceTick } from './pricing.ts';
+import { computePrice, revivePoolPricing, type PoolRef, type PriceIngest, type PricePoller, type PriceTick } from './pricing.ts';
 import { EmergencyMonitor, creatorAtaFor, monitorCfgFor, type EmergencyMonitorConfig } from './monitors.ts';
 import type { Executor } from '../executor/index.ts';
-import type { BroadcastResult } from '../executor/broadcaster.ts';
+import type { BroadcastResult, EntryTiming } from '../executor/broadcaster.ts';
 import { EntryMoveExceeded } from '../executor/slippage.ts';
 import { isLamportShortfall } from '../executor/txErrors.ts';
 import type { ExitLadder } from './presign.ts';
 import { ExitSupervisor, parseExitIntent, type ExitOutcome } from './exitSupervisor.ts';
 import { exitCfgFor } from '../exits/engine.ts';
 import { AdaptiveExit } from '../exits/adaptive.ts';
-import type { StrategyFeatureFields } from '../persistence/repositories.ts';
+import type { LatencyKind, StrategyFeatureFields } from '../persistence/repositories.ts';
 import { getActiveRunSession } from '../core/session.ts';
 import { ActualsRecorder } from './actuals.ts';
 import { deriveAta } from '../core/ata.ts';
+import type { WalletTx, WalletWatch } from './walletStream.ts';
 
 /**
  * Position manager (Section 7.3). In paper mode it opens a simulated position
@@ -135,6 +136,9 @@ interface LiveEntryArgs {
   ctx: OpenContext;
 }
 
+/** After a failed balance read, how long a confirmed buy waits on the wallet stream for its fill. */
+const STREAM_FILL_GRACE_MS = 2_000;
+
 const PATH_HORIZONS_MS = [1_000, 5_000, 15_000, 30_000, 60_000] as const;
 
 /** Rate limit on the degraded-poller alert so a flapping endpoint cannot spam. */
@@ -176,6 +180,8 @@ export class PositionManager {
   private readonly log = logger.child({ mod: 'positions' });
   private readonly positions = new Map<Mint, PositionRecord>();
   private readonly pendingEntries = new Set<Mint>();
+  /** Set by haltEntries(); blocks new entries until restart. */
+  private entryHaltReason: string | null = null;
   private readonly pendingRelaxedEntries = new Set<Mint>();
   private readonly now: () => number;
   /** dry-run/live: builds + broadcasts real buy/sell txs alongside the FSM. */
@@ -198,6 +204,10 @@ export class PositionManager {
     | undefined;
   private unsubscribe: (() => void) | null = null;
   private unsubscribeKill: (() => void) | null = null;
+  private unsubscribeWallet: (() => void) | null = null;
+  private readonly walletWatch: WalletWatch | undefined;
+  /** Mints whose untracked fill is being adopted (debounce + no double adoption). */
+  private readonly adopting = new Set<Mint>();
   private timeStopTimer: NodeJS.Timeout | null = null;
   /** NO_PRICE_DATA exits this session. Past the configured count, stop entering. */
   private blindExits = 0;
@@ -215,6 +225,8 @@ export class PositionManager {
     poller: PricePoller;
     ingest?: PriceIngest;
     executor?: Executor;
+    /** Wallet tx push (LaserStream). Confirms buys and adopts untracked fills without HTTP RPC. */
+    walletWatch?: WalletWatch;
     risk?: {
       canEnter(): { ok: boolean; reason?: string; detail?: string };
       reserveSol?(sol: number): void;
@@ -233,6 +245,7 @@ export class PositionManager {
     this.poller = deps.poller;
     this.ingest = deps.ingest;
     this.executor = deps.executor;
+    this.walletWatch = deps.walletWatch;
     this.now = deps.now ?? (() => Date.now());
     this.exitSupervisor = deps.executor
       ? new ExitSupervisor({ config: deps.config, bus: deps.bus, repos: deps.repos, executor: deps.executor, now: this.now })
@@ -266,10 +279,16 @@ export class PositionManager {
           ...(e.venue !== undefined ? { venue: e.venue } : {}),
           ...(e.entrySoftScore !== undefined ? { entrySoftScore: e.entrySoftScore } : {}),
           ...(e.detectedAtMs !== undefined ? { detectedAtMs: e.detectedAtMs } : {}),
+          ...(e.detectedAtNs !== undefined ? { detectedAtNs: e.detectedAtNs } : {}),
+          ...(e.graduationSlot !== undefined ? { graduationSlot: e.graduationSlot } : {}),
+          ...(e.preArmed !== undefined ? { preArmed: e.preArmed } : {}),
         },
       ),
     );
     this.unsubscribeKill = this.bus.on('killSwitch', () => this.forceCloseAll('KILL_SWITCH', 'kill switch'));
+    if (this.walletWatch && this.config.mode === 'live' && this.executor) {
+      this.unsubscribeWallet = this.walletWatch.onTransaction((tx) => this.onWalletTx(tx));
+    }
     // Wall-clock backup: PricePoller skips ticks when a request is in flight, so
     // TIME_STOP can miss its window and pin a concurrent slot (seen on 8Ynp…).
     // Also carries the blind-position guard, which needs a much shorter horizon.
@@ -281,8 +300,10 @@ export class PositionManager {
   stop(): void {
     this.unsubscribe?.();
     this.unsubscribeKill?.();
+    this.unsubscribeWallet?.();
     this.unsubscribe = null;
     this.unsubscribeKill = null;
+    this.unsubscribeWallet = null;
     if (this.timeStopTimer) {
       clearInterval(this.timeStopTimer);
       this.timeStopTimer = null;
@@ -439,6 +460,7 @@ export class PositionManager {
         price: read.price,
         baseReserve: read.baseReserve,
         quoteReserveLamports: read.quoteReserveLamports,
+        virtualQuoteLamports: read.virtualQuoteLamports,
         atMs: this.now(),
       });
     } catch (err) {
@@ -656,7 +678,9 @@ export class PositionManager {
   private estimateProceedsSol(rec: PositionRecord, sold: bigint): number | null {
     const r = this.liveReserves(rec);
     if (!r || sold <= 0n) return null;
-    const grossLamports = (r.quoteReserveLamports * sold) / (r.baseReserve + sold);
+    // Priced on vault + virtual (the program's curve), paid from the vault.
+    const effQuote = r.quoteReserveLamports + rec.pricing.virtualQuoteLamports;
+    const grossLamports = (effQuote * sold) / (r.baseReserve + sold);
     const bps = this.feeModel.forPrice(rec.lastPrice).bps;
     return (Number(grossLamports) * (1 - bps / 10_000)) / LAMPORTS_PER_SOL;
   }
@@ -742,6 +766,19 @@ export class PositionManager {
     return this.positions.size;
   }
 
+  /**
+   * Revive a persisted pricing_json (bigints come back as strings) and fill a
+   * missing virtual quote reserve — rows written before 2026-10-04 lack it, and
+   * pricing them on the vault alone reads ~22 % low and stops them out.
+   */
+  private async loadPersistedPricing(json: string): Promise<PoolPricingRef> {
+    const { pricing, virtualQuoteKnown } = revivePoolPricing(json);
+    if (virtualQuoteKnown) return pricing;
+    const v = await this.poller.readVirtualQuote(pricing.poolAddress);
+    if (v === null) throw new Error('pool virtual reserve unreadable — refusing to price on the vault alone');
+    return { ...pricing, virtualQuoteLamports: v };
+  }
+
   async recoverOpenPositions(): Promise<void> {
     if (this.config.mode !== 'live' || !this.executor) return;
     const rows = this.repos.latestOpenPositions();
@@ -752,7 +789,7 @@ export class PositionManager {
         if (!row.pricingJson || row.entryPrice === null || !row.openedAt) {
           throw new Error('missing pricing/entry metadata');
         }
-        const pricing = JSON.parse(row.pricingJson) as PoolPricingRef;
+        const pricing = await this.loadPersistedPricing(row.pricingJson);
         const rawBaseAmount = await this.executor.reconcileTokenBalance(pricing.baseMint, pricing.baseIsToken2022 ?? false);
         if (rawBaseAmount <= 0n) {
           const relaxedRisk = row.relaxedRisk === 1;
@@ -849,7 +886,7 @@ export class PositionManager {
         if (!row.pricingJson || !row.exitIntentJson || row.entryPrice === null || !row.openedAt) {
           throw new Error('missing exit recovery metadata');
         }
-        const pricing = JSON.parse(row.pricingJson) as PoolPricingRef;
+        const pricing = await this.loadPersistedPricing(row.pricingJson);
         const intent = parseExitIntent(row.exitIntentJson);
         const remaining = await this.executor.reconcileTokenBalance(pricing.baseMint, pricing.baseIsToken2022 ?? false);
         if (remaining <= 0n) {
@@ -975,8 +1012,29 @@ export class PositionManager {
     await this.openPaperLike(mint, sizeSol, highVolatility, pricing, momentumWindowMs, relaxedRisk, relaxedReasons, ctx);
   }
 
+  /**
+   * Stop opening new positions while leaving every open position and exit
+   * running. Used by invariant guards — a mark that disagrees with the real
+   * fill (mispriced exits on every trade) or a wallet transaction this
+   * process never signed (a second writer). Cleared only by a restart.
+   */
+  haltEntries(reason: string): void {
+    if (this.entryHaltReason) return;
+    this.entryHaltReason = reason;
+    this.log.error('new entries halted', { reason });
+    this.bus.emit('alert', { level: 'error', message: `⛔ new entries halted — ${reason}`, telegram: true });
+  }
+
+  get entriesHalted(): string | null {
+    return this.entryHaltReason;
+  }
+
   private canStartEntry(mint: Mint, relaxedRisk: boolean): boolean {
     if (this.positions.has(mint) || this.pendingEntries.has(mint)) return false;
+    if (this.entryHaltReason) {
+      this.bus.emit('entryVetoed', { mint, reason: 'KILL_SWITCH', detail: this.entryHaltReason, code: 'ENTRY_HALT' });
+      return false;
+    }
     if (this.positions.size + this.pendingEntries.size >= this.config.risk.maxConcurrentPositions) {
       this.bus.emit('entryVetoed', { mint, reason: 'CIRCUIT_BREAKER', detail: 'max concurrent positions', code: 'MAX_CONCURRENT' });
       this.log.info('entry blocked — max concurrent positions', { mint, cap: this.config.risk.maxConcurrentPositions });
@@ -1030,7 +1088,7 @@ export class PositionManager {
       // confirm latency, at the pool price THEN — and can fail. In dry-run the
       // real executor's buy simulate runs over the same window and its verdict
       // (6004 / move gate) is the landing test.
-      const screenPrice = computePrice(pricing.baseReserve, pricing.quoteReserveLamports, pricing.baseDecimals);
+      const screenPrice = computePrice(pricing.baseReserve, pricing.quoteReserveLamports, pricing.baseDecimals, pricing.virtualQuoteLamports);
       let sim: { latencyMs: number; haircutPct: number; executorRan: boolean; walletUnfunded?: boolean } | null = null;
       if (this.simulating) {
         const latencyMs = this.simulator.sampleLatencyMs('entry_confirm');
@@ -1040,6 +1098,9 @@ export class PositionManager {
                 .buy(pricing.poolAddress, pricing.baseMint, sizeSol, pricing)
                 .then((r) => {
                   const failed = r.simErr !== undefined && r.simErr !== null;
+                  // The error code alone (e.g. Custom 2004) does not say which
+                  // account was wrong; the program's own log lines do.
+                  if (failed) this.log.warn('dry-run buy simulation failed', { mint, simErr: r.simErr, logs: (r.logs ?? []).slice(-12) });
                   return {
                     ok: !failed,
                     detail: failed ? describeBuyFailure(r) : '',
@@ -1069,6 +1130,7 @@ export class PositionManager {
         baseVault: pricing.baseVault,
         quoteVault: pricing.quoteVault,
         baseDecimals: pricing.baseDecimals,
+        virtualQuoteLamports: pricing.virtualQuoteLamports,
       });
       const pricingForPosition: PoolPricingRef = fresh
         ? { ...pricing, baseReserve: fresh.baseReserve, quoteReserveLamports: fresh.quoteReserveLamports }
@@ -1119,7 +1181,7 @@ export class PositionManager {
         ...freshTickState(),
         lastBaseReserve: pricingForPosition.baseReserve,
         slippageSol: this.config.fees.modelPaperSlippage
-          ? buyImpactSol(sizeSol, pricingForPosition.quoteReserveLamports)
+          ? buyImpactSol(sizeSol, pricingForPosition.quoteReserveLamports + pricingForPosition.virtualQuoteLamports)
           : 0,
         originalRawBaseAmount: rawEstimate,
         rawBaseAmount: rawEstimate,
@@ -1190,7 +1252,7 @@ export class PositionManager {
     ctx: OpenContext = {},
   ): Promise<void> {
     if (!this.canStartEntry(mint, relaxedRisk)) return;
-    const estimatedEntryPrice = computePrice(pricing.baseReserve, pricing.quoteReserveLamports, pricing.baseDecimals);
+    const estimatedEntryPrice = computePrice(pricing.baseReserve, pricing.quoteReserveLamports, pricing.baseDecimals, pricing.virtualQuoteLamports);
     if (estimatedEntryPrice <= 0) {
       this.log.warn('cannot open live — invalid entry price', { mint });
       return;
@@ -1204,19 +1266,37 @@ export class PositionManager {
     if (relaxedRisk) this.pendingRelaxedEntries.add(mint);
     const openedAtMs = this.now();
     const pending: Position = { mint, state: 'PENDING_ENTRY', sizeSol, entryPrice: estimatedEntryPrice, openedAt: openedAtMs };
-    this.persistPosition(pending, {
-      pricingJson: safeJson(pricing),
-      executionJson: safeJson({ event: 'pending_entry' }),
-      momentumWindowMs,
-      relaxedRisk,
-      relaxedReasonsJson: relaxedReasons.length ? JSON.stringify(relaxedReasons) : null,
-    });
-    this.bus.emit('positionUpdate', pending);
+    // The PENDING row and its bus fan-out (dashboard, risk, Telegram) run
+    // right after the send is dispatched, not in front of it. A crash in that
+    // gap leaves the fill to the wallet stream's adoption and the orphan sweep.
+    let pendingRecorded = false;
+    const recordPending = () => {
+      if (pendingRecorded) return;
+      pendingRecorded = true;
+      this.persistPosition(pending, {
+        pricingJson: safeJson(pricing),
+        executionJson: safeJson({ event: 'pending_entry' }),
+        momentumWindowMs,
+        relaxedRisk,
+        relaxedReasonsJson: relaxedReasons.length ? JSON.stringify(relaxedReasons) : null,
+      });
+      this.bus.emit('positionUpdate', pending);
+    };
 
     let buy: BroadcastResult | undefined;
     const entry: LiveEntryArgs = { mint, sizeSol, highVolatility, pricing, estimatedEntryPrice, openedAtMs, pending, momentumWindowMs, relaxedRisk, relaxedReasons, ctx };
+    // Registered BEFORE the send: the wallet stream's tx carrying our token
+    // delta is the landing signal, independent of any HTTP RPC.
+    const watch = this.walletWatch?.waitForMintIncrease(pricing.baseMint, this.config.execution.buyConfirmTimeoutMs + 5_000);
+    let streamFill: WalletTx | null = null;
+    void watch?.promise.then((tx) => {
+      streamFill = tx;
+    });
+    // Only a real tx counts as landed — a timeout (null) must never confirm.
+    const landed = watch?.promise.then((tx) => tx ?? new Promise<never>(() => {}));
     try {
-      buy = await this.executor!.buyAndConfirm(pricing.poolAddress, pricing.baseMint, sizeSol, pricing);
+      buy = await this.executor!.buyAndConfirm(pricing.poolAddress, pricing.baseMint, sizeSol, pricing, { landed, onDispatched: recordPending });
+      if (buy.sent) recordPending(); // executors that never call the hook
       if (!buy.sent || !buy.signature) {
         this.risk?.releaseSol?.(sizeSol);
         this.failLiveEntry(mint, pending, buy, describeBuyFailure(buy), momentumWindowMs, relaxedRisk, relaxedReasons, pricing);
@@ -1243,9 +1323,8 @@ export class PositionManager {
           }
         }
       }
-      const rawBaseAmount = buy.confirmed
-        ? await this.executor!.reconcileTokenBalance(pricing.baseMint, pricing.baseIsToken2022 ?? false)
-        : 0n;
+      const rawBaseAmount = buy.confirmed ? await this.filledAmount(pricing, () => streamFill, watch?.promise) : 0n;
+      buy = this.withEntryTiming(mint, buy, ctx, streamFill);
       if (rawBaseAmount > 0n) {
         this.adoptLiveFill(entry, buy, rawBaseAmount);
         return;
@@ -1293,9 +1372,123 @@ export class PositionManager {
         this.log.error('live entry failed', { mint, err });
       }
     } finally {
+      watch?.cancel();
       this.pendingEntries.delete(mint);
       this.pendingRelaxedEntries.delete(mint);
     }
+  }
+
+  /**
+   * Wallet stream: a successful tx that raised our balance of a mint nobody
+   * here owns (no position, no in-flight entry) is a landed buy we lost track
+   * of — 2026-10-03's three FAILED-but-landed buys sat for 12–60 min without
+   * exits. Adopt it as an OPEN position with exits armed instead of leaving it
+   * to the orphan sweep's market dump.
+   */
+  private onWalletTx(tx: WalletTx): void {
+    if (tx.err || !this.config.execution.adoptUntrackedFills) return;
+    // Only fills our key paid for are lost buys; tokens someone sent us are
+    // the orphan sweep's to judge (spam airdrops must not become positions).
+    if (!this.executor || tx.feePayer !== this.executor.publicKey) return;
+    for (const [mint, d] of tx.tokenDeltas) {
+      if (d.raw <= 0n || mint === WSOL_MINT) continue;
+      if (this.positions.has(mint) || this.pendingEntries.has(mint) || this.adopting.has(mint)) continue;
+      this.adopting.add(mint);
+      const delay = this.config.execution.adoptUntrackedDelayMs;
+      void this.sleep(delay)
+        .then(() => this.adoptUntrackedFill(mint, d.raw, d.decimals, d.programId === PROGRAM_IDS.TOKEN_2022, tx))
+        .catch((err) => this.log.error('untracked fill adoption failed — orphan sweep is the backstop', { mint, err }))
+        .finally(() => this.adopting.delete(mint));
+    }
+  }
+
+  private async adoptUntrackedFill(mint: Mint, raw: bigint, decimals: number, is2022: boolean, tx: WalletTx): Promise<void> {
+    if (this.positions.has(mint) || this.pendingEntries.has(mint)) return; // claimed meanwhile
+    const pricing = await this.poller.readPoolPricing(mint, decimals, is2022);
+    if (!pricing) {
+      this.log.warn('untracked fill has no readable PumpSwap pool — leaving it to the orphan sweep', { mint, signature: tx.signature });
+      return;
+    }
+    if (this.positions.has(mint) || this.pendingEntries.has(mint)) return;
+    // SOL that left the wallet for these tokens (fee + ATA rent included: conservative).
+    const spentSol = tx.solDeltaLamports < 0n ? Number(-tx.solDeltaLamports) / LAMPORTS_PER_SOL : 0;
+    const mark = computePrice(pricing.baseReserve, pricing.quoteReserveLamports, pricing.baseDecimals, pricing.virtualQuoteLamports);
+    const sizeSol = spentSol > 0 ? spentSol : (Number(raw) / 10 ** decimals) * mark;
+    if (!(sizeSol > 0) || !(mark > 0)) return;
+    const openedAtMs = this.now();
+    const pending: Position = { mint, state: 'PENDING_ENTRY', sizeSol, entryPrice: mark, openedAt: openedAtMs };
+    const entry: LiveEntryArgs = {
+      mint, sizeSol, highVolatility: false, pricing, estimatedEntryPrice: mark, openedAtMs, pending,
+      momentumWindowMs: undefined, relaxedRisk: false, relaxedReasons: [], ctx: {},
+    };
+    const buy: BroadcastResult = {
+      mode: 'live', simulated: false, sent: true, confirmed: true, signature: tx.signature,
+      ...(tx.slot !== undefined ? { slot: tx.slot } : {}), attempts: [],
+    };
+    this.log.warn('adopting untracked wallet fill', { mint, signature: tx.signature, raw: raw.toString(), sizeSol });
+    this.bus.emit('alert', { level: 'warn', message: `🛟 adopted untracked fill ${short(mint)} (${sizeSol.toFixed(4)} SOL) — exits armed`, telegram: true });
+    this.adoptLiveFill(entry, buy, raw, { skipPriceInvariant: true });
+  }
+
+  /**
+   * Attach and record the entry's latency chain: detect→send (µs, monotonic),
+   * send→stream-seen, and how many slots after the migration it landed.
+   */
+  private withEntryTiming(mint: Mint, buy: BroadcastResult, ctx: OpenContext, streamFill: WalletTx | null): BroadcastResult {
+    const timing: EntryTiming = {};
+    if (ctx.preArmed !== undefined) timing.preArmed = ctx.preArmed;
+    if (ctx.detectedAtNs !== undefined && buy.submittedAtNs !== undefined) {
+      timing.detectToSendUs = Number((BigInt(buy.submittedAtNs) - ctx.detectedAtNs) / 1_000n);
+    }
+    if (streamFill && buy.submittedAtMs !== undefined) timing.sendToStreamMs = Math.max(0, streamFill.seenAtMs - buy.submittedAtMs);
+    const landedSlot = streamFill?.slot ?? buy.slot;
+    if (ctx.graduationSlot !== undefined) {
+      timing.migrationSlot = ctx.graduationSlot;
+      if (landedSlot !== undefined) timing.slotsFromMigration = landedSlot - ctx.graduationSlot;
+    }
+    const sample = (kind: LatencyKind, latencyMs: number | undefined) => {
+      if (latencyMs === undefined || !Number.isFinite(latencyMs)) return;
+      try {
+        this.repos.recordLatencySample({ kind, latencyMs, mint, ...(ctx.feedSource ? { feedSource: ctx.feedSource } : {}) });
+      } catch (err) {
+        this.log.debug('latency sample failed', { kind, mint, err });
+      }
+    };
+    sample('detect_to_send_us', timing.detectToSendUs);
+    sample('send_to_stream', timing.sendToStreamMs);
+    sample('migration_to_land_slots', timing.slotsFromMigration);
+    this.log.info('entry timing', { mint, ...timing });
+    return { ...buy, timing };
+  }
+
+  /**
+   * Tokens a confirmed buy delivered. The wallet stream's delta wins (no RPC);
+   * otherwise the on-chain balance read races the stream, so a 429ing RPC
+   * cannot hold the position unadopted while the stream already knows.
+   */
+  private async filledAmount(
+    pricing: PoolPricingRef,
+    streamed: () => WalletTx | null,
+    streamPromise: Promise<WalletTx | null> | undefined,
+  ): Promise<bigint> {
+    const fromTx = (tx: WalletTx | null) => tx?.tokenDeltas.get(pricing.baseMint)?.raw ?? 0n;
+    const now = fromTx(streamed());
+    if (now > 0n) return now;
+    const read = this.executor!.reconcileTokenBalance(pricing.baseMint, pricing.baseIsToken2022 ?? false);
+    if (!streamPromise) return read;
+    const viaStream = streamPromise.then((tx) => {
+      const raw = fromTx(tx);
+      return raw > 0n ? raw : new Promise<never>(() => {});
+    });
+    // A failed (429ing) read gives the stream a short window before the
+    // error sends the buy to settleSentBuy — which still resolves it.
+    const readOrStream = read.catch(async (err: unknown) => {
+      const tx = await Promise.race([streamPromise, this.sleep(STREAM_FILL_GRACE_MS).then(() => null)]);
+      const raw = fromTx(tx);
+      if (raw > 0n) return raw;
+      throw err;
+    });
+    return Promise.race([readOrStream, viaStream]);
   }
 
   /**
@@ -1316,7 +1509,7 @@ export class PositionManager {
       relaxedReasonsJson: relaxedReasons.length ? JSON.stringify(relaxedReasons) : null,
     });
     this.log.warn('buy sent but not settled — resolving against the chain', { mint, signature: buy.signature, confirmed: buy.confirmed });
-    const res = await this.resolveSentBuy(buy.signature!, pricing);
+    const res = await this.resolveSentBuy(buy.signature!, pricing, buy.submittedAtMs);
     if (res.kind === 'landed') {
       this.log.warn('adopted late-landing buy', { mint, signature: buy.signature, rawBaseAmount: res.rawBaseAmount.toString() });
       this.adoptLiveFill(entry, { ...buy, confirmed: true, landingUnknown: false }, res.rawBaseAmount);
@@ -1327,19 +1520,41 @@ export class PositionManager {
   }
 
   /**
-   * Poll signature status + token balance every execution.sentBuyPollMs for up
-   * to execution.sentBuyResolveMs. Tokens in the wallet win over everything:
-   * that is the one fact that decides whether a position must be managed.
-   * Iteration-bounded (not clock-bounded) so an injected constant clock cannot spin.
+   * Decide a sent buy against the chain. Never on a clock alone:
+   *  - the wallet stream's tx for this signature (or a token delta for the
+   *    mint) settles it immediately, no HTTP RPC needed;
+   *  - an on-chain error (stream or RPC) is the only early "failed";
+   *  - after execution.sentBuyResolveMs with no sighting, "failed" only if the
+   *    stream was continuously up since before the send (it would have seen
+   *    the tx) — otherwise keep polling up to execution.sentBuyHardMaxMs, so a
+   *    429 storm with the stream down cannot declare a landed buy dead.
+   * Tokens that still arrive later are adopted by onWalletTx.
    */
   private async resolveSentBuy(
     signature: string,
     pricing: PoolPricingRef,
+    submittedAtMs?: number,
   ): Promise<{ kind: 'landed'; rawBaseAmount: bigint } | { kind: 'failed'; detail: string }> {
-    const { sentBuyResolveMs, sentBuyPollMs } = this.config.execution;
-    const polls = Math.max(1, Math.ceil(sentBuyResolveMs / sentBuyPollMs));
+    const { sentBuyResolveMs, sentBuyPollMs, sentBuyHardMaxMs } = this.config.execution;
+    const startedAtMs = this.now();
+    const sentAtMs = submittedAtMs ?? startedAtMs;
+    let streamTx: WalletTx | null = null;
+    let streamDone = false;
+    const streamWait = this.walletWatch
+      ? this.walletWatch.waitForSignature(signature, sentBuyHardMaxMs).then((tx) => {
+          streamTx = tx;
+          streamDone = true;
+        })
+      : null;
     let seenConfirmed = false;
-    for (let i = 0; i < polls; i++) {
+    const maxPolls = Math.max(1, Math.ceil(sentBuyHardMaxMs / sentBuyPollMs));
+    for (let i = 0; i < maxPolls; i++) {
+      const tx = streamTx as WalletTx | null;
+      if (tx) {
+        if (tx.err) return { kind: 'failed', detail: `buy failed on-chain: ${errText(tx.err)}` };
+        const raw = tx.tokenDeltas.get(pricing.baseMint)?.raw ?? 0n;
+        if (raw > 0n) return { kind: 'landed', rawBaseAmount: raw };
+      }
       let status: Awaited<ReturnType<Executor['signatureStatus']>> = null;
       try {
         status = await this.executor!.signatureStatus(signature);
@@ -1355,14 +1570,26 @@ export class PositionManager {
       if (raw > 0n) return { kind: 'landed', rawBaseAmount: raw };
       if (status?.err) return { kind: 'failed', detail: `buy failed on-chain: ${errText(status.err)}` };
       if (status?.confirmationStatus === 'confirmed' || status?.confirmationStatus === 'finalized') seenConfirmed = true;
-      if (i < polls - 1) await this.sleep(sentBuyPollMs);
+      if (seenConfirmed && tx && !tx.err) {
+        return { kind: 'failed', detail: 'confirmed buy but wallet has no base tokens' };
+      }
+      const elapsed = (i + 1) * sentBuyPollMs;
+      const watch = this.walletWatch;
+      const streamCoveredSend = watch?.healthy === true && watch.upSinceMs !== null && watch.upSinceMs <= sentAtMs;
+      if (elapsed >= sentBuyResolveMs && !tx && (streamCoveredSend || !watch)) {
+        return {
+          kind: 'failed',
+          detail: seenConfirmed
+            ? 'confirmed buy but wallet has no base tokens'
+            : `buy not seen on-chain within ${sentBuyResolveMs}ms${watch ? ' (wallet stream up throughout)' : ''}`,
+        };
+      }
+      if (i < maxPolls - 1) {
+        if (streamWait && !streamDone) await Promise.race([this.sleep(sentBuyPollMs), streamWait]);
+        else await this.sleep(sentBuyPollMs);
+      }
     }
-    return {
-      kind: 'failed',
-      detail: seenConfirmed
-        ? 'confirmed buy but wallet has no base tokens'
-        : `buy not seen on-chain within ${sentBuyResolveMs}ms`,
-    };
+    return { kind: 'failed', detail: `buy unresolved after ${sentBuyHardMaxMs}ms (stream and RPC both silent)` };
   }
 
   /**
@@ -1387,10 +1614,30 @@ export class PositionManager {
     this.log.error('live entry unresolved', { mint, detail, signature: buy.signature });
   }
 
+  /**
+   * Price invariant: the realised fill (SOL in / tokens out, fee included)
+   * must sit within fee + the entry slippage cap of the mark the screen priced
+   * at. Every 2026-10 live fill sat 27.7 % above a vault-only mark — exits then
+   * measured against the wrong price and stopped out on the first tick. A
+   * breach means the mark is wrong for every trade, so new entries halt.
+   */
+  private checkFillAgainstMark(mint: Mint, fillPrice: number, markPrice: number): void {
+    if (!(fillPrice > 0) || !(markPrice > 0)) return;
+    const feePct = this.feeModel.forPrice(markPrice).bps / 100;
+    const tolerancePct = feePct + this.config.entry.maxSlippagePct;
+    const gapPct = (fillPrice / markPrice - 1) * 100;
+    if (Math.abs(gapPct) <= tolerancePct) return;
+    this.log.error('fill price disagrees with the mark', { mint, fillPrice, markPrice, gapPct, tolerancePct });
+    this.haltEntries(
+      `fill ${short(mint)} is ${gapPct.toFixed(1)} % from the mark (tolerance ${tolerancePct.toFixed(1)} %) — pricing is wrong`,
+    );
+  }
+
   /** Register a landed live buy as an OPEN position: pricing, ladder, persist, alerts. */
-  private adoptLiveFill(entry: LiveEntryArgs, buy: BroadcastResult, rawBaseAmount: bigint): void {
+  private adoptLiveFill(entry: LiveEntryArgs, buy: BroadcastResult, rawBaseAmount: bigint, opts: { skipPriceInvariant?: boolean } = {}): void {
     const { mint, sizeSol, highVolatility, pricing, estimatedEntryPrice, openedAtMs, momentumWindowMs, relaxedRisk, relaxedReasons, ctx } = entry;
     const entryPrice = entryPriceFromRawAmount(sizeSol, rawBaseAmount, pricing.baseDecimals) ?? estimatedEntryPrice;
+    if (!opts.skipPriceInvariant) this.checkFillAgainstMark(mint, entryPrice, estimatedEntryPrice);
 
     const pos = new PaperPosition({ mint, sizeSol, entryPrice, openedAtMs, highVolatility, cfg: this.exitCfgFor(relaxedRisk) });
     const monitor = new EmergencyMonitor(this.monitorCfgFor(relaxedRisk));
@@ -1662,6 +1909,7 @@ export class PositionManager {
       baseVault: pricing.baseVault,
       quoteVault: pricing.quoteVault,
       baseDecimals: pricing.baseDecimals,
+      virtualQuoteLamports: pricing.virtualQuoteLamports,
       ...(creatorAta ? { creatorAta } : {}),
     };
     this.poller.register(ref);
@@ -2406,6 +2654,9 @@ export interface OpenContext {
   venue?: string;
   entrySoftScore?: number;
   detectedAtMs?: number;
+  detectedAtNs?: bigint;
+  graduationSlot?: number;
+  preArmed?: boolean;
 }
 
 function short(mint: string): string {

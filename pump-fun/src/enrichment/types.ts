@@ -101,6 +101,8 @@ export interface ScreenTimings {
   fastReadAttempts?: number;
   /** Where the pool reserves came from: the vaults, or the migrate tx. */
   reservesFrom?: 'rpc' | 'tx' | 'rpc_reread';
+  /** Pool/mint/ATAs came from the curve-completion pre-arm (no RPC read). */
+  preArmed?: boolean;
   /** Screen start → verdict emitted (and openPosition, when accepted). */
   verdictMs?: number;
   /** Background: Enricher.enrich(). */

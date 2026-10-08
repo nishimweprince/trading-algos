@@ -133,11 +133,11 @@ class FakePoller {
   get size() { return 0; }
   get pollStats() { return { failures: 0, deadlineExpired: 0, overlapSkips: 0 }; }
   tick(mint: string, price: number, atMs: number) {
-    this.handler({ mint, price, baseReserve: 0n, quoteReserveLamports: 0n, atMs });
+    this.handler({ virtualQuoteLamports: 0n, mint, price, baseReserve: 0n, quoteReserveLamports: 0n, atMs });
   }
 }
 
-const pricing = (): PoolPricingRef => ({
+const pricing = (): PoolPricingRef => ({ virtualQuoteLamports: 0n,
   poolAddress: 'pool', baseMint: 'mint', baseVault: 'b', quoteVault: 'q', baseDecimals: 6,
   baseReserve: 10n ** 15n, quoteReserveLamports: 100n * 10n ** 9n, // mid 1e-7
 });

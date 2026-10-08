@@ -127,7 +127,8 @@ export class PumpAmmClient {
   async estimateSellLamports(poolAddress: string, user: PublicKey, baseAmount: bigint): Promise<bigint> {
     const state = await this.online.swapSolanaState(new PublicKey(poolAddress), user);
     const baseReserve = BigInt(state.poolBaseAmount.toString());
-    const quoteReserve = BigInt(state.poolQuoteAmount.toString());
+    // The program prices against vault + virtual reserve.
+    const quoteReserve = BigInt(state.poolQuoteAmount.toString()) + BigInt(state.pool.virtualQuoteReserves?.toString() ?? '0');
     if (baseReserve + baseAmount === 0n) return 0n;
     return (baseAmount * quoteReserve) / (baseReserve + baseAmount);
   }

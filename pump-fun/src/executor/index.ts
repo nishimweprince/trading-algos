@@ -24,6 +24,11 @@ import type { PrefetchedSwapStates } from './swapState.ts';
 import { fetchFillActuals, type FillActuals } from './fillActuals.ts';
 import type { SwapSolanaState } from '@pump-fun/pump-swap-sdk';
 import BN from 'bn.js';
+import { isPoolNotYetVisible } from './txErrors.ts';
+
+/** Dry-run: re-simulate when the simulating node has not seen the new pool yet. */
+const DRY_RUN_POOL_RETRIES = 3;
+const DRY_RUN_POOL_RETRY_MS = 400;
 
 /**
  * Execution orchestrator (Section 7.1). Builds a swap via the SDK, assembles a
@@ -37,9 +42,12 @@ export class Executor {
   private readonly wallet: Wallet;
   private readonly pumpAmm: PumpAmmClient;
   private readonly broadcaster: Broadcaster;
+  /** Exits: same routes, but the Sender leg is the exit route (exitSwqosOnly). */
+  private readonly exitBroadcaster: Broadcaster;
   private readonly jito: JitoTxSender | undefined;
   private readonly blockhashes: BlockhashCache | undefined;
   private readonly heliusSender: HeliusSenderTxSender | undefined;
+  private readonly heliusExitSender: HeliusSenderTxSender | undefined;
   /** Simulation-measured CU per tx kind (P4.1); only used when execution.dynamicComputeUnits. */
   private readonly cu = new ComputeUnitTracker();
   /** Cached fee plan; see feePlan() for why staleness here is safe. */
@@ -75,7 +83,13 @@ export class Executor {
     this.blockhashes =
       exec.blockhashCacheMs > 0 ? new BlockhashCache(this.connection, exec.blockhashCacheMs) : undefined;
     this.wallet = Wallet.load(deps.config.wallet.keypairEnvVar, deps.config.mode);
-    this.pumpAmm = new PumpAmmClient(deps.httpUrl, exec.stateCommitment, deps.swapStates ? { prefetched: deps.swapStates } : undefined);
+    // Failover + timeout like every other client: a bare Connection here made
+    // orphan sells and exit-state reads Helius-only and unbounded (2026-10-03).
+    this.pumpAmm = new PumpAmmClient(deps.httpUrl, exec.stateCommitment, {
+      fallbackHttpUrls: fetchUrls.slice(1),
+      timeoutMs: Math.max(deps.config.rpc?.readTimeoutMs ?? 900, 1_500),
+      ...(deps.swapStates ? { prefetched: deps.swapStates } : {}),
+    });
 
     const senderOpts = { commitment: exec.stateCommitment, simulateTimeoutMs: exec.simulateTimeoutMs };
     const primary = new RpcTxSender('primary', deps.httpUrl, senderOpts);
@@ -87,25 +101,43 @@ export class Executor {
         })
       : undefined;
 
-    const senderKey = deps.config.heliusSender.apiKeyEnvVar ? readSecret(deps.config.heliusSender.apiKeyEnvVar) : undefined;
-    this.heliusSender = deps.config.heliusSender.enabled
-      ? new HeliusSenderTxSender({ url: deps.config.heliusSender.url, swqosOnly: deps.config.heliusSender.swqosOnly, apiKey: senderKey })
-      : undefined;
+    const hs = deps.config.heliusSender;
+    const senderKey = hs.apiKeyEnvVar ? readSecret(hs.apiKeyEnvVar) : undefined;
+    // Buys: Sender Max (staked + Jito) when swqosOnly is false. Exits: their own
+    // route, staked-only at the minimum tip unless exitSwqosOnly is false.
+    this.heliusSender = hs.enabled ? new HeliusSenderTxSender({ url: hs.url, swqosOnly: hs.swqosOnly, apiKey: senderKey }) : undefined;
+    this.heliusExitSender = !hs.enabled
+      ? undefined
+      : hs.exitSwqosOnly === hs.swqosOnly
+        ? this.heliusSender
+        : new HeliusSenderTxSender({ url: hs.url, swqosOnly: hs.exitSwqosOnly, apiKey: senderKey });
 
-    const senders: TxSender[] = [];
-    if (this.heliusSender) senders.push(this.heliusSender);
-    if (this.jito) senders.push(this.jito);
-    senders.push(primary);
+    const rest: TxSender[] = [];
+    if (this.jito) rest.push(this.jito);
+    rest.push(primary);
     if (deps.config.rpc?.secondaryHttp) {
-      senders.push(new RpcTxSender('secondary', deps.config.rpc.secondaryHttp, senderOpts));
+      rest.push(new RpcTxSender('secondary', deps.config.rpc.secondaryHttp, senderOpts));
     }
-    this.broadcaster = new Broadcaster(deps.config.mode, senders, {
+    const broadcasterOpts = {
       simulator: primary,
-      confirmSignature: (signature) => this.confirmSignature(signature),
+      confirmSignature: (signature: string) => this.confirmSignature(signature),
       slotClock: deps.slotClock,
-    });
+    };
+    this.broadcaster = new Broadcaster(deps.config.mode, [...(this.heliusSender ? [this.heliusSender] : []), ...rest], broadcasterOpts);
+    this.exitBroadcaster = new Broadcaster(deps.config.mode, [...(this.heliusExitSender ? [this.heliusExitSender] : []), ...rest], broadcasterOpts);
 
-    this.log.info('executor ready', { mode: deps.config.mode, wallet: this.wallet.publicKey, ephemeral: this.wallet.ephemeral });
+    const routeName = (s: TxSender) =>
+      s instanceof HeliusSenderTxSender ? `helius-sender:${s.swqosOnly ? 'swqos' : 'max'}(${new URL(hs.url).hostname.split('.')[0]})` : s.name;
+    this.log.info('executor ready', {
+      mode: deps.config.mode,
+      wallet: this.wallet.publicKey,
+      ephemeral: this.wallet.ephemeral,
+      sendRoutes: {
+        buy: [...(this.heliusSender ? [this.heliusSender] : []), ...rest].map(routeName).join('+'),
+        exit: [...(this.heliusExitSender ? [this.heliusExitSender] : []), ...rest].map(routeName).join('+'),
+      },
+      ...(deps.config.mode === 'dry-run' ? { note: 'dry-run only simulates — no route is used until live' } : {}),
+    });
   }
 
   get publicKey(): string {
@@ -149,6 +181,15 @@ export class Executor {
     };
     const exec = this.config.execution;
     if (this.blockhashes && exec.blockhashCacheMs > 0) every(exec.blockhashCacheMs / 2, () => this.blockhashes!.warm());
+    if (this.heliusSender && this.config.heliusSender.warmPingMs > 0) {
+      const sender = this.heliusSender;
+      let reported = false;
+      every(this.config.heliusSender.warmPingMs, async () => {
+        const ok = await sender.warm();
+        if (!reported || !ok) this.log[ok ? 'info' : 'warn']('helius sender ping', { ok, url: new URL(this.config.heliusSender.url).host });
+        reported = true;
+      });
+    }
     const ttl = this.config.fees.planCacheMs;
     if (ttl > 0) {
       every(ttl / 2, async () => {
@@ -193,15 +234,23 @@ export class Executor {
     build: () => Promise<Uint8Array>,
     label: string,
     opts?: ExitBroadcastOpts,
+    kind: 'buy' | 'exit' = 'buy',
   ): Promise<BroadcastResult> {
+    const b = kind === 'exit' ? this.exitBroadcaster : this.broadcaster;
     try {
-      return await this.broadcaster.broadcast(await build(), label, opts);
+      return await b.broadcast(await build(), label, opts);
     } catch (err) {
       if (!this.blockhashes || !isBlockhashNotFound(err)) throw err;
       this.log.warn('send rejected the signed blockhash — refreshing and retrying once', { label });
       this.blockhashes.invalidate();
-      return this.broadcaster.broadcast(await build(), label, opts);
+      return b.broadcast(await build(), label, opts);
     }
+  }
+
+  /** Exits pay the exit route's tip (the Sender swqos minimum by default), not the buy tip. */
+  private async exitFeePlan(): Promise<FeePlan> {
+    const base = this.feePlanCache?.plan ?? (await this.feePlan());
+    return { ...base, jitoTipLamports: base.exitTipLamports };
   }
 
   /** Confirmation budget for buys — see execution.buyConfirmTimeoutMs. */
@@ -218,7 +267,16 @@ export class Executor {
 
   /** Build + broadcast a buy for `sizeSol` worth of the pool's base token. */
   async buy(poolAddress: string, baseMint: string, sizeSol: number, reference?: ReserveSnapshot): Promise<BroadcastResult> {
-    return this.buyAndConfirm(poolAddress, baseMint, sizeSol, reference);
+    let result = await this.buyAndConfirm(poolAddress, baseMint, sizeSol, reference);
+    // Dry-run simulates ~30 ms after detection; the simulating node may not
+    // have the migrate tx yet. Re-simulate a slot or two later instead of
+    // recording a phantom failure (live sends are ordered after the migration).
+    for (let i = 0; i < DRY_RUN_POOL_RETRIES && this.config.mode === 'dry-run' && isPoolNotYetVisible(result.simErr, result.logs); i++) {
+      this.log.info('dry-run: pool not yet visible to the simulator — re-simulating', { mint: baseMint, attempt: i + 1 });
+      await new Promise((r) => setTimeout(r, DRY_RUN_POOL_RETRY_MS));
+      result = await this.buyAndConfirm(poolAddress, baseMint, sizeSol, reference);
+    }
+    return result;
   }
 
   /**
@@ -232,6 +290,7 @@ export class Executor {
     baseMint: string,
     sizeSol: number,
     reference?: ReserveSnapshot,
+    opts: { landed?: Promise<unknown> | undefined; onDispatched?: (() => void) | undefined } = {},
   ): Promise<BroadcastResult> {
     const feePlan = await this.feePlan();
     const quoteLamports = BigInt(Math.floor(sizeSol * LAMPORTS_PER_SOL));
@@ -241,7 +300,7 @@ export class Executor {
     const moveCap = this.config.entry.maxEntryMovePct;
 
     if (this.config.mode === 'live' && this.config.execution.skipBuySimulate) {
-      return this.buyNoSimulate({ poolAddress, baseMint, quoteLamports, feePlan, jitoTip, moveCap, reference });
+      return this.buyNoSimulate({ poolAddress, baseMint, quoteLamports, feePlan, jitoTip, moveCap, reference, landed: opts.landed, onDispatched: opts.onDispatched });
     }
 
     if (this.config.execution.parallelBuySimulate && attempts.length > 1) {
@@ -268,7 +327,7 @@ export class Executor {
           ...jitoTip,
           ...this.assembleExtras('buy'),
         });
-      const result = await this.broadcastSigned(build, `buy:${short(baseMint)}`, this.buyConfirmOpts());
+      const result = await this.broadcastSigned(build, `buy:${short(baseMint)}`, { ...this.buyConfirmOpts(), landed: opts.landed, onDispatched: opts.onDispatched });
       this.cu.record('buy', result.unitsConsumed);
       if (movePct !== undefined) result.entryMovePct = movePct;
       this.log.info('buy broadcast', { mint: baseMint, slippagePct, entryMovePct: movePct, ...summarize(result) });
@@ -299,8 +358,12 @@ export class Executor {
     jitoTip: { jitoTipAccount?: string };
     moveCap: number | undefined;
     reference?: ReserveSnapshot | undefined;
+    /** Wallet-stream signal that the buy's tokens arrived — confirms without an RPC poll. */
+    landed?: Promise<unknown> | undefined;
+    /** Bookkeeping to run right after the send is dispatched. */
+    onDispatched?: (() => void) | undefined;
   }): Promise<BroadcastResult> {
-    const { poolAddress, baseMint, quoteLamports, feePlan, jitoTip, moveCap, reference } = args;
+    const { poolAddress, baseMint, quoteLamports, feePlan, jitoTip, moveCap, reference, landed, onDispatched } = args;
     const slippagePct = this.config.entry.maxSlippagePct;
     const quoted = await this.pumpAmm.buildBuyQuoted(poolAddress, this.wallet.keypair.publicKey, quoteLamports, slippagePct);
     const movePct = reference ? entryMovePct(reference, quoted) : undefined;
@@ -316,7 +379,7 @@ export class Executor {
         ...jitoTip,
         ...this.assembleExtras('buy'),
       });
-    const result = await this.broadcastSigned(build, `buy:${short(baseMint)}`, { skipSimulation: true, ...this.buyConfirmOpts() });
+    const result = await this.broadcastSigned(build, `buy:${short(baseMint)}`, { skipSimulation: true, ...this.buyConfirmOpts(), landed, onDispatched });
     if (movePct !== undefined) result.entryMovePct = movePct;
     this.log.info('buy broadcast (no simulate)', { mint: baseMint, slippagePct, prefetchedState: quoted.prefetched, ...summarize(result) });
     return result;
@@ -500,7 +563,7 @@ export class Executor {
       poolQuoteAmount: new BN(reserves.quoteReserveLamports.toString()),
     };
     const ixs = await this.pumpAmm.buildSellFromState(state, baseAmount, slippagePct);
-    const base = this.feePlanCache?.plan ?? (await this.feePlan());
+    const base = await this.exitFeePlan();
     const feePlan: FeePlan = {
       ...base,
       priorityMicroLamports: Math.min(
@@ -540,7 +603,7 @@ export class Executor {
     slippagePct: number,
     opts?: ExitBroadcastOpts,
   ): Promise<BroadcastResult> {
-    const feePlan = await this.feePlan();
+    const feePlan = await this.exitFeePlan();
     const ixs = await this.pumpAmm.buildSell(
       poolAddress,
       this.wallet.keypair.publicKey,
@@ -556,7 +619,7 @@ export class Executor {
         ...jitoTip,
         ...this.assembleExtras('sell'),
       });
-    const result = await this.broadcastSigned(build, `sell:${short(baseMint)}`, opts);
+    const result = await this.broadcastSigned(build, `sell:${short(baseMint)}`, opts, 'exit');
     this.cu.record('sell', result.unitsConsumed);
     this.log.info('sell broadcast', { mint: baseMint, ...summarize(result) });
     return result;
@@ -571,12 +634,12 @@ export class Executor {
       baseMint,
       slippageTiers: this.config.exits.ladderSlippageTiers,
       emergencySlippagePct: this.config.exits.emergencySlippagePct,
-      feePlanProvider: () => this.feePlan(),
+      feePlanProvider: () => this.exitFeePlan(),
       ...this.assembleExtras(),
       // Same account selection as every other signing path (Helius Sender's
       // tip accounts take precedence over Jito's).
       jitoTipAccountProvider: async () => {
-        const feePlan = await this.feePlan();
+        const feePlan = await this.exitFeePlan();
         return (await this.jitoTipAccount(feePlan.jitoTipLamports)).jitoTipAccount;
       },
     });
@@ -590,7 +653,7 @@ export class Executor {
    */
   async signAndBroadcastCurveTrade(unsignedTxBytes: Uint8Array, label: string): Promise<BroadcastResult> {
     const vtx = VersionedTransaction.deserialize(unsignedTxBytes);
-    vtx.sign([this.wallet.keypair]);
+    this.wallet.sign(vtx);
     const result = await this.broadcaster.broadcast(Buffer.from(vtx.serialize()), label);
     this.log.info('curve broadcast', { label, ...summarize(result) });
     return result;
@@ -600,7 +663,7 @@ export class Executor {
     // Pre-signed ladder tx: was validated at build time, so optionally skip the
     // pre-send simulate to shave an RPC round-trip off the exit hot path. Exits
     // use a short confirm window so a non-landing attempt escalates fast.
-    return this.broadcaster.broadcast(bytes, `exit:${short(baseMint)}`, {
+    return this.exitBroadcaster.broadcast(bytes, `exit:${short(baseMint)}`, {
       skipSimulation: this.config.exits.skipSimulateOnPresignedExit,
       confirmTimeoutMs: this.config.exits.exitConfirmTimeoutMs,
       confirmPollMs: this.config.exits.exitConfirmPollMs,
@@ -714,6 +777,7 @@ export interface ExitBroadcastOpts {
   collectStragglers?: boolean;
   acceptProcessed?: boolean;
   landed?: Promise<unknown> | undefined;
+  onDispatched?: (() => void) | undefined;
 }
 
 function summarize(r: BroadcastResult): Record<string, unknown> {

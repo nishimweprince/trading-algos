@@ -22,7 +22,13 @@ export type LatencyKind =
   /** Exit tx dispatched -> landing seen. */
   | 'exit_send_to_landed'
   /** Exit landing seen -> proceeds credited to the in-memory wallet ledger. */
-  | 'exit_landed_to_credited';
+  | 'exit_landed_to_credited'
+  /** Graduation receipt -> buy dispatch, MICROSECONDS on the monotonic clock. */
+  | 'detect_to_send_us'
+  /** Buy dispatch -> wallet-stream sighting of the fill. */
+  | 'send_to_stream'
+  /** Landed slot - migration slot (a slot count, 0 = same slot). */
+  | 'migration_to_land_slots';
 
 export type OperatorEventLevel = 'info' | 'warn' | 'error';
 
@@ -306,6 +312,81 @@ export class Repositories {
    * the feed supplied it. detected_at_ns is process hrtime and is NOT
    * comparable across restarts, so it is deliberately not returned.
    */
+  /** Publish a small piece of in-memory state for other processes (dashboard). */
+  putRuntimeState(key: string, value: unknown, atMs: number = Date.now()): void {
+    const json = JSON.stringify(value, (_k, v) => (typeof v === 'bigint' ? v.toString() : v));
+    this.db
+      .prepare(`INSERT INTO runtime_state (key, json, updated_at) VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET json = excluded.json, updated_at = excluded.updated_at`)
+      .run(key, json, atMs);
+  }
+
+  /** Published state, or null when absent or older than `maxAgeMs`. */
+  getRuntimeState<T>(key: string, maxAgeMs: number, nowMs: number = Date.now()): T | null {
+    const row = this.db.prepare(`SELECT json, updated_at AS updatedAt FROM runtime_state WHERE key = ?`).get(key) as
+      | { json: string; updatedAt: number }
+      | undefined;
+    if (!row || nowMs - row.updatedAt > maxAgeMs) return null;
+    try {
+      return JSON.parse(row.json) as T;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Highest rowid in a table (research worker starts tailing from here). */
+  maxRowid(table: 'candidates' | 'launches'): number {
+    const r = this.db.prepare(`SELECT COALESCE(MAX(rowid), 0) AS m FROM ${table}`).get() as { m: number };
+    return r.m;
+  }
+
+  /** Launches written after `rowid` (research worker: cluster warm-up feed). */
+  launchesAfter(rowid: number, limit = 500): Array<{ rowid: number; mint: string; creator: string | null }> {
+    return this.db
+      .prepare(`SELECT rowid, mint, creator FROM launches WHERE rowid > ? ORDER BY rowid ASC LIMIT ?`)
+      .all(rowid, limit) as Array<{ rowid: number; mint: string; creator: string | null }>;
+  }
+
+  /**
+   * Verdict rows written after `rowid`, with their graduation (research
+   * worker: background enrichment + shadow run out of the trading process).
+   */
+  candidatesAfter(rowid: number, limit = 200): Array<{
+    rowid: number;
+    mint: string;
+    enrichmentJson: string | null;
+    hardCheckResults: string | null;
+    softScore: number | null;
+    verdict: string;
+    vetoReasons: string | null;
+    highVolatility: number | null;
+    sizeMultiplier: number | null;
+    slot: number | null;
+    feedSource: string | null;
+    detectedAt: string | null;
+  }> {
+    return this.db
+      .prepare(
+        `SELECT c.rowid AS rowid, c.mint AS mint, c.enrichment_json AS enrichmentJson,
+                c.hard_check_results AS hardCheckResults, c.soft_score AS softScore, c.verdict AS verdict,
+                c.veto_reasons AS vetoReasons, c.high_volatility AS highVolatility, c.size_multiplier AS sizeMultiplier,
+                g.slot AS slot, g.feed_source AS feedSource, g.created_at AS detectedAt
+           FROM candidates c
+           LEFT JOIN graduations g ON g.rowid = (SELECT MAX(rowid) FROM graduations WHERE mint = c.mint)
+          WHERE c.rowid > ?
+          ORDER BY c.rowid ASC
+          LIMIT ?`,
+      )
+      .all(rowid, limit) as never;
+  }
+
+  /** Newest launch mints (pre-arm curve map warm-up at boot). */
+  recentLaunchMints(limit: number): string[] {
+    if (limit <= 0) return [];
+    const rows = this.db.prepare(`SELECT mint FROM launches ORDER BY rowid DESC LIMIT ?`).all(limit) as Array<{ mint: string }>;
+    return rows.map((r) => r.mint);
+  }
+
   launchByMint(mint: string): { slot: number | null; createdAtMs: number | null; creator: string | null } | null {
     const row = this.db
       .prepare(`SELECT slot, created_at, creator FROM launches WHERE mint = ?`)
@@ -1433,6 +1514,24 @@ export class Repositories {
       )
       .all(sinceIso ?? null, sinceIso ?? null, limit) as Array<{ pnlSol: number; sizeSol: number }>;
     return rows.map((r) => (r.pnlSol / r.sizeSol) * 100);
+  }
+
+  /**
+   * Every signature text the bot has recorded (positions' entry/exit/execution
+   * blobs + wallet events) — the foreign-signer startup audit checks recent
+   * wallet signatures against it with a substring test.
+   */
+  knownSignatureText(): string {
+    const rows = this.db
+      .prepare(
+        `SELECT COALESCE(entry_tx,'') || ' ' || COALESCE(exit_tx,'') || ' ' || COALESCE(execution_json,'') || ' ' || COALESCE(exit_intent_json,'') AS t
+           FROM positions WHERE created_at >= datetime('now', '-30 days')
+         UNION ALL
+         SELECT COALESCE(signature,'') || ' ' || COALESCE(detail,'') AS t FROM wallet_events
+           WHERE created_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-30 days')`,
+      )
+      .all() as Array<{ t: string }>;
+    return rows.map((r) => r.t).join('\n');
   }
 
   /**

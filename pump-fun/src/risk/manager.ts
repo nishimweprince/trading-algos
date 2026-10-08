@@ -87,6 +87,10 @@ const WALLET_BALANCE_REFRESH_MS = 60_000;
  * reserve/release deltas still apply on top of the virtual ledger.
  */
 export const DRY_RUN_ASSUMED_WALLET_SOL = 1;
+/** runtime_state key the trader publishes getSnapshot() under (standalone dashboard). */
+export const RISK_SNAPSHOT_KEY = 'risk_snapshot';
+export const RISK_SNAPSHOT_PUBLISH_MS = 5_000;
+export const RISK_SNAPSHOT_MAX_AGE_MS = 30_000;
 // Priority order for the single reason reported to callers (most severe first).
 const REASON_ORDER: BreakerType[] = [
   'KILL_SWITCH',
@@ -138,6 +142,8 @@ export class RiskManager {
    * trade size — 93/95 dry-run entries in the 2026-09-27 week.
    */
   private chainBalanceLamports: bigint | null = null;
+  /** risk.dryRunWalletSource = chain: the virtual ledger was seeded from the chain. */
+  private dryRunSeededFromChain = false;
   private fundingAlerted = false;
   private walletRefreshTimer: NodeJS.Timeout | null = null;
   private streamDown = false;
@@ -231,6 +237,17 @@ export class RiskManager {
       if (this.getWalletBalanceLamports) {
         try {
           this.chainBalanceLamports = await this.getWalletBalanceLamports();
+          if (this.config.risk.dryRunWalletSource === 'chain' && !this.dryRunSeededFromChain) {
+            // Seed once: dry-run never spends, so later chain reads would only
+            // erase the simulated PnL the ledger has accumulated since.
+            this.dryRunSeededFromChain = true;
+            this.walletBalanceLamports = this.chainBalanceLamports;
+            this.walletBalanceAtMs = this.now();
+            this.log.info('dry-run sized from the real wallet balance', {
+              walletSol: Number(this.chainBalanceLamports) / LAMPORTS_PER_SOL,
+            });
+            this.reconcile();
+          }
           this.checkDryRunFunding();
         } catch (err) {
           this.log.debug('dry-run chain balance read failed', { err });

@@ -434,6 +434,13 @@ function App() {
   const [pnlRange, setPnlRange] = useState<PnlRange>('7d');
   const [vetoDryRunRange, setVetoDryRunRange] = useState<AnalyticsRange>('7d');
   const [track, setTrack] = useState<Track>('live');
+  // A dry-run bot opens on the Dry-run tab (its numbers live there); a manual
+  // tab choice is never overridden.
+  const trackChosen = useRef(false);
+  const chooseTrack = (next: Track) => {
+    trackChosen.current = true;
+    setTrack(next);
+  };
   const [selectedDrag, setSelectedDrag] = useState<ExecutionDragRow | null>(null);
   const [status, setStatus] = useState<DashboardStatus>('connecting');
   const [streamReady, setStreamReady] = useState(false);
@@ -465,7 +472,12 @@ function App() {
   };
 
   const refresh = async () => {
-    await fetchJson('/api/health');
+    const health = await fetchJson<{ mode?: string }>('/api/health');
+    if (!trackChosen.current && health?.mode === 'dry-run' && track === 'live') {
+      trackChosen.current = true;
+      setTrack('dry'); // the effect re-runs refresh for the dry tab
+      return;
+    }
     // Δ mode reads wallet-shaped panels from the live track; the drag numbers
     // come from /api/analytics/execution-drag, whose type is unambiguous.
     const dataTrack = track === 'delta' ? 'live' : track;
@@ -691,10 +703,10 @@ function App() {
             <div class="breadcrumb">
               <span>Dashboard</span>
               <b>/</b>
-              <strong>Wallet PnL</strong>
+              <strong>{track === 'dry' && summary.mode === 'dry-run' ? 'Dry-run PnL' : 'Wallet PnL'}</strong>
             </div>
             <div class="account-strip">
-              <Segmented value={track} values={['live', 'dry', 'delta']} labels={TRACK_LABELS} onChange={setTrack} />
+              <Segmented value={track} values={['live', 'dry', 'delta']} labels={TRACK_LABELS} onChange={chooseTrack} />
               <div class="export-row">
                 <ExportLink
                   href={`/api/reports/trades.csv?range=7d&track=${track === 'delta' ? 'live' : track}`}
@@ -737,8 +749,13 @@ function App() {
               section down a row and clip the metric grid. */}
           <div class="metrics-zone">
           {/* The Δ track shows execution-drag differences, not balances — say so
-              plainly. Live and dry-run need no banner: the tab label says
-              which leg the numbers come from. */}
+              plainly. A dry-run bot's numbers live on the Dry-run tab under a
+              banner; Live carries no banner (real capital only). */}
+          {track === 'dry' && summary.mode === 'dry-run' && (
+            <div class="track-strip dry-run-strip" role="status">
+              Dry-run — simulated trades only. Nothing is sent on-chain; PnL is modelled from pool prices, not the wallet.
+            </div>
+          )}
           {track === 'delta' && (
             <div class="track-strip" role="status">
               Δ track — live minus dry-run. These are execution-drag differences, not wallet balances.
@@ -854,7 +871,7 @@ function App() {
               </Panel>
             ) : (
               <Panel
-                title={track === 'dry' ? 'Dry-run twins' : 'Positions'}
+                title={track === 'dry' ? (summary.mode === 'dry-run' ? 'Dry-run positions' : 'Dry-run twins') : 'Positions'}
                 action={<Segmented value={positionFilter} values={['open', 'closed', 'all']} onChange={setPositionFilter} />}
               >
                 <PositionsTable rows={positions} onSelect={setSelectedPosition} />

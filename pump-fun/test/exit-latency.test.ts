@@ -28,7 +28,7 @@ class FakeIngest implements PriceIngest {
 }
 
 const RAW = 2_500_000_000_000n;
-const pricing = { poolAddress: 'pool', baseMint: 'So11111111111111111111111111111111111111112', baseVault: 'bv', quoteVault: 'qv', baseDecimals: 6, baseReserve: 10n ** 15n, quoteReserveLamports: 10n ** 11n };
+const pricing = { poolAddress: 'pool', baseMint: 'So11111111111111111111111111111111111111112', baseVault: 'bv', quoteVault: 'qv', baseDecimals: 6, baseReserve: 10n ** 15n, quoteReserveLamports: 10n ** 11n, virtualQuoteLamports: 0n };
 const ok = (signature: string): BroadcastResult => ({ mode: 'live', simulated: false, sent: true, confirmed: true, signature, attempts: [] });
 const settle = async () => {
   for (let i = 0; i < 8; i++) await new Promise((r) => setTimeout(r, 0));
@@ -60,13 +60,13 @@ describe('price freshness: a stale poll never overrides a newer push', () => {
     await settle();
     // entry price = 0.02 / 2.5e6 = 8e-9
     const t = Date.now();
-    h.ingest.sinks.get('M')!({ mint: 'M', price: 8.4e-9, baseReserve: 10n ** 15n, quoteReserveLamports: 10n ** 11n, atMs: t, source: 'push' });
+    h.ingest.sinks.get('M')!({ virtualQuoteLamports: 0n, mint: 'M', price: 8.4e-9, baseReserve: 10n ** 15n, quoteReserveLamports: 10n ** 11n, atMs: t, source: 'push' });
     // A poll read issued 200 ms BEFORE that push lands now with a -25 % price.
-    h.poller.handler({ mint: 'M', price: 6e-9, baseReserve: 10n ** 15n, quoteReserveLamports: 9n * 10n ** 10n, atMs: t + 5, source: 'poll', readStartedAtMs: t - 200 });
+    h.poller.handler({ virtualQuoteLamports: 0n, mint: 'M', price: 6e-9, baseReserve: 10n ** 15n, quoteReserveLamports: 9n * 10n ** 10n, atMs: t + 5, source: 'poll', readStartedAtMs: t - 200 });
     await settle();
     expect(sellAndConfirm).not.toHaveBeenCalled();
     // A FRESH poll (issued after the push) at that price does trigger.
-    h.poller.handler({ mint: 'M', price: 6e-9, baseReserve: 10n ** 15n, quoteReserveLamports: 9n * 10n ** 10n, atMs: t + 600, source: 'poll', readStartedAtMs: Date.now() + 1 });
+    h.poller.handler({ virtualQuoteLamports: 0n, mint: 'M', price: 6e-9, baseReserve: 10n ** 15n, quoteReserveLamports: 9n * 10n ** 10n, atMs: t + 600, source: 'poll', readStartedAtMs: Date.now() + 1 });
     await settle();
     expect(sellAndConfirm).toHaveBeenCalled();
     h.mgr.stop();
@@ -104,7 +104,7 @@ describe('exit lands at processed via our token account push', () => {
     h.bus.emit('openPosition', { mint: 'M', sizeSol: 0.02, highVolatility: false, pricing });
     await settle();
     expect(h.ingest.watchers.size).toBe(1); // our ATA is watched while the position is open
-    h.ingest.sinks.get('M')!({ mint: 'M', price: 2e-9, baseReserve: 4n * 10n ** 15n, quoteReserveLamports: 8n * 10n ** 9n, atMs: Date.now(), source: 'push' });
+    h.ingest.sinks.get('M')!({ virtualQuoteLamports: 0n, mint: 'M', price: 2e-9, baseReserve: 4n * 10n ** 15n, quoteReserveLamports: 8n * 10n ** 9n, atMs: Date.now(), source: 'push' });
     await settle();
     expect(fired).toBe(true);
     expect(updates.at(-1)).toBe('CLOSED');
@@ -124,10 +124,10 @@ describe('the exit decision runs before the price tick is persisted', () => {
     });
     h.bus.emit('openPosition', { mint: 'M', sizeSol: 0.02, highVolatility: false, pricing });
     await settle();
-    const db = (h.repos as unknown as { db: { prepare(s: string): { get(): unknown } } }).db;
+    const db = (h.repos as unknown as { virtualQuoteLamports: 0n, db: { prepare(s: string): { get(): unknown } } }).db;
     const count = () => (db.prepare('select count(*) n from price_ticks').get() as { n: number }).n;
     const before = count();
-    h.poller.handler({ mint: 'M', price: 2e-9, baseReserve: 4n * 10n ** 15n, quoteReserveLamports: 8n * 10n ** 9n, atMs: Date.now() });
+    h.poller.handler({ virtualQuoteLamports: 0n, mint: 'M', price: 2e-9, baseReserve: 4n * 10n ** 15n, quoteReserveLamports: 8n * 10n ** 9n, atMs: Date.now() });
     expect(count()).toBe(before);
     await new Promise((r) => setImmediate(r));
     expect(count()).toBe(before + 1);

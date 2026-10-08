@@ -8,8 +8,7 @@ import { scoreCandidate, type MomentumScoringOpts } from './scoring.ts';
 import { checkProvenance } from './checks/provenance.ts';
 import { checkSerialRugger, checkBreakers } from './checks/blacklist.ts';
 import { checkPopulation } from './checks/population.ts';
-import { checkManipulation } from './checks/manipulation.ts';
-import { checkCreatorHoldings, checkLiquidityFloor } from './checks/pool.ts';
+import { checkLiquidityFloor } from './checks/pool.ts';
 
 /**
  * Guardrail engine — the fast path (2026-09-28). Every check reads the one
@@ -52,20 +51,21 @@ export interface CheckContext {
   risk?: GuardrailRisk;
   /** Live wallet SOL for H7 buy-impact; 0 when unknown (uses minAbsoluteSol). */
   walletSol: number;
-  /** Start of the launch stream's unbroken coverage window (H12); null when none. */
-  launchCoverageSinceMs?: number | null;
 }
 
 type CheckFn = (ctx: CheckContext) => CheckResult | CheckResult[];
 
+// H6 (creator holdings), H13 (creator funding cluster) and H12's mint-age /
+// pool-band rules were removed 2026-10-04: they took < 1 ms but vetoed ~20 %
+// of graduations on signals never shown to carry edge (the pre-fix trade
+// data was priced wrong). Selection is now P0 safety, H7 liquidity, H8
+// blacklist, H10 breakers and the pump-suffix population rule.
 const CHECKS: CheckFn[] = [
   checkProvenance, // P0
-  checkCreatorHoldings, // H6
   checkLiquidityFloor, // H7
   checkSerialRugger, // H8
   checkBreakers, // H10
-  checkPopulation, // H12
-  checkManipulation, // H13
+  checkPopulation, // H12 (pump suffix only)
 ];
 
 export class GuardrailEngine {
@@ -73,13 +73,11 @@ export class GuardrailEngine {
   private readonly repos: Repositories;
   private readonly momentumOpts: MomentumScoringOpts;
   private readonly risk: GuardrailRisk | undefined;
-  private readonly launchCoverageSinceMs: () => number | null;
 
-  constructor(config: Config, repos: Repositories, risk?: GuardrailRisk, launchCoverageSinceMs?: () => number | null) {
+  constructor(config: Config, repos: Repositories, risk?: GuardrailRisk) {
     this.config = config;
     this.repos = repos;
     this.risk = risk;
-    this.launchCoverageSinceMs = launchCoverageSinceMs ?? (() => null);
     this.momentumOpts = {
       strongInflowSol: config.guardrails.momentumStrongInflowSol,
       maxScoreBonus: config.guardrails.momentumMaxScoreBonus,
@@ -95,7 +93,6 @@ export class GuardrailEngine {
       repos: this.repos,
       mode: this.config.mode,
       walletSol,
-      launchCoverageSinceMs: this.launchCoverageSinceMs(),
       ...(this.risk ? { risk: this.risk } : {}),
     };
 

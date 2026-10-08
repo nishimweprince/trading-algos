@@ -24,7 +24,7 @@ class FakePoller {
   stop() {}
   get size() { return this.registered.size; }
   tick(mint: string, price: number, atMs: number, quoteReserveLamports = 0n, creatorBaseBalance?: bigint) {
-    this.handler({
+    this.handler({ virtualQuoteLamports: 0n,
       mint,
       price,
       baseReserve: 0n,
@@ -37,7 +37,7 @@ class FakePoller {
 
 const sol = (n: number) => BigInt(Math.floor(n * 1e9));
 
-const pricing = (): PoolPricingRef => ({
+const pricing = (): PoolPricingRef => ({ virtualQuoteLamports: 0n,
   poolAddress: 'pool',
   baseMint: 'mint',
   baseVault: 'b',
@@ -217,7 +217,7 @@ describe('PositionManager (paper)', () => {
     const { bus, poller } = harness();
     const updates: Position[] = [];
     bus.on('positionUpdate', (p) => updates.push(p));
-    poller.readOnceResult = {
+    poller.readOnceResult = { virtualQuoteLamports: 0n,
       price: 2e-7,
       baseReserve: 10n ** 15n,
       quoteReserveLamports: 200n * 10n ** 9n,

@@ -7,6 +7,8 @@ import { PROGRAM_IDS, WSOL_MINT } from '../src/core/constants.ts';
 import { deriveAta } from '../src/core/ata.ts';
 import { GuardrailEngine } from '../src/guardrails/engine.ts';
 import { FastPoolReader, reservesFromTx } from '../src/guardrails/fastRead.ts';
+import { PreArmer } from '../src/guardrails/preArm.ts';
+import { BONDING_CURVE_DISCRIMINATOR, deriveBondingCurvePda } from '../src/enrichment/curve.ts';
 import { GuardrailPipeline } from '../src/guardrails/pipeline.ts';
 import { reviveEnrichment, replayRow, candidateFromRow } from '../src/research/screenReplay.ts';
 import { TypedBus } from '../src/core/bus.ts';
@@ -135,7 +137,7 @@ const HEALTHY_MINT = {
 const CREATOR = base58Encode(Buffer.alloc(32).fill(9));
 
 function healthyPool(over: Partial<PoolInfo> = {}): PoolInfo {
-  return {
+  return { virtualQuoteLamports: 0n,
     poolAddress: 'pool',
     baseMint: 'MintUnderTest',
     quoteMint: 'So11111111111111111111111111111111111111112',
@@ -241,7 +243,7 @@ describe('GuardrailEngine (fast path)', () => {
     it(`${mode}: accepts a clean canonical graduation from the fast read alone — no check comes back unknown`, () => {
       const v = new GuardrailEngine(cfg, fresh()).evaluate(fastCandidate());
       expect(v.verdict).toBe('accept');
-      expect(v.hardChecks.map((c) => c.id)).toEqual(['P0', 'H6', 'H7', 'H8', 'H10', 'H12', 'H13']);
+      expect(v.hardChecks.map((c) => c.id)).toEqual(['P0', 'H7', 'H8', 'H10', 'H12']);
       expect(v.hardChecks.every((c) => c.status !== 'unknown')).toBe(true);
       expect(v.relaxedRisk).toBe(false);
     });
@@ -249,7 +251,7 @@ describe('GuardrailEngine (fast path)', () => {
 
   it('no longer runs the removed checks', () => {
     const ids = new GuardrailEngine(cfgs.live, fresh()).evaluate(fastCandidate()).hardChecks.map((c) => c.id);
-    for (const gone of ['H1', 'H2', 'H3', 'H4', 'H5', 'H9', 'H11']) expect(ids).not.toContain(gone);
+    for (const gone of ['H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'H9', 'H11', 'H13']) expect(ids).not.toContain(gone);
   });
 
   it('does not gate on the soft score (LOW_SCORE is gone)', () => {
@@ -290,19 +292,6 @@ describe('GuardrailEngine (fast path)', () => {
     });
   });
 
-  describe('H6 creator holdings (creator ATA from the fast read)', () => {
-    const h6 = (c: Candidate) => check(new GuardrailEngine(cfgs.live, fresh()).evaluate(c), 'H6')!;
-
-    it('does not veto when the creator was not known before graduation', () => {
-      expect(h6(fastCandidate())).toMatchObject({ status: 'pass', reason: 'not_checked' });
-    });
-
-    it('fails over the cap and passes under it', () => {
-      expect(h6(fastCandidate({ creatorHolding: { creator: CREATOR, share: 0.3 } }))).toMatchObject({ status: 'fail' });
-      expect(h6(fastCandidate({ creatorHolding: { creator: CREATOR, share: 0.01 } })).status).toBe('pass');
-    });
-  });
-
   it('H7 fails a pool under the SOL floor', () => {
     const v = new GuardrailEngine(cfgs.paper, fresh()).evaluate(fastCandidate({ pool: healthyPool({ quoteReserveLamports: 10n * 1_000_000_000n }) }));
     expect(check(v, 'H7')?.status).toBe('fail');
@@ -314,165 +303,32 @@ describe('GuardrailEngine (fast path)', () => {
     repos.blacklistCreator(CREATOR, 'test');
     expect(new GuardrailEngine(cfgs.paper, repos).evaluate(fastCandidate()).vetoReasons).toContain('H8');
   });
-
-  describe('H13 funding cluster (precomputed cache only)', () => {
-    const cfg = ConfigSchema.parse({ mode: 'paper', guardrails: { features: { enabled: true }, creatorMaxLaunches7d: 2 } });
-
-    it('does not veto a creator whose cluster was not precomputed', () => {
-      expect(check(new GuardrailEngine(cfg, fresh()).evaluate(fastCandidate()), 'H13')).toMatchObject({ status: 'pass', reason: 'not_checked' });
-    });
-
-    it('fails a cached cluster that launched more than creatorMaxLaunches7d coins', () => {
-      const repos = fresh();
-      repos.upsertWalletFunder(CREATOR, 'Funder', 'Root');
-      repos.upsertWalletFunder('Sibling', 'Funder', 'Root');
-      for (const [i, creator] of [CREATOR, CREATOR, 'Sibling'].entries()) {
-        repos.recordLaunch({ mint: `m${i}`, feedSource: 'laserstream', receivedAtNs: 0n, creator });
-      }
-      const r = check(new GuardrailEngine(cfg, repos).evaluate(fastCandidate()), 'H13');
-      expect(r).toMatchObject({ status: 'fail', reason: 'creator_cluster' });
-      expect(r?.detail).toContain('launched 3 coins');
-    });
-  });
 });
 
-describe('P2.2 H12 population', () => {
+describe('H12 population (pump suffix only, 2026-10-04)', () => {
   const PUMP_MINT = 'So1dCanonica1MintAddressXXXXXXXXXXXXXXXpump';
   const cfg = ConfigSchema.parse({ mode: 'dry-run', guardrails: { population: { enabled: true } } });
-  const segA = (over: { mint?: string; poolSol?: number; slot?: number; detectedAtMs?: number } = {}) => {
+  const cand = (over: { mint?: string; poolSol?: number; slot?: number; creatorShare?: number } = {}) => {
     const c = fastCandidate({ pool: healthyPool({ quoteReserveLamports: BigInt(Math.round((over.poolSol ?? 80) * 1e9)) }) });
-    c.graduation = {
-      ...c.graduation,
-      mint: over.mint ?? PUMP_MINT,
-      slot: over.slot ?? 1_000,
-      ...(over.detectedAtMs !== undefined ? { detectedAtMs: over.detectedAtMs } : {}),
-    };
+    c.graduation = { ...c.graduation, mint: over.mint ?? PUMP_MINT, slot: over.slot ?? 1_000 };
+    if (over.creatorShare !== undefined) c.enrichment.creatorHolding = { creator: 'dev', share: over.creatorShare };
     return c;
   };
-  const h12 = (repos: Repositories, c: Candidate) =>
-    new GuardrailEngine(cfg, repos).evaluate(c).hardChecks.find((x) => x.id === 'H12')!;
-  const fresh = () => new Repositories(openDb({ path: ':memory:', memory: true }));
-
-  /** Repos with a launch row 10 min (1,500 slots) before a slot-2,500 migration. */
-  const launched = (mint = PUMP_MINT) => {
-    const repos = fresh();
-    repos.recordLaunch({ mint, feedSource: 'pumpportal', receivedAtNs: 0n, slot: 1_000 });
-    return repos;
-  };
-
-  it('passes a segment-A graduation', () => {
-    expect(h12(launched(), segA({ slot: 2_500 })).status).toBe('pass');
-  });
+  const engine = () => new GuardrailEngine(cfg, new Repositories(openDb({ path: ':memory:', memory: true })));
 
   it('fails a non-pump suffix', () => {
-    const mint = 'SomeOtherMintAddressWithoutTheSuffixXXXXX';
-    const r = h12(launched(mint), segA({ mint, slot: 2_500 }));
+    const r = engine().evaluate(cand({ mint: 'So1dCanonica1MintAddressXXXXXXXXXXXXXXXXXXX' })).hardChecks.find((x) => x.id === 'H12');
     expect(r).toMatchObject({ status: 'fail', reason: 'non_pump_suffix' });
   });
 
-  it('fails pools outside 60–90 SOL', () => {
-    expect(h12(launched(), segA({ poolSol: 45, slot: 2_500 }))).toMatchObject({ status: 'fail', reason: 'pool_sol_out_of_band' });
-    expect(h12(launched(), segA({ poolSol: 120, slot: 2_500 }))).toMatchObject({ status: 'fail', reason: 'pool_sol_out_of_band' });
-  });
-
-  it('fails an insta-graduation measured from the launch slot', () => {
-    const repos = fresh();
-    repos.recordLaunch({ mint: PUMP_MINT, feedSource: 'pumpportal', receivedAtNs: 0n, slot: 997 });
-    // 3 slots = 1.2 s.
-    expect(h12(repos, segA({ slot: 1_000 }))).toMatchObject({ status: 'fail', reason: 'insta_graduation' });
-  });
-
-  it('fails unknown mint age by default — in dry-run too, where unknowns never veto', () => {
-    const v = new GuardrailEngine(cfg, fresh()).evaluate(segA());
-    expect(v.hardChecks.find((x) => x.id === 'H12')).toMatchObject({ status: 'fail', reason: 'mint_age_unknown' });
-    expect(v.vetoReasons).toContain('H12');
-  });
-
-  it('fails closed with no_pool when the pool is missing — vetoed in dry-run', () => {
-    const c = segA();
-    delete (c.enrichment as unknown as Record<string, unknown>).pool;
-    const v = new GuardrailEngine(cfg, fresh()).evaluate(c);
-    expect(v.hardChecks.find((x) => x.id === 'H12')).toMatchObject({ status: 'fail', reason: 'no_pool' });
-    expect(v.verdict).toBe('veto');
-    expect(v.vetoReasons).toContain('H12');
-  });
-
-  const withCurve = (c: Candidate, curve: { creationSlot: number | null; oldestSlotScanned: number | null }) => {
-    c.enrichment.features = {
-      curve: { ...curve, txScanned: 1, bundleSharePct: null, creationSlotBuyers: null, washRatio: null },
-    };
-    return c;
-  };
-
-  it('fails an insta-graduation measured from the curve creation slot', () => {
-    const r = h12(fresh(), withCurve(segA({ slot: 1_000 }), { creationSlot: 999, oldestSlotScanned: 999 }));
-    expect(r).toMatchObject({ status: 'fail', reason: 'insta_graduation' });
-    expect(r.detail).toContain('curve_slot');
-  });
-
-  it('passes a mint whose curve creation slot is well before migration', () => {
-    const r = h12(fresh(), withCurve(segA({ slot: 2_000 }), { creationSlot: 1_000, oldestSlotScanned: 1_000 }));
-    expect(r.status).toBe('pass');
-    expect(r.detail).toContain('curve_slot');
-  });
-
-  it('prefers the curve creation slot over the launch clock', () => {
-    const repos = fresh();
-    repos.recordLaunch({ mint: PUMP_MINT, feedSource: 'pumpportal', receivedAtNs: 0n });
-    // Launch row inserted "now" -> launch_clock would say ~0 s; the curve says 400 s.
-    const c = withCurve(segA({ slot: 2_000, detectedAtMs: Date.now() }), { creationSlot: 1_000, oldestSlotScanned: 1_000 });
-    expect(h12(repos, c).status).toBe('pass');
-  });
-
-  it('passes a mint created before the process started on a curve lower bound (no launch row)', () => {
-    // 2026-09-28 regression: ZYNg…pump / 22NN…pump vetoed as mint_age_unknown.
-    const r = h12(fresh(), withCurve(segA({ slot: 2_000 }), { creationSlot: null, oldestSlotScanned: 1_000 }));
-    expect(r.status).toBe('pass');
-    expect(r.detail).toContain('>= 400 s old (curve_lower_bound)');
-  });
-
-  it('treats a short curve lower bound as unknown, not as an insta-graduation', () => {
-    const r = h12(fresh(), withCurve(segA({ slot: 1_000 }), { creationSlot: null, oldestSlotScanned: 990 }));
-    expect(r).toMatchObject({ status: 'fail', reason: 'mint_age_unknown' });
-  });
-
-  it('is a no-op when disabled', () => {
-    const off = ConfigSchema.parse({ mode: 'paper' });
-    const r = new GuardrailEngine(off, fresh()).evaluate(segA({ mint: 'NoSuffix' })).hardChecks.find((x) => x.id === 'H12');
-    expect(r?.status).toBe('pass');
+  it('accepts what the removed rules used to veto: off-band pool, unknown mint age, heavy creator', () => {
+    for (const c of [cand({ poolSol: 45 }), cand({ poolSol: 120 }), cand({ slot: 1 }), cand({ creatorShare: 0.4 })]) {
+      const v = engine().evaluate(c);
+      expect(v.verdict).toBe('accept');
+      expect(v.hardChecks.map((x) => x.id)).toEqual(['P0', 'H7', 'H8', 'H10', 'H12']);
+    }
   });
 });
-
-describe('H12 launch-stream coverage window', () => {
-  const PUMP_MINT = 'So1dCanonica1MintAddressXXXXXXXXXXXXXXXpump';
-  const cfg = ConfigSchema.parse({ mode: 'dry-run', guardrails: { population: { enabled: true } } });
-  const at = 1_000_000_000;
-  const c = () => {
-    const x = fastCandidate({ pool: healthyPool({ quoteReserveLamports: 80n * 1_000_000_000n }) });
-    x.graduation = { ...x.graduation, mint: PUMP_MINT, slot: 5_000, detectedAtMs: at };
-    return x;
-  };
-  const h12 = (coverageSince: number | null, repos = new Repositories(openDb({ path: ':memory:', memory: true }))) =>
-    new GuardrailEngine(cfg, repos, undefined, () => coverageSince).evaluate(c()).hardChecks.find((x) => x.id === 'H12')!;
-
-  it('passes a mint never seen created while the stream covered longer than minMintAgeMs', () => {
-    const r = h12(at - 45_000);
-    expect(r.status).toBe('pass');
-    expect(r.detail).toContain('coverage');
-  });
-
-  it('still fails an unknown age when the window is shorter than minMintAgeMs', () => {
-    expect(h12(at - 10_000)).toMatchObject({ status: 'fail', reason: 'mint_age_unknown' });
-    expect(h12(null)).toMatchObject({ status: 'fail', reason: 'mint_age_unknown' });
-  });
-
-  it('lets a seen creation decide: an insta-graduation fails even under full coverage', () => {
-    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
-    repos.recordLaunch({ mint: PUMP_MINT, feedSource: 'laserstream', receivedAtNs: 0n, slot: 4_997 });
-    expect(h12(at - 3_600_000, repos)).toMatchObject({ status: 'fail', reason: 'insta_graduation' });
-  });
-});
-
 // ---------------------------------------------------------------------------
 // Fast read: one batched processed read → pool, mint, reserves, creator bag
 // ---------------------------------------------------------------------------
@@ -529,24 +385,17 @@ function fakeChain(opts: { quoteLamports?: bigint; creatorTokens?: bigint; poolA
 describe('FastPoolReader', () => {
   const noSleep = async () => {};
 
-  it('gets pool, mint, reserves and the creator bag from ONE batched read', async () => {
+  it('gets pool, mint and reserves from ONE batched read — no creator accounts', async () => {
     const chain = fakeChain();
-    const reader = new FastPoolReader({ rpc: chain.rpc, retryDelaysMs: [0], launchCreator: () => CREATOR, sleep: noSleep });
+    const reader = new FastPoolReader({ rpc: chain.rpc, retryDelaysMs: [0], sleep: noSleep });
     const r = await reader.read(chain.graduation);
     expect(chain.calls).toHaveLength(1);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.snapshot.pool).toMatchObject({ poolAddress: chain.pool, baseMint: chain.mint, isCanonical: true, quoteReserveLamports: 80_000_000_000n });
     expect(r.snapshot.mintInfo?.mintAuthority).toBeNull();
-    expect(r.snapshot.creatorHolding).toEqual({ creator: CREATOR, share: 0.05 });
     expect(r.snapshot.reservesFrom).toBe('rpc');
-  });
-
-  it('skips the creator bag when the launch feed named someone other than coin_creator', async () => {
-    const chain = fakeChain();
-    const reader = new FastPoolReader({ rpc: chain.rpc, retryDelaysMs: [0], launchCreator: () => PUBKEY, sleep: noSleep });
-    const r = await reader.read(chain.graduation);
-    expect(r.ok && r.snapshot.creatorHolding).toBeUndefined();
+    expect(chain.calls[0]!.some((k) => k === deriveAta(CREATOR, chain.mint, false))).toBe(false);
   });
 
   it('retries while the RPC node has not seen the pool yet, then gives up with pool_not_found', async () => {
@@ -678,5 +527,119 @@ describe('screen replay (offline)', () => {
     const r = replayRow(row(c, { verdict: 'veto', primary: 'H11', checks: stored }), cfg, repos)!;
     expect(r.stored).toEqual({ verdict: 'veto', primary: 'H11', reasons: ['H11'] });
     expect(r.replay).toEqual({ verdict: 'accept', primary: null, reasons: [] });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pre-arm at curve completion: pool pushed + mint prefetched → no RPC read
+// ---------------------------------------------------------------------------
+
+describe('PreArmer + FastPoolReader', () => {
+  const noSleep = async () => {};
+  const cfg = { enabled: true, ttlMs: 60_000, poolWaitMs: 5, maxTrackedLaunches: 1_000 };
+
+  function completion(mint: string, drained = false) {
+    const curve = deriveBondingCurvePda(mint)!;
+    const data = Buffer.alloc(151);
+    Buffer.from(BONDING_CURVE_DISCRIMINATOR, 'hex').copy(data, 0);
+    data.writeBigUInt64LE(drained ? 0n : 85_000_000_000n, 32); // realSolReserves
+    data[48] = 1;
+    Buffer.from(base58Decode(CREATOR)).copy(data, 49);
+    return { account: { account: { pubkey: curve, owner: PROGRAM_IDS.PUMP_FUN, data: data.toString('base64'), lamports: '1' } } };
+  }
+
+  function migrated(chain: ReturnType<typeof fakeChain>): GraduationEvent {
+    return {
+      ...chain.graduation,
+      txBalances: [
+        { mint: WSOL_MINT, owner: chain.pool, amount: 67_405_855_261n },
+        { mint: chain.mint, owner: chain.pool, amount: 206_900_000_000_000n },
+      ],
+    };
+  }
+
+  it('serves the verdict read from the armed state with zero RPC on the hot path', async () => {
+    const chain = fakeChain();
+    const armer = new PreArmer({ endpoint: '', rpc: chain.rpc, config: cfg });
+    armer.noteLaunch(chain.mint);
+    armer.ingest(completion(chain.mint));
+    await new Promise((r) => setTimeout(r, 0)); // prefetch
+    const prefetchCalls = chain.calls.length;
+    const poolAcct = (await chain.rpc.getMultipleAccountsBase64([chain.pool]))[0]!;
+    chain.calls.length = prefetchCalls; // not part of the test's accounting
+    armer.ingest({ account: { account: { pubkey: chain.pool, owner: PROGRAM_IDS.PUMP_SWAP, data: poolAcct.data, lamports: 1 } } });
+
+    const reader = new FastPoolReader({ rpc: chain.rpc, retryDelaysMs: [0], preArmer: armer, sleep: noSleep });
+    const r = await reader.read(migrated(chain));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(chain.calls).toHaveLength(prefetchCalls); // nothing after the migration
+    expect(r.snapshot.preArmed).toBe(true);
+    expect(r.snapshot.reservesFrom).toBe('tx');
+    expect(r.snapshot.pool.quoteReserveLamports).toBe(67_405_855_261n);
+    expect(armer.stats).toMatchObject({ completions: 1, armed: 1, poolPushes: 1, hits: 1 });
+  });
+
+  it('falls back to the batched read when the pool push has not arrived', async () => {
+    const chain = fakeChain();
+    const armer = new PreArmer({ endpoint: '', rpc: chain.rpc, config: cfg });
+    armer.noteLaunch(chain.mint);
+    armer.ingest(completion(chain.mint));
+    await new Promise((r) => setTimeout(r, 0));
+    const reader = new FastPoolReader({ rpc: chain.rpc, retryDelaysMs: [0], preArmer: armer, sleep: noSleep });
+    const r = await reader.read(migrated(chain));
+    expect(r.ok && r.snapshot.preArmed).toBe(false);
+    expect(chain.calls.length).toBe(2); // prefetch + the normal read
+  });
+
+  it('race: a pool push that lands while the RPC read is in flight wins', async () => {
+    const chain = fakeChain();
+    const armer = new PreArmer({ endpoint: '', rpc: chain.rpc, config: cfg });
+    armer.noteLaunch(chain.mint);
+    armer.ingest(completion(chain.mint));
+    await new Promise((r) => setTimeout(r, 0)); // prefetch done
+    const poolAcct = (await chain.rpc.getMultipleAccountsBase64([chain.pool]))[0]!;
+    const slowRpc = {
+      getMultipleAccountsBase64: async (keys: string[]) => {
+        await new Promise((r) => setTimeout(r, 200));
+        return chain.rpc.getMultipleAccountsBase64(keys);
+      },
+    };
+    const reader = new FastPoolReader({ rpc: slowRpc, retryDelaysMs: [0], preArmer: armer, poolRaceMs: 1_000, sleep: noSleep });
+    setTimeout(() => armer.ingest({ account: { account: { pubkey: chain.pool, owner: PROGRAM_IDS.PUMP_SWAP, data: poolAcct.data, lamports: 1 } } }), 20);
+    const t0 = Date.now();
+    const r = await reader.read(migrated(chain));
+    expect(r.ok && r.snapshot.preArmed).toBe(true);
+    expect(Date.now() - t0).toBeLessThan(150); // did not wait for the 200 ms read
+    expect(armer.stats).toMatchObject({ hits: 1 });
+  });
+
+  it('race: the RPC read wins when no push comes, never waiting out the race window', async () => {
+    const chain = fakeChain();
+    const armer = new PreArmer({ endpoint: '', rpc: chain.rpc, config: cfg });
+    armer.noteLaunch(chain.mint);
+    armer.ingest(completion(chain.mint));
+    await new Promise((r) => setTimeout(r, 0));
+    const reader = new FastPoolReader({ rpc: chain.rpc, retryDelaysMs: [0], preArmer: armer, poolRaceMs: 5_000, sleep: noSleep });
+    const t0 = Date.now();
+    const r = await reader.read(migrated(chain));
+    expect(r.ok && r.snapshot.preArmed).toBe(false);
+    expect(Date.now() - t0).toBeLessThan(100);
+    expect(armer.stats).toMatchObject({ misses: 1 });
+  });
+
+  it('does not arm a curve that already migrated (drained reserves)', () => {
+    const chain = fakeChain();
+    const armer = new PreArmer({ endpoint: '', rpc: chain.rpc, config: cfg });
+    armer.noteLaunch(chain.mint);
+    armer.ingest(completion(chain.mint, true));
+    expect(armer.stats).toMatchObject({ completions: 1, alreadyMigrated: 1, armed: 0 });
+  });
+
+  it('ignores completions of curves whose launch it never saw', () => {
+    const chain = fakeChain();
+    const armer = new PreArmer({ endpoint: '', rpc: chain.rpc, config: cfg });
+    armer.ingest(completion(chain.mint));
+    expect(armer.stats).toMatchObject({ completions: 1, unknownCurve: 1, armed: 0 });
   });
 });

@@ -42,6 +42,19 @@ export interface ConfirmationResult {
   err?: unknown;
 }
 
+export interface EntryTiming {
+  /** Graduation receipt → first send dispatch, µs (monotonic clock). */
+  detectToSendUs?: number;
+  /** Buy was sent from a pre-signed transaction built at curve completion. */
+  preArmed?: boolean;
+  /** Dispatch → wallet-stream sighting of our buy, ms. */
+  sendToStreamMs?: number;
+  /** Migration tx slot. */
+  migrationSlot?: number;
+  /** Landed slot − migration slot (0 = same slot as the migration). */
+  slotsFromMigration?: number;
+}
+
 export interface BroadcastResult {
   mode: RunMode;
   simulated: boolean;
@@ -57,6 +70,10 @@ export interface BroadcastResult {
   /** slot − submittedSlot: how many slots inclusion took. */
   slotsToLand?: number | undefined;
   submittedAtMs?: number | undefined;
+  /** process.hrtime.bigint() at dispatch, as a decimal string (JSON-safe). */
+  submittedAtNs?: string | undefined;
+  /** Entry timing attribution, filled by the position manager (live buys). */
+  timing?: EntryTiming | undefined;
   confirmedAtMs?: number | undefined;
   confirmLatencyMs?: number | undefined;
   bundleId?: string | undefined;
@@ -132,6 +149,11 @@ export class Broadcaster {
       acceptProcessed?: boolean;
       /** Resolves when an out-of-band signal (our token account's push) shows the tx landed. */
       landed?: Promise<unknown> | undefined;
+      /**
+       * Called synchronously right after every send route has been started,
+       * before any await — bookkeeping the caller kept off the pre-send path.
+       */
+      onDispatched?: (() => void) | undefined;
     } = {},
   ): Promise<BroadcastResult> {
     // Hard guard: reaching the broadcaster in paper mode is a bug — paper never
@@ -171,6 +193,9 @@ export class Broadcaster {
     // awaiting every route used to spend the whole confirm budget on a slow
     // secondary path, so the deadline expired with zero polls and a buy that
     // later landed was reported unconfirmed (2026-10-03 wallet drain).
+    // Monotonic dispatch stamp: comparable with the detector's receivedAtNs,
+    // so detect→send is measured in µs, not wall-clock ms.
+    const dispatchedAtNs = process.hrtime.bigint().toString();
     const settled: TxSendAttempt[] = [];
     const sends = this.senders.map((s) =>
       this.sendVia(s, txBytes).then((a) => {
@@ -178,6 +203,11 @@ export class Broadcaster {
         return a;
       }),
     );
+    try {
+      opts.onDispatched?.();
+    } catch (err) {
+      this.log.warn('onDispatched hook failed', { label, err });
+    }
     const [firstSent, submittedSlot] = await Promise.all([firstAccepted(sends), this.readSubmittedSlot()]);
     if (!firstSent?.signature) {
       const attempts = await Promise.all(sends);
@@ -212,6 +242,7 @@ export class Broadcaster {
         acceptedVia,
         unitsConsumed,
         submittedAtMs: firstSent.submittedAtMs,
+        submittedAtNs: dispatchedAtNs,
         submittedSlot,
         confirmedAtMs: Date.now(),
         confirmLatencyMs: 0,
@@ -246,6 +277,7 @@ export class Broadcaster {
         acceptedVia,
         unitsConsumed,
         submittedAtMs: firstSent.submittedAtMs,
+        submittedAtNs: dispatchedAtNs,
         submittedSlot,
         confirmationStatus: confirmed.status?.confirmationStatus,
         slot: confirmed.status?.slot,
@@ -274,6 +306,7 @@ export class Broadcaster {
       bundleId: firstSent.bundleId,
       landedVia: firstSent.route,
       submittedAtMs: firstSent.submittedAtMs,
+        submittedAtNs: dispatchedAtNs,
       confirmedAtMs: confirmed.confirmedAtMs,
       confirmLatencyMs: confirmed.confirmedAtMs - firstSent.submittedAtMs,
       confirmationStatus: confirmed.status?.confirmationStatus,

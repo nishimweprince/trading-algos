@@ -4,7 +4,7 @@ import { canonicalPumpPoolPda } from '@pump-fun/pump-swap-sdk';
 import { base58Encode, base58Decode } from '../src/core/base58.ts';
 import { decodePool, decodeTokenAccountAmount, fetchPumpSwapPool, type PoolInfo } from '../src/enrichment/pool.ts';
 import { PROGRAM_IDS, WSOL_MINT, LAMPORTS_PER_SOL } from '../src/core/constants.ts';
-import { checkCreatorHoldings, checkLiquidityFloor } from '../src/guardrails/checks/pool.ts';
+import { checkLiquidityFloor } from '../src/guardrails/checks/pool.ts';
 import { ConfigSchema } from '../src/config/schema.ts';
 import { openDb } from '../src/persistence/db.ts';
 import { Repositories } from '../src/persistence/repositories.ts';
@@ -191,7 +191,7 @@ function ctxWith(pool: PoolInfo | undefined, creatorShare?: number): CheckContex
   return { candidate, config: cfg, repos, mode: 'paper', walletSol: 0 };
 }
 
-const POOL: PoolInfo = {
+const POOL: PoolInfo = { virtualQuoteLamports: 0n,
   poolAddress: 'POOL', baseMint: 'M', quoteMint: WSOL_MINT, lpMint: 'LP',
   baseVault: 'BASEVAULT', quoteVault: 'QUOTEVAULT', creator: 'C', coinCreator: 'DEV',
   isCanonical: true, baseReserve: 1000n, quoteReserveLamports: BigInt(50) * BigInt(LAMPORTS_PER_SOL),
@@ -209,14 +209,4 @@ describe('H7 liquidity floor + impact', () => {
   });
 });
 
-describe('H6 creator holdings', () => {
-  it('fails when the dev holds over the cap', () => {
-    expect(checkCreatorHoldings(ctxWith(POOL, 0.1)).status).toBe('fail'); // 10% > 5%
-  });
-  it('passes when the dev holds little', () => {
-    expect(checkCreatorHoldings(ctxWith(POOL, 0.02)).status).toBe('pass');
-  });
-  it('does not veto when the creator bag was not read', () => {
-    expect(checkCreatorHoldings(ctxWith(POOL))).toMatchObject({ status: 'pass', reason: 'not_checked' });
-  });
-});
+

@@ -125,7 +125,7 @@ export async function sweepEmptyTokenAccounts(
       const tx = new VersionedTransaction(
         new TransactionMessage({ payerKey: owner, recentBlockhash: blockhash, instructions: ixs }).compileToV0Message(),
       );
-      tx.sign([wallet.keypair]);
+      wallet.sign(tx);
       const signature = await connection.sendTransaction(tx, { skipPreflight: false, maxRetries: 3 });
       const conf = await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed');
       if (conf.value.err) {

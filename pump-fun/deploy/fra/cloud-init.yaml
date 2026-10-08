@@ -1,0 +1,39 @@
+#cloud-config
+# PumpDesk Frankfurt VM (Azure Germany West Central) — feat/fra-lean WS5.
+# Base OS only; the app itself is installed by setup.sh as the `pumpdesk`
+# user. No inbound ports are needed after setup: admin over Cloudflare
+# Access SSH or Azure Bastion, dashboard over the Cloudflare Tunnel.
+package_update: true
+package_upgrade: true
+packages:
+  - git
+  - sqlite3
+  - build-essential
+  - chrony          # tight clock: wall-clock latency samples and slot timing
+  - jq
+  - util-linux      # taskset
+users:
+  - default
+  - name: pumpdesk
+    shell: /bin/bash
+    sudo: false
+write_files:
+  - path: /etc/sysctl.d/90-pumpdesk.conf
+    content: |
+      # Low-latency networking for a handful of long-lived TLS/gRPC sockets.
+      net.core.rmem_max = 16777216
+      net.core.wmem_max = 16777216
+      net.ipv4.tcp_rmem = 4096 131072 16777216
+      net.ipv4.tcp_wmem = 4096 65536 16777216
+      net.ipv4.tcp_slow_start_after_idle = 0
+      net.ipv4.tcp_notsent_lowat = 16384
+      net.core.default_qdisc = fq
+      net.ipv4.tcp_congestion_control = bbr
+runcmd:
+  - sysctl --system
+  - systemctl enable --now chrony
+  # cloudflared (Cloudflare's apt repo)
+  - mkdir -p --mode=0755 /usr/share/keyrings
+  - curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg -o /usr/share/keyrings/cloudflare-main.gpg
+  - echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared noble main' > /etc/apt/sources.list.d/cloudflared.list
+  - apt-get update && apt-get install -y cloudflared

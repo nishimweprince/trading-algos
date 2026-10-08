@@ -19,6 +19,11 @@ import { OrphanReconciler } from './positions/orphanReconciler.ts';
 import { ActualsRecorder } from './positions/actuals.ts';
 import { DryRunTracker } from './positions/dryRunTracker.ts';
 import { WebhookPriceIngest } from './positions/webhookPricing.ts';
+import { WalletStream } from './positions/walletStream.ts';
+import { installKeepAliveDispatcher } from './core/http.ts';
+import { SignerGuard } from './positions/signerGuard.ts';
+import { PreArmer } from './guardrails/preArm.ts';
+import { resolveRole } from './core/role.ts';
 import { LaserstreamPriceIngest } from './positions/laserstreamPricing.ts';
 import type { PoolRef, PriceIngest, TickSink } from './positions/pricing.ts';
 import { PricePoller } from './positions/pricing.ts';
@@ -26,7 +31,7 @@ import { PositionManager } from './positions/manager.ts';
 import { Executor } from './executor/index.ts';
 import { AmmConfigCache, PrefetchedSwapStates } from './executor/swapState.ts';
 import { ClusterWarmer } from './enrichment/features/clusterWarm.ts';
-import { RiskManager } from './risk/manager.ts';
+import { RiskManager, RISK_SNAPSHOT_KEY, RISK_SNAPSHOT_PUBLISH_MS } from './risk/manager.ts';
 import { KillFileWatcher } from './risk/killswitch.ts';
 import { startDashboardServer, type DashboardRuntime } from './dashboard/server.ts';
 import { runAnalyticsMaintenance } from './dashboard/analytics.ts';
@@ -68,6 +73,8 @@ interface Runtime {
   killWatcher: KillFileWatcher;
   dashboard: DashboardRuntime | null;
   laserstreamTicks: LaserstreamPriceIngest | null;
+  walletStream: WalletStream | null;
+  preArmer: PreArmer | null;
   maintenance: NodeJS.Timeout;
   pushFeedWatch: NodeJS.Timeout | null;
   sessionId: number;
@@ -89,8 +96,19 @@ function lockPathForDb(dbPath: string): string {
 }
 
 async function main(): Promise<void> {
+  // Before any fetch: keep RPC / Sender sockets open across quiet minutes.
+  installKeepAliveDispatcher();
   const config = loadConfig(process.env.CONFIG_PATH ? { path: process.env.CONFIG_PATH } : {});
   const log = logger.child({ mod: 'bootstrap' });
+  // Process role (feat/fra-lean WS4c): the trader keeps research reads,
+  // shadow tracking and the dashboard off its event loop; research-worker.ts
+  // runs them against the shared DB.
+  const role = resolveRole(process.env.PUMPDESK_ROLE, config.runtime.role);
+  if (role === 'research') {
+    throw new Error('role research runs src/research-worker.ts, not src/index.ts');
+  }
+  const research = role === 'all';
+  log.info('process role', { role });
 
   // Redact the wallet secret from all logs before anything else runs.
   registerSecret(readSecret(config.wallet.keypairEnvVar));
@@ -171,6 +189,7 @@ async function main(): Promise<void> {
           ? { maxConcurrent: config.rpc.maxConcurrentRequests }
           : {}),
         ...(config.rpc?.readTimeoutMs !== undefined ? { timeoutMs: config.rpc.readTimeoutMs } : {}),
+        maxRps: config.rpc?.researchMaxRps ?? 0,
       })
     : undefined;
   if (enrichmentRpc) {
@@ -191,7 +210,7 @@ async function main(): Promise<void> {
   const warmRpc = enrichmentRpc ?? rpc;
   const featuresCfg = config.guardrails.features;
   const clusterWarmer =
-    warmRpc && config.guardrails.clusterWarm.enabled && featuresCfg.enabled && featuresCfg.cluster.enabled
+    research && warmRpc && config.guardrails.clusterWarm.enabled && featuresCfg.enabled && featuresCfg.cluster.enabled
       ? new ClusterWarmer(warmRpc, repos, {
           hops: featuresCfg.cluster.hops,
           maxSigs: featuresCfg.cluster.maxSigs,
@@ -206,7 +225,10 @@ async function main(): Promise<void> {
     repos,
     slotClock,
     ...(rpc ? { rpc } : {}),
-    ...(clusterWarmer ? { onLaunch: (l) => l.creator && clusterWarmer.enqueue(l.creator) } : {}),
+    onLaunch: (l) => {
+      preArmer?.noteLaunch(l.mint);
+      if (clusterWarmer && l.creator) clusterWarmer.enqueue(l.creator);
+    },
   });
 
   // Fast screen read (guardrails/fastRead.ts): its own client on the primary
@@ -232,6 +254,26 @@ async function main(): Promise<void> {
     rpc && config.rpc?.primaryHttp && config.mode !== 'paper'
       ? new Executor({ config, rpc, httpUrl: config.rpc.primaryHttp, slotClock, ...(swapStates ? { swapStates } : {}) })
       : undefined;
+
+  // Curve-completion pre-arm (guardrails/preArm.ts): removes the fast screen's
+  // RPC read when the pool account was pushed before the migration landed.
+  const preArmCfg = config.entry.preArm;
+  const preArmer =
+    preArmCfg.enabled && config.mode !== 'paper' && fastRpc && config.rpc?.primaryGrpc
+      ? new PreArmer({
+          endpoint: config.rpc.primaryGrpc,
+          token:
+            (config.rpc.primaryGrpcTokenEnvVar ? readSecret(config.rpc.primaryGrpcTokenEnvVar) : undefined) ??
+            heliusApiKeyFromUrl(config.rpc.primaryHttp),
+          rpc: fastRpc,
+          ...(executor ? { user: executor.publicKey } : {}),
+          config: preArmCfg,
+        })
+      : null;
+  if (preArmer) {
+    // Oldest first so the newest launches survive the map's size cap.
+    for (const mint of repos.recentLaunchMints(preArmCfg.bootLaunches).reverse()) preArmer.noteLaunch(mint);
+  }
 
   // Risk manager + circuit breakers. Wallet-floor / pct-of-wallet checks need a
   // balance provider — only in dry-run/live where a wallet exists.
@@ -278,6 +320,23 @@ async function main(): Promise<void> {
   } else if (laserstreamTicks) {
     log.info('laserstream push ticks enabled', { minIntervalMs: config.positions.laserstreamTickMinIntervalMs });
   }
+  // Wallet tx push (live): confirms buys and adopts untracked fills from the
+  // stream itself, so a 429ing RPC can no longer leave a landed buy without
+  // exits (2026-10-03). Also feeds the foreign-signer guard.
+  const walletStream =
+    config.mode === 'live' && executor && config.rpc?.primaryGrpc
+      ? new WalletStream({
+          endpoint: config.rpc.primaryGrpc,
+          token:
+            (config.rpc.primaryGrpcTokenEnvVar ? readSecret(config.rpc.primaryGrpcTokenEnvVar) : undefined) ??
+            heliusApiKeyFromUrl(config.rpc.primaryHttp),
+          wallet: executor.publicKey,
+        })
+      : null;
+  if (config.mode === 'live' && !walletStream) {
+    log.warn('live without a wallet stream (rpc.primaryGrpc blank) — landed buys are found by RPC polling only');
+  }
+
   // Trackers see one ingest; webhook (if any) and LaserStream (if any) both
   // mirror the tracked set.
   const trackerIngest: PriceIngest | null = composeIngest([priceIngest, laserstreamTicks]);
@@ -329,7 +388,7 @@ async function main(): Promise<void> {
   // concurrency is independent of live risk caps.
   const readRpc = enrichmentRpc ?? rpc;
   const shadow =
-    readRpc && config.shadow.enabled
+    research && readRpc && config.shadow.enabled
       ? new ShadowTracker(readRpc, repos, {
           windowMs: config.shadow.windowMinutes * 60_000,
           pollMs: config.shadow.pollMs,
@@ -347,7 +406,9 @@ async function main(): Promise<void> {
 
   // Decision model (Jev / System One). provider: none builds nothing; a jev
   // provider without its API key fails here, at startup, not silently.
-  const decisionClient = createDecisionClient(config);
+  // The trader only needs the model when it gates entries; shadow calls run
+  // in the research worker.
+  const decisionClient = research || config.decision.mode === 'gate' ? createDecisionClient(config) : null;
   const decision = decisionClient ? new EntryDecider({ config, repos, client: decisionClient }) : undefined;
   if (decision) {
     log.info('decision model enabled', { provider: decision.provider, mode: decision.mode, model: config.decision.jev.model });
@@ -367,7 +428,8 @@ async function main(): Promise<void> {
         ...(executor ? { user: executor.publicKey } : {}),
         ...(swapStates ? { swapStates } : {}),
         ...(ammConfigs ? { ammConfigs } : {}),
-        launchCoverageSinceMs: () => detector.launchCoverageSinceMs(),
+        ...(preArmer ? { preArmer } : {}),
+        researchInProcess: research,
       })
     : null;
   if (!guardrails) {
@@ -409,6 +471,7 @@ async function main(): Promise<void> {
           deadlineMs: config.positions.pricePollDeadlineMs,
         }),
         ...(laserstreamTicks ? { ingest: laserstreamTicks } : {}),
+        ...(walletStream ? { walletWatch: walletStream } : {}),
         risk: riskManager,
         ...(executor ? { executor } : {}),
         feeModel,
@@ -429,7 +492,7 @@ async function main(): Promise<void> {
   //     global budget. On a rate-limited endpoint that pushes LIVE exit reads
   //     into 429-and-retry, slowing the exits this exists to measure.
   const dryRun =
-    readRpc && config.rpc?.primaryHttp && config.dryRunTwin.enabled
+    research && readRpc && config.rpc?.primaryHttp && config.dryRunTwin.enabled
       ? new DryRunTracker({
           config,
           bus,
@@ -478,7 +541,7 @@ async function main(): Promise<void> {
   // tick against the shared RPC budget. Never screens, trades, or contacts
   // risk — outcomes land in launch_tracks only.
   const launchTrack =
-    readRpc && config.launchTrack.enabled
+    research && readRpc && config.launchTrack.enabled
       ? new LaunchTracker(readRpc, repos, {
           windowMs: config.launchTrack.windowMinutes * 60_000,
           pollMs: config.launchTrack.pollMs,
@@ -551,18 +614,34 @@ async function main(): Promise<void> {
   // the background poller lands a good read.
   await riskManager.refreshWalletBalance();
   riskManager.start();
-  const dashboard = startDashboardServer({
-    config,
-    db,
-    bus,
-    repos,
-    risk: riskManager,
-    ...(priceIngest ? { priceIngest } : {}),
-  });
+  // Trader role: no in-process dashboard, so publish the risk snapshot for the
+  // standalone one (wallet, floor, breakers) — otherwise it shows "n/a".
+  if (!research) {
+    const publish = () => {
+      try {
+        repos.putRuntimeState(RISK_SNAPSHOT_KEY, riskManager.getSnapshot());
+      } catch (err) {
+        log.debug('risk snapshot publish failed', { err });
+      }
+    };
+    publish();
+    setInterval(publish, RISK_SNAPSHOT_PUBLISH_MS).unref();
+  }
+  // Trader role: the dashboard runs as its own process (dashboard/standalone.ts).
+  const dashboard = research
+    ? startDashboardServer({
+        config,
+        db,
+        bus,
+        repos,
+        risk: riskManager,
+        ...(priceIngest ? { priceIngest } : {}),
+      })
+    : null;
 
   const runtime: Runtime = {
     lock, db, bus, alerter, detector, guardrails, shadow, launchTrack, curveTrader, dryRun, positions, risk: riskManager, killWatcher, dashboard, maintenance,
-    pushFeedWatch, sessionId, repos, laserstreamTicks,
+    pushFeedWatch, sessionId, repos, laserstreamTicks, walletStream, preArmer,
   };
   installShutdown(runtime, log);
 
@@ -575,6 +654,24 @@ async function main(): Promise<void> {
   // has seen the accept — losing exactly the blocked-entry cohort it exists to
   // measure.
   laserstreamTicks?.start();
+  walletStream?.start();
+  preArmer?.start();
+  const signerGuard =
+    walletStream && positions && executor && config.guard.enabled
+      ? new SignerGuard({
+          wallet: executor.publicKey,
+          watch: walletStream,
+          bus,
+          halt: (reason) => positions.haltEntries(reason),
+          allowListPath: config.guard.allowListPath,
+          graceMs: config.guard.graceMs,
+        })
+      : null;
+  signerGuard?.start();
+  if (signerGuard && rpc) {
+    const knownText = repos.knownSignatureText();
+    void signerGuard.auditRecent(rpc, (sig) => knownText.includes(sig), config.guard.startupLookback);
+  }
   ammConfigs?.start();
   executor?.startKeepWarm();
   startAtaSweeper(config, executor, log, repos, riskManager);
@@ -631,6 +728,8 @@ function installShutdown(rt: Runtime, log: ReturnType<typeof logger.child>): voi
     rt.dryRun?.stop();
     rt.positions?.stop();
     await rt.laserstreamTicks?.stop();
+    await rt.walletStream?.stop();
+    await rt.preArmer?.stop();
     rt.risk.stop();
     try {
       await rt.dashboard?.stop();
@@ -740,3 +839,4 @@ function startAtaSweeper(
   const timer = setInterval(() => void run(), minutes * 60_000);
   timer.unref?.();
 }
+

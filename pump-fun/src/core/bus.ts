@@ -37,6 +37,12 @@ export interface BusEventMap {
     entrySoftScore?: number;
     /** Wall-clock detection time (GraduationEvent.detectedAtMs), for detect->open. */
     detectedAtMs?: number;
+    /** Monotonic receipt stamp (GraduationEvent.receivedAtNs), for detect->send in µs. */
+    detectedAtNs?: bigint;
+    /** Migration tx slot, for landed-slot attribution. */
+    graduationSlot?: number;
+    /** Set when the pre-armed (pre-signed) buy path produced this open. */
+    preArmed?: boolean;
   };
   /**
    * An entry was blocked before capital was committed. `code` discriminates the
