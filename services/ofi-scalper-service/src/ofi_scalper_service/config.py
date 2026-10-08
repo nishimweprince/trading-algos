@@ -112,6 +112,10 @@ class Settings(BaseServiceSettings, NotificationSettings, BinanceFuturesSettings
     max_consecutive_unknown: int = Field(
         default=3, ge=1, validation_alias="OFI_MAX_CONSECUTIVE_UNKNOWN"
     )
+    # A demo entry is priced only from a touch at most this old (exits allow 2 s).
+    entry_quote_max_age_ms: int = Field(
+        default=1_500, ge=100, le=2_000, validation_alias="OFI_ENTRY_QUOTE_MAX_AGE_MS"
+    )
     # After a rejected entry the symbol waits this long before entering again,
     # doubling per rejection in a row up to the maximum.
     reject_cooldown_ms: int = Field(

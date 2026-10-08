@@ -490,7 +490,7 @@ async def test_micro_live_refuses_a_demo_gateway(testnet) -> None:
 async def test_a_stale_demo_quote_blocks_entries_but_not_exits(testnet) -> None:
     gateway, dial = FakeGateway(), Dial()
     bridge, _ = await testnet(gateway, dial=dial)
-    bridge.quotes.age_ms = 900  # older than the 500 ms entry limit, inside the 2 s one
+    bridge.quotes.age_ms = 1800  # older than the 1.5 s entry limit, inside the 2 s one
     dial.set(up=0.8, down=0.05)
     bridge.on_sample(sample(T0), GATE_ON)
     assert bridge.book.recent_signals[-1]["action"] == "skip:stale_venue_quote"
@@ -557,3 +557,19 @@ async def test_a_close_filled_without_a_price_still_closes_the_cycle(testnet) ->
     bridge.flush_pending()
     (trade,) = bridge.book.recent_trades
     assert trade["exit_price"] == 60000.0  # demo's bid, the side a sell close takes
+
+
+async def test_a_stale_demo_quote_never_cancels_a_resting_entry(testnet) -> None:
+    # Demo's bookTicker is sparse on a quiet book: an old touch must only gate new
+    # entries. It used to block the symbol, and the policy cancels a resting entry
+    # when blocked, so demo entries never got their full timeout.
+    gateway, dial = FakeGateway(), Dial()
+    bridge, _ = await testnet(gateway, dial=dial)
+    dial.set(up=0.8, down=0.05)
+    bridge.on_sample(sample(T0), GATE_ON)
+    await until(lambda: len(gateway.orders()) == 1)
+    bridge.quotes.age_ms = 1800
+    for k in range(1, 6):
+        bridge.on_sample(sample(T0 + k * 100_000_000), GATE_ON)
+    assert bridge.policies["BTCUSDT"].phase is Phase.ENTRY_RESTING
+    assert not any(p == "/v1/orders/cancel" for p in gateway.paths())

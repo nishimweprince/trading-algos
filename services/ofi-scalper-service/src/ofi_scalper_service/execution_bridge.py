@@ -78,9 +78,12 @@ TERMINAL = {"filled", "closed", "partially_filled_final", "cancelled", "rejected
 # A post-only order that would take expires on Binance too; it is not rejected.
 NOT_REFUSED = {"cancelled", "post_only_would_take", "not_submitted"}
 QUOTE_MAX_AGE_MS = 2_000
-# A post-only entry priced from an older touch tends to cross in the fast moves
-# signals fire on, and Binance expires it at once. Exits and marks keep 2 s.
-ENTRY_QUOTE_MAX_AGE_MS = 500
+# A post-only entry priced from an older touch can cross in the fast moves signals
+# fire on, and Binance expires it at once. Exits and marks keep 2 s. Demo's
+# bookTicker only sends on a change and a quiet demo book changes about once a
+# second, so 500 ms skipped 93 of 141 signals (2026-10-08, no crossing expiry
+# among the 34 entries); OFI_ENTRY_QUOTE_MAX_AGE_MS overrides this default.
+ENTRY_QUOTE_MAX_AGE_MS = 1_500
 CONTROL_SECONDS = 5.0
 
 # Mainnet USDⓈ-M filters (2026-10), for replays that have no exchangeInfo.
@@ -703,7 +706,7 @@ class ExecutionBridge:
             return
         scores = self.model.scorer.score(sample)
         fees = self.fees(symbol)
-        blocked = self._blocked(symbol, gate, bid, ask, fees)
+        blocked = self._blocked(symbol, gate, bid, ask, fees, entering=policy.phase is Phase.FLAT)
         maker, taker = fees if fees is not None else (0.0, 0.0)
         step = policy.on_sample(
             Context(
@@ -787,7 +790,12 @@ class ExecutionBridge:
         bid: float | None,
         ask: float | None,
         fees: tuple[float, float] | None,
+        *,
+        entering: bool = True,
     ) -> str | None:
+        """Why the symbol may not trade now. The policy cancels a resting entry when
+        this is set, so checks that only concern a *new* entry (``entering``: the
+        symbol is flat) must not fire for one already resting."""
         if self.risk.halted:
             return "halted"
         if self.position_mismatch is not None:
@@ -807,10 +815,13 @@ class ExecutionBridge:
             return "fees_unknown"
         if bid is None or ask is None:
             return "no_venue_quote"
+        if not entering:
+            return None
+        max_age = getattr(self.settings, "entry_quote_max_age_ms", None) or ENTRY_QUOTE_MAX_AGE_MS
         if (
             self.mode is ExecutionMode.TESTNET
             and self.quotes is not None
-            and self.quotes.get(symbol, ENTRY_QUOTE_MAX_AGE_MS) is None
+            and self.quotes.get(symbol, max_age) is None
         ):
             return "stale_venue_quote"
         backoff = self.reject_backoff.get(symbol)
