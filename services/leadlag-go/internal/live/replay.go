@@ -17,6 +17,8 @@ type Segment struct {
 	Build    string   `json:"build"`
 	StartNs  int64    `json:"start_ns"`
 	Symbols  []string `json:"symbols"`
+	Mode     string   `json:"mode"`
+	Params   string   `json:"params_sha256,omitempty"`
 	Frames   uint64   `json:"frames"`
 	Events   uint64   `json:"events"`
 	Digest   uint64   `json:"digest"`
@@ -27,8 +29,8 @@ type Segment struct {
 }
 
 // Replay runs tape files through fresh hubs (one per trader run) and returns
-// each run's segment. newEngine builds the engine for a run's symbols.
-func Replay(files []string, newEngine func(symbols []string) Engine) ([]Segment, error) {
+// each run's segment. newEngine builds the engine for a run from its hello.
+func Replay(files []string, newEngine func(h ipc.Hello) Engine) ([]Segment, error) {
 	r := tape.NewReader(files)
 	defer r.Close()
 	var (
@@ -69,8 +71,9 @@ func Replay(files []string, newEngine func(symbols []string) Engine) ([]Segment,
 				continue
 			}
 			finish()
-			cur = &Segment{PID: w.Hello.PID, Build: w.Hello.Build, StartNs: w.Hello.StartNs, Symbols: w.Hello.Symbols, Hellos: 1}
-			hub = NewHub(w.Hello.Symbols, newEngine(w.Hello.Symbols), nil)
+			cur = &Segment{PID: w.Hello.PID, Build: w.Hello.Build, StartNs: w.Hello.StartNs, Symbols: w.Hello.Symbols,
+				Mode: w.Hello.Mode, Params: w.Hello.ParamsSHA256, Hellos: 1}
+			hub = NewHub(w.Hello.Symbols, newEngine(w.Hello), nil)
 			hub.SetClock(func() int64 { return recv })
 		case "gap":
 			if cur != nil {

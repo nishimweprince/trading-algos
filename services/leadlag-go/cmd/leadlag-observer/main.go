@@ -51,7 +51,8 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	o := observe.New(observe.Config{TapeDir: tapeDir, DiskMaxPct: maxPct, Log: log})
+	journalDir := env("LL_JOURNAL_DIR", "/data/leadlag/shadow")
+	o := observe.New(observe.Config{TapeDir: tapeDir, DiskMaxPct: maxPct, Log: log, JournalDir: journalDir})
 	go o.Serve(ctx, ln)
 
 	mux := http.NewServeMux()

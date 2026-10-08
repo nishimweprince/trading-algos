@@ -59,6 +59,20 @@ func (p *Producer) Frame(recvNs int64, conn byte, frame []byte) {
 	p.noteUsed()
 }
 
+// Journal queues one JSON journal record (a shadow trade). Caller holds the
+// hub lock. Like a frame, it never blocks: a full ring drops it and counts a gap.
+func (p *Producer) Journal(atNs int64, body []byte) {
+	if p.gapRecs > 0 && !p.flushGap() {
+		p.drop(len(body), atNs)
+		return
+	}
+	if !p.ring.Put(TypeJournal, nil, body) {
+		p.drop(len(body), atNs)
+		return
+	}
+	p.noteUsed()
+}
+
 // Conn queues a connection state change. Caller holds the hub lock.
 func (p *Producer) Conn(atNs int64, conn, state byte) {
 	var b [10]byte

@@ -17,6 +17,15 @@ type StatsDoc struct {
 	Symbols   []SymDoc              `json:"symbols"`
 	Frames    uint64                `json:"frames"`
 	ParseErr  uint64                `json:"parse_errors"`
+	Journal   JournalDoc            `json:"journal"`
+}
+
+// JournalDoc describes the shadow-trade journal.
+type JournalDoc struct {
+	Dir     string `json:"dir"`
+	Day     string `json:"day"`
+	Records uint64 `json:"records"`
+	Err     string `json:"err,omitempty"`
 }
 
 // TapeDoc describes the recorder.
@@ -69,6 +78,7 @@ func (o *Observer) Stats() StatsDoc {
 	d := StatsDoc{
 		NowNs: now.UnixNano(), StartedNs: o.started.UnixNano(), Conns: map[string]*connState{},
 		Frames: o.frames, ParseErr: o.parseErr,
+		Journal: JournalDoc{Dir: o.cfg.JournalDir, Day: o.jday, Records: o.journals, Err: o.journalErr},
 		Tape: TapeDoc{Enabled: o.tapeOn, PausedReason: o.pausedReason, Dir: o.cfg.TapeDir,
 			DiskUsedPct: o.diskUsedPct, DiskFreeGB: o.diskFreeGB, LastError: o.tapeErr},
 		Trader: TraderDoc{Connected: o.traderUp, Hello: o.helloRaw, Hellos: o.hellos, Gaps: o.gaps,

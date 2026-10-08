@@ -10,6 +10,8 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -28,6 +30,9 @@ type Config struct {
 	Log         *slog.Logger
 	Now         func() time.Time
 	DisableTape bool
+	// JournalDir receives the trader's journal records (shadow trades), one
+	// JSON-lines file per UTC day. Empty: journal records are counted, not kept.
+	JournalDir string
 }
 
 // Observer owns the tape writer and the aggregates.
@@ -59,6 +64,11 @@ type Observer struct {
 	ev    model.Event
 
 	frames, parseErr uint64
+
+	jf         *os.File // today's journal file
+	jday       string
+	journals   uint64
+	journalErr string
 }
 
 // Hole is a span the trader could not deliver (observer down or ring full).
@@ -214,8 +224,40 @@ func (o *Observer) Handle(typ byte, body []byte) error {
 			}
 		}
 		return o.tape(func(w *tape.Writer) error { return w.Conn(at, conn, state == ipc.StateUp) })
+	case ipc.TypeJournal:
+		o.journals++
+		o.journal(now, body)
 	}
 	return nil
+}
+
+// journal appends one record to the day's file. A failure is reported in the
+// stats and never stops the observer (the tape still lets a replay rebuild it).
+func (o *Observer) journal(now int64, body []byte) {
+	if o.cfg.JournalDir == "" {
+		return
+	}
+	day := time.Unix(0, now).UTC().Format(time.DateOnly)
+	if o.jf == nil || day != o.jday {
+		if o.jf != nil {
+			o.jf.Close()
+			o.jf = nil
+		}
+		if err := os.MkdirAll(o.cfg.JournalDir, 0o755); err != nil {
+			o.journalErr = err.Error()
+			return
+		}
+		f, err := os.OpenFile(filepath.Join(o.cfg.JournalDir, day+".jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			o.journalErr = err.Error()
+			return
+		}
+		o.jf, o.jday = f, day
+	}
+	line := append(append(make([]byte, 0, len(body)+1), body...), '\n')
+	if _, err := o.jf.Write(line); err != nil {
+		o.journalErr = err.Error()
+	}
 }
 
 func (o *Observer) setSymbols(names []string) {
@@ -331,6 +373,10 @@ func (o *Observer) Housekeep() {
 func (o *Observer) Close() error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	if o.jf != nil {
+		o.jf.Close()
+		o.jf = nil
+	}
 	if o.w != nil {
 		return o.w.Close()
 	}

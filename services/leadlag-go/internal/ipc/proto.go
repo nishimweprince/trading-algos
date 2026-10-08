@@ -20,7 +20,8 @@ const (
 	TypeGap byte = 3
 	// TypeConn: body is [i64 atNs][u8 conn][u8 state]: a feed connection changed state.
 	TypeConn byte = 4
-	// TypeJournal: body is one JSON journal record (decisions, shadow fills; M5).
+	// TypeJournal: body is one JSON journal record (a completed shadow trade);
+	// the observer appends it to <journal dir>/<UTC day>.jsonl.
 	TypeJournal byte = 5
 )
 
@@ -45,6 +46,9 @@ type Hello struct {
 	Symbols  []string `json:"symbols"`
 	StartNs  int64    `json:"start_ns"`
 	Hostname string   `json:"hostname"`
+	// ParamsSHA256 is the shadow params file's sha256 (shadow mode only), so a
+	// replay can tell which parameters a run used.
+	ParamsSHA256 string `json:"params_sha256,omitempty"`
 	// Cumulative counters at connect time: bytes drained while no observer was
 	// connected, and records dropped on a full ring. A rise since the previous
 	// hello means a hole in the tape.

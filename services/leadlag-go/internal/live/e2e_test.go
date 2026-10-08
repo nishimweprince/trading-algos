@@ -120,7 +120,7 @@ func TestLiveTapeReplayParity(t *testing.T) {
 		t.Fatalf("tape files %v %v", files, err)
 	}
 	var replayed *captureEngine
-	segs, err := live.Replay(files, func(s []string) live.Engine { replayed = &captureEngine{}; return replayed })
+	segs, err := live.Replay(files, func(ipc.Hello) live.Engine { replayed = &captureEngine{}; return replayed })
 	if err != nil {
 		t.Fatal(err)
 	}

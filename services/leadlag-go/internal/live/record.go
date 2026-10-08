@@ -3,7 +3,8 @@ package live
 import "github.com/nishimweprince/trading-algos/services/leadlag-go/internal/model"
 
 // RecordEngine is the M2 engine: it only tracks the latest trade and quote per
-// symbol for the status page. The policy engine replaces it in M5.
+// symbol for the status page. In shadow mode it runs next to the shadow engine
+// (Engines).
 type RecordEngine struct {
 	Last []SymState
 }
@@ -32,4 +33,14 @@ func (r *RecordEngine) OnEvent(e *model.Event) {
 		s.Bid, s.Ask = e.Bid, e.Ask
 	}
 	s.LastExch = e.ExchMs
+}
+
+// Engines runs several engines in order on every event (record + shadow).
+type Engines []Engine
+
+// OnEvent implements Engine.
+func (es Engines) OnEvent(e *model.Event) {
+	for _, eng := range es {
+		eng.OnEvent(e)
+	}
 }
