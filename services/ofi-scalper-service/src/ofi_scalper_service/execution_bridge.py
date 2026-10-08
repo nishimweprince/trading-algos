@@ -75,6 +75,9 @@ SOURCE = "ofi_scalper"
 NS = 1_000_000_000
 TERMINAL = {"filled", "closed", "partially_filled_final", "cancelled", "rejected"}
 QUOTE_MAX_AGE_MS = 2_000
+# A post-only entry priced from an older touch tends to cross in the fast moves
+# signals fire on, and Binance expires it at once. Exits and marks keep 2 s.
+ENTRY_QUOTE_MAX_AGE_MS = 500
 CONTROL_SECONDS = 5.0
 
 # Mainnet USDⓈ-M filters (2026-10), for replays that have no exchangeInfo.
@@ -789,6 +792,12 @@ class ExecutionBridge:
             return "fees_unknown"
         if bid is None or ask is None:
             return "no_venue_quote"
+        if (
+            self.mode is ExecutionMode.TESTNET
+            and self.quotes is not None
+            and self.quotes.get(symbol, ENTRY_QUOTE_MAX_AGE_MS) is None
+        ):
+            return "stale_venue_quote"
         return None
 
     # --- actions -----------------------------------------------------------------------

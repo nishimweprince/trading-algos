@@ -26,9 +26,10 @@ class FakeQuotes:
     def __init__(self, bid: float = 60000.0, ask: float = 60000.1) -> None:
         self.quotes = {"BTCUSDT": FakeQuote(bid, ask), "ETHUSDT": FakeQuote(3000.0, 3000.01)}
         self.started = False
+        self.age_ms = 0.0
 
     def get(self, symbol: str, max_age_ms: float) -> FakeQuote | None:
-        return self.quotes.get(symbol)
+        return self.quotes.get(symbol) if self.age_ms <= max_age_ms else None
 
     async def start(self) -> None:
         self.started = True

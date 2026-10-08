@@ -467,3 +467,17 @@ async def test_micro_live_refuses_a_demo_gateway(testnet) -> None:
     await bridge.start()
     await until(lambda: risk.halt is not None)
     assert not bridge.venue_ready
+
+
+async def test_a_stale_demo_quote_blocks_entries_but_not_exits(testnet) -> None:
+    gateway, dial = FakeGateway(), Dial()
+    bridge, _ = await testnet(gateway, dial=dial)
+    bridge.quotes.age_ms = 900  # older than the 500 ms entry limit, inside the 2 s one
+    dial.set(up=0.8, down=0.05)
+    bridge.on_sample(sample(T0), GATE_ON)
+    assert bridge.book.recent_signals[-1]["action"] == "skip:stale_venue_quote"
+    assert not gateway.orders()
+    assert bridge._mid("BTCUSDT") is not None  # marks and stops still have a price
+    bridge.quotes.age_ms = 100
+    bridge.on_sample(sample(T0 + S), GATE_ON)
+    assert bridge.book.recent_signals[-1]["action"] == "enter"
