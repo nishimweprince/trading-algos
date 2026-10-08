@@ -524,6 +524,10 @@ DRILLS = ("kill_switch", "dead_man", "disconnect", "gap_handling")
 def _model_gates(model_dir: Path, version: str | None) -> dict[str, Any]:
     if not version:
         return {}
+    manifest = _read_json(model_dir / version / "manifest.json") or {}
+    if manifest.get("kind") == "rules":
+        # A fixed rule: no training, no research gates. Not a failed gates run.
+        return {"passed": None, "tier": "rules", "backtest_mean_net_bp": None, "cv_brier": None}
     gates = _read_json(model_dir / version / "gates.json") or {}
     held = _read_json(model_dir / version / "held_out_summary.json") or {}
     return {

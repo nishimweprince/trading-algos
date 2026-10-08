@@ -437,3 +437,14 @@ def test_speedrun_counts_only_demo_fills_of_the_pinned_model(tmp_path: Path) -> 
     assert rows["vs held-out backtest (bp)"]["value"] == -0.5
     assert rows["vs held-out backtest (bp)"]["met"] is True
     assert r["tier"] == "shallow" and r["ready"] is False
+
+
+def test_a_rule_model_is_shown_as_ungated_not_as_failed_gates(tmp_path: Path) -> None:
+    import json as _json
+
+    from ofi_scalper_service.status import _model_gates
+
+    (tmp_path / "rules-v3").mkdir()
+    (tmp_path / "rules-v3" / "manifest.json").write_text(_json.dumps({"kind": "rules"}))
+    assert _model_gates(tmp_path, "rules-v3")["tier"] == "rules"
+    assert _model_gates(tmp_path, "rules-v3")["passed"] is None

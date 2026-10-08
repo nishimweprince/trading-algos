@@ -285,7 +285,7 @@ function executionBlock(s) {
     `<span class="chip ${v === "passed" ? "good" : ""}">${esc(k.replace("_", " "))}: ${esc(v)}</span>`).join(" ");
   return `<h2>Execution</h2><div class="grid">` +
     card("Trading state", esc(st.label), `mode ${esc(st.mode)}`, st.level === "halted" ? "bad" : st.level === "demo" ? "good" : "") +
-    card("Model", esc(st.model_version || "none"), m.tier ? `gates ${m.passed ? "passed" : "failed"} &middot; tier ${esc(m.tier)}` : "no model loaded") +
+    card("Model", esc(st.model_version || "none"), m.tier === "rules" ? "rule model: ungated, no research gates" : m.tier ? `gates ${m.passed ? "passed" : "failed"} &middot; tier ${esc(m.tier)}` : "no model loaded") +
     card("Venue", yes(e.venue_ready), `gateway ${e.gateway_ok ? "ok" : "not ready"} &middot; dead-man ${e.dead_man_armed ? "armed" : "off"}`) +
     card("Open orders", e.open_orders ?? "-", `unknown in a row ${e.consecutive_unknown ?? "-"} &middot; position mismatch ${e.position_mismatch ? "YES" : "no"}`) +
     card("Halted", e.halted ? `<span class="bad">yes</span>` : `<span class="good">no</span>`, e.halt_reason ? esc(e.halt_reason) : "") +
