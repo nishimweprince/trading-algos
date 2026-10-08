@@ -117,7 +117,7 @@ round trip stands in.
 | Eligible days | `pipeline.py` | `ofi-daily-check` clean (no missing hours, no unrecovered breaks), recorded on `OFI_HOST_TAG`, diff mode. Excluded days are printed |
 | Split | `cv.py` | Weekly (provisional) or monthly (binding) periods: the walk-forward periods, then 1 held-out period. **Fixed per run name once written** (`splits/<run>.json`) |
 | Features | `replay.py` | Any day without a feature file is replayed through the live code |
-| Labels | `dataset.py` | Triple barrier on mid at 1/5/10/30 s, barrier `--barrier-bp` (6 = 4 bp maker round trip + 2 bp buffer). Grid samples only. A gap or book reset before a touch: no label |
+| Labels | `dataset.py` | Triple barrier on mid at `--horizons` (default 1/5/10/30 s), barrier `--barrier-bp`: one value, or per horizon (`60:12,120:15,300:20`). The entry cost check needs `p - p_opposite >= 2 x maker / barrier`, so a 6 bp barrier needs a 0.67 gap that no 1-30 s model reaches (shallow-1); wider barriers over longer horizons bring it to 0.2-0.33. Grid samples only. A gap or book reset before a touch: no label |
 | Train | `train.py` | Per horizon: CatBoost per expanding fold (purged + 5 min embargo), multi-level OFI PCA fit on each fold's training rows only, isotonic calibration (own PAV) on the out-of-fold predictions, Brier score and reliability per class, a final model on every walk-forward period, SHAP |
 | Scores | `scores.py` | Out-of-fold tables for validation days; final-model tables for held-out days only |
 | Select | `selection.py` | Horizon x threshold by **mean daily net P&L after costs**, on validation days, out-of-fold scores, pessimistic queue, 1x latency, >= 30 trades |

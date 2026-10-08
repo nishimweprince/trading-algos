@@ -380,3 +380,12 @@ def test_score_diagnostics_show_a_barrier_too_small_for_the_fees(tmp_path: Path)
     report = _no_candidate_md(split, {"days": ["2026-10-04"], "diagnostics": rows, "grid": []})
     assert "No score at any horizon can pay the round trip" in report
     assert "| 30 s | 6.0 |" in report
+
+
+def test_barriers_by_horizon_takes_one_value_or_one_per_horizon() -> None:
+    from research.pipeline import barriers_by_horizon
+
+    assert barriers_by_horizon("6", [1.0, 30.0]) == {1.0: 6.0, 30.0: 6.0}
+    assert barriers_by_horizon("60:12,120:15,300:20", [60.0, 300.0]) == {60.0: 12.0, 300.0: 20.0}
+    with pytest.raises(SystemExit, match="300"):
+        barriers_by_horizon("60:12", [60.0, 300.0])

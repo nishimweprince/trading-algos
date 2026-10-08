@@ -94,6 +94,20 @@ def ensure_features(
         return list(pool.map(_features_day, work))
 
 
+def barriers_by_horizon(spec: str, horizons: list[float]) -> dict[float, float]:
+    """``"15"`` for every horizon, or ``"60:12,300:20"`` naming each one."""
+    if ":" not in spec:
+        return dict.fromkeys(horizons, float(spec))
+    given: dict[float, float] = {}
+    for token in spec.split(","):
+        horizon, _, barrier = token.partition(":")
+        given[float(horizon)] = float(barrier)
+    missing = [h for h in horizons if h not in given]
+    if missing:
+        raise SystemExit(f"--barrier-bp names no barrier for horizon(s) {missing}")
+    return {h: given[h] for h in horizons}
+
+
 def _say(step: str, **fields: Any) -> None:
     print(json.dumps({"step": step, **fields}, default=str), flush=True)
 
@@ -111,7 +125,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--from", dest="start", type=date.fromisoformat, default=None)
     parser.add_argument("--to", dest="end", type=date.fromisoformat, default=None)
     parser.add_argument("--horizons", default=",".join(f"{h:g}" for h in HORIZONS_S))
-    parser.add_argument("--barrier-bp", type=float, default=6.0)
+    parser.add_argument(
+        "--barrier-bp",
+        default="6",
+        help="one barrier for every horizon, or per horizon: 60:12,120:15,300:20",
+    )
     parser.add_argument("--order-rtt-ms", type=float, default=None)
     parser.add_argument("--jobs", type=int, default=1)
     parser.add_argument("--host-tag", default=None)
@@ -160,7 +178,9 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     candidates = []
-    for horizon in (float(h) for h in args.horizons.split(",")):
+    horizons = [float(h) for h in args.horizons.split(",")]
+    barriers = barriers_by_horizon(args.barrier_bp, horizons)
+    for horizon in horizons:
         out = research_dir / "candidates" / run / f"h{horizon:g}"
         if (out / "candidate.json").is_file():
             candidates.append(Candidate.load(out))
@@ -171,7 +191,7 @@ def main(argv: list[str] | None = None) -> int:
                     features_dir=features_dir,
                     out_dir=out,
                     horizon_s=horizon,
-                    barrier_bp=args.barrier_bp,
+                    barrier_bp=barriers[horizon],
                     row_stride=args.row_stride,
                 )
             )
