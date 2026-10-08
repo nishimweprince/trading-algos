@@ -193,13 +193,32 @@ def train_candidate(
     params: dict[str, Any] | None = None,
     max_train_rows: int | None = 2_000_000,
     features: list[str] | None = None,
+    row_stride: int = 1,
 ) -> Candidate:
-    """Fit folds, calibrate on OOF, fit the final model; write the candidate directory."""
+    """Fit folds, calibrate on OOF, fit the final model; write the candidate directory.
+
+    ``row_stride`` > 1 keeps every n-th labelled grid row per symbol for fitting
+    and calibration, loading and labelling one day at a time, so memory is
+    bounded by one full day plus the kept rows. Score tables always cover every
+    grid sample of a validation day (the backtest scores each one).
+    """
     params = {**CATBOOST_PARAMS, **(params or {})}
     features = list(features or FEATURES)
     label = label_column(horizon_s)
     wf_days = split.days_of(split.walk_forward)
-    df = add_labels(load_days(features_dir, wf_days), (horizon_s,), barrier_bp=barrier_bp)
+    if row_stride <= 1:
+        df = add_labels(load_days(features_dir, wf_days), (horizon_s,), barrier_bp=barrier_bp)
+    else:
+        df = pd.concat(
+            [
+                _strided(
+                    add_labels(load_days(features_dir, [day]), (horizon_s,), barrier_bp=barrier_bp),
+                    row_stride,
+                )
+                for day in wf_days
+            ],
+            ignore_index=True,
+        )
     period_of_day = {day: p for p, days in split.days.items() for day in days}
     df["period"] = df["day"].map(period_of_day)
     rng = np.random.default_rng(params["random_seed"])
@@ -212,7 +231,6 @@ def train_candidate(
 
     path = out_dir
     path.mkdir(parents=True, exist_ok=True)
-    oof_parts: list[pd.DataFrame] = []
     folds_report = []
     raw_oof: list[np.ndarray] = []
     oof_labels: list[np.ndarray] = []
@@ -246,7 +264,6 @@ def train_candidate(
                 },
             }
         )
-        oof_parts.append(validation_rows)
     if not raw_oof:
         raise ValueError("no fold produced predictions: too little labelled data")
 
@@ -258,10 +275,11 @@ def train_candidate(
     calibrator = Calibrator(calibrator_json)
     calibrated = calibrate(raw_all, calibrator)
 
-    # OOF score tables, per validation day, from the model that did not see it.
-    for (_validation, model, _weights), rows in zip(fold_models, oof_parts, strict=True):
-        for day, day_rows in rows.groupby("day"):
-            table = score_frame(day_rows, features, _predict(model), calibrator)
+    # OOF score tables, per validation day (every grid sample), from the model that did not see it.
+    for validation, model, fold_weights in fold_models:
+        for day in split.days.get(validation, []):
+            rows = apply_pca(load_days(features_dir, [day]), fold_weights)
+            table = score_frame(rows, features, _predict(model), calibrator)
             write_table(table, path / "scores" / "oof" / f"{day}.parquet")
 
     # Final model on every walk-forward period.
@@ -294,9 +312,15 @@ def train_candidate(
             [p for d in wf_days for p in (features_dir / f"{d}.parquet",) if p.is_file()]
         ),
         "final_train_rows": len(train_all),
+        "row_stride": row_stride,
     }
     (path / "candidate.json").write_text(json.dumps(meta, indent=2))
     return Candidate(path, horizon_s, barrier_bp, features, meta)
+
+
+def _strided(df: pd.DataFrame, stride: int) -> pd.DataFrame:
+    """Every ``stride``-th row of each symbol's sample path (labels already computed)."""
+    return df[df.groupby("symbol", sort=False, observed=True).cumcount() % stride == 0]
 
 
 def _shap_summary(

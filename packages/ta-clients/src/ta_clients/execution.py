@@ -340,6 +340,16 @@ class ExecutionClient:
             {"instruments": [i.upper() for i in instruments], "countdown_ms": countdown_ms},
         )
 
+    async def venue_health(self) -> dict[str, Any] | None:
+        """The gateway's readiness details per adapter (``/health/ready``), or None."""
+        try:
+            response = await self._client.get(f"{self._base}/health/ready", timeout=self._timeout)
+            body = response.json()
+        except (httpx.HTTPError, ValueError):
+            return None
+        details = body.get("details") if isinstance(body, dict) else None
+        return details if isinstance(details, dict) else None
+
     async def trading_ready(self) -> tuple[bool, str]:
         """Gateway readiness. Unauthenticated by design, like the other health routes."""
         try:

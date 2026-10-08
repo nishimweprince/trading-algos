@@ -13,12 +13,16 @@
    "note": "Labels, walk-forward CatBoost, calibration, a backtest that runs the live code, selection by after-cost P&L, the gates harness."},
   {"phase": "Data collection in Tokyo", "status": "active", "date": "",
    "note": "Recording BTCUSDT and ETHUSDT order books continuously; progress is under Milestones."},
+  {"phase": "Shallow research run", "status": "active", "date": "2026-10-07",
+   "note": "3 walk-forward days + 1 held-out day (2026-10-03 to 10-06), relaxed gates. A pass starts shallow paper trading on demo."},
+  {"phase": "Shallow paper trading on demo", "status": "pending", "date": "",
+   "note": "The shallow model trades small on Binance demo while recording continues; 7 days and 150 trades of our own fills decide whether to speed-run the live gate."},
   {"phase": "Provisional research run", "status": "pending", "date": "",
-   "note": "Needs about 4 weeks of clean recordings. A pass lets the model trade on demo (shadow and testnet)."},
+   "note": "Needs about 4 weeks of clean recordings. With a good demo record it can stand in for the binding run (speed-run)."},
   {"phase": "Testnet drills", "status": "pending", "date": "",
    "note": "Kill switch, dead-man, disconnect and gap handling, each fired on demo trading and recorded."},
   {"phase": "Binding research run", "status": "pending", "date": "",
    "note": "Needs about 4 months of recordings. Required before any real-money trading."},
   {"phase": "Small live trading", "status": "pending", "date": "",
-   "note": "Only after a binding pass, 14+ days of clean shadow, the drills, and explicit approval."}
+   "note": "After a binding pass, or a provisional pass plus the speed-run demo record; the drills; and explicit approval."}
 ]

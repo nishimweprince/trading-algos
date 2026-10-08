@@ -1,6 +1,7 @@
 """Periods, purged walk-forward folds, and the held-out period that is touched once.
 
-- **Periods** are ISO weeks (provisional runs) or calendar months (binding).
+- **Periods** are UTC days (shallow runs), ISO weeks (provisional) or calendar
+  months (binding).
 - **Folds** expand forward: fold k trains on the periods before k and is
   validated on period k. The held-out (last) period is in no fold.
 - **Purge and embargo**: a training row whose label window ``[t, t + h]``,
@@ -40,12 +41,14 @@ class HoldoutUsed(RuntimeError):
 
 def period_of(day: str, period: str) -> str:
     d = date.fromisoformat(day)
+    if period == "day":
+        return d.isoformat()
     if period == "week":
         year, week, _ = d.isocalendar()
         return f"{year}-W{week:02d}"
     if period == "month":
         return d.strftime("%Y-%m")
-    raise ValueError(f"period must be week or month, not {period!r}")
+    raise ValueError(f"period must be day, week or month, not {period!r}")
 
 
 @dataclass(frozen=True)

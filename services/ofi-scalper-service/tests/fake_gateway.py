@@ -51,6 +51,9 @@ class FakeGateway:
     payloads: dict[str, dict[str, Any]] = field(default_factory=dict)
     calls: list[tuple[str, str, Any]] = field(default_factory=list)
     next_order_id: int = 1000
+    environment: str = "testnet"
+    # Open orders on the venue the bridge did not place: {"order_id", "instrument"}
+    resting: list[dict[str, Any]] = field(default_factory=list)
 
     # --- test controls -----------------------------------------------------------
 
@@ -88,6 +91,22 @@ class FakeGateway:
             if self.ready:
                 return httpx.Response(200, json={"status": "ready"})
             return httpx.Response(503, json={"status": "not_ready", "reason": "preflight"})
+        if path == "/health/ready":
+            return httpx.Response(
+                200,
+                json={
+                    "status": "ready",
+                    "details": {"binance_futures": {"environment": self.environment}},
+                },
+            )
+        if path == f"/v1/accounts/{ACCOUNT}/orders" and request.method == "GET":
+            return httpx.Response(
+                200, json=[{"account": ACCOUNT, "state": "new", **o} for o in self.resting]
+            )
+        if path == f"/v1/accounts/{ACCOUNT}/cancel-all":
+            instrument = (body or {}).get("instrument")
+            self.resting = [o for o in self.resting if instrument and o["instrument"] != instrument]
+            return httpx.Response(200, json={"ok": True, "details": {}})
         if path == "/v1/accounts" and request.method == "GET":
             return httpx.Response(
                 200, json={"accounts": [{"alias": ACCOUNT, "wallet_balance_usdt": self.wallet}]}

@@ -32,6 +32,8 @@ __all__ = [
     "health",
     "research",
     "roadmap",
+    "execution",
+    "speedrun",
     "trading",
     "unit_states",
 ]
@@ -45,7 +47,9 @@ UNITS = (
     "ofi-status",
 )
 # Eligible days each research run needs (research/cv.py: 3 walk-forward periods + 1 held out).
+# Shallow: days; provisional: ISO weeks; binding: months.
 MILESTONES = {
+    "shallow": {"days": 4, "periods": 4, "period": "day", "label": "Shallow run"},
     "provisional": {"days": 28, "periods": 4, "period": "week", "label": "Provisional run"},
     "binding": {"days": 120, "periods": 4, "period": "month", "label": "Binding run"},
 }
@@ -169,7 +173,9 @@ def _milestone(name: str, eligible_days: list[str], today: date) -> dict[str, An
     periods = set()
     for day in eligible_days:
         d = date.fromisoformat(day)
-        if spec["period"] == "week":
+        if spec["period"] == "day":
+            periods.add(day)
+        elif spec["period"] == "week":
             year, week, _ = d.isocalendar()
             periods.add(f"{year}-W{week:02d}")
         else:
@@ -499,6 +505,159 @@ def trading(state_dir: Path, *, model_loaded: bool, today: date | None = None) -
         "last_7_days": brief(summarise(week_trades, week_signals)),
         "recent_trades": [{k: t.get(k) for k in TRADE_FIELDS} for t in week_trades[-50:]][::-1],
         "recent_signals": [{k: s.get(k) for k in SIGNAL_FIELDS} for s in week_signals[-50:]][::-1],
+    }
+
+
+# --- execution and the live speed-run ----------------------------------------------------------
+
+# Mirrors research/gates.py LIVE_SPEEDRUN (the service does not import research code).
+SPEEDRUN = {
+    "min_demo_days": 7,
+    "min_demo_trades": 150,
+    "net_edge_bp": 0.0,
+    "t_stat": 2.0,
+    "max_worse_than_backtest_bp": 1.0,
+}
+DRILLS = ("kill_switch", "dead_man", "disconnect", "gap_handling")
+
+
+def _model_gates(model_dir: Path, version: str | None) -> dict[str, Any]:
+    if not version:
+        return {}
+    gates = _read_json(model_dir / version / "gates.json") or {}
+    held = _read_json(model_dir / version / "held_out_summary.json") or {}
+    return {
+        "passed": gates.get("passed"),
+        "tier": gates.get("tier") or ("binding" if gates.get("binding") else "provisional"),
+        "backtest_mean_net_bp": _pick(held, "base", "summary", "mean_net_bp"),
+        "cv_brier": gates.get("cv_brier"),
+    }
+
+
+def trading_state(mode: str, model_version: str | None, halted: bool) -> dict[str, Any]:
+    """One line that says whether, and how, the bot is trading."""
+    label, level = {
+        "off": ("Recording only", "idle"),
+        "shadow": ("Shadow: simulated fills on live data", "sim"),
+        "testnet": (
+            ("Demo paper trading", "demo") if model_version else ("Demo, controls only", "idle")
+        ),
+        "micro_live": ("Micro-live: real money, capped", "live"),
+    }.get(mode, ("Unknown", "idle"))
+    if halted:
+        label, level = f"{label} (halted)", "halted"
+    return {"label": label, "level": level, "mode": mode, "model_version": model_version}
+
+
+def execution(status: dict[str, Any] | None, *, model_dir: Path, state_dir: Path) -> dict[str, Any]:
+    """The execution panel: allowlisted bridge fields, the model's tier, the drills."""
+    drills_raw = _read_json(state_dir / "drills.json") or {}
+    drills = {name: _pick(drills_raw, name, "result") or "pending" for name in DRILLS}
+    if status is None:
+        return {"state": None, "drills": drills}
+    mode = str(status.get("execution_mode") or "off")
+    version = _pick(status, "model", "version")
+    risk = status.get("risk") or {}
+    bridge = status.get("bridge") or {}
+    controls = [c for c in bridge.get("controls") or [] if isinstance(c, dict)]
+    last = controls[-1] if controls else {}
+    return {
+        "state": trading_state(mode, version, bool(risk.get("halted"))),
+        "model": _model_gates(model_dir, version),
+        "venue_ready": bridge.get("venue_ready"),
+        "gateway_ok": bridge.get("gateway_not_ready") in (None, ""),
+        "dead_man_armed": bridge.get("dead_man_armed"),
+        "open_orders": len(bridge.get("open_orders") or []),
+        "consecutive_unknown": bridge.get("consecutive_unknown"),
+        "position_mismatch": bridge.get("position_mismatch") is not None,
+        "halted": bool(risk.get("halted")),
+        "halt_reason": _pick(risk, "halt", "reason"),
+        "last_control": {
+            "at": last.get("at"),
+            "control": last.get("control"),
+            "state": last.get("state"),
+        },
+        "drills": drills,
+    }
+
+
+def speedrun(state_dir: Path, *, model_dir: Path, model_version: str | None) -> dict[str, Any]:
+    """Progress against the live speed-run criteria, on demo fills of the pinned model."""
+    log = JsonlDaily(state_dir / "trades")
+    trades: list[dict[str, Any]] = []
+    days: set[str] = set()
+    for path in sorted((state_dir / "trades").glob("*.jsonl")):
+        for t in log.read(path.stem):
+            if (
+                t.get("mode") == "testnet"
+                and model_version
+                and t.get("model_version") == model_version
+            ):
+                trades.append(t)
+                days.add(path.stem)
+    summary = summarise(trades)
+    model = _model_gates(model_dir, model_version)
+    expected = model.get("backtest_mean_net_bp")
+    mean_bp = summary.get("mean_net_bp")
+    cv = model.get("cv_brier") or {}
+    cv_ref = [v for k, v in cv.items() if k in {"up", "down"} and isinstance(v, int | float)]
+    cv_brier = sum(cv_ref) / len(cv_ref) if cv_ref else None
+    drills_raw = _read_json(state_dir / "drills.json") or {}
+    halts = 0  # hard halts are not yet logged per day; the panel shows the current one
+    th = SPEEDRUN
+
+    def row(name: str, value: Any, threshold: Any, met: bool | None) -> dict[str, Any]:
+        return {"name": name, "value": value, "threshold": threshold, "met": met}
+
+    rows = [
+        row("Demo days", len(days), f">= {th['min_demo_days']}", len(days) >= th["min_demo_days"]),
+        row(
+            "Demo trades",
+            summary["trades"],
+            f">= {th['min_demo_trades']}",
+            summary["trades"] >= th["min_demo_trades"],
+        ),
+        row(
+            "Mean net bp / trade",
+            mean_bp,
+            "> 0",
+            None if mean_bp is None else mean_bp > th["net_edge_bp"],
+        ),
+        row(
+            "t-stat",
+            summary.get("t_stat"),
+            f"> {th['t_stat']}",
+            None if summary.get("t_stat") is None else summary["t_stat"] > th["t_stat"],
+        ),
+        row(
+            "vs held-out backtest (bp)",
+            None if mean_bp is None or expected is None else round(mean_bp - expected, 3),
+            f">= -{th['max_worse_than_backtest_bp']}",
+            None
+            if mean_bp is None or expected is None
+            else mean_bp - expected >= -th["max_worse_than_backtest_bp"],
+        ),
+        row(
+            "Brier on own fills vs CV",
+            summary.get("brier"),
+            None if cv_brier is None else f"<= {cv_brier:.4f}",
+            None
+            if summary.get("brier") is None or cv_brier is None
+            else summary["brier"] <= cv_brier,
+        ),
+        row("Hard-risk halts", halts, "0", halts == 0),
+        row(
+            "Drills done",
+            f"{sum(1 for d in DRILLS if _pick(drills_raw, d, 'result') == 'passed')}/{len(DRILLS)}",
+            "all",
+            all(_pick(drills_raw, d, "result") == "passed" for d in DRILLS),
+        ),
+    ]
+    return {
+        "model_version": model_version,
+        "tier": model.get("tier"),
+        "rows": rows,
+        "ready": all(r["met"] for r in rows),
     }
 
 

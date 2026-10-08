@@ -14,16 +14,26 @@ Two append-only JSONL streams under ``<state_dir>``, one file per UTC day
 
 from __future__ import annotations
 
+import atexit
 import json
 import math
+import queue
+import threading
 from collections import deque
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 from .policy import Cycle
 
-__all__ = ["ADVERSE_HORIZONS_S", "JsonlDaily", "TradeBook", "summarise", "trade_record"]
+__all__ = [
+    "ADVERSE_HORIZONS_S",
+    "BackgroundAppender",
+    "JsonlDaily",
+    "TradeBook",
+    "summarise",
+    "trade_record",
+]
 
 ADVERSE_HORIZONS_S = (1, 5, 30)
 NS = 1_000_000_000
@@ -35,20 +45,86 @@ def _iso(t_ns: int | None) -> str | None:
     return datetime.fromtimestamp(t_ns / 1e9, UTC).isoformat().replace("+00:00", "Z")
 
 
-class JsonlDaily:
-    """Append JSON lines to ``<dir>/<YYYY-MM-DD>.jsonl`` by the record's event time."""
+class BackgroundAppender:
+    """Serialise and append records on a writer thread, so the decision loop
+    never waits on ``json.dumps`` or the disk (a signal record is written in the
+    same callback that queues its order). The loop only enqueues; a full queue
+    drops the record and counts it rather than blocking. Files stay open."""
 
-    def __init__(self, directory: Path | None) -> None:
+    def __init__(self, queue_limit: int = 100_000) -> None:
+        self._queue: queue.Queue[tuple[Path, dict[str, Any]] | None] = queue.Queue(queue_limit)
+        self._handles: dict[Path, IO[str]] = {}
+        self.dropped = 0
+        self.errors = 0
+        self._thread = threading.Thread(target=self._run, name="ofi-records", daemon=True)
+        self._thread.start()
+        atexit.register(self.close)
+
+    def append(self, path: Path, record: dict[str, Any]) -> None:
+        try:
+            self._queue.put_nowait((path, record))
+        except queue.Full:
+            self.dropped += 1
+
+    def flush(self, timeout: float = 5.0) -> None:
+        """Wait until everything enqueued so far is on disk (tests, shutdown)."""
+        done = threading.Event()
+        self._queue.put((Path(), {"__flush__": done}))
+        done.wait(timeout)
+
+    def close(self) -> None:
+        if self._thread.is_alive():
+            self._queue.put(None)
+            self._thread.join(5.0)
+
+    def _run(self) -> None:
+        while True:
+            item = self._queue.get()
+            if item is None:
+                break
+            path, record = item
+            marker = record.get("__flush__")
+            if marker is not None:
+                for handle in self._handles.values():
+                    handle.flush()
+                marker.set()
+                continue
+            try:
+                handle = self._handles.get(path)
+                if handle is None:
+                    for old in list(self._handles):  # a new day: close the others
+                        self._handles.pop(old).close()
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    handle = self._handles[path] = path.open("a", buffering=1)
+                handle.write(json.dumps(record, separators=(",", ":"), default=str) + "\n")
+            except OSError:
+                self.errors += 1
+        for handle in self._handles.values():
+            handle.close()
+
+
+class JsonlDaily:
+    """Append JSON lines to ``<dir>/<YYYY-MM-DD>.jsonl`` by the record's event time.
+
+    With a ``writer`` the append happens on its thread; without one, inline.
+    """
+
+    def __init__(self, directory: Path | None, writer: BackgroundAppender | None = None) -> None:
         self.directory = directory
+        self.writer = writer
         self.errors = 0
 
     def write(self, t_ns: int, record: dict[str, Any]) -> None:
         if self.directory is None:
             return
         day = datetime.fromtimestamp(t_ns / 1e9, UTC).strftime("%Y-%m-%d")
+        path = self.directory / f"{day}.jsonl"
+        if self.writer is not None:
+            self.writer.append(path, record)
+            return
         try:
             self.directory.mkdir(parents=True, exist_ok=True)
-            with (self.directory / f"{day}.jsonl").open("a") as handle:
+            with path.open("a") as handle:
                 handle.write(json.dumps(record, separators=(",", ":"), default=str) + "\n")
         except OSError:
             self.errors += 1  # a record must never stop trading or the kill path
@@ -134,9 +210,16 @@ def trade_record(
 class TradeBook:
     """Keeps recent records in memory and writes them to the daily files."""
 
-    def __init__(self, state_dir: Path | None, *, keep: int = 500) -> None:
-        self.trades = JsonlDaily(None if state_dir is None else state_dir / "trades")
-        self.signals = JsonlDaily(None if state_dir is None else state_dir / "signals")
+    def __init__(
+        self,
+        state_dir: Path | None,
+        *,
+        keep: int = 500,
+        writer: BackgroundAppender | None = None,
+    ) -> None:
+        self.writer = writer
+        self.trades = JsonlDaily(None if state_dir is None else state_dir / "trades", writer)
+        self.signals = JsonlDaily(None if state_dir is None else state_dir / "signals", writer)
         self.recent_trades: deque[dict[str, Any]] = deque(maxlen=keep)
         self.recent_signals: deque[dict[str, Any]] = deque(maxlen=keep)
 
@@ -147,6 +230,10 @@ class TradeBook:
     def trade(self, t_ns: int, record: dict[str, Any]) -> None:
         self.recent_trades.append(record)
         self.trades.write(t_ns, record)
+
+    def close(self) -> None:
+        if self.writer is not None:
+            self.writer.close()
 
 
 def _pct(values: list[float], q: float) -> float | None:

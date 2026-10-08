@@ -25,7 +25,7 @@ buffered.
 
 from __future__ import annotations
 
-import heapq
+from bisect import bisect_left, bisect_right, insort
 from collections import deque
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -77,47 +77,62 @@ class LocalOrderBook:
     """Price -> quantity per side, with the touch cached.
 
     Prices are the floats Binance's decimal strings parse to; the same string
-    always parses to the same float, so they are safe as keys.
+    always parses to the same float, so they are safe as keys. Each side also
+    keeps its prices sorted ascending, so the top levels and the depth near mid
+    are slices rather than scans of the whole book (a REST snapshot alone is
+    1000 levels a side, and features read the book every 100 ms).
     """
 
     def __init__(self) -> None:
         self.bids: dict[float, float] = {}
         self.asks: dict[float, float] = {}
+        self._bid_prices: list[float] = []
+        self._ask_prices: list[float] = []
         self._best_bid: float | None = None
         self._best_ask: float | None = None
 
     def clear(self) -> None:
         self.bids.clear()
         self.asks.clear()
+        self._bid_prices.clear()
+        self._ask_prices.clear()
         self._best_bid = self._best_ask = None
 
     def load(self, bids: Iterable[Level], asks: Iterable[Level]) -> None:
         self.clear()
         self.bids.update((price, qty) for price, qty in bids if qty > 0)
         self.asks.update((price, qty) for price, qty in asks if qty > 0)
-        self._best_bid = max(self.bids) if self.bids else None
-        self._best_ask = min(self.asks) if self.asks else None
+        self._bid_prices = sorted(self.bids)
+        self._ask_prices = sorted(self.asks)
+        self._best_bid = self._bid_prices[-1] if self._bid_prices else None
+        self._best_ask = self._ask_prices[0] if self._ask_prices else None
+
+    @staticmethod
+    def _set(side: dict[float, float], prices: list[float], price: float, qty: float) -> None:
+        if price not in side:
+            insort(prices, price)
+        side[price] = qty
+
+    @staticmethod
+    def _remove(side: dict[float, float], prices: list[float], price: float) -> bool:
+        if side.pop(price, None) is None:
+            return False
+        del prices[bisect_left(prices, price)]
+        return True
 
     def apply(self, bids: Iterable[Level], asks: Iterable[Level]) -> None:
-        recompute_bid = recompute_ask = False
         for price, qty in bids:
             if qty > 0:
-                self.bids[price] = qty
-                if self._best_bid is None or price > self._best_bid:
-                    self._best_bid = price
-            elif self.bids.pop(price, None) is not None and price == self._best_bid:
-                recompute_bid = True
+                self._set(self.bids, self._bid_prices, price, qty)
+            else:
+                self._remove(self.bids, self._bid_prices, price)
         for price, qty in asks:
             if qty > 0:
-                self.asks[price] = qty
-                if self._best_ask is None or price < self._best_ask:
-                    self._best_ask = price
-            elif self.asks.pop(price, None) is not None and price == self._best_ask:
-                recompute_ask = True
-        if recompute_bid:
-            self._best_bid = max(self.bids) if self.bids else None
-        if recompute_ask:
-            self._best_ask = min(self.asks) if self.asks else None
+                self._set(self.asks, self._ask_prices, price, qty)
+            else:
+                self._remove(self.asks, self._ask_prices, price)
+        self._best_bid = self._bid_prices[-1] if self._bid_prices else None
+        self._best_ask = self._ask_prices[0] if self._ask_prices else None
 
     @property
     def best_bid(self) -> Level | None:
@@ -144,8 +159,8 @@ class LocalOrderBook:
 
     def top(self, levels: int) -> tuple[list[Level], list[Level]]:
         """The best ``levels`` bids (descending) and asks (ascending)."""
-        bid_prices = heapq.nlargest(levels, self.bids)
-        ask_prices = heapq.nsmallest(levels, self.asks)
+        bid_prices = self._bid_prices[: -levels - 1 : -1] if levels > 0 else []
+        ask_prices = self._ask_prices[:levels] if levels > 0 else []
         return (
             [(price, self.bids[price]) for price in bid_prices],
             [(price, self.asks[price]) for price in ask_prices],
@@ -158,8 +173,11 @@ class LocalOrderBook:
             return 0.0, 0.0
         floor = mid * (1 - bp / 10_000)
         ceiling = mid * (1 + bp / 10_000)
-        bid = sum(price * qty for price, qty in self.bids.items() if price >= floor)
-        ask = sum(price * qty for price, qty in self.asks.items() if price <= ceiling)
+        bids, asks = self.bids, self.asks
+        near_bids = self._bid_prices[bisect_left(self._bid_prices, floor) :]
+        near_asks = self._ask_prices[: bisect_right(self._ask_prices, ceiling)]
+        bid = sum(price * bids[price] for price in near_bids)
+        ask = sum(price * asks[price] for price in near_asks)
         return bid, ask
 
 

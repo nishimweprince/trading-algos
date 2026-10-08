@@ -20,7 +20,14 @@ from ta_notify import NotificationSettings
 from ta_plugin_api import MARKET_DATA_GROUP, load_providers
 from ta_plugin_binance_futures.settings import BinanceFuturesSettingsMixin
 
-__all__ = ["PROVIDER", "ExecutionMode", "Settings", "load_settings"]
+__all__ = [
+    "MICRO_LIVE_ACK",
+    "MICRO_LIVE_CAPS",
+    "PROVIDER",
+    "ExecutionMode",
+    "Settings",
+    "load_settings",
+]
 
 PROVIDER = "binance_futures"
 
@@ -31,7 +38,31 @@ class ExecutionMode(StrEnum):
     SHADOW = "shadow"
     # Orders sent to execution-service on Binance demo trading.
     TESTNET = "testnet"
+    # Real money on mainnet, hard-capped (MICRO_LIVE_CAPS): minimum-size orders on an
+    # allowlist of symbols, through a gateway on BINANCE_FUTURES_ENV=mainnet.
+    MICRO_LIVE = "micro_live"
     LIVE = "live"
+
+    @property
+    def gateway(self) -> bool:
+        """Orders go to execution-service (demo or mainnet)."""
+        return self in (ExecutionMode.TESTNET, ExecutionMode.MICRO_LIVE)
+
+    @property
+    def venue_environment(self) -> str | None:
+        """The BINANCE_FUTURES_ENV the gateway must report for this mode."""
+        return {"testnet": "testnet", "micro_live": "mainnet"}.get(self.value)
+
+
+# Micro-live is real money: these caps are code, not configuration. ETHUSDT's
+# minimum notional is $20; BTCUSDT's minimum lot (0.001) is ~$80+, above the cap.
+MICRO_LIVE_CAPS = {
+    "order_notional_usd": 25.0,
+    "position_notional_usd": 30.0,
+    "total_notional_usd": 30.0,
+    "daily_loss_usd": 3.0,
+}
+MICRO_LIVE_ACK = "real-money-micro-live"
 
 
 class Settings(BaseServiceSettings, NotificationSettings, BinanceFuturesSettingsMixin):
@@ -89,6 +120,10 @@ class Settings(BaseServiceSettings, NotificationSettings, BinanceFuturesSettings
     )
     # Shadow mode's simulated account, so the loss and drawdown halts are exercised.
     shadow_equity_usd: float = Field(default=500.0, gt=0, validation_alias="OFI_SHADOW_EQUITY_USD")
+    micro_live_ack: str | None = Field(default=None, validation_alias="OFI_MICRO_LIVE_ACK")
+    micro_live_symbols_csv: str = Field(
+        default="ETHUSDT", validation_alias="OFI_MICRO_LIVE_SYMBOLS"
+    )
 
     maker_fee_bp: float | None = Field(default=None, ge=0, validation_alias="OFI_MAKER_FEE_BP")
     taker_fee_bp: float | None = Field(default=None, ge=0, validation_alias="OFI_TAKER_FEE_BP")
@@ -175,6 +210,48 @@ class Settings(BaseServiceSettings, NotificationSettings, BinanceFuturesSettings
                 ids.add(int(token.strip()))
         return frozenset(ids)
 
+    @property
+    def trading_symbols(self) -> tuple[str, ...]:
+        """Symbols the bridge may trade: all of them, or the micro-live allowlist."""
+        if self.execution_mode is not ExecutionMode.MICRO_LIVE:
+            return tuple(self.binance_futures_symbols)
+        allowed = {t.strip().upper() for t in self.micro_live_symbols_csv.split(",") if t.strip()}
+        return tuple(s for s in self.binance_futures_symbols if s in allowed)
+
+    def _check_micro_live(self) -> None:
+        if self.micro_live_ack != MICRO_LIVE_ACK:
+            raise ValueError(
+                f"OFI_EXECUTION_MODE=micro_live trades real money: set OFI_MICRO_LIVE_ACK="
+                f"{MICRO_LIVE_ACK} to confirm"
+            )
+        if self.model_version is None:
+            raise ValueError(
+                "OFI_EXECUTION_MODE=micro_live needs OFI_MODEL_VERSION (a passing model)"
+            )
+        if not self.trading_symbols:
+            raise ValueError("OFI_MICRO_LIVE_SYMBOLS names none of BINANCE_FUTURES_SYMBOLS")
+        caps = MICRO_LIVE_CAPS
+        over = [
+            name
+            for name, value, cap in (
+                ("OFI_ORDER_NOTIONAL_USD", self.order_notional_usd, caps["order_notional_usd"]),
+                (
+                    "OFI_MAX_POSITION_NOTIONAL_USD",
+                    self.max_position_notional_usd,
+                    caps["position_notional_usd"],
+                ),
+                (
+                    "OFI_MAX_TOTAL_NOTIONAL_USD",
+                    self.max_total_notional_usd,
+                    caps["total_notional_usd"],
+                ),
+                ("OFI_DAILY_LOSS_LIMIT_USD", self.daily_loss_limit_usd, caps["daily_loss_usd"]),
+            )
+            if value > cap
+        ]
+        if over:
+            raise ValueError(f"micro_live caps exceeded ({MICRO_LIVE_CAPS}): {', '.join(over)}")
+
     @model_validator(mode="after")
     def check_ofi(self) -> Self:
         if self.execution_mode is ExecutionMode.LIVE:
@@ -187,8 +264,10 @@ class Settings(BaseServiceSettings, NotificationSettings, BinanceFuturesSettings
                 "OFI_EXECUTION_MODE=shadow needs OFI_MODEL_VERSION: shadow runs the live "
                 "model, and only a model whose research gates passed"
             )
-        if self.execution_mode is ExecutionMode.TESTNET and self.execution_api_key is None:
-            raise ValueError("OFI_EXECUTION_MODE=testnet needs EXECUTION_API_KEY")
+        if self.execution_mode.gateway and self.execution_api_key is None:
+            raise ValueError(
+                f"OFI_EXECUTION_MODE={self.execution_mode.value} needs EXECUTION_API_KEY"
+            )
         if self.shadow_mirror and (
             self.execution_mode is not ExecutionMode.TESTNET or self.model_version is None
         ):
@@ -196,6 +275,8 @@ class Settings(BaseServiceSettings, NotificationSettings, BinanceFuturesSettings
                 "OFI_SHADOW_MIRROR=true needs OFI_EXECUTION_MODE=testnet and OFI_MODEL_VERSION: "
                 "the mirror shadows the demo bridge's model on the mainnet feed"
             )
+        if self.execution_mode is ExecutionMode.MICRO_LIVE:
+            self._check_micro_live()
         if self.order_notional_usd > self.max_position_notional_usd:
             raise ValueError("OFI_ORDER_NOTIONAL_USD cannot exceed OFI_MAX_POSITION_NOTIONAL_USD")
         if self.order_notional_usd > self.manual_approval_notional_usd:

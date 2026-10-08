@@ -114,6 +114,7 @@ def test_the_examples_exist() -> None:
         ".env.example.ftmo",
         ".env.example.production",
         ".env.example.binance",
+        ".env.example.binance-live",
     }
 
 
@@ -149,7 +150,7 @@ def test_an_unedited_template_is_rejected(
 
     reported = {error["loc"][0] for error in caught.value.errors()}
     assert "API_KEY" in reported
-    if profile == "binance":
+    if profile in {"binance", "binance-live"}:
         assert {
             "BINANCE_FUTURES_TRADING_API_KEY",
             "BINANCE_FUTURES_TRADING_API_SECRET",

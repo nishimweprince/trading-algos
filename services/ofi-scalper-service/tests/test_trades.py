@@ -82,3 +82,17 @@ def test_summary_and_daily_lines(tmp_path) -> None:
     assert any("maker fill 66.7%" in line for line in _trading_lines(report))
     assert trading_summary(tmp_path, date(2026, 9, 22)) is None
     assert summarise([])["trades"] == 0
+
+
+def test_background_appender_writes_records_off_the_caller(tmp_path) -> None:
+    from ofi_scalper_service.trades import BackgroundAppender, JsonlDaily, TradeBook
+
+    writer = BackgroundAppender()
+    book = TradeBook(tmp_path, writer=writer)
+    t0 = 1_790_000_000_000_000_000
+    for i in range(50):
+        book.signal(t0 + i, {"i": i})
+    writer.flush()
+    rows = JsonlDaily(tmp_path / "signals").read("2026-09-21")
+    assert [r["i"] for r in rows] == list(range(50)) and writer.dropped == 0
+    book.close()

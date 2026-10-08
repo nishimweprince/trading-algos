@@ -25,6 +25,8 @@ import pandas as pd
 from ofi_scalper_service.model import CLASSES, Calibrator
 from ofi_scalper_service.policy import Scores
 
+SCORE_CHUNK = 200_000
+
 __all__ = ["PrecomputedScorer", "calibrate", "load_table", "score_frame", "write_table"]
 
 
@@ -52,10 +54,10 @@ def score_frame(
     complete = df[features].notna().all(axis=1).to_numpy()
     rows = df[complete]
     out = pd.DataFrame({"symbol": rows["symbol"].to_numpy(), "t_ns": rows["t_ns"].to_numpy()})
-    if len(rows):
-        probs = calibrate(predict(rows[features].to_numpy(dtype=float)), calibrator)
-    else:
-        probs = np.empty((0, 3))
+    probs = np.empty((len(rows), 3))
+    for start in range(0, len(rows), SCORE_CHUNK):  # bounded memory on a full day
+        chunk = rows[features].iloc[start : start + SCORE_CHUNK].to_numpy(dtype=float)
+        probs[start : start + len(chunk)] = calibrate(predict(chunk), calibrator)
     for j, name in enumerate(CLASSES):
         out[name] = probs[:, j]
     return out

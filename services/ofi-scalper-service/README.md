@@ -34,7 +34,8 @@ Under launchd: `infra/launchd/install.sh --service ofi-scalper-service dev`.
 | `off` (default) | nothing | Records and computes features; a halt only logs `ofi_would_act` |
 | `shadow` | `OFI_MODEL_VERSION` with a passing `gates.json` | Scores every grid sample, runs the policy and risk, builds every order, and fills them in a pessimistic simulator (a maker order needs a trade printed *through* its price). Nothing is sent |
 | `testnet` | `EXECUTION_API_KEY`, execution-service on `BINANCE_FUTURES_ENV=testnet` | Sends orders to execution-service (`ADAPTERS=binance_futures`), priced from demo trading's own touch; fills are polled back. Without a model: controls only |
-| `live` | refused | Mainnet waits for a binding gates pass and explicit approval (Stage 5) |
+| `micro_live` | `OFI_MICRO_LIVE_ACK=real-money-micro-live`, a passing `OFI_MODEL_VERSION`, a gateway on `BINANCE_FUTURES_ENV=mainnet` | Real money, hard-capped in code (`config.MICRO_LIVE_CAPS`: order $25, position and total $30, daily loss $3), only `OFI_MICRO_LIVE_SYMBOLS` (ETHUSDT). Priced from the mainnet book the features come from. Runs as profile `live` beside the dev scalper |
+| `live` | refused | Mainnet at full size waits for a binding gates pass (or the speed-run) and explicit approval (Stage 5) |
 
 - **Model** (`model.py`): `<OFI_MODEL_DIR>/<version>/` with a manifest holding
   the sha256 of every file. Any mismatch, an unknown feature, or a `gates.json`
@@ -61,6 +62,31 @@ Under launchd: `infra/launchd/install.sh --service ofi-scalper-service dev`.
   fills, fees, funding, P&L, exit reason, mid move 1/5/30 s after the fill,
   order RTT) and `signals/` (every threshold crossing and what was done).
   `ofi-daily-check` adds the day's trading report to its Telegram summary.
+
+- **Startup checks** (testnet and micro-live): the gateway must report the
+  environment the mode needs (demo for `testnet`, mainnet for `micro_live`), or
+  the bridge halts and never gets ready; and open orders the bridge does not
+  track (left by a crash inside the dead-man countdown, or by a human) are
+  cancelled per symbol before anything trades.
+
+### Micro-live (real money, capped)
+
+A second scalper process (profile `live`, port 8031, no recording) trades
+minimum size on mainnet through a second gateway (profile `binance-live`, port
+8011), while the dev scalper keeps recording and demo paper trading.
+
+1. Binance: a sub-account funded with the test money only (~$50 USDT in the
+   USDⓈ-M wallet), one-way mode, single-asset margin, ETHUSDT isolated, leverage
+   <= 2. A key on it: futures trading only, withdrawals off, IP-restricted to the VM.
+2. Paste the key into `services/execution-service/.env.binance-live`, then
+   `sudo systemctl start execution-service-binance-live` and check
+   `curl -s localhost:8011/health/ready` (environment `mainnet`, preflight ok).
+3. Plumbing drill on mainnet, no model: a far-from-market post-only ETHUSDT order
+   through `POST localhost:8011/v1/orders`, then the kill file and the dead-man
+   (as for testnet below).
+4. In `.env.live`: `OFI_MODEL_VERSION=<the passing model>` and
+   `OFI_MICRO_LIVE_ACK=real-money-micro-live`; then
+   `sudo systemctl start ofi-scalper-live`. Kill: `touch data/KILL.live`.
 
 ### Testnet drills without a model (controls only)
 
@@ -194,8 +220,10 @@ balances or paths). Share it through Cloudflare Tunnel + Access:
 
 ## Stage 2 research
 
-`python -m research.pipeline --profile dev --provisional` trains, selects and
-gates a model from the recordings; see `research/README.md`. The backtest runs
+`python -m research.pipeline --profile dev --shallow` (days) or `--provisional`
+(weeks) trains, selects and gates a model from the recordings; see
+`research/README.md` for the gate tiers and the live speed-run criteria. On the
+VM: `sudo systemctl start ofi-research`. The backtest runs
 this service's own bridge, policy and risk on replayed recordings.
 
 ## Stage 0 tools

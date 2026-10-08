@@ -424,3 +424,46 @@ async def test_control_unknowns_halt_only_when_unbroken(testnet) -> None:
     assert risk.halt is not None and risk.halt.reason is HaltReason.EXECUTION
     assert "control" in risk.halt.detail
     assert bridge.status()["consecutive_control_unknown"] == 3
+
+
+MICRO = {
+    "OFI_EXECUTION_MODE": "micro_live",
+    "OFI_MICRO_LIVE_ACK": "real-money-micro-live",
+    "OFI_ORDER_NOTIONAL_USD": 25,
+    "OFI_MAX_POSITION_NOTIONAL_USD": 30,
+    "OFI_MAX_TOTAL_NOTIONAL_USD": 30,
+    "OFI_DAILY_LOSS_LIMIT_USD": 3,
+    "OFI_MANUAL_APPROVAL_NOTIONAL_USD": 30,
+}
+
+
+async def test_untracked_orders_left_on_the_venue_are_cancelled_at_boot(testnet) -> None:
+    gateway = FakeGateway(resting=[{"order_id": 77, "instrument": "BTCUSDT"}])
+    bridge, risk = await testnet(gateway)
+    assert any(p.endswith("/cancel-all") for p in gateway.paths())
+    assert gateway.resting == [] and risk.halt is None
+    assert any(c["control"] == "cancel_all" for c in bridge.gateway.controls)
+
+
+async def test_a_gateway_on_the_wrong_environment_halts_and_never_gets_ready(testnet) -> None:
+    gateway = FakeGateway(environment="mainnet")  # testnet mode must not reach mainnet
+    bridge, risk = await testnet(gateway, start=False)
+    await bridge.start()
+    await until(lambda: risk.halt is not None)
+    assert risk.halt.reason is HaltReason.EXECUTION and not bridge.venue_ready
+    assert "mainnet" in (bridge.gateway_reason or "")
+
+
+async def test_micro_live_trades_only_its_allowlist_on_a_mainnet_gateway(testnet) -> None:
+    gateway = FakeGateway(environment="mainnet")
+    bridge, risk = await testnet(gateway, dial=Dial(), **MICRO)
+    assert set(bridge.policies) == {"ETHUSDT"} and risk.halt is None
+    assert bridge.mode.value == "micro_live"
+
+
+async def test_micro_live_refuses_a_demo_gateway(testnet) -> None:
+    gateway = FakeGateway(environment="testnet")
+    bridge, risk = await testnet(gateway, dial=Dial(), start=False, **MICRO)
+    await bridge.start()
+    await until(lambda: risk.halt is not None)
+    assert not bridge.venue_ready

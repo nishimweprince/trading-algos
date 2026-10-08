@@ -121,7 +121,7 @@ round trip stands in.
 | Train | `train.py` | Per horizon: CatBoost per expanding fold (purged + 5 min embargo), multi-level OFI PCA fit on each fold's training rows only, isotonic calibration (own PAV) on the out-of-fold predictions, Brier score and reliability per class, a final model on every walk-forward period, SHAP |
 | Scores | `scores.py` | Out-of-fold tables for validation days; final-model tables for held-out days only |
 | Select | `selection.py` | Horizon x threshold by **mean daily net P&L after costs**, on validation days, out-of-fold scores, pessimistic queue, 1x latency, >= 30 trades |
-| Gates | `gates.py` | The chosen policy on the **held-out** period: base (queue model), pessimistic queue, 2x latency, and the most volatile validation days. Writes `models/<version>/` with `gates.json` (every gate, value and threshold), plus `strategy.md` on a pass or `REPORT.md` on a fail |
+| Gates | `gates.py` | The chosen policy on the **held-out** period: base (queue model), pessimistic queue, 2x latency, and the most volatile validation days; plus 0.5x latency, informational only (`latency_sensitivity` in `gates.json`: bp per trade a host nearer the venue would add). Writes `models/<version>/` with `gates.json` (every gate, value and threshold), plus `strategy.md` on a pass or `REPORT.md` on a fail |
 
 **The backtest is the live code.** `backtest.py` replays recordings through
 `FuturesStreams.replay_line` and `ScalperRuntime.handle` into an
@@ -151,6 +151,7 @@ held-out period. To try again, record more data and start a new run name.
 
 | Run | Data | Outcome |
 |---|---|---|
+| `--shallow` | >= 3 walk-forward days + 1 held-out day | `binding: false`, `tier: shallow`; if it passes, shadow and testnet (demo) may load the model for shallow paper trading |
 | `--provisional` | >= 3 walk-forward weeks + 1 held-out week | `binding: false`; if it passes, shadow and testnet may load the model |
 | `--binding` | >= 3 walk-forward months + 1 held-out month | `binding: true`; required (with approval) before mainnet |
 
@@ -160,3 +161,54 @@ Backtest one candidate by hand:
 python -m research.backtest --profile dev --candidate research/data/candidates/provisional-1/h5 \
     --from 2026-10-12 --to 2026-10-25 --scores oof --threshold 0.55 --queue queue --jobs 3
 ```
+
+### Gate tiers
+
+`gates.py` picks thresholds from the split's period. One held-out day cannot
+carry a Sharpe ratio or a per-period stability count, so the shallow tier
+records those and the per-symbol results without requiring them
+(`"required": false` in `gates.json`); everything that says "is there an edge
+after costs" stays required.
+
+| Gate | shallow (days) | provisional / binding |
+|---|---|---|
+| trades on the held-out period | >= 20 | >= 30 |
+| mean net edge per trade | > 0 bp | > 0 bp |
+| hit rate | > 0.50 | > 0.55 |
+| t-stat of trade P&L | > 1.0 | > 2.0 |
+| Sharpe (daily, annualised) | recorded only | > 1.5 |
+| max drawdown | < 15 % | < 15 % |
+| pessimistic queue, 2x latency | profitable | profitable |
+| validation periods positive | majority | majority |
+| held-out sub-periods positive | recorded only (hours) | majority (days / weeks) |
+| BTC and ETH each positive | recorded only | required |
+| most volatile validation days | 2, within the loss limit + 20 % | 3, same |
+
+The rows are kept small for this VM: `--row-stride 3` fits on every third
+grid row per symbol (labels are computed on the full path first), and the
+feature replay holds rows as Arrow batches (~1.5 GB a day instead of >10 GB
+of dicts). Score tables still cover every grid sample.
+
+On the VM the run goes through `infra/systemd/ofi-research.service` (nice 19,
+idle IO, a memory ceiling) so it cannot starve the recorder or the bridge.
+
+### Speed-running the live gate
+
+A shallow pass only admits demo paper trading. Whether to accept a
+**provisional** (weekly) pass instead of waiting four months for the binding
+one is decided on our own demo fills (`LIVE_SPEEDRUN` in `gates.py`):
+
+| Criterion | Threshold |
+|---|---|
+| days of demo trading with the model | >= 7 |
+| completed demo trades | >= 150 |
+| mean net bp per trade after fees | > 0 |
+| t-stat of demo trade P&L | > 2.0 |
+| demo mean net bp vs the held-out backtest | not more than 1 bp worse |
+| Brier score on our own fills | not worse than cross-validated |
+| hard-risk halts (daily loss, drawdown, execution fault) | 0 |
+| testnet drills (kill, dead-man, disconnect, gap) | done |
+
+All met, plus a provisional pass and explicit approval: small live may start
+on the provisional model. Any miss: wait for the binding run. `live` stays
+refused in code either way until that approval.

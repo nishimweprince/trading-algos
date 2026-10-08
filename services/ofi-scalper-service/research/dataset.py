@@ -46,6 +46,47 @@ def label_column(horizon_s: float) -> str:
     return f"label_{horizon_s:g}s"
 
 
+def _compact(frame: pd.DataFrame) -> pd.DataFrame:
+    """Grid rows only, held compactly.
+
+    Features become float32: CatBoost casts its inputs to float32 anyway, so the
+    model sees the same values. ``mid`` (labels) and the per-level OFI columns
+    (the PCA, computed in float64 as the live engine does) keep full precision.
+    Strings become categories. A day drops from ~5 GB of pandas to ~1 GB.
+    """
+    frame = frame[frame["trigger"] == "grid"]
+    exact = {"mid", *(c for c in frame.columns if c.startswith("ofi_l"))}
+    floats = [c for c in frame.columns if frame[c].dtype == np.float64 and c not in exact]
+    out = frame.astype({c: np.float32 for c in floats})
+    for column in ("symbol", "trigger"):
+        if column in out.columns:
+            out[column] = out[column].astype("category")
+    return out
+
+
+def _read_grid_parquet(path: Path) -> pd.DataFrame:
+    """Grid rows, filtered and downcast one row group at a time in Arrow, so the
+    full-precision file is never in memory at once."""
+    import pyarrow as pa
+    import pyarrow.compute as pc
+    import pyarrow.parquet as pq
+
+    source = pq.ParquetFile(path)
+    parts = []
+    for index in range(source.num_row_groups):
+        table = source.read_row_group(index)
+        table = table.filter(pc.equal(table["trigger"], "grid"))
+        fields = [
+            pa.field(f.name, pa.float32())
+            if pa.types.is_float64(f.type) and f.name != "mid" and not f.name.startswith("ofi_l")
+            else f
+            for f in table.schema
+        ]
+        parts.append(table.cast(pa.schema(fields)))
+    table = pa.concat_tables(parts) if parts else source.read().slice(0, 0)
+    return table.to_pandas(strings_to_categorical=True, self_destruct=True)
+
+
 def load_days(features_dir: Path, days: Iterable[str]) -> pd.DataFrame:
     """Grid rows of the given days (``YYYY-MM-DD``), ordered by symbol and time."""
     frames = []
@@ -53,18 +94,21 @@ def load_days(features_dir: Path, days: Iterable[str]) -> pd.DataFrame:
         parquet = features_dir / f"{day}.parquet"
         jsonl = features_dir / f"{day}.jsonl.gz"
         if parquet.is_file():
-            frame = pd.read_parquet(parquet)
+            frame = _read_grid_parquet(parquet)
         elif jsonl.is_file():
             with gzip.open(jsonl, "rt", encoding="utf-8") as handle:
                 frame = pd.DataFrame([json.loads(line) for line in handle])
         else:
             raise FileNotFoundError(f"no features for {day} in {features_dir}")
+        frame = _compact(frame)
         frame["day"] = day
         frames.append(frame)
     if not frames:
         return pd.DataFrame()
-    df = pd.concat(frames, ignore_index=True)
-    df = df[df["trigger"] == "grid"]
+    df = pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
+    for column in ("symbol", "trigger"):  # concat of differing categories falls back to object
+        if column in df.columns:
+            df[column] = df[column].astype("category")
     return df.sort_values(["symbol", "t_ns"], kind="stable").reset_index(drop=True)
 
 
@@ -115,10 +159,10 @@ def add_labels(
     grid_ns: int = GRID_NS,
 ) -> pd.DataFrame:
     """Add ``label_<h>s`` columns, computed per symbol on its own sample path."""
-    out = df.copy()
+    out = df.copy(deep=False)  # new columns only: the caller's frame is not touched
     for horizon in horizons_s:
         column = np.full(len(out), np.nan)
-        for _, index in out.groupby("symbol", sort=False).indices.items():
+        for _, index in out.groupby("symbol", sort=False, observed=True).indices.items():
             column[index] = triple_barrier(
                 out["t_ns"].to_numpy()[index],
                 out["mid"].to_numpy(dtype=float)[index],
@@ -157,7 +201,7 @@ def fit_pca(df: pd.DataFrame, window_ms: int = PCA_WINDOW_MS) -> tuple[float, ..
 
 def apply_pca(df: pd.DataFrame, weights: Sequence[float]) -> pd.DataFrame:
     """Recompute every ``ofi_int_<w>ms`` as the live engine does with these weights."""
-    out = df.copy()
+    out = df.copy(deep=False)  # whole columns are replaced, never edited in place
     w = np.asarray(weights, dtype=float)
     for window in OFI_WINDOWS_MS:
         levels = out[_level_columns(window)].to_numpy(dtype=float)

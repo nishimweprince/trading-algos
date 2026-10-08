@@ -331,3 +331,13 @@ async def test_the_shadow_mirror_gets_the_feed_pauses_and_the_kill_switch(build,
     ok, message = runtime.ack("test")
     assert ok and "shadow mirror" in message
     assert not runtime.risk.halted and not mirror.risk.halted
+
+
+def test_heartbeat_reports_our_processing_time() -> None:
+    from collections import deque
+
+    from ofi_scalper_service.runtime import _tail
+
+    assert _tail(deque()) is None
+    out = _tail(deque([1.0, 2.0, 3.0, 50.0]))
+    assert out["p50"] == 3.0 and out["max"] == 50.0 and out["n"] == 4

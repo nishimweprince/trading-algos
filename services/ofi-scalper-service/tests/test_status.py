@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -152,6 +152,8 @@ def test_collection_counts_eligible_days_and_milestones(tmp_path: Path) -> None:
     assert c["disk_free_gb"] is not None and c["disk_runway_days"] is not None
     provisional = c["milestones"]["provisional"]
     assert provisional["eligible_days"] == 7 and provisional["target_days"] == 28
+    assert c["milestones"]["shallow"]["target_days"] == 4
+    assert c["milestones"]["shallow"]["earliest"] == "reached"
     assert provisional["earliest"] == "2026-11-10"  # 21 more clean days from 2026-10-20
     assert provisional["periods"] == 2  # ISO weeks 40 and 41
     assert c["milestones"]["binding"]["target_days"] == 120
@@ -368,3 +370,69 @@ async def test_scalper_down_is_shown_not_fatal(tmp_path: Path) -> None:
     async with await client_for(settings_for(tmp_path), None) as client:
         body = (await client.get("/api/summary")).json()
     assert body["health"]["scalper_reachable"] is False
+
+
+# --- execution and the speed-run --------------------------------------------------------
+
+
+def test_trading_state_says_how_the_bot_trades() -> None:
+    assert builders.trading_state("off", None, False)["label"] == "Recording only"
+    assert builders.trading_state("testnet", None, False)["label"] == "Demo, controls only"
+    assert builders.trading_state("testnet", "m1", False)["level"] == "demo"
+    assert builders.trading_state("micro_live", "m1", False)["level"] == "live"
+    assert builders.trading_state("testnet", "m1", True)["level"] == "halted"
+
+
+def test_execution_panel_picks_bridge_fields_and_drills(tmp_path: Path) -> None:
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "drills.json").write_text(json.dumps({"kill_switch": {"result": "passed"}}))
+    status = scalper_status()
+    status["bridge"].update(
+        venue_ready=True,
+        dead_man_armed=True,
+        open_orders=[{"x": 1}],
+        controls=[{"at": "2026-10-07T12:00:00", "control": "dead_man", "state": "succeeded"}],
+    )
+    e = builders.execution(status, model_dir=tmp_path / "models", state_dir=state)
+    assert e["state"]["label"] == "Demo paper trading" and e["open_orders"] == 1
+    assert e["drills"] == {
+        "kill_switch": "passed",
+        "dead_man": "pending",
+        "disconnect": "pending",
+        "gap_handling": "pending",
+    }
+    assert e["last_control"]["control"] == "dead_man"
+    assert builders.execution(None, model_dir=tmp_path, state_dir=state)["state"] is None
+
+
+def test_speedrun_counts_only_demo_fills_of_the_pinned_model(tmp_path: Path) -> None:
+    state, models = tmp_path / "state", tmp_path / "models"
+    (models / "m1").mkdir(parents=True)
+    (models / "m1" / "gates.json").write_text(
+        json.dumps({"passed": True, "tier": "shallow", "cv_brier": {"up": 0.2, "down": 0.2}})
+    )
+    (models / "m1" / "held_out_summary.json").write_text(
+        json.dumps({"base": {"summary": {"mean_net_bp": 1.5}}})
+    )
+    log = JsonlDaily(state / "trades")
+    t0 = int(datetime(2026, 10, 8, tzinfo=UTC).timestamp() * 1e9)
+    trade = {
+        "mode": "testnet",
+        "model_version": "m1",
+        "entry_qty_ordered": "0.01",
+        "filled": True,
+        "net_usd": 0.02,
+        "net_bp": 1.0,
+        "p": 0.7,
+        "exit_reason": "take_profit",
+    }
+    log.write(t0, trade)
+    log.write(t0, {**trade, "model_version": "other"})
+    log.write(t0, {**trade, "mode": "shadow"})
+    r = builders.speedrun(state, model_dir=models, model_version="m1")
+    rows = {row["name"]: row for row in r["rows"]}
+    assert rows["Demo trades"]["value"] == 1 and rows["Demo days"]["value"] == 1
+    assert rows["vs held-out backtest (bp)"]["value"] == -0.5
+    assert rows["vs held-out backtest (bp)"]["met"] is True
+    assert r["tier"] == "shallow" and r["ready"] is False

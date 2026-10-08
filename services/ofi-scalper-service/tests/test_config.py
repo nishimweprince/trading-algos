@@ -128,3 +128,35 @@ def test_shadow_mirror_needs_testnet_and_a_model(tmp_path) -> None:
         OFI_ALLOW_UNGATED="true",
     )
     assert settings.shadow_mirror and settings.allow_ungated
+
+
+def test_micro_live_needs_the_ack_a_model_and_stays_under_the_caps(tmp_path) -> None:
+    from ofi_scalper_service.config import MICRO_LIVE_ACK
+
+    base = {
+        "OFI_EXECUTION_MODE": "micro_live",
+        "EXECUTION_API_KEY": "gateway-key-at-least-16",
+        "OFI_MODEL_VERSION": "v1",
+        "OFI_ORDER_NOTIONAL_USD": 25,
+        "OFI_MAX_POSITION_NOTIONAL_USD": 30,
+        "OFI_MAX_TOTAL_NOTIONAL_USD": 30,
+        "OFI_DAILY_LOSS_LIMIT_USD": 3,
+        "OFI_MANUAL_APPROVAL_NOTIONAL_USD": 30,
+    }
+    with pytest.raises(ValueError, match="OFI_MICRO_LIVE_ACK"):
+        make_settings(tmp_path, **base)
+    ok = make_settings(tmp_path, **base, OFI_MICRO_LIVE_ACK=MICRO_LIVE_ACK)
+    assert ok.trading_symbols == ("ETHUSDT",)
+    with pytest.raises(ValueError, match="OFI_DAILY_LOSS_LIMIT_USD"):
+        make_settings(
+            tmp_path, **{**base, "OFI_DAILY_LOSS_LIMIT_USD": 10}, OFI_MICRO_LIVE_ACK=MICRO_LIVE_ACK
+        )
+    with pytest.raises(ValueError, match="OFI_MODEL_VERSION"):
+        make_settings(
+            tmp_path,
+            **{k: v for k, v in base.items() if k != "OFI_MODEL_VERSION"},
+            OFI_MICRO_LIVE_ACK=MICRO_LIVE_ACK,
+        )
+    with pytest.raises(ValueError, match="live is refused"):
+        make_settings(tmp_path, OFI_EXECUTION_MODE="live")
+    assert make_settings(tmp_path).trading_symbols == ("BTCUSDT", "ETHUSDT")

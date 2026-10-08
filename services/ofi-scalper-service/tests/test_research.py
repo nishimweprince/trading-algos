@@ -104,8 +104,9 @@ def test_pca_weights_follow_the_common_factor_and_recompute_integrated_ofi() -> 
 def test_periods() -> None:
     assert period_of("2026-10-05", "week") == "2026-W41"
     assert period_of("2026-10-05", "month") == "2026-10"
+    assert period_of("2026-10-05", "day") == "2026-10-05"
     with pytest.raises(ValueError):
-        period_of("2026-10-05", "day")
+        period_of("2026-10-05", "year")
 
 
 def test_split_is_fixed_once_made_and_needs_enough_periods(tmp_path: Path) -> None:
@@ -267,3 +268,65 @@ def test_limits_build_from_settings_for_jobs(tmp_path: Path) -> None:
     )
     assert isinstance(common["limits"], RiskLimits)
     assert common["maker_bp"] == pytest.approx(1.8) and common["taker_bp"] == pytest.approx(4.5)
+
+
+def test_shallow_gates_relax_what_one_held_out_day_cannot_show(tmp_path: Path) -> None:
+    from research.gates import passed_all, tier_of
+
+    days = ["2026-10-03", "2026-10-04", "2026-10-05", "2026-10-06"]
+    split = load_or_create_split(tmp_path, "s1", days=days, period="day", binding=False)
+    assert split.walk_forward == tuple(days[:3]) and split.holdout == (days[3],)
+    assert tier_of(split) == "shallow"
+
+    held_out = {days[3]: [_trade("BTCUSDT", 0.2)] * 15 + [_trade("ETHUSDT", -0.05)] * 6}
+    agg = {}
+    for name in ("base", "pessimistic", "latency_2x", "stress"):
+        agg.update(aggregate(_results(held_out, name), capital_usd=500.0))
+    selection = {"chosen": {"by_period_net_usd": {days[1]: 1.0, days[2]: 0.5}}}
+    gates = gate_table(agg, split=split, selection=selection, daily_loss_limit_usd=15.0)
+    assert gates["sharpe"]["value"] is None and gates["sharpe"].get("required") is False
+    assert not gates["eth_positive"]["passed"] and gates["eth_positive"]["required"] is False
+    assert gates["min_trades"]["threshold"] == 20
+    assert passed_all(gates), {k: g for k, g in gates.items() if not g["passed"]}
+
+    # The same day under the weekly tier fails: no Sharpe, ETH negative.
+    weekly = Split("p1", "week", ("a", "b", "c"), ("d",), {}, False, "now")
+    assert not passed_all(
+        gate_table(agg, split=weekly, selection=selection, daily_loss_limit_usd=15.0)
+    )
+
+
+def test_strided_keeps_every_nth_row_per_symbol() -> None:
+    from research.train import _strided
+
+    df = pd.DataFrame({"symbol": ["A"] * 5 + ["B"] * 4, "t_ns": list(range(5)) + list(range(4))})
+    kept = _strided(df, 2)
+    assert list(zip(kept["symbol"], kept["t_ns"], strict=True)) == [
+        ("A", 0),
+        ("A", 2),
+        ("A", 4),
+        ("B", 0),
+        ("B", 2),
+    ]
+
+
+def test_half_latency_takes_the_feed_saving_off_the_order_delay() -> None:
+    lat = Latency(feed_ms=4.0, order_ms=6.0)
+    assert lat.delay_ns(1.0) == 6_000_000
+    assert lat.delay_ns(2.0) == 16_000_000
+    assert lat.delay_ns(0.5) == 1_000_000  # 0.5 x 6 - 0.5 x 4
+    assert Latency(feed_ms=10.0, order_ms=2.0).delay_ns(0.5) == 0  # floored
+
+
+def test_latency_sensitivity_reports_bp_gained_at_half_latency() -> None:
+    from research.gates import latency_sensitivity
+
+    day = {"2026-10-06": [_trade("BTCUSDT", 0.2)] * 5}
+    faster = {"2026-10-06": [_trade("BTCUSDT", 0.3)] * 6}
+    agg = {}
+    agg.update(aggregate(_results(day, "base"), capital_usd=500.0))
+    agg.update(aggregate(_results(day, "latency_2x"), capital_usd=500.0))
+    agg.update(aggregate(_results(faster, "latency_0_5x"), capital_usd=500.0))
+    out = latency_sensitivity(agg)
+    assert out["0.5x"]["trades"] == 6 and out["1x"]["trades"] == 5
+    assert out["bp_per_trade_gained_at_0.5x"] == round(0.1 / 180 * 10_000, 3)

@@ -65,7 +65,14 @@ class Latency:
     order_ms: float = 0.0  # one-way order latency (half the order round trip, p50)
 
     def delay_ns(self, multiple: float) -> int:
-        return int(((multiple - 1) * self.feed_ms + multiple * self.order_ms) * 1e6)
+        """Order delay at ``multiple`` x our latency.
+
+        Above 1x the extra feed latency is added to the order's. Below 1x (a host
+        nearer the venue) the recordings still carry our full feed latency, so the
+        feed saving is taken off the order delay instead: an approximation of
+        reacting earlier, floored at zero.
+        """
+        return max(int(((multiple - 1) * self.feed_ms + multiple * self.order_ms) * 1e6), 0)
 
     @classmethod
     def from_file(cls, path: Path, *, order_rtt_ms: float | None = None) -> Latency:

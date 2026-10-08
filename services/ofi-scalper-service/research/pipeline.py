@@ -1,5 +1,6 @@
 """Stage 2 end to end: eligible days -> features -> train -> select -> gates.
 
+    python -m research.pipeline --profile dev --shallow [--row-stride 3] [--jobs 3]
     python -m research.pipeline --profile dev --provisional [--to 2026-11-01] [--jobs 3]
     python -m research.pipeline --profile dev --binding --run binding-1
 
@@ -95,6 +96,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Stage 2: train, select and gate a model")
     parser.add_argument("--profile", default=None)
     mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument(
+        "--shallow", action="store_true", help="daily periods (>= 4 clean days), non-binding"
+    )
     mode.add_argument("--provisional", action="store_true", help="weekly periods, non-binding")
     mode.add_argument("--binding", action="store_true", help="monthly periods, binding")
     parser.add_argument("--run", default=None, help="run name; its split is fixed once made")
@@ -105,6 +109,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--order-rtt-ms", type=float, default=None)
     parser.add_argument("--jobs", type=int, default=1)
     parser.add_argument("--host-tag", default=None)
+    parser.add_argument(
+        "--row-stride",
+        type=int,
+        default=1,
+        help="fit on every n-th grid row per symbol (bounds training memory)",
+    )
     args = parser.parse_args(argv)
 
     from ofi_scalper_service.config import load_settings
@@ -113,8 +123,9 @@ def main(argv: list[str] | None = None) -> int:
     research_dir = settings.research_dir
     record_dir = settings.record_dir
     features_dir = research_dir / "features" / (settings.profile or "default")
-    run = args.run or ("provisional-1" if args.provisional else "binding-1")
-    period = "week" if args.provisional else "month"
+    tier = "shallow" if args.shallow else "provisional" if args.provisional else "binding"
+    run = args.run or f"{tier}-1"
+    period = {"shallow": "day", "provisional": "week", "binding": "month"}[tier]
 
     end = args.end or (datetime.now(UTC).date() - timedelta(days=1))
     start = args.start or _first_recorded_day(record_dir) or end
@@ -125,7 +136,7 @@ def main(argv: list[str] | None = None) -> int:
     split = load_or_create_split(
         research_dir / "splits", run, days=days, period=period, binding=args.binding
     )
-    _say("split", walk_forward=split.walk_forward, held_out=split.holdout)
+    _say("split", tier=tier, walk_forward=split.walk_forward, held_out=split.holdout)
 
     overrides = {
         "grid_ms": settings.grid_ms,
@@ -151,6 +162,7 @@ def main(argv: list[str] | None = None) -> int:
                     out_dir=out,
                     horizon_s=horizon,
                     barrier_bp=args.barrier_bp,
+                    row_stride=args.row_stride,
                 )
             )
         _say("candidate", horizon_s=horizon, path=str(out))

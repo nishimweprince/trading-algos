@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from ta_plugin_binance_futures.depth import (
     DepthDiff,
     DepthSync,
@@ -160,3 +162,34 @@ def test_restore_detects_a_gap_after_the_checkpoint() -> None:
     sync.on_diff(diff(110, 112, 109))  # pu 109 != checkpoint 100: something is missing
     assert sync.restore(100, SNAP_BIDS, SNAP_ASKS) is SyncOutcome.GAP
     assert not sync.verified and sync.needs_snapshot
+
+
+def test_sorted_book_matches_full_scans_under_random_updates() -> None:
+    import heapq
+    import random
+
+    rng = random.Random(7)
+    book = LocalOrderBook()
+    tick = 0.1
+    book.load(
+        [(round(60000 - i * tick, 1), rng.random()) for i in range(1, 300)],
+        [(round(60000 + i * tick, 1), rng.random()) for i in range(1, 300)],
+    )
+    for _ in range(3000):
+        centre = 60000 + rng.randint(-50, 50) * tick
+        bids = [(round(centre - rng.randint(0, 400) * tick, 1), rng.choice([0.0, rng.random()]))]
+        asks = [(round(centre + rng.randint(1, 400) * tick, 1), rng.choice([0.0, rng.random()]))]
+        book.apply(bids, asks)
+        assert book._bid_prices == sorted(book.bids) and book._ask_prices == sorted(book.asks)
+        assert book._best_bid == (max(book.bids) if book.bids else None)
+        assert book._best_ask == (min(book.asks) if book.asks else None)
+        top_bids, top_asks = book.top(10)
+        assert [p for p, _ in top_bids] == heapq.nlargest(10, book.bids)
+        assert [p for p, _ in top_asks] == heapq.nsmallest(10, book.asks)
+        if book.mid() is not None:
+            mid = book.mid()
+            floor, ceiling = mid * (1 - 5 / 10_000), mid * (1 + 5 / 10_000)
+            bid, ask = book.notional_within(5)
+            assert bid == pytest.approx(sum(p * q for p, q in book.bids.items() if p >= floor))
+            assert ask == pytest.approx(sum(p * q for p, q in book.asks.items() if p <= ceiling))
+    assert book.top(0) == ([], [])

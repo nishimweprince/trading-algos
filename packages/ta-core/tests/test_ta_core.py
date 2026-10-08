@@ -234,3 +234,17 @@ def test_log_event_level_name_is_recorded(tmp_path: Path) -> None:
         reset_file_logs()
     event = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
     assert event["level"] == "WARNING"
+
+
+def test_background_events_log_writes_on_its_thread(tmp_path) -> None:
+    import json as _json
+
+    from ta_core.logging_config import BackgroundJsonlLogger
+
+    sink = BackgroundJsonlLogger(tmp_path / "events.jsonl")
+    for i in range(20):
+        sink.append({"event": "x", "i": i})
+    sink.close()
+    rows = [_json.loads(x) for x in (tmp_path / "events.jsonl").read_text().splitlines()]
+    assert [r["i"] for r in rows] == list(range(20)) and all("ts" in r for r in rows)
+    sink.close()  # idempotent

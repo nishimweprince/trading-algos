@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import gc
 import logging
 import time
 from collections import Counter, deque
@@ -67,6 +68,19 @@ def _percentiles(values: deque[float]) -> dict[str, float] | None:
     return {"p50": pick(0.50), "p90": pick(0.90), "p99": pick(0.99), "n": len(ordered)}
 
 
+def _tail(values: deque[float]) -> dict[str, float] | None:
+    """p50, p99 and max of a reservoir, in ms."""
+    if not values:
+        return None
+    ordered = sorted(values)
+    return {
+        "p50": round(ordered[len(ordered) // 2], 3),
+        "p99": round(ordered[min(len(ordered) - 1, int(0.99 * len(ordered)))], 3),
+        "max": round(ordered[-1], 3),
+        "n": len(ordered),
+    }
+
+
 class ScalperRuntime:
     def __init__(
         self,
@@ -105,6 +119,16 @@ class ScalperRuntime:
         self.fees: dict[str, Any] = {}
         self.counts: Counter[str] = Counter()
         self.feed_latency_ms: dict[str, deque[float]] = {}
+        # Our own processing, live (ms): a 100 ms tick's features for every symbol,
+        # the bridge's decisions inside it, and receive -> handled per event (parse,
+        # queue wait, book apply, any tick it triggered). And GC pauses.
+        self.proc_ms: dict[str, deque[float]] = {
+            "tick": deque(maxlen=LATENCY_RESERVOIR),
+            "decide": deque(maxlen=LATENCY_RESERVOIR),
+            "handle_lag": deque(maxlen=LATENCY_RESERVOIR),
+            "gc": deque(maxlen=LATENCY_RESERVOIR),
+        }
+        self._gc_started = 0
         self.last_book_ns: dict[str, int] = {}
         self.booted = asyncio.Event()
         self.boot_error: str | None = None
@@ -169,6 +193,11 @@ class ScalperRuntime:
             # Anchor the grid at the recorded session start (replay does the same).
             self.grid.due(session_ns)
         self.booted.set()
+        # Everything allocated so far (books, engine, model) lives for the process:
+        # take it out of the collector so a full collection has less to walk.
+        gc.freeze()
+        if self._gc_callback not in gc.callbacks:
+            gc.callbacks.append(self._gc_callback)
         log_event("ofi_streams_started", symbols=list(ticks), tick_sizes=ticks)
         self.spawn(self._load_fees(), "ofi-fees")
         self.spawn(self._check_key(), "ofi-key-check")
@@ -221,6 +250,8 @@ class ScalperRuntime:
         self._tasks.clear()
         for bridge in self._bridges():
             await bridge.close()
+        if self._gc_callback in gc.callbacks:
+            gc.callbacks.remove(self._gc_callback)
         await self.streams.close()
         closer = getattr(self.account, "aclose", None)
         if closer is not None:
@@ -234,7 +265,11 @@ class ScalperRuntime:
     # --- the consumer -----------------------------------------------------------
 
     async def _consume(self) -> None:
+        lag = self.proc_ms["handle_lag"]
         async for event in self.streams.events():
+            recv_ns = getattr(event, "recv_ns", None)
+            if recv_ns is not None:
+                lag.append((time.time_ns() - recv_ns) / 1e6)
             try:
                 self.handle(event)
             except Exception as exc:  # noqa: BLE001 - one bad event must not stop the feed
@@ -304,8 +339,17 @@ class ScalperRuntime:
         for grid_ns in self.grid.due(recv_ns):
             self._on_grid(grid_ns)
 
+    def _gc_callback(self, phase: str, info: dict[str, Any]) -> None:
+        if phase == "start":
+            self._gc_started = time.perf_counter_ns()
+        elif self._gc_started:
+            self.proc_ms["gc"].append((time.perf_counter_ns() - self._gc_started) / 1e6)
+            self._gc_started = 0
+
     def _on_grid(self, grid_ns: int) -> None:
         assert self.engine is not None
+        started = time.perf_counter_ns()
+        deciding = 0
         self._burst.clear()
         for symbol, features in self.engine.grid(grid_ns).items():
             features["trigger"] = "grid"
@@ -322,8 +366,13 @@ class ScalperRuntime:
             if self._set_pause(symbol, "stale_book", stale) and stale and last is not None:
                 self._would("cancel_all", symbol, "stale_book")
             for bridge in self._bridges():
+                t = time.perf_counter_ns()
                 bridge.on_sample(features, self.decisions.get(symbol))
+                deciding += time.perf_counter_ns() - t
         self.counts["grid_samples"] += 1
+        self.proc_ms["tick"].append((time.perf_counter_ns() - started) / 1e6)
+        if self.bridge is not None:
+            self.proc_ms["decide"].append(deciding / 1e6)
 
     async def _quiet_grid(self) -> None:
         """Sample on time even when no event arrives to drive the grid."""
@@ -530,6 +579,7 @@ class ScalperRuntime:
             "pauses": {s: sorted(r) for s, r in self.risk.pauses.items() if r},
             "halted": self.risk.halted,
             "handler_errors": self.counts.get("handler_errors", 0),
+            "proc_ms": {kind: _tail(values) for kind, values in self.proc_ms.items()},
         }
         if recorder is not None:
             line["recorder"] = {

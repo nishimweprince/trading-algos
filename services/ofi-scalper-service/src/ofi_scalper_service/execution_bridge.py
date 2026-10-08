@@ -487,9 +487,9 @@ class ExecutionBridge:
         self.shadow: ShadowVenue | None = None
         self.gateway: GatewayVenue | None = None
         self.venue: Venue
-        if self.mode is ExecutionMode.TESTNET:
+        if self.mode.gateway:
             if client is None:
-                raise ValueError("testnet mode needs an execution client")
+                raise ValueError(f"{self.mode.value} mode needs an execution client")
             self.gateway = GatewayVenue(self, client, poll_ms=settings.fill_poll_ms)
             self.venue = self.gateway
         else:
@@ -502,8 +502,10 @@ class ExecutionBridge:
         """One policy per symbol, once the order filters are known. No model: none."""
         if self.model is None:
             return
+        allowed = set(getattr(self.settings, "trading_symbols", None) or filters)
         for symbol, symbol_filters in filters.items():
-            self.policies[symbol] = SymbolPolicy(symbol, self.model.policy, symbol_filters)
+            if symbol in allowed:
+                self.policies[symbol] = SymbolPolicy(symbol, self.model.policy, symbol_filters)
 
     # --- lifecycle (testnet I/O) -------------------------------------------------------
 
@@ -533,6 +535,7 @@ class ExecutionBridge:
         if self.quotes is not None:
             await self.quotes.close()
         self.flush_pending()
+        self.book.close()
         self.persist()
 
     async def _boot(self) -> None:
@@ -552,13 +555,65 @@ class ExecutionBridge:
                 self.update(order, Decimal(0), None, True, self.clock_ns(), "not_submitted")
                 continue
             order.state = "unknown"  # "sent" before the restart: ask, do not resend
+        if not await self._check_environment():
+            return
         await self.gateway.poll_once()
+        await self._cancel_strays()
         await self._check_positions()
         self.venue_ready = True
         self.gateway_reason = None
         self._tasks.append(asyncio.create_task(self.gateway.poller(), name="ofi-bridge-poller"))
         self._tasks.append(asyncio.create_task(self._control_loop(), name="ofi-bridge-control"))
         log_event("ofi_bridge_ready", mode=self.mode.value, restored_orders=len(self.orders))
+
+    async def _check_environment(self) -> bool:
+        """The gateway must trade where this mode says: demo for testnet, mainnet for micro-live."""
+        expected = self.mode.venue_environment
+        details = await self.client.venue_health()
+        found = {
+            str(d.get("environment"))
+            for d in (details or {}).values()
+            if isinstance(d, dict) and d.get("environment")
+        }
+        if found == {expected}:
+            return True
+        reason = (
+            f"gateway environment {sorted(found) or 'unknown'}, {self.mode.value} needs {expected}"
+        )
+        self.gateway_reason = reason
+        self.risk.execution_fault(reason)
+        self.alerts.send(
+            "venue-environment", "OFI: wrong gateway environment", [reason], always=True
+        )
+        log_event("ofi_bridge_wrong_environment", level=logging.CRITICAL, reason=reason)
+        return False
+
+    async def _cancel_strays(self) -> None:
+        """Cancel open orders this bridge does not track (left by a crash or a human).
+
+        A process restarted inside the dead-man countdown re-arms it, so Binance never
+        cancels what the previous process left resting; this does. A symbol where the
+        bridge also has live orders of its own is not touched: it halts for a human.
+        """
+        assert self.gateway is not None
+        tracked = {o.order_id for o in self.orders.values() if not o.terminal and o.order_id}
+        busy = {o.symbol for o in self.orders.values() if not o.terminal}
+        symbols = set(self.settings.binance_futures_symbols)
+        strays: dict[str, int] = {}
+        for row in await self.client.list_orders():
+            symbol = str(row.get("instrument") or "")
+            if symbol in symbols and row.get("order_id") not in tracked:
+                strays[symbol] = strays.get(symbol, 0) + 1
+        for symbol, count in sorted(strays.items()):
+            if symbol in busy:
+                reason = f"{count} untracked open order(s) on {symbol} next to the bridge's own"
+                self.risk.execution_fault(reason)
+                self.alerts.send(
+                    "stray-orders", "OFI: untracked open orders", [reason], always=True
+                )
+                continue
+            log_event("ofi_bridge_stray_orders", level=logging.WARNING, symbol=symbol, count=count)
+            await self.gateway._control("cancel_all", (symbol,), 0.0)
 
     async def _check_positions(self) -> None:
         positions = await self.client.list_positions()
@@ -702,7 +757,7 @@ class ExecutionBridge:
             self.shadow.advance(t_ns)
 
     def _quote(self, symbol: str, sample: dict[str, Any]) -> tuple[float | None, float | None]:
-        if self.mode is ExecutionMode.TESTNET:
+        if self.mode is ExecutionMode.TESTNET and self.quotes is not None:
             quote = self.quotes.get(symbol, QUOTE_MAX_AGE_MS) if self.quotes is not None else None
             return (quote.bid, quote.ask) if quote is not None else (None, None)
         return sample.get("best_bid"), sample.get("best_ask")
@@ -1037,7 +1092,7 @@ class ExecutionBridge:
     # --- persistence (testnet) --------------------------------------------------------------
 
     def persist(self) -> None:
-        if self.state_path is None or self.mode is not ExecutionMode.TESTNET:
+        if self.state_path is None or not self.mode.gateway:
             return
         state = {
             "schema": 1,
@@ -1056,7 +1111,7 @@ class ExecutionBridge:
             log_event("ofi_bridge_persist_failed", level=logging.ERROR, error=str(exc)[:200])
 
     def restore(self) -> None:
-        if self.state_path is None or self.mode is not ExecutionMode.TESTNET:
+        if self.state_path is None or not self.mode.gateway:
             return
         if not self.state_path.is_file():
             return

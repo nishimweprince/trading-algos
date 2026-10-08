@@ -43,7 +43,7 @@ from .risk import RiskLimits, RiskState
 from .runtime import ScalperRuntime
 from .sample_log import SampleLog
 from .telegram_commands import TelegramCommands
-from .trades import summarise
+from .trades import BackgroundAppender, TradeBook, summarise
 
 __all__ = ["LOGGER_NAME", "build_runtime", "create_app"]
 
@@ -88,7 +88,7 @@ def build_bridge(
     if settings.execution_mode is ExecutionMode.OFF:
         return None, None
     client = http = quotes = None
-    if settings.execution_mode is ExecutionMode.TESTNET:
+    if settings.execution_mode.gateway:
         http = httpx.AsyncClient()
         client = ExecutionClient(
             _ClientSettings(
@@ -99,7 +99,10 @@ def build_bridge(
             ),
             http,
         )
-        quotes = factory.quotes(settings, settings.testnet_quotes_ws_url)
+        if settings.execution_mode is ExecutionMode.TESTNET:
+            # Demo has its own book: price orders from demo's touch. Micro-live trades
+            # the mainnet book the features come from, so its samples price it.
+            quotes = factory.quotes(settings, settings.testnet_quotes_ws_url)
     bridge = ExecutionBridge(
         settings,
         risk=risk,
@@ -109,6 +112,8 @@ def build_bridge(
         quotes=quotes,
         state_dir=settings.state_dir,
         fees=fees,
+        # Trade and signal records are written off the decision loop.
+        book=TradeBook(settings.state_dir, writer=BackgroundAppender()),
     )
     return bridge, http
 
@@ -180,8 +185,9 @@ def build_runtime(settings: Settings, notifier: Any | None) -> ScalperRuntime:
 
 def create_app(settings: Settings | None = None, runtime: ScalperRuntime | None = None) -> FastAPI:
     settings = settings or load_settings()
-    configure_logging(settings.log_level, name=LOGGER_NAME)
-    configure_file_logs(settings.events_log_path)
+    # Both log sinks write on threads: the decision loop only enqueues.
+    configure_logging(settings.log_level, name=LOGGER_NAME, background=True)
+    configure_file_logs(settings.events_log_path, background=True)
     state: dict[str, Any] = {"runtime": runtime}
 
     async def telegram_handler(command: str, user_id: int) -> str:
