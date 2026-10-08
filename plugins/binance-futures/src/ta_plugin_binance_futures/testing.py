@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -456,6 +456,9 @@ class FakeBinanceTrading(FakeBinanceFutures):
         self.listen_key_calls: list[str] = []
         self.user_queue: asyncio.Queue[dict[str, Any]] | None = None
         self.fail_next: str | None = None
+        # Called with a copy of a new order just before the REST response is
+        # returned: lets a test deliver a stream event ahead of the response.
+        self.after_post: Callable[[dict[str, Any]], None] | None = None
         self._next_id = 1000
 
     # helpers ---------------------------------------------------------------------
@@ -674,6 +677,8 @@ class FakeBinanceTrading(FakeBinanceFutures):
                 -1007,
                 "Timeout waiting for response from backend server; execution status unknown.",
             )
+        if self.after_post is not None:
+            self.after_post(dict(order))
         return httpx.Response(200, json=order)
 
 

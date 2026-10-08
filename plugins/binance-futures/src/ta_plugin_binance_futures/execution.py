@@ -800,13 +800,16 @@ class BinanceFuturesExecution:
                 {"order_id": order.order_id},
                 {"binance_status": order.status},
             )
-        if order.open:
-            self._orders[order.order_id] = order
         state, extra = self._state_for(order)
-        # The stream may already have reported a later state for this order.
+        # The stream may already have reported a later state for this order (a
+        # post-only can fill within milliseconds, before this response is read).
         streamed = self._seen.get(client_order_id)
         if streamed is not None and RANK.get(streamed, 0) > RANK.get(state, 0):
             state = streamed
+        # Cache it as open only if the stream has not already finished it: the
+        # stream's fill removed it, and this older NEW must not bring it back.
+        if order.open and state not in FINAL:
+            self._orders[order.order_id] = order
         return TargetOutcome(
             state,
             self._values(order, extra),

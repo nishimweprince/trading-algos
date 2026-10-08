@@ -468,3 +468,21 @@ def test_volume_caps_parse_and_reject_bad_pairs() -> None:
     for bad in ("BTCUSDT", "BTCUSDT=0", "BTCUSDT=x", "=1"):
         with pytest.raises(ValueError):
             BinanceFuturesSettingsMixin(BINANCE_FUTURES_MAX_VOLUME_LOTS=bad)
+
+
+async def test_a_fill_streamed_before_the_order_response_leaves_no_stale_open_order(
+    venue, fake
+) -> None:
+    # Demo filled a post-only buy 4 ms after placing it: the user stream's FILLED
+    # was handled before the REST response (status NEW), which re-cached the
+    # order as open for hours (2026-10-08, BNBUSDT).
+    from ta_plugin_binance_futures.execution import _Order
+
+    def stream_first(row: dict) -> None:
+        filled = dict(row, status="FILLED", executedQty=row["origQty"], avgPrice=row["price"])
+        venue._settle(_Order.from_rest(filled), source="stream")
+
+    fake.after_post = stream_first
+    outcome, _, _ = await send(venue, order(post_only=True))
+    assert outcome.state is TargetState.FILLED
+    assert venue.orders(ACCOUNT) == []
