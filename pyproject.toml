@@ -41,8 +41,9 @@ members = [
 ]
 # notification-service and ta-market-data-js are TypeScript and have no
 # pyproject.toml; a glob that matched them would fail resolution. They are
-# npm projects driven from the root package.json.
-exclude = ["services/notification-service", "packages/ta-market-data-js"]
+# npm projects driven from the root package.json. leadlag-go is a Go module
+# (its own go.mod), built with the Go toolchain.
+exclude = ["services/notification-service", "packages/ta-market-data-js", "services/leadlag-go"]
 
 [tool.ruff]
 target-version = "py311"
