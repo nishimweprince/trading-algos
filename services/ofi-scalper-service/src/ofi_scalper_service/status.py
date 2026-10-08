@@ -592,6 +592,7 @@ def speedrun(state_dir: Path, *, model_dir: Path, model_version: str | None) -> 
                 t.get("mode") == "testnet"
                 and model_version
                 and t.get("model_version") == model_version
+                and not t.get("ungated")  # a rule or ungated fit never counts
             ):
                 trades.append(t)
                 days.add(path.stem)

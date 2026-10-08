@@ -430,6 +430,7 @@ def test_speedrun_counts_only_demo_fills_of_the_pinned_model(tmp_path: Path) -> 
     log.write(t0, trade)
     log.write(t0, {**trade, "model_version": "other"})
     log.write(t0, {**trade, "mode": "shadow"})
+    log.write(t0, {**trade, "ungated": True})  # a rule model's demo trade never counts
     r = builders.speedrun(state, model_dir=models, model_version="m1")
     rows = {row["name"]: row for row in r["rows"]}
     assert rows["Demo trades"]["value"] == 1 and rows["Demo days"]["value"] == 1

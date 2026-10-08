@@ -157,6 +157,8 @@ def test_micro_live_needs_the_ack_a_model_and_stays_under_the_caps(tmp_path) -> 
             **{k: v for k, v in base.items() if k != "OFI_MODEL_VERSION"},
             OFI_MICRO_LIVE_ACK=MICRO_LIVE_ACK,
         )
+    with pytest.raises(ValueError, match="OFI_ALLOW_UNGATED"):
+        make_settings(tmp_path, **base, OFI_MICRO_LIVE_ACK=MICRO_LIVE_ACK, OFI_ALLOW_UNGATED="true")
     with pytest.raises(ValueError, match="live is refused"):
         make_settings(tmp_path, OFI_EXECUTION_MODE="live")
     assert make_settings(tmp_path).trading_symbols == ("BTCUSDT", "ETHUSDT")

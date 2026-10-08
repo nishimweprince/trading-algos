@@ -71,8 +71,12 @@ def load_pinned_model(settings: Settings) -> LoadedModel | None:
     if settings.model_version is None:
         return None
     # Mode off may load a non-passing model to watch its features; it trades nothing.
-    # OFI_ALLOW_UNGATED lets demo and shadow trade one (live is refused in config).
-    require_pass = settings.execution_mode is not ExecutionMode.OFF and not settings.allow_ungated
+    # OFI_ALLOW_UNGATED lets demo and shadow trade one; real money never does
+    # (config also refuses the flag with micro_live, and live outright).
+    require_pass = settings.execution_mode is not ExecutionMode.OFF and (
+        not settings.allow_ungated
+        or settings.execution_mode not in (ExecutionMode.SHADOW, ExecutionMode.TESTNET)
+    )
     return load_model(settings.model_dir, settings.model_version, require_pass=require_pass)
 
 

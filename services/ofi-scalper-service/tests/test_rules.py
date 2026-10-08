@@ -182,3 +182,28 @@ def test_a_rule_model_trades_through_the_shadow_bridge(tmp_path: Path) -> None:
     assert signal["ungated"] is True and signal["model_version"] == "rules-v1"
     assert signal["edge_bp"] == pytest.approx(DEFAULT_POLICY["barrier_bp"])
     assert bridge.status()["ungated"] is True
+
+
+def test_real_money_never_loads_an_ungated_model(tmp_path: Path) -> None:
+    from ofi_scalper_service.app import load_pinned_model
+    from ofi_scalper_service.config import MICRO_LIVE_ACK, ExecutionMode
+
+    write(tmp_path / "models")
+    settings = make_settings(
+        tmp_path,
+        OFI_EXECUTION_MODE="micro_live",
+        OFI_MICRO_LIVE_ACK=MICRO_LIVE_ACK,
+        EXECUTION_API_KEY="gateway-key-at-least-16",
+        OFI_MODEL_VERSION="rules-v1",
+        OFI_MODEL_DIR=str(tmp_path / "models"),
+        OFI_ORDER_NOTIONAL_USD=25,
+        OFI_MAX_POSITION_NOTIONAL_USD=30,
+        OFI_MAX_TOTAL_NOTIONAL_USD=30,
+        OFI_DAILY_LOSS_LIMIT_USD=3,
+        OFI_MANUAL_APPROVAL_NOTIONAL_USD=30,
+    )
+    # Even if the flag got past config (it cannot), the loader still demands a pass.
+    forced = settings.model_copy(update={"allow_ungated": True})
+    assert forced.execution_mode is ExecutionMode.MICRO_LIVE
+    with pytest.raises(ModelError, match="ungated"):
+        load_pinned_model(forced)

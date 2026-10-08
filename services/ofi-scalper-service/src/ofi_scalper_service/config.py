@@ -228,6 +228,11 @@ class Settings(BaseServiceSettings, NotificationSettings, BinanceFuturesSettings
             raise ValueError(
                 "OFI_EXECUTION_MODE=micro_live needs OFI_MODEL_VERSION (a passing model)"
             )
+        if self.allow_ungated:
+            raise ValueError(
+                "OFI_ALLOW_UNGATED=true is for demo and shadow only: micro_live is real money "
+                "and needs a model whose research gates passed"
+            )
         if not self.trading_symbols:
             raise ValueError("OFI_MICRO_LIVE_SYMBOLS names none of BINANCE_FUTURES_SYMBOLS")
         caps = MICRO_LIVE_CAPS
