@@ -403,3 +403,27 @@ async def test_kill_controls_cancel_flatten_and_arm_the_dead_man(venue, fake) ->
     assert fake.countdowns["BTCUSDT"] == 0
     with pytest.raises(KeyError):
         await venue.cancel_all(ACCOUNT, "DOGEUSDT")
+
+
+def test_a_fill_reported_with_avg_price_zero_is_priced_from_cum_quote() -> None:
+    from decimal import Decimal
+
+    from ta_plugin_binance_futures.execution import _Order
+
+    row = {
+        "symbol": "ETHUSDT",
+        "orderId": 1,
+        "status": "FILLED",
+        "side": "BUY",
+        "type": "MARKET",
+        "origQty": "0.039",
+        "executedQty": "0.039",
+        "avgPrice": "0.00",
+        "cumQuote": "99.06",
+        "price": "0",
+    }
+    assert _Order.from_rest(row).avg_price == Decimal("99.06") / Decimal("0.039")
+    assert _Order.from_rest({**row, "avgPrice": "2540.0"}).avg_price == Decimal("2540.0")
+    unfilled = {**row, "executedQty": "0", "cumQuote": "0"}
+    assert _Order.from_rest(unfilled).avg_price == 0
+

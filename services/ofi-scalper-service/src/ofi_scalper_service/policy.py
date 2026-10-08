@@ -444,7 +444,11 @@ class SymbolPolicy:
         cycle = self.cycle
         if cycle is None or cycle.cycle_id != cycle_id:
             return []
-        if executed > 0 and avg_price is not None:
+        if executed > 0:
+            if avg_price is None:
+                # Count the quantity whatever happens to the price; keep the leg's
+                # last known price, else the entry limit (P&L is then approximate).
+                avg_price = cycle.fills.get(leg, (Decimal(0), float(cycle.entry_price)))[1]
             cycle.fills[leg] = (executed, avg_price)
         if leg == "entry":
             if executed > 0 and cycle.entry_fill_ns is None:

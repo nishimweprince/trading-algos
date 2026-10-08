@@ -764,6 +764,16 @@ class ExecutionBridge:
         if self.shadow is not None:
             self.shadow.advance(t_ns)
 
+    def _estimate_fill_price(self, order: TrackedOrder) -> float | None:
+        """The order's limit, else the side of the current venue touch it would take."""
+        if order.price is not None:
+            return float(order.price)
+        sample = self.last_sample.get(order.symbol)
+        if sample is None:
+            return None
+        bid, ask = self._quote(order.symbol, sample)
+        return ask if order.side == "buy" else bid
+
     def _quote(self, symbol: str, sample: dict[str, Any]) -> tuple[float | None, float | None]:
         if self.mode is ExecutionMode.TESTNET and self.quotes is not None:
             quote = self.quotes.get(symbol, QUOTE_MAX_AGE_MS) if self.quotes is not None else None
@@ -910,6 +920,18 @@ class ExecutionBridge:
         """Fold one order's cumulative state into the policy."""
         if order.terminal:
             return
+        if executed > 0 and avg_price is None and order.avg_price is None:
+            # A fill reported without a price (Binance demo answers some market
+            # orders with avgPrice 0): the quantity must still count, or the
+            # position looks open and another close goes out.
+            avg_price = self._estimate_fill_price(order)
+            log_event(
+                "ofi_fill_price_estimated",
+                level=logging.WARNING,
+                order=order.key,
+                executed=str(executed),
+                price=avg_price,
+            )
         if executed > Decimal(order.executed) or avg_price is not None:
             order.executed = str(max(executed, Decimal(order.executed)))
             if avg_price is not None:

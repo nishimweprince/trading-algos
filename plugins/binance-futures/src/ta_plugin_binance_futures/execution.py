@@ -122,6 +122,12 @@ class _Order:
 
     @classmethod
     def from_rest(cls, row: dict[str, Any]) -> _Order:
+        cum_qty = _decimal(row.get("executedQty", 0))
+        avg_price = _decimal(row.get("avgPrice", 0))
+        if avg_price <= 0 and cum_qty > 0 and _decimal(row.get("cumQuote", 0)) > 0:
+            # Demo trading answers some filled market orders with avgPrice "0";
+            # cumQuote / executedQty is the same average.
+            avg_price = _decimal(row["cumQuote"]) / cum_qty
         return cls(
             symbol=row["symbol"],
             order_id=int(row["orderId"]),
@@ -130,8 +136,8 @@ class _Order:
             side=str(row.get("side", "")),
             type=str(row.get("type", "")),
             orig_qty=_decimal(row.get("origQty", 0)),
-            cum_qty=_decimal(row.get("executedQty", 0)),
-            avg_price=_decimal(row.get("avgPrice", 0)),
+            cum_qty=cum_qty,
+            avg_price=avg_price,
             price=_decimal(row.get("price", 0)),
             reduce_only=bool(row.get("reduceOnly", False)),
         )

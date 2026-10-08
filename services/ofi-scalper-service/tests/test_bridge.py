@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Callable
 from decimal import Decimal
 from pathlib import Path
@@ -534,3 +535,25 @@ async def test_a_rejected_entry_backs_off_instead_of_retrying_every_step(testnet
     gateway.settle(gateway.op_for("entry"), "cancelled")
     await until(lambda: "BTCUSDT" not in bridge.reject_backoff)
     assert risk.halt is None
+
+
+async def test_a_close_filled_without_a_price_still_closes_the_cycle(testnet) -> None:
+    # Binance demo answers some filled market orders with avgPrice 0: the quantity
+    # must count, or the position looks open and more reduce-only closes go out.
+    gateway, dial = FakeGateway(), Dial()
+    bridge, risk = await testnet(gateway, dial=dial)
+    dial.set(up=0.8, down=0.05)
+    bridge.on_sample(sample(T0), GATE_ON)
+    await until(lambda: len(gateway.orders()) == 1)
+    gateway.settle(gateway.op_for("entry"), "filled", "0.003", "60000.0")
+    await until(lambda: len(gateway.orders()) == 2)  # the take profit
+    gateway.settle(gateway.op_for("tp"), "cancelled")  # lost (e.g. the dead-man)
+    await until(lambda: len(gateway.orders()) == 3)
+    gateway.settle(gateway.op_for("close1"), "filled", "0.003")  # no execution_price
+    await until(lambda: bridge.policies["BTCUSDT"].phase is Phase.FLAT)
+    await asyncio.sleep(0.1)
+    assert len(gateway.orders()) == 3  # no close2
+    assert risk.halt is None
+    bridge.flush_pending()
+    (trade,) = bridge.book.recent_trades
+    assert trade["exit_price"] == 60000.0  # demo's bid, the side a sell close takes
