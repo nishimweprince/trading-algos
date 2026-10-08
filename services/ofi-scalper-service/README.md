@@ -74,6 +74,46 @@ touch ~/trading-algos/services/ofi-scalper-service/data/KILL.dev   # cancel-all,
 sudo systemctl kill -s KILL ofi-scalper-service                    # dead-man: Binance cancels
 ```
 
+## Go live on demo and shadow (rule model, ungated)
+
+Before a trained model passes its gates, a fixed rule (`rules.py`) can fill the
+model's slot so demo trading produces our own fills and shadow trading on the
+mainnet feed produces would-have fills, both through the unchanged policy, risk
+and bridge:
+
+```sh
+.venv/bin/ofi-go-live --profile dev status
+.venv/bin/ofi-go-live --profile dev on --restart      # demo orders + shadow mirror
+.venv/bin/ofi-go-live --profile dev on --shadow-only  # mainnet feed, nothing sent
+.venv/bin/ofi-go-live --profile dev off --restart     # back to demo controls only
+```
+
+`on` writes `models/rules-v1` if it is missing, sets `OFI_EXECUTION_MODE=testnet`,
+`OFI_MODEL_VERSION`, `OFI_ALLOW_UNGATED` and `OFI_SHADOW_MIRROR=true` in
+`.env.<profile>` (backup next to it), and keeps the change only if the settings
+and the model load as the service will load them. It then checks
+execution-service and reports a halt that needs an ack. `--version v7` switches
+to a trained model instead; a model without a gates pass is still ungated.
+
+- **The rule** (`rules.py`): `ofi_int_5000ms` z-scored against its own
+  exponentially weighted mean and variance (5 min half-life, 5 min warm-up);
+  up at `z >= 3.5` with touch imbalance `>= 0.6`, trade flow `tfi_5000ms > 0`
+  and spread `<= 2` ticks (down mirrored), held 1.5 s so the resting entry is
+  not cancelled as decay. Policy: 60 s horizon, 12 bp barrier, 2 bp buffer,
+  1.5 s entry timeout, 120 s time stop. Write variants with
+  `ofi-rules-model --version rules-v2 --z-entry 4 --barrier-bp 15`.
+- **Shadow mirror** (`OFI_SHADOW_MIRROR`, testnet only): a second bridge in
+  shadow mode on the mainnet feed with its own simulated account and risk
+  state. Feed pauses and the kill switch reach it; demo execution faults do
+  not. Records under `<OFI_STATE_DIR>/shadow/`; `/v1/trades?shadow=true`,
+  `/v1/signals?shadow=true`, `/v1/status.shadow_mirror`, and the status page's
+  Trading tab.
+- **Labels**: every signal and trade carries `ungated: true`; they do not count
+  toward the speed-run. Live is refused by the settings whatever the model.
+- **What it measures**: order handling, maker fill rate and RTT on demo, signal
+  frequency, and (shadow) the rule's after-cost result on mainnet's book. Demo's
+  book is synthetic, so demo P&L says nothing about mainnet edge.
+
 ## Book modes
 
 `BINANCE_FUTURES_BOOK_MODE` picks how the order book arrives:
@@ -99,8 +139,8 @@ fell seconds behind and kept falling; `depth10@100ms` held a steady ~250 ms.
 | `GET /health/ready` | no | both stream routes connected and every book verified |
 | `GET /v1/status` | yes | books, risk (halt, pauses, limits), gate, recorder, fees, counts, feed latency |
 | `GET /v1/features?symbol=` | yes | latest feature vector (grid or trade-burst sample) |
-| `GET /v1/signals?limit=` | yes | recent threshold crossings, newest first |
-| `GET /v1/trades?date=&limit=` | yes | recent cycles (or one UTC day's) and their summary |
+| `GET /v1/signals?limit=&shadow=` | yes | recent threshold crossings, newest first (`shadow=true`: the mirror's) |
+| `GET /v1/trades?date=&limit=&shadow=` | yes | recent cycles (or one UTC day's) and their summary |
 | `GET /dashboard` | page | signals, cycles, policy state and today's report, live; asks for the key |
 | `POST /v1/kill` | yes | halt (cancel all, close, flatten); body `{"reason": "..."}` optional |
 | `POST /v1/kill/ack` | yes | clear a halt; refused while the kill file exists; daily-loss halts wait for the next UTC day |

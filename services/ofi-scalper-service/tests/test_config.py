@@ -107,3 +107,24 @@ def test_unwritable_record_dir_fails_with_a_fix(tmp_path) -> None:
         ).check_record_dir()
     finally:
         locked.chmod(0o700)
+
+
+def test_shadow_mirror_needs_testnet_and_a_model(tmp_path) -> None:
+    with pytest.raises(ValueError, match="OFI_SHADOW_MIRROR"):
+        make_settings(tmp_path, OFI_SHADOW_MIRROR="true")
+    with pytest.raises(ValueError, match="OFI_SHADOW_MIRROR"):
+        make_settings(
+            tmp_path,
+            OFI_SHADOW_MIRROR="true",
+            OFI_EXECUTION_MODE="testnet",
+            EXECUTION_API_KEY="gateway-key-at-least-16",
+        )
+    settings = make_settings(
+        tmp_path,
+        OFI_SHADOW_MIRROR="true",
+        OFI_EXECUTION_MODE="testnet",
+        EXECUTION_API_KEY="gateway-key-at-least-16",
+        OFI_MODEL_VERSION="rules-v1",
+        OFI_ALLOW_UNGATED="true",
+    )
+    assert settings.shadow_mirror and settings.allow_ungated

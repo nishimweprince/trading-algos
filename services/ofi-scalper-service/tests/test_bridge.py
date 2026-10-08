@@ -404,3 +404,23 @@ def test_payload_is_a_valid_order_request(tmp_path: Path) -> None:
     assert payload["targets"][0]["volume_lots"] == "0.003"
     assert Decimal(payload["entry_price"]) == Decimal("60000.0")
     assert payload["note"] == entry.key
+
+
+async def test_control_unknowns_halt_only_when_unbroken(testnet) -> None:
+    gateway = FakeGateway()
+    bridge, risk = await testnet(gateway)
+    # Scattered dead-man timeouts with successes between them: no halt.
+    for _ in range(4):
+        bridge.note_unknown("dead_man: timeout", control=True)
+        bridge.note_unknown("dead_man: timeout", control=True)
+        bridge.note_ok(control=True)
+    assert risk.halt is None and bridge.consecutive_unknown == 0
+    # Order outcomes keep their own count: a control success does not clear them.
+    bridge.note_unknown("entry: timeout")
+    bridge.note_ok(control=True)
+    assert bridge.consecutive_unknown == 1
+    for _ in range(3):
+        bridge.note_unknown("dead_man: timeout", control=True)
+    assert risk.halt is not None and risk.halt.reason is HaltReason.EXECUTION
+    assert "control" in risk.halt.detail
+    assert bridge.status()["consecutive_control_unknown"] == 3

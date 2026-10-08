@@ -71,7 +71,8 @@ def load_pinned_model(settings: Settings) -> LoadedModel | None:
     if settings.model_version is None:
         return None
     # Mode off may load a non-passing model to watch its features; it trades nothing.
-    require_pass = settings.execution_mode is not ExecutionMode.OFF
+    # OFI_ALLOW_UNGATED lets demo and shadow trade one (live is refused in config).
+    require_pass = settings.execution_mode is not ExecutionMode.OFF and not settings.allow_ungated
     return load_model(settings.model_dir, settings.model_version, require_pass=require_pass)
 
 
@@ -112,6 +113,27 @@ def build_bridge(
     return bridge, http
 
 
+def build_mirror(
+    settings: Settings, *, alerts: Alerts, model: LoadedModel | None, fees: Any
+) -> ExecutionBridge | None:
+    """OFI_SHADOW_MIRROR: a shadow bridge on the mainnet feed beside the demo one.
+
+    Its own simulated account and risk state (a demo execution fault does not stop
+    it; the kill switch does), and its own records under ``<state_dir>/shadow``.
+    """
+    if not settings.shadow_mirror or model is None:
+        return None
+    shadow_settings = settings.model_copy(update={"execution_mode": ExecutionMode.SHADOW})
+    return ExecutionBridge(
+        shadow_settings,
+        risk=RiskState(RiskLimits.from_settings(settings)),
+        alerts=alerts,
+        model=model,
+        state_dir=settings.state_dir / "shadow",
+        fees=fees,
+    )
+
+
 def build_runtime(settings: Settings, notifier: Any | None) -> ScalperRuntime:
     """Wire the plugin's extras through the discovered factory (never constructors)."""
     factory = load_providers(MARKET_DATA_GROUP, [PROVIDER])[PROVIDER]
@@ -147,6 +169,12 @@ def build_runtime(settings: Settings, notifier: Any | None) -> ScalperRuntime:
     runtime.bridge, runtime.bridge_http = build_bridge(
         settings, factory=factory, risk=risk, alerts=alerts, model=model, fees=runtime.fee_bp
     )
+    if runtime.bridge is not None:
+        # The mirror scores its own copy of the model: a rule scorer keeps state.
+        mirror_model = load_pinned_model(settings) if settings.shadow_mirror else None
+        runtime.mirror = build_mirror(
+            settings, alerts=alerts, model=mirror_model, fees=runtime.fee_bp
+        )
     return runtime
 
 
@@ -234,8 +262,11 @@ def create_app(settings: Settings | None = None, runtime: ScalperRuntime | None 
         return latest
 
     @app.get("/v1/signals", dependencies=auth)
-    async def signals(limit: int = Query(default=100, ge=1, le=500)) -> dict[str, Any]:
-        bridge = current_runtime().bridge
+    async def signals(
+        limit: int = Query(default=100, ge=1, le=500), shadow: bool = False
+    ) -> dict[str, Any]:
+        current = current_runtime()
+        bridge = current.mirror if shadow else current.bridge
         items = list(bridge.book.recent_signals)[-limit:] if bridge is not None else []
         return {"signals": items[::-1]}
 
@@ -243,8 +274,10 @@ def create_app(settings: Settings | None = None, runtime: ScalperRuntime | None 
     async def trades(
         day: Annotated[date | None, Query(alias="date")] = None,
         limit: Annotated[int, Query(ge=1, le=500)] = 100,
+        shadow: bool = False,
     ) -> dict[str, Any]:
-        bridge = current_runtime().bridge
+        current = current_runtime()
+        bridge = current.mirror if shadow else current.bridge
         if bridge is None:
             return {"trades": [], "summary": summarise([])}
         if day is None:

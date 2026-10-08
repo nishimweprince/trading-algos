@@ -57,6 +57,13 @@ class Settings(BaseServiceSettings, NotificationSettings, BinanceFuturesSettings
     # Pinned model (model.py). Empty: no model, no entries.
     model_dir: Path = Field(default=Path("models"), validation_alias="OFI_MODEL_DIR")
     model_version: str | None = Field(default=None, validation_alias="OFI_MODEL_VERSION")
+    # Demo and shadow may run a model with no research gates pass (a rule model,
+    # or a quick ungated fit). Its trades are labelled ungated and never count
+    # toward the speed-run. Live refuses regardless.
+    allow_ungated: bool = Field(default=False, validation_alias="OFI_ALLOW_UNGATED")
+    # Testnet only: also run a shadow bridge on the mainnet feed beside the demo
+    # one, so one process yields demo fills and live-book would-have fills.
+    shadow_mirror: bool = Field(default=False, validation_alias="OFI_SHADOW_MIRROR")
 
     # The bridge's link to execution-service (testnet mode).
     execution_url: str = Field(default="http://127.0.0.1:8010", validation_alias="EXECUTION_URL")
@@ -182,6 +189,13 @@ class Settings(BaseServiceSettings, NotificationSettings, BinanceFuturesSettings
             )
         if self.execution_mode is ExecutionMode.TESTNET and self.execution_api_key is None:
             raise ValueError("OFI_EXECUTION_MODE=testnet needs EXECUTION_API_KEY")
+        if self.shadow_mirror and (
+            self.execution_mode is not ExecutionMode.TESTNET or self.model_version is None
+        ):
+            raise ValueError(
+                "OFI_SHADOW_MIRROR=true needs OFI_EXECUTION_MODE=testnet and OFI_MODEL_VERSION: "
+                "the mirror shadows the demo bridge's model on the mainnet feed"
+            )
         if self.order_notional_usd > self.max_position_notional_usd:
             raise ValueError("OFI_ORDER_NOTIONAL_USD cannot exceed OFI_MAX_POSITION_NOTIONAL_USD")
         if self.order_notional_usd > self.manual_approval_notional_usd:

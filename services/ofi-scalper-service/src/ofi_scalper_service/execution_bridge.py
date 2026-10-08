@@ -370,7 +370,9 @@ class GatewayVenue:
         level = logging.INFO if result.state is ExecutionState.SUCCEEDED else logging.ERROR
         log_event("ofi_bridge_control", level=level, **entry)
         if result.state is ExecutionState.UNKNOWN:
-            self.bridge.note_unknown(f"{name}: {result.reason}")
+            self.bridge.note_unknown(f"{name}: {result.reason}", control=True)
+        elif result.state is ExecutionState.SUCCEEDED:
+            self.bridge.note_ok(control=True)
 
     async def poller(self) -> None:
         while True:
@@ -470,6 +472,9 @@ class ExecutionBridge:
         self.orders: dict[str, TrackedOrder] = {}
         self.last_sample: dict[str, dict[str, Any]] = {}
         self.consecutive_unknown = 0
+        # Controls (the dead-man every few seconds) count apart from orders, and a
+        # control that succeeds resets them: only an unbroken run halts.
+        self.consecutive_control_unknown = 0
         self.position_mismatch: str | None = None
         self._halt_handled = False
         self._marks: dict[str, dict[str, float]] = {}
@@ -657,6 +662,7 @@ class ExecutionBridge:
                 **asdict(step.signal),
                 "at": datetime.fromtimestamp(t_ns / 1e9, UTC).isoformat(),
                 "model_version": self.model.version,
+                "ungated": self._ungated(),
                 "mode": self.mode.value,
                 "gate": gate,
             }
@@ -855,19 +861,24 @@ class ExecutionBridge:
 
     # --- unknowns and halts --------------------------------------------------------------
 
-    def note_unknown(self, detail: str) -> None:
-        self.consecutive_unknown += 1
-        self.count("unknown")
+    def note_unknown(self, detail: str, *, control: bool = False) -> None:
+        if control:
+            self.consecutive_control_unknown += 1
+            consecutive = self.consecutive_control_unknown
+        else:
+            self.consecutive_unknown += 1
+            consecutive = self.consecutive_unknown
+        self.count("control_unknown" if control else "unknown")
         log_event(
             "ofi_bridge_unknown",
             level=logging.ERROR,
             detail=detail,
-            consecutive=self.consecutive_unknown,
+            control=control,
+            consecutive=consecutive,
         )
-        if self.consecutive_unknown >= self.settings.max_consecutive_unknown:
-            if self.risk.execution_fault(
-                f"{self.consecutive_unknown} consecutive UNKNOWN outcomes"
-            ):
+        if consecutive >= self.settings.max_consecutive_unknown:
+            kind = "control" if control else "order"
+            if self.risk.execution_fault(f"{consecutive} consecutive UNKNOWN {kind} outcomes"):
                 self.alerts.send(
                     "bridge-unknown",
                     "OFI halted: execution-service outcomes unknown",
@@ -876,8 +887,11 @@ class ExecutionBridge:
                 )
             self._check_halt(self.clock_ns())
 
-    def note_ok(self) -> None:
-        self.consecutive_unknown = 0
+    def note_ok(self, *, control: bool = False) -> None:
+        if control:
+            self.consecutive_control_unknown = 0
+        else:
+            self.consecutive_unknown = 0
 
     def _check_halt(self, t_ns: int) -> None:
         if self.risk.halted and not self._halt_handled:
@@ -963,6 +977,7 @@ class ExecutionBridge:
             adverse_bp={f"{h}s": marks.get(f"{h}s") for h in ADVERSE_HORIZONS_S},
             rtt_ms={leg: o.rtt_ms for leg, o in legs.items() if o.rtt_ms is not None},
         )
+        record["ungated"] = self._ungated()
         self._marks.pop(cycle.cycle_id, None)
         if record.get("net_usd") is not None:
             self.realized_usd += record["net_usd"]
@@ -1011,6 +1026,10 @@ class ExecutionBridge:
             return
         sign = 1 if cycle.side == "buy" else -1
         self.risk.set_position(symbol, sign * float(cycle.remaining) * cycle.entry_avg)
+
+    def _ungated(self) -> bool | None:
+        """The loaded model has no research gates pass (research's stand-ins say nothing)."""
+        return getattr(self.model, "ungated", None)
 
     def count(self, name: str) -> None:
         self.counts[name] = self.counts.get(name, 0) + 1
@@ -1062,6 +1081,8 @@ class ExecutionBridge:
             "gateway_not_ready": self.gateway_reason,
             "position_mismatch": self.position_mismatch,
             "consecutive_unknown": self.consecutive_unknown,
+            "consecutive_control_unknown": self.consecutive_control_unknown,
+            "ungated": self._ungated(),
             "dead_man_armed": self.dead_man_armed,
             "policy": {s: p.snapshot() for s, p in self.policies.items()},
             "open_orders": [asdict(o) for o in self.orders.values() if not o.terminal],

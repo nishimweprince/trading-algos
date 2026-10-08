@@ -458,6 +458,7 @@ TRADE_FIELDS = (
     "net_usd",
     "mode",
     "model_version",
+    "ungated",
 )
 SIGNAL_FIELDS = ("at", "symbol", "side", "p", "threshold", "edge_bp", "cost_bp", "action")
 

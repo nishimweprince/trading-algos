@@ -266,10 +266,14 @@ function research(s) {
   $("rs-body").innerHTML = out;
 }
 function trading(s) {
-  const t = s.trading;
+  $("tr-body").innerHTML = tradingBlock(s.trading, "Demo trading (Binance demo fills)") +
+    (s.shadow_trading ? tradingBlock(s.shadow_trading, "Shadow on the live feed (simulated fills, mainnet book)") : "");
+}
+function tradingBlock(t, title) {
   const sum = (x, label) => card(label, `<span class="${cls(x.net_usd)}">$${num(x.net_usd, 2)}</span>`,
     `${x.trades} trades &middot; win ${pct(x.win_rate)} &middot; fill ${pct(x.maker_fill_rate)} &middot; fees $${num(x.fees_usd, 2)}`);
-  let out = t.note ? `<div class="card" style="margin-bottom:12px">${esc(t.note)}</div>` : "";
+  let out = `<h2>${esc(title)}</h2>`;
+  out += t.note ? `<div class="card" style="margin-bottom:12px">${esc(t.note)}</div>` : "";
   out += `<div class="grid">${sum(t.today, "Today")}${sum(t.last_7_days, "Last 7 days")}` +
          card("Signals (7 days)", t.last_7_days.signals, `Brier on own fills ${num(t.last_7_days.brier, 3)}`) + `</div>`;
   out += `<h2>Recent cycles</h2><div class="card scroll">` + table(t.recent_trades, [
@@ -277,13 +281,14 @@ function trading(s) {
     ["Side", (x) => esc(x.side)], ["p", (x) => num(x.p, 3)], ["Filled", (x) => x.filled ? "yes" : "no"],
     ["Entry", (x) => num(x.entry_price, 2)], ["Exit", (x) => num(x.exit_price, 2)], ["Reason", (x) => esc(x.exit_reason)],
     ["Net bp", (x) => `<span class="${cls(x.net_bp)}">${num(x.net_bp, 2)}</span>`], ["Mode", (x) => esc(x.mode)],
+    ["Model", (x) => esc(x.model_version) + (x.ungated ? " (ungated)" : "")],
   ]) + `</div>`;
   out += `<h2>Recent signals</h2><div class="card scroll">` + table(t.recent_signals, [
     ["Time", (x) => esc((x.at || "").replace("T", " ").slice(0, 19))], ["Symbol", (x) => esc(x.symbol)],
     ["Side", (x) => esc(x.side)], ["p", (x) => num(x.p, 3)], ["Threshold", (x) => num(x.threshold, 3)],
     ["Action", (x) => esc(x.action)],
   ]) + `</div>`;
-  $("tr-body").innerHTML = out;
+  return out;
 }
 let points = [];
 async function load() {

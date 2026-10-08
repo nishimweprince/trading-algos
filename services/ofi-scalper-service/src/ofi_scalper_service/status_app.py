@@ -97,6 +97,14 @@ def create_status_app(
             and settings.execution_mode is not ExecutionMode.OFF,
         )
     )
+    # OFI_SHADOW_MIRROR's records, beside the demo ones.
+    shadow_trading = builders.Cached(
+        lambda: (
+            builders.trading(settings.state_dir / "shadow", model_loaded=True)
+            if settings.shadow_mirror
+            else None
+        )
+    )
     unit_cache = builders.Cached(units, ttl=POLL_SECONDS)
 
     async def refresh() -> None:
@@ -167,11 +175,12 @@ def create_status_app(
     async def summary() -> dict[str, Any]:
         if state["fetched_at"] is None and fetcher is not None:
             await refresh()  # the first request after start: do not wait for the poller
-        unit_states, data, results, trades = await asyncio.gather(
+        unit_states, data, results, trades, shadow_trades = await asyncio.gather(
             asyncio.to_thread(unit_cache.get),
             asyncio.to_thread(collection.get),
             asyncio.to_thread(research.get),
             asyncio.to_thread(trading.get),
+            asyncio.to_thread(shadow_trading.get),
         )
         return {
             "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -187,6 +196,7 @@ def create_status_app(
             ),
             "research": results,
             "trading": trades,
+            "shadow_trading": shadow_trades,
         }
 
     @app.get("/api/history")

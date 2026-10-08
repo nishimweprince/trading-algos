@@ -9,6 +9,10 @@ A model lives in ``<OFI_MODEL_DIR>/<version>/``::
     gates.json        the research harness's verdict for this version
     ...               any other listed file (SHAP summary, strategy.md) is verified too
 
+A rule model (``"kind": "rules"`` in the manifest, ``rules.py``) has
+``rules.json`` and ``engine.json`` instead of the CatBoost files and usually no
+``gates.json``: it is ungated, and loads only where ungated models are allowed.
+
 Loading refuses on any hash mismatch, on a feature the engine does not
 produce, and (unless asked not to) on a ``gates.json`` that did not pass. The
 research harness writes ``gates.json``; nothing here decides whether a model
@@ -28,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from .policy import PolicyParams, Scores
+from .rules import RuleParams, RuleScorer
 from .state_engine import LEVELS, feature_names
 
 __all__ = [
@@ -40,9 +45,11 @@ __all__ = [
     "engine_overrides",
     "load_model",
     "write_model",
+    "write_rules_model",
 ]
 
 REQUIRED_FILES = ("model.cbm", "calibrator.json", "engine.json", "gates.json")
+RULES_REQUIRED_FILES = ("rules.json", "engine.json")
 CLASSES = ("down", "none", "up")
 LATENCY_RESERVOIR = 2000
 
@@ -146,11 +153,19 @@ class LoadedModel:
     policy: PolicyParams
     engine: dict[str, Any]
     gates: GatesVerdict
-    scorer: Scorer
+    scorer: Scorer | RuleScorer
+    kind: str = "catboost"
+
+    @property
+    def ungated(self) -> bool:
+        """No research gates pass behind it: demo and shadow only, never counted."""
+        return not self.gates.passed
 
     def summary(self) -> dict[str, Any]:
         return {
             "version": self.version,
+            "kind": self.kind,
+            "ungated": self.ungated,
             "horizon_s": self.policy.horizon_s,
             "policy": self.policy.as_dict(),
             "features": len(self.scorer.features),
@@ -217,8 +232,11 @@ def load_model(
     if manifest.get("version") != version:
         raise ModelError(f"manifest version {manifest.get('version')!r} != {version!r}")
 
+    kind = str(manifest.get("kind") or "catboost")
+    if kind not in ("catboost", "rules"):
+        raise ModelError(f"unknown model kind {kind!r}")
     files: dict[str, str] = manifest.get("files") or {}
-    for name in REQUIRED_FILES:
+    for name in REQUIRED_FILES if kind == "catboost" else RULES_REQUIRED_FILES:
         if name not in files:
             raise ModelError(f"manifest lists no {name}")
     for name, expected in files.items():
@@ -244,22 +262,46 @@ def load_model(
     if float(manifest.get("horizon_s", policy.horizon_s)) != policy.horizon_s:
         raise ModelError("manifest horizon_s differs from policy.horizon_s")
 
-    gates_raw = json.loads((path / "gates.json").read_text())
-    if gates_raw.get("model_version") != version:
-        raise ModelError(f"gates.json is for {gates_raw.get('model_version')!r}, not {version!r}")
+    if "gates.json" in files:
+        gates_raw = json.loads((path / "gates.json").read_text())
+        if gates_raw.get("model_version") != version:
+            raise ModelError(
+                f"gates.json is for {gates_raw.get('model_version')!r}, not {version!r}"
+            )
+    else:
+        gates_raw = {"model_version": version, "passed": False, "ungated": True}
     gates = GatesVerdict(
         passed=gates_raw.get("passed") is True,
         binding=gates_raw.get("binding") is True,
         raw=gates_raw,
     )
     if require_pass and not gates.passed:
+        why = "gates.json did not pass" if "gates.json" in files else f"an ungated {kind} model"
         raise ModelError(
-            f"{version}: gates.json did not pass. Shadow and testnet need a model whose "
-            "research gates passed (ofi-scalper-plan.md §1.7)."
+            f"{version}: {why}. Shadow and testnet need a model whose research gates passed "
+            "(ofi-scalper-plan.md §1.7), unless OFI_ALLOW_UNGATED=true."
         )
 
     engine = json.loads((path / "engine.json").read_text())
     engine_overrides(engine)  # validate now
+    if kind == "rules":
+        try:
+            rules = RuleParams.from_dict(json.loads((path / "rules.json").read_text()))
+        except (TypeError, ValueError) as exc:
+            raise ModelError(f"rules.json: {exc}") from exc
+        missing = [name for name in rules.features if name not in known]
+        if missing or sorted(rules.features) != sorted(features):
+            raise ModelError("manifest features must be exactly the rule's inputs")
+        return LoadedModel(
+            version=version,
+            path=path,
+            manifest=manifest,
+            policy=policy,
+            engine=engine,
+            gates=gates,
+            scorer=RuleScorer(rules),
+            kind=kind,
+        )
     calibrator = Calibrator(json.loads((path / "calibrator.json").read_text()))
     predict, class_index = backend(path / "model.cbm", list(CLASSES))
     return LoadedModel(
@@ -306,6 +348,37 @@ def write_model(
         "policy": policy,
         "data": data or {},
         "files": {name: _sha256(path / name) for name in names},
+    }
+    (path / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    return path
+
+
+def write_rules_model(
+    model_dir: Path,
+    version: str,
+    *,
+    rules: dict[str, Any],
+    policy: dict[str, Any],
+    engine: dict[str, Any] | None = None,
+) -> Path:
+    """Write an ungated rule model (``rules.py``): no CatBoost file, no gates.json."""
+    params = RuleParams.from_dict(rules)
+    PolicyParams.from_dict(policy)
+    path = model_dir / version
+    path.mkdir(parents=True, exist_ok=False)
+    (path / "rules.json").write_text(json.dumps(params.as_dict(), indent=2))
+    (path / "engine.json").write_text(json.dumps(engine or {}, indent=2))
+    manifest = {
+        "schema": 1,
+        "kind": "rules",
+        "version": version,
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "horizon_s": policy["horizon_s"],
+        "classes": list(CLASSES),
+        "features": params.features,
+        "policy": policy,
+        "data": {"note": "rule model: no training data, no research gates"},
+        "files": {name: _sha256(path / name) for name in RULES_REQUIRED_FILES},
     }
     (path / "manifest.json").write_text(json.dumps(manifest, indent=2))
     return path

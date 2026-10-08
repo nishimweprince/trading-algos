@@ -93,6 +93,8 @@ class ScalperRuntime:
         self.model = model
         self.bridge = bridge
         self.bridge_http: Any | None = None  # the bridge's HTTP client; the app closes it
+        # OFI_SHADOW_MIRROR: a shadow bridge on this (mainnet) feed beside the demo one.
+        self.mirror: ExecutionBridge | None = None
         self._gate_at: dict[str, int] = {}
         self._clock_ns = clock_ns
         self.grid_ns = settings.grid_ms * 1_000_000
@@ -189,8 +191,12 @@ class ScalperRuntime:
                 log_event("ofi_filters_failed", level=logging.ERROR, error=repr(exc)[:200])
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, 60.0)
-        self.bridge.configure({s: Filters.from_order_filters(f) for s, f in filters.items()})
+        configured = {s: Filters.from_order_filters(f) for s, f in filters.items()}
+        self.bridge.configure(configured)
         await self.bridge.start()
+        if self.mirror is not None:
+            self.mirror.configure(configured)
+            await self.mirror.start()
 
     def init_engine(self, tick_sizes: dict[str, float]) -> None:
         """The feature engine for these symbols. Live calls it after loading
@@ -213,8 +219,8 @@ class ScalperRuntime:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
         self._tasks.clear()
-        if self.bridge is not None:
-            await self.bridge.close()
+        for bridge in self._bridges():
+            await bridge.close()
         await self.streams.close()
         closer = getattr(self.account, "aclose", None)
         if closer is not None:
@@ -244,8 +250,9 @@ class ScalperRuntime:
             # moved); kept so a direct handle() call samples correctly too.
             self.advance_grid(recv_ns)
         self.counts[type(event).__name__] += 1
-        if self.bridge is not None and recv_ns is not None:
-            self.bridge.advance(recv_ns)  # a simulated venue's delayed orders arrive
+        if recv_ns is not None:
+            for bridge in self._bridges():
+                bridge.advance(recv_ns)  # a simulated venue's delayed orders arrive
 
         if isinstance(event, DepthUpdate | BookSnapshot):
             self._latency("depth", event.recv_ns, event.event_ms)
@@ -254,16 +261,16 @@ class ScalperRuntime:
                     event.recv_ns, self.streams.syncs[event.symbol].book
                 )
                 self.last_book_ns[event.symbol] = event.recv_ns
-                if self.bridge is not None:
-                    self.bridge.on_book(event.symbol, self.streams.syncs[event.symbol].book)
+                for bridge in self._bridges():
+                    bridge.on_book(event.symbol, self.streams.syncs[event.symbol].book)
         elif isinstance(event, AggTrade):
             self._latency("aggTrade", event.recv_ns, event.event_ms)
             if event.symbol in self.engine.symbols:
                 self.engine[event.symbol].on_trade(
                     event.recv_ns, event.price, event.qty, event.buyer_is_maker
                 )
-                if self.bridge is not None:
-                    self.bridge.on_trade(
+                for bridge in self._bridges():
+                    bridge.on_trade(
                         event.symbol, event.recv_ns, event.price, event.qty, event.buyer_is_maker
                     )
                 self._burst[event.symbol] += 1
@@ -312,10 +319,10 @@ class ScalperRuntime:
                 self._gate_at[symbol] = grid_ns
             last = self.last_book_ns.get(symbol)
             stale = last is None or (grid_ns - last) / 1e6 > self.settings.stale_book_ms
-            if self.risk.set_pause(symbol, "stale_book", stale) and stale and last is not None:
+            if self._set_pause(symbol, "stale_book", stale) and stale and last is not None:
                 self._would("cancel_all", symbol, "stale_book")
-            if self.bridge is not None:
-                self.bridge.on_sample(features, self.decisions.get(symbol))
+            for bridge in self._bridges():
+                bridge.on_sample(features, self.decisions.get(symbol))
         self.counts["grid_samples"] += 1
 
     async def _quiet_grid(self) -> None:
@@ -342,7 +349,7 @@ class ScalperRuntime:
             else:
                 self.engine[event.symbol].on_book_reset(event.recv_ns)
                 self.last_book_ns.pop(event.symbol, None)
-        changed = self.risk.set_pause(event.symbol, "depth_resync", not live)
+        changed = self._set_pause(event.symbol, "depth_resync", not live)
         if "gap" in event.reason or event.reason == "crossed":
             if self.recorder is not None:
                 self.recorder.note_gap(event.symbol)
@@ -361,7 +368,7 @@ class ScalperRuntime:
         down = event.state != "connected"
         reason = f"stream_{event.channel}"
         for symbol in self.streams.symbols:
-            self.risk.set_pause(symbol, reason, down)
+            self._set_pause(symbol, reason, down)
         if down:
             self._would("cancel_all", "*", f"{event.channel}_{event.state}")
             self.alerts.send(
@@ -547,6 +554,10 @@ class ScalperRuntime:
             log_event("ofi_kill_switch", level=logging.CRITICAL, source=source, detail=detail)
             if self.bridge is not None:
                 self.bridge.on_halt("kill_switch")
+                if self.mirror is not None:
+                    # The mirror keeps its own risk state: the kill switch stops it too.
+                    self.mirror.risk.kill(source, detail)
+                    self.mirror.on_halt("kill_switch")
             else:
                 self._would("cancel_all", "*", "kill_switch")
                 self._would("flatten", "*", "kill_switch")
@@ -562,6 +573,9 @@ class ScalperRuntime:
         if self.settings.kill_file_path.exists():
             return False, f"remove {self.settings.kill_file_path} first"
         ok, message = self.risk.ack(source)
+        if ok and self.mirror is not None and self.mirror.risk.halted:
+            _, mirror_message = self.mirror.risk.ack(source)
+            message = f"{message}; shadow mirror: {mirror_message}"
         if ok:
             log_event("ofi_halt_acknowledged", level=logging.WARNING, source=source)
             self.alerts.send("ack", "OFI halt acknowledged", [message, f"by {source}"], always=True)
@@ -602,6 +616,20 @@ class ScalperRuntime:
 
     # --- reads ------------------------------------------------------------------
 
+    def _set_pause(self, symbol: str, reason: str, active: bool) -> bool:
+        """Feed pauses hold for the mirror's risk state too: same feed, same book."""
+        if self.mirror is not None:
+            self.mirror.risk.set_pause(symbol, reason, active)
+        return self.risk.set_pause(symbol, reason, active)
+
+    def _bridges(self) -> list[ExecutionBridge]:
+        return [b for b in (self.bridge, self.mirror) if b is not None]
+
+    def _mirror_status(self) -> dict[str, Any] | None:
+        if self.mirror is None:
+            return None
+        return {**self.mirror.status(), "risk": self.mirror.risk.snapshot()}
+
     def readiness(self) -> tuple[bool, dict[str, Any]]:
         streams_ready, details = self.streams.readiness()
         details["booted"] = self.booted.is_set()
@@ -623,6 +651,7 @@ class ScalperRuntime:
             "fees": self.fees,
             "model": self.model.summary() if self.model is not None else None,
             "bridge": self.bridge.status() if self.bridge is not None else None,
+            "shadow_mirror": self._mirror_status(),
             "key_check": self.key_check,
             "heartbeat": self.last_heartbeat,
             "counts": dict(self.counts),

@@ -281,3 +281,53 @@ async def test_bridge_gets_filters_samples_with_gate_trades_and_kills(build) -> 
     assert runtime.status()["bridge"] == {"stub": True}
     await runtime.close()
     assert bridge.closed
+
+
+async def test_the_shadow_mirror_gets_the_feed_pauses_and_the_kill_switch(build, tmp_path) -> None:
+    from ofi_scalper_service.alerts import Alerts
+    from ofi_scalper_service.app import build_mirror
+    from ofi_scalper_service.execution_bridge import DEFAULT_FILTERS, ExecutionBridge
+    from tests.conftest import RecordingNotifier, make_settings
+    from tests.model_fixture import Dial, dial_model
+
+    runtime = build(FakeFuturesStream(healthy_frames()))
+    await runtime.start()
+    await until(lambda: books_live(runtime))
+    dial = Dial()
+    shadow = make_settings(tmp_path, OFI_EXECUTION_MODE="shadow", OFI_MODEL_VERSION="v1")
+    model = dial_model(tmp_path / "models", dial)
+    runtime.bridge = ExecutionBridge(
+        shadow,
+        risk=runtime.risk,
+        alerts=Alerts(RecordingNotifier()),
+        model=model,
+        filters=dict(DEFAULT_FILTERS),
+        fees=lambda _s: (2.0, 5.0),
+    )
+    mirror_settings = make_settings(
+        tmp_path,
+        OFI_EXECUTION_MODE="testnet",
+        EXECUTION_API_KEY="gateway-key-at-least-16",
+        OFI_MODEL_VERSION="v1",
+        OFI_SHADOW_MIRROR="true",
+        OFI_STATE_DIR=str(tmp_path / "state"),
+    )
+    mirror = build_mirror(
+        mirror_settings, alerts=Alerts(RecordingNotifier()), model=model, fees=lambda _s: None
+    )
+    assert mirror is not None and mirror.mode.value == "shadow"
+    assert mirror.book.trades.directory == tmp_path / "state" / "shadow" / "trades"
+    assert mirror.risk is not runtime.risk
+    mirror.configure(dict(DEFAULT_FILTERS))
+    runtime.mirror = mirror
+
+    runtime._clock_ns.now += 10 * GRID
+    await until(lambda: "BTCUSDT" in mirror.last_sample)  # grid samples reach both
+    await until(lambda: "stale_book" in mirror.risk.paused("BTCUSDT"))
+    assert runtime.status()["shadow_mirror"]["mode"] == "shadow"
+
+    assert runtime.kill("test", "drill")
+    assert runtime.risk.halted and mirror.risk.halted
+    ok, message = runtime.ack("test")
+    assert ok and "shadow mirror" in message
+    assert not runtime.risk.halted and not mirror.risk.halted
