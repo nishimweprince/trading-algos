@@ -1,0 +1,11 @@
+# /etc/cloudflared/config.yml on the poly-kalshi (London) VM. Copy, then replace
+# the <...> values. The tunnel connects outward; nothing listens publicly.
+tunnel: <TUNNEL-ID>
+credentials-file: /etc/cloudflared/<TUNNEL-ID>.json
+
+ingress:
+  # Only the read-only status page. The service API (8050, with the kill
+  # switch) is never published.
+  - hostname: pk.<your-domain>
+    service: http://127.0.0.1:8051
+  - service: http_status:404

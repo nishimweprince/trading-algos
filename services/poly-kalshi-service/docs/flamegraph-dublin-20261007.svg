@@ -1,0 +1,491 @@
+<?xml version="1.0" standalone="no"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd"><svg version="1.1" width="1200" height="538" onload="init(evt)" viewBox="0 0 1200 538" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:fg="http://github.com/jonhoo/inferno"><!--Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples.--><!--NOTES: --><defs><linearGradient id="background" y1="0" y2="1" x1="0" x2="0"><stop stop-color="#eeeeee" offset="5%"/><stop stop-color="#eeeeb0" offset="95%"/></linearGradient></defs><style type="text/css">
+text { font-family:monospace; font-size:12px }
+#title { text-anchor:middle; font-size:17px; }
+#matched { text-anchor:end; }
+#search { text-anchor:end; opacity:0.1; cursor:pointer; }
+#search:hover, #search.show { opacity:1; }
+#subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+#unzoom { cursor:pointer; }
+#frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+.hide { display:none; }
+.parent { opacity:0.5; }
+</style><script type="text/ecmascript"><![CDATA[
+        var nametype = 'Function:';
+        var fontsize = 12;
+        var fontwidth = 0.59;
+        var xpad = 10;
+        var inverted = true;
+        var searchcolor = 'rgb(230,0,230)';
+        var fluiddrawing = true;
+        var truncate_text_right = false;
+    ]]><![CDATA["use strict";
+var details, searchbtn, unzoombtn, matchedtxt, svg, searching, frames, known_font_width;
+function init(evt) {
+    details = document.getElementById("details").firstChild;
+    searchbtn = document.getElementById("search");
+    unzoombtn = document.getElementById("unzoom");
+    matchedtxt = document.getElementById("matched");
+    svg = document.getElementsByTagName("svg")[0];
+    frames = document.getElementById("frames");
+    known_font_width = get_monospace_width(frames);
+    total_samples = parseInt(frames.attributes.total_samples.value);
+    searching = 0;
+
+    // Use GET parameters to restore a flamegraph's state.
+    var restore_state = function() {
+        var params = get_params();
+        if (params.x && params.y)
+            zoom(find_group(document.querySelector('[*|x="' + params.x + '"][y="' + params.y + '"]')));
+        if (params.s)
+            search(params.s);
+    };
+
+    if (fluiddrawing) {
+        // Make width dynamic so the SVG fits its parent's width.
+        svg.removeAttribute("width");
+        // Edge requires us to have a viewBox that gets updated with size changes.
+        var isEdge = /Edge\/\d./i.test(navigator.userAgent);
+        if (!isEdge) {
+            svg.removeAttribute("viewBox");
+        }
+        var update_for_width_change = function() {
+            if (isEdge) {
+                svg.attributes.viewBox.value = "0 0 " + svg.width.baseVal.value + " " + svg.height.baseVal.value;
+            }
+
+            // Keep consistent padding on left and right of frames container.
+            frames.attributes.width.value = svg.width.baseVal.value - xpad * 2;
+
+            // Text truncation needs to be adjusted for the current width.
+            update_text_for_elements(frames.children);
+
+            // Keep search elements at a fixed distance from right edge.
+            var svgWidth = svg.width.baseVal.value;
+            searchbtn.attributes.x.value = svgWidth - xpad;
+            matchedtxt.attributes.x.value = svgWidth - xpad;
+        };
+        window.addEventListener('resize', function() {
+            update_for_width_change();
+        });
+        // This needs to be done asynchronously for Safari to work.
+        setTimeout(function() {
+            unzoom();
+            update_for_width_change();
+            restore_state();
+        }, 0);
+    } else {
+        restore_state();
+    }
+}
+// event listeners
+window.addEventListener("click", function(e) {
+    var target = find_group(e.target);
+    if (target) {
+        if (target.nodeName == "a") {
+            if (e.ctrlKey === false) return;
+            e.preventDefault();
+        }
+        if (target.classList.contains("parent")) unzoom();
+        zoom(target);
+
+        // set parameters for zoom state
+        var el = target.querySelector("rect");
+        if (el && el.attributes && el.attributes.y && el.attributes["fg:x"]) {
+            var params = get_params()
+            params.x = el.attributes["fg:x"].value;
+            params.y = el.attributes.y.value;
+            history.replaceState(null, null, parse_params(params));
+        }
+    }
+    else if (e.target.id == "unzoom") {
+        unzoom();
+
+        // remove zoom state
+        var params = get_params();
+        if (params.x) delete params.x;
+        if (params.y) delete params.y;
+        history.replaceState(null, null, parse_params(params));
+    }
+    else if (e.target.id == "search") search_prompt();
+}, false)
+// mouse-over for info
+// show
+window.addEventListener("mouseover", function(e) {
+    var target = find_group(e.target);
+    if (target) details.nodeValue = nametype + " " + g_to_text(target);
+}, false)
+// clear
+window.addEventListener("mouseout", function(e) {
+    var target = find_group(e.target);
+    if (target) details.nodeValue = ' ';
+}, false)
+// ctrl-F for search
+window.addEventListener("keydown",function (e) {
+    if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+        e.preventDefault();
+        search_prompt();
+    }
+}, false)
+// functions
+function get_params() {
+    var params = {};
+    var paramsarr = window.location.search.substr(1).split('&');
+    for (var i = 0; i < paramsarr.length; ++i) {
+        var tmp = paramsarr[i].split("=");
+        if (!tmp[0] || !tmp[1]) continue;
+        params[tmp[0]]  = decodeURIComponent(tmp[1]);
+    }
+    return params;
+}
+function parse_params(params) {
+    var uri = "?";
+    for (var key in params) {
+        uri += key + '=' + encodeURIComponent(params[key]) + '&';
+    }
+    if (uri.slice(-1) == "&")
+        uri = uri.substring(0, uri.length - 1);
+    if (uri == '?')
+        uri = window.location.href.split('?')[0];
+    return uri;
+}
+function find_child(node, selector) {
+    var children = node.querySelectorAll(selector);
+    if (children.length) return children[0];
+    return;
+}
+function find_group(node) {
+    var parent = node.parentElement;
+    if (!parent) return;
+    if (parent.id == "frames") return node;
+    return find_group(parent);
+}
+function orig_save(e, attr, val) {
+    if (e.attributes["fg:orig_" + attr] != undefined) return;
+    if (e.attributes[attr] == undefined) return;
+    if (val == undefined) val = e.attributes[attr].value;
+    e.setAttribute("fg:orig_" + attr, val);
+}
+function orig_load(e, attr) {
+    if (e.attributes["fg:orig_"+attr] == undefined) return;
+    e.attributes[attr].value = e.attributes["fg:orig_" + attr].value;
+    e.removeAttribute("fg:orig_" + attr);
+}
+function g_to_text(e) {
+    var text = find_child(e, "title").firstChild.nodeValue;
+    return (text)
+}
+function g_to_func(e) {
+    var func = g_to_text(e);
+    // if there's any manipulation we want to do to the function
+    // name before it's searched, do it here before returning.
+    return (func);
+}
+function get_monospace_width(frames) {
+    // Given the id="frames" element, return the width of text characters if
+    // this is a monospace font, otherwise return 0.
+    text = find_child(frames.children[0], "text");
+    originalContent = text.textContent;
+    text.textContent = "!";
+    bangWidth = text.getComputedTextLength();
+    text.textContent = "W";
+    wWidth = text.getComputedTextLength();
+    text.textContent = originalContent;
+    if (bangWidth === wWidth) {
+        return bangWidth;
+    } else {
+        return 0;
+    }
+}
+function update_text_for_elements(elements) {
+    // In order to render quickly in the browser, you want to do one pass of
+    // reading attributes, and one pass of mutating attributes. See
+    // https://web.dev/avoid-large-complex-layouts-and-layout-thrashing/ for details.
+
+    // Fall back to inefficient calculation, if we're variable-width font.
+    // TODO This should be optimized somehow too.
+    if (known_font_width === 0) {
+        for (var i = 0; i < elements.length; i++) {
+            update_text(elements[i]);
+        }
+        return;
+    }
+
+    var textElemNewAttributes = [];
+    for (var i = 0; i < elements.length; i++) {
+        var e = elements[i];
+        var r = find_child(e, "rect");
+        var t = find_child(e, "text");
+        var w = parseFloat(r.attributes.width.value) * frames.attributes.width.value / 100 - 3;
+        var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+        var newX = format_percent((parseFloat(r.attributes.x.value) + (100 * 3 / frames.attributes.width.value)));
+
+        // Smaller than this size won't fit anything
+        if (w < 2 * known_font_width) {
+            textElemNewAttributes.push([newX, ""]);
+            continue;
+        }
+
+        // Fit in full text width
+        if (txt.length * known_font_width < w) {
+            textElemNewAttributes.push([newX, txt]);
+            continue;
+        }
+
+        var substringLength = Math.floor(w / known_font_width) - 2;
+        if (truncate_text_right) {
+            // Truncate the right side of the text.
+            textElemNewAttributes.push([newX, txt.substring(0, substringLength) + ".."]);
+            continue;
+        } else {
+            // Truncate the left side of the text.
+            textElemNewAttributes.push([newX, ".." + txt.substring(txt.length - substringLength, txt.length)]);
+            continue;
+        }
+    }
+
+    console.assert(textElemNewAttributes.length === elements.length, "Resize failed, please file a bug at https://github.com/jonhoo/inferno/");
+
+    // Now that we know new textContent, set it all in one go so we don't refresh a bazillion times.
+    for (var i = 0; i < elements.length; i++) {
+        var e = elements[i];
+        var values = textElemNewAttributes[i];
+        var t = find_child(e, "text");
+        t.attributes.x.value = values[0];
+        t.textContent = values[1];
+    }
+}
+
+function update_text(e) {
+    var r = find_child(e, "rect");
+    var t = find_child(e, "text");
+    var w = parseFloat(r.attributes.width.value) * frames.attributes.width.value / 100 - 3;
+    var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+    t.attributes.x.value = format_percent((parseFloat(r.attributes.x.value) + (100 * 3 / frames.attributes.width.value)));
+
+    // Smaller than this size won't fit anything
+    if (w < 2 * fontsize * fontwidth) {
+        t.textContent = "";
+        return;
+    }
+    t.textContent = txt;
+    // Fit in full text width
+    if (t.getComputedTextLength() < w)
+        return;
+    if (truncate_text_right) {
+        // Truncate the right side of the text.
+        for (var x = txt.length - 2; x > 0; x--) {
+            if (t.getSubStringLength(0, x + 2) <= w) {
+                t.textContent = txt.substring(0, x) + "..";
+                return;
+            }
+        }
+    } else {
+        // Truncate the left side of the text.
+        for (var x = 2; x < txt.length; x++) {
+            if (t.getSubStringLength(x - 2, txt.length) <= w) {
+                t.textContent = ".." + txt.substring(x, txt.length);
+                return;
+            }
+        }
+    }
+    t.textContent = "";
+}
+// zoom
+function zoom_reset(e) {
+    if (e.tagName == "rect") {
+        e.attributes.x.value = format_percent(100 * parseInt(e.attributes["fg:x"].value) / total_samples);
+        e.attributes.width.value = format_percent(100 * parseInt(e.attributes["fg:w"].value) / total_samples);
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_reset(c[i]);
+    }
+}
+function zoom_child(e, x, zoomed_width_samples) {
+    if (e.tagName == "text") {
+        var parent_x = parseFloat(find_child(e.parentNode, "rect[x]").attributes.x.value);
+        e.attributes.x.value = format_percent(parent_x + (100 * 3 / frames.attributes.width.value));
+    } else if (e.tagName == "rect") {
+        e.attributes.x.value = format_percent(100 * (parseInt(e.attributes["fg:x"].value) - x) / zoomed_width_samples);
+        e.attributes.width.value = format_percent(100 * parseInt(e.attributes["fg:w"].value) / zoomed_width_samples);
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_child(c[i], x, zoomed_width_samples);
+    }
+}
+function zoom_parent(e) {
+    if (e.attributes) {
+        if (e.attributes.x != undefined) {
+            e.attributes.x.value = "0.0%";
+        }
+        if (e.attributes.width != undefined) {
+            e.attributes.width.value = "100.0%";
+        }
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_parent(c[i]);
+    }
+}
+function zoom(node) {
+    var attr = find_child(node, "rect").attributes;
+    var width = parseInt(attr["fg:w"].value);
+    var xmin = parseInt(attr["fg:x"].value);
+    var xmax = xmin + width;
+    var ymin = parseFloat(attr.y.value);
+    unzoombtn.classList.remove("hide");
+    var el = frames.children;
+    var to_update_text = [];
+    for (var i = 0; i < el.length; i++) {
+        var e = el[i];
+        var a = find_child(e, "rect").attributes;
+        var ex = parseInt(a["fg:x"].value);
+        var ew = parseInt(a["fg:w"].value);
+        // Is it an ancestor
+        if (!inverted) {
+            var upstack = parseFloat(a.y.value) > ymin;
+        } else {
+            var upstack = parseFloat(a.y.value) < ymin;
+        }
+        if (upstack) {
+            // Direct ancestor
+            if (ex <= xmin && (ex+ew) >= xmax) {
+                e.classList.add("parent");
+                zoom_parent(e);
+                to_update_text.push(e);
+            }
+            // not in current path
+            else
+                e.classList.add("hide");
+        }
+        // Children maybe
+        else {
+            // no common path
+            if (ex < xmin || ex >= xmax) {
+                e.classList.add("hide");
+            }
+            else {
+                zoom_child(e, xmin, width);
+                to_update_text.push(e);
+            }
+        }
+    }
+    update_text_for_elements(to_update_text);
+}
+function unzoom() {
+    unzoombtn.classList.add("hide");
+    var el = frames.children;
+    for(var i = 0; i < el.length; i++) {
+        el[i].classList.remove("parent");
+        el[i].classList.remove("hide");
+        zoom_reset(el[i]);
+    }
+    update_text_for_elements(el);
+}
+// search
+function reset_search() {
+    var el = document.querySelectorAll("#frames rect");
+    for (var i = 0; i < el.length; i++) {
+        orig_load(el[i], "fill")
+    }
+    var params = get_params();
+    delete params.s;
+    history.replaceState(null, null, parse_params(params));
+}
+function search_prompt() {
+    if (!searching) {
+        var term = prompt("Enter a search term (regexp " +
+            "allowed, eg: ^ext4_)", "");
+        if (term != null) {
+            search(term)
+        }
+    } else {
+        reset_search();
+        searching = 0;
+        searchbtn.classList.remove("show");
+        searchbtn.firstChild.nodeValue = "Search"
+        matchedtxt.classList.add("hide");
+        matchedtxt.firstChild.nodeValue = ""
+    }
+}
+function search(term) {
+    var re = new RegExp(term);
+    var el = frames.children;
+    var matches = new Object();
+    var maxwidth = 0;
+    for (var i = 0; i < el.length; i++) {
+        var e = el[i];
+        // Skip over frames which are either not visible, or below the zoomed-to frame
+        if (e.classList.contains("hide") || e.classList.contains("parent")) {
+            continue;
+        }
+        var func = g_to_func(e);
+        var rect = find_child(e, "rect");
+        if (func == null || rect == null)
+            continue;
+        // Save max width. Only works as we have a root frame
+        var w = parseInt(rect.attributes["fg:w"].value);
+        if (w > maxwidth)
+            maxwidth = w;
+        if (func.match(re)) {
+            // highlight
+            var x = parseInt(rect.attributes["fg:x"].value);
+            orig_save(rect, "fill");
+            rect.attributes.fill.value = searchcolor;
+            // remember matches
+            if (matches[x] == undefined) {
+                matches[x] = w;
+            } else {
+                if (w > matches[x]) {
+                    // overwrite with parent
+                    matches[x] = w;
+                }
+            }
+            searching = 1;
+        }
+    }
+    if (!searching)
+        return;
+    var params = get_params();
+    params.s = term;
+    history.replaceState(null, null, parse_params(params));
+
+    searchbtn.classList.add("show");
+    searchbtn.firstChild.nodeValue = "Reset Search";
+    // calculate percent matched, excluding vertical overlap
+    var count = 0;
+    var lastx = -1;
+    var lastw = 0;
+    var keys = Array();
+    for (k in matches) {
+        if (matches.hasOwnProperty(k))
+            keys.push(k);
+    }
+    // sort the matched frames by their x location
+    // ascending, then width descending
+    keys.sort(function(a, b){
+        return a - b;
+    });
+    // Step through frames saving only the biggest bottom-up frames
+    // thanks to the sort order. This relies on the tree property
+    // where children are always smaller than their parents.
+    for (var k in keys) {
+        var x = parseInt(keys[k]);
+        var w = matches[keys[k]];
+        if (x >= lastx + lastw) {
+            count += w;
+            lastx = x;
+            lastw = w;
+        }
+    }
+    // display matched percent
+    matchedtxt.classList.remove("hide");
+    var pct = 100 * count / maxwidth;
+    if (pct != 100) pct = pct.toFixed(1);
+    matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+}
+function format_percent(n) {
+    return n.toFixed(4) + "%";
+}
+]]></script><rect x="0" y="0" width="100%" height="538" fill="url(#background)"/><text id="title" fill="rgb(0,0,0)" x="50.0000%" y="24.00">/home/poly/.local/bin/py-spy record --pid 37404 --duration 120 --rate 100 --nonblocking --format flamegraph --output docs/flamegraph-dublin-20261007.svg</text><text id="details" fill="rgb(0,0,0)" x="10" y="40.00"> </text><text id="unzoom" class="hide" fill="rgb(0,0,0)" x="10" y="24.00">Reset Zoom</text><text id="search" fill="rgb(0,0,0)" x="1190" y="24.00">Search</text><text id="matched" fill="rgb(0,0,0)" x="1190" y="527.00"> </text><svg id="frames" x="10" width="1180" total_samples="2102"><g><title>data_received (websockets/asyncio/connection.py:1081) (11 samples, 0.52%)</title><rect x="66.3654%" y="180" width="0.5233%" height="15" fill="rgb(227,0,7)" fg:x="1395" fg:w="11"/><text x="66.6154%" y="190.50"></text></g><g><title>receive_data (websockets/protocol.py:271) (11 samples, 0.52%)</title><rect x="66.3654%" y="196" width="0.5233%" height="15" fill="rgb(217,0,24)" fg:x="1395" fg:w="11"/><text x="66.6154%" y="206.50"></text></g><g><title>parse (websockets/client.py:348) (10 samples, 0.48%)</title><rect x="66.4129%" y="212" width="0.4757%" height="15" fill="rgb(221,193,54)" fg:x="1396" fg:w="10"/><text x="66.6629%" y="222.50"></text></g><g><title>parse (websockets/protocol.py:601) (10 samples, 0.48%)</title><rect x="66.4129%" y="228" width="0.4757%" height="15" fill="rgb(248,212,6)" fg:x="1396" fg:w="10"/><text x="66.6629%" y="238.50"></text></g><g><title>parse (websockets/frames.py:309) (3 samples, 0.14%)</title><rect x="66.7460%" y="244" width="0.1427%" height="15" fill="rgb(208,68,35)" fg:x="1403" fg:w="3"/><text x="66.9960%" y="254.50"></text></g><g><title>add (poly_kalshi_service/metrics.py:46) (6 samples, 0.29%)</title><rect x="68.7916%" y="212" width="0.2854%" height="15" fill="rgb(232,128,0)" fg:x="1446" fg:w="6"/><text x="69.0416%" y="222.50"></text></g><g><title>_evaluate (poly_kalshi_service/engine.py:490) (3 samples, 0.14%)</title><rect x="68.9343%" y="228" width="0.1427%" height="15" fill="rgb(207,160,47)" fg:x="1449" fg:w="3"/><text x="69.1843%" y="238.50"></text></g><g><title>read (ssl.py:859) (49 samples, 2.33%)</title><rect x="66.8887%" y="180" width="2.3311%" height="15" fill="rgb(228,23,34)" fg:x="1406" fg:w="49"/><text x="67.1387%" y="190.50">r..</text></g><g><title>ingest (poly_kalshi_service/runtime.py:103) (9 samples, 0.43%)</title><rect x="68.7916%" y="196" width="0.4282%" height="15" fill="rgb(218,30,26)" fg:x="1446" fg:w="9"/><text x="69.0416%" y="206.50"></text></g><g><title>handle_line (poly_kalshi_service/engine.py:190) (3 samples, 0.14%)</title><rect x="69.0771%" y="212" width="0.1427%" height="15" fill="rgb(220,122,19)" fg:x="1452" fg:w="3"/><text x="69.3271%" y="222.50"></text></g><g><title>_evaluate (poly_kalshi_service/engine.py:472) (3 samples, 0.14%)</title><rect x="69.0771%" y="228" width="0.1427%" height="15" fill="rgb(250,228,42)" fg:x="1452" fg:w="3"/><text x="69.3271%" y="238.50"></text></g><g><title>handle_line (poly_kalshi_service/engine.py:183) (8 samples, 0.38%)</title><rect x="70.0761%" y="244" width="0.3806%" height="15" fill="rgb(240,193,28)" fg:x="1473" fg:w="8"/><text x="70.3261%" y="254.50"></text></g><g><title>_evaluate (poly_kalshi_service/engine.py:490) (3 samples, 0.14%)</title><rect x="70.3140%" y="260" width="0.1427%" height="15" fill="rgb(216,20,37)" fg:x="1478" fg:w="3"/><text x="70.5640%" y="270.50"></text></g><g><title>_on_message (poly_kalshi_service/feeds.py:306) (11 samples, 0.52%)</title><rect x="69.9810%" y="196" width="0.5233%" height="15" fill="rgb(206,188,39)" fg:x="1471" fg:w="11"/><text x="70.2310%" y="206.50"></text></g><g><title>emit (poly_kalshi_service/app.py:112) (11 samples, 0.52%)</title><rect x="69.9810%" y="212" width="0.5233%" height="15" fill="rgb(217,207,13)" fg:x="1471" fg:w="11"/><text x="70.2310%" y="222.50"></text></g><g><title>ingest (poly_kalshi_service/runtime.py:102) (11 samples, 0.52%)</title><rect x="69.9810%" y="228" width="0.5233%" height="15" fill="rgb(231,73,38)" fg:x="1471" fg:w="11"/><text x="70.2310%" y="238.50"></text></g><g><title>handle_line (poly_kalshi_service/engine.py:181) (3 samples, 0.14%)</title><rect x="70.5043%" y="244" width="0.1427%" height="15" fill="rgb(225,20,46)" fg:x="1482" fg:w="3"/><text x="70.7543%" y="254.50"></text></g><g><title>run (poly_kalshi_service/feeds.py:149) (31 samples, 1.47%)</title><rect x="69.2198%" y="180" width="1.4748%" height="15" fill="rgb(210,31,41)" fg:x="1455" fg:w="31"/><text x="69.4698%" y="190.50"></text></g><g><title>_on_message (poly_kalshi_service/feeds.py:365) (4 samples, 0.19%)</title><rect x="70.5043%" y="196" width="0.1903%" height="15" fill="rgb(221,200,47)" fg:x="1482" fg:w="4"/><text x="70.7543%" y="206.50"></text></g><g><title>emit (poly_kalshi_service/app.py:112) (4 samples, 0.19%)</title><rect x="70.5043%" y="212" width="0.1903%" height="15" fill="rgb(226,26,5)" fg:x="1482" fg:w="4"/><text x="70.7543%" y="222.50"></text></g><g><title>ingest (poly_kalshi_service/runtime.py:102) (4 samples, 0.19%)</title><rect x="70.5043%" y="228" width="0.1903%" height="15" fill="rgb(249,33,26)" fg:x="1482" fg:w="4"/><text x="70.7543%" y="238.50"></text></g><g><title>_evaluate (poly_kalshi_service/engine.py:464) (6 samples, 0.29%)</title><rect x="70.9324%" y="244" width="0.2854%" height="15" fill="rgb(235,183,28)" fg:x="1491" fg:w="6"/><text x="71.1824%" y="254.50"></text></g><g><title>quotes (poly_kalshi_service/engine.py:436) (5 samples, 0.24%)</title><rect x="70.9800%" y="260" width="0.2379%" height="15" fill="rgb(221,5,38)" fg:x="1492" fg:w="5"/><text x="71.2300%" y="270.50"></text></g><g><title>_on_message (poly_kalshi_service/feeds.py:274) (8 samples, 0.38%)</title><rect x="70.8849%" y="196" width="0.3806%" height="15" fill="rgb(247,18,42)" fg:x="1490" fg:w="8"/><text x="71.1349%" y="206.50"></text></g><g><title>ingest (poly_kalshi_service/runtime.py:102) (7 samples, 0.33%)</title><rect x="70.9324%" y="212" width="0.3330%" height="15" fill="rgb(241,131,45)" fg:x="1491" fg:w="7"/><text x="71.1824%" y="222.50"></text></g><g><title>handle_line (poly_kalshi_service/engine.py:190) (7 samples, 0.33%)</title><rect x="70.9324%" y="228" width="0.3330%" height="15" fill="rgb(249,31,29)" fg:x="1491" fg:w="7"/><text x="71.1824%" y="238.50"></text></g><g><title>_on_message (poly_kalshi_service/feeds.py:276) (3 samples, 0.14%)</title><rect x="71.2655%" y="196" width="0.1427%" height="15" fill="rgb(225,111,53)" fg:x="1498" fg:w="3"/><text x="71.5155%" y="206.50"></text></g><g><title>emit (poly_kalshi_service/app.py:112) (3 samples, 0.14%)</title><rect x="71.2655%" y="212" width="0.1427%" height="15" fill="rgb(238,160,17)" fg:x="1498" fg:w="3"/><text x="71.5155%" y="222.50"></text></g><g><title>ingest (poly_kalshi_service/runtime.py:102) (3 samples, 0.14%)</title><rect x="71.2655%" y="228" width="0.1427%" height="15" fill="rgb(214,148,48)" fg:x="1498" fg:w="3"/><text x="71.5155%" y="238.50"></text></g><g><title>evaluate (poly_kalshi_service/shadow.py:113) (4 samples, 0.19%)</title><rect x="72.4072%" y="276" width="0.1903%" height="15" fill="rgb(232,36,49)" fg:x="1522" fg:w="4"/><text x="72.6572%" y="286.50"></text></g><g><title>quote (poly_kalshi_service/book.py:113) (3 samples, 0.14%)</title><rect x="72.7878%" y="292" width="0.1427%" height="15" fill="rgb(209,103,24)" fg:x="1530" fg:w="3"/><text x="73.0378%" y="302.50"></text></g><g><title>evaluate (poly_kalshi_service/shadow.py:120) (9 samples, 0.43%)</title><rect x="72.7402%" y="276" width="0.4282%" height="15" fill="rgb(229,88,8)" fg:x="1529" fg:w="9"/><text x="72.9902%" y="286.50"></text></g><g><title>quote (poly_kalshi_service/book.py:115) (5 samples, 0.24%)</title><rect x="72.9305%" y="292" width="0.2379%" height="15" fill="rgb(213,181,19)" fg:x="1533" fg:w="5"/><text x="73.1805%" y="302.50"></text></g><g><title>state (poly_kalshi_service/book.py:104) (4 samples, 0.19%)</title><rect x="72.9781%" y="308" width="0.1903%" height="15" fill="rgb(254,191,54)" fg:x="1534" fg:w="4"/><text x="73.2281%" y="318.50"></text></g><g><title>add (poly_kalshi_service/metrics.py:46) (26 samples, 1.24%)</title><rect x="71.9791%" y="244" width="1.2369%" height="15" fill="rgb(241,83,37)" fg:x="1513" fg:w="26"/><text x="72.2291%" y="254.50"></text></g><g><title>_evaluate (poly_kalshi_service/engine.py:472) (20 samples, 0.95%)</title><rect x="72.2645%" y="260" width="0.9515%" height="15" fill="rgb(233,36,39)" fg:x="1519" fg:w="20"/><text x="72.5145%" y="270.50"></text></g><g><title>handle_line (poly_kalshi_service/engine.py:176) (5 samples, 0.24%)</title><rect x="73.3587%" y="244" width="0.2379%" height="15" fill="rgb(226,3,54)" fg:x="1542" fg:w="5"/><text x="73.6087%" y="254.50"></text></g><g><title>_evaluate (poly_kalshi_service/engine.py:490) (3 samples, 0.14%)</title><rect x="73.4539%" y="260" width="0.1427%" height="15" fill="rgb(245,192,40)" fg:x="1544" fg:w="3"/><text x="73.7039%" y="270.50"></text></g><g><title>evaluate (poly_kalshi_service/shadow.py:120) (3 samples, 0.14%)</title><rect x="73.4539%" y="276" width="0.1427%" height="15" fill="rgb(238,167,29)" fg:x="1544" fg:w="3"/><text x="73.7039%" y="286.50"></text></g><g><title>_evaluate (poly_kalshi_service/engine.py:472) (3 samples, 0.14%)</title><rect x="73.9296%" y="260" width="0.1427%" height="15" fill="rgb(232,182,51)" fg:x="1554" fg:w="3"/><text x="74.1796%" y="270.50"></text></g><g><title>handle_line (poly_kalshi_service/engine.py:183) (22 samples, 1.05%)</title><rect x="73.6441%" y="244" width="1.0466%" height="15" fill="rgb(231,60,39)" fg:x="1548" fg:w="22"/><text x="73.8941%" y="254.50"></text></g><g><title>_evaluate (poly_kalshi_service/engine.py:490) (13 samples, 0.62%)</title><rect x="74.0723%" y="260" width="0.6185%" height="15" fill="rgb(208,69,12)" fg:x="1557" fg:w="13"/><text x="74.3223%" y="270.50"></text></g><g><title>evaluate (poly_kalshi_service/shadow.py:120) (11 samples, 0.52%)</title><rect x="74.1675%" y="276" width="0.5233%" height="15" fill="rgb(235,93,37)" fg:x="1559" fg:w="11"/><text x="74.4175%" y="286.50"></text></g><g><title>quote (poly_kalshi_service/book.py:115) (10 samples, 0.48%)</title><rect x="74.2150%" y="292" width="0.4757%" height="15" fill="rgb(213,116,39)" fg:x="1560" fg:w="10"/><text x="74.4650%" y="302.50"></text></g><g><title>add_level (poly_kalshi_service/book.py:84) (5 samples, 0.24%)</title><rect x="74.9762%" y="276" width="0.2379%" height="15" fill="rgb(222,207,29)" fg:x="1576" fg:w="5"/><text x="75.2262%" y="286.50"></text></g><g><title>consumes_window (poly_kalshi_service/decision.py:64) (5 samples, 0.24%)</title><rect x="75.2141%" y="276" width="0.2379%" height="15" fill="rgb(206,96,30)" fg:x="1581" fg:w="5"/><text x="75.4641%" y="286.50"></text></g><g><title>_none (poly_kalshi_service/decision.py:68) (5 samples, 0.24%)</title><rect x="75.9277%" y="292" width="0.2379%" height="15" fill="rgb(218,138,4)" fg:x="1596" fg:w="5"/><text x="76.1777%" y="302.50"></text></g><g><title>_evaluate (poly_kalshi_service/engine.py:464) (33 samples, 1.57%)</title><rect x="74.7383%" y="260" width="1.5699%" height="15" fill="rgb(250,191,14)" fg:x="1571" fg:w="33"/><text x="74.9883%" y="270.50"></text></g><g><title>quotes (poly_kalshi_service/engine.py:436) (14 samples, 0.67%)</title><rect x="75.6422%" y="276" width="0.6660%" height="15" fill="rgb(239,60,40)" fg:x="1590" fg:w="14"/><text x="75.8922%" y="286.50"></text></g><g><title>_evaluate (poly_kalshi_service/engine.py:470) (3 samples, 0.14%)</title><rect x="76.3083%" y="260" width="0.1427%" height="15" fill="rgb(206,27,48)" fg:x="1604" fg:w="3"/><text x="76.5583%" y="270.50"></text></g><g><title>quote (poly_kalshi_service/book.py:113) (4 samples, 0.19%)</title><rect x="76.7364%" y="292" width="0.1903%" height="15" fill="rgb(225,35,8)" fg:x="1613" fg:w="4"/><text x="76.9864%" y="302.50"></text></g><g><title>evaluate (poly_kalshi_service/shadow.py:120) (7 samples, 0.33%)</title><rect x="76.6413%" y="276" width="0.3330%" height="15" fill="rgb(250,213,24)" fg:x="1611" fg:w="7"/><text x="76.8913%" y="286.50"></text></g><g><title>_evaluate (poly_kalshi_service/engine.py:472) (12 samples, 0.57%)</title><rect x="76.4510%" y="260" width="0.5709%" height="15" fill="rgb(247,123,22)" fg:x="1607" fg:w="12"/><text x="76.7010%" y="270.50"></text></g><g><title>_evaluate (poly_kalshi_service/engine.py:490) (7 samples, 0.33%)</title><rect x="77.2598%" y="260" width="0.3330%" height="15" fill="rgb(231,138,38)" fg:x="1624" fg:w="7"/><text x="77.5098%" y="270.50"></text></g><g><title>evaluate (poly_kalshi_service/shadow.py:120) (5 samples, 0.24%)</title><rect x="77.3549%" y="276" width="0.2379%" height="15" fill="rgb(231,145,46)" fg:x="1626" fg:w="5"/><text x="77.6049%" y="286.50"></text></g><g><title>quote (poly_kalshi_service/book.py:115) (3 samples, 0.14%)</title><rect x="77.4500%" y="292" width="0.1427%" height="15" fill="rgb(251,118,11)" fg:x="1628" fg:w="3"/><text x="77.7000%" y="302.50"></text></g><g><title>handle_line (poly_kalshi_service/engine.py:190) (67 samples, 3.19%)</title><rect x="74.6908%" y="244" width="3.1874%" height="15" fill="rgb(217,147,25)" fg:x="1570" fg:w="67"/><text x="74.9408%" y="254.50">han..</text></g><g><title>window_open (poly_kalshi_service/windows.py:45) (3 samples, 0.14%)</title><rect x="77.7355%" y="260" width="0.1427%" height="15" fill="rgb(247,81,37)" fg:x="1634" fg:w="3"/><text x="77.9855%" y="270.50"></text></g><g><title>_evaluate (poly_kalshi_service/engine.py:472) (5 samples, 0.24%)</title><rect x="77.8782%" y="260" width="0.2379%" height="15" fill="rgb(209,12,38)" fg:x="1637" fg:w="5"/><text x="78.1282%" y="270.50"></text></g><g><title>evaluate (poly_kalshi_service/shadow.py:120) (5 samples, 0.24%)</title><rect x="77.8782%" y="276" width="0.2379%" height="15" fill="rgb(227,1,9)" fg:x="1637" fg:w="5"/><text x="78.1282%" y="286.50"></text></g><g><title>evaluate (poly_kalshi_service/shadow.py:120) (3 samples, 0.14%)</title><rect x="78.1637%" y="276" width="0.1427%" height="15" fill="rgb(248,47,43)" fg:x="1643" fg:w="3"/><text x="78.4137%" y="286.50"></text></g><g><title>_evaluate (poly_kalshi_service/engine.py:482) (6 samples, 0.29%)</title><rect x="78.1161%" y="260" width="0.2854%" height="15" fill="rgb(221,10,30)" fg:x="1642" fg:w="6"/><text x="78.3661%" y="270.50"></text></g><g><title>ingest (poly_kalshi_service/runtime.py:102) (140 samples, 6.66%)</title><rect x="71.7888%" y="228" width="6.6603%" height="15" fill="rgb(210,229,1)" fg:x="1509" fg:w="140"/><text x="72.0388%" y="238.50">ingest (p..</text></g><g><title>write (poly_kalshi_service/recorder.py:163) (12 samples, 0.57%)</title><rect x="77.8782%" y="244" width="0.5709%" height="15" fill="rgb(222,148,37)" fg:x="1637" fg:w="12"/><text x="78.1282%" y="254.50"></text></g><g><title>ingest (poly_kalshi_service/runtime.py:103) (8 samples, 0.38%)</title><rect x="78.4491%" y="228" width="0.3806%" height="15" fill="rgb(234,67,33)" fg:x="1649" fg:w="8"/><text x="78.6991%" y="238.50"></text></g><g><title>handle_line (poly_kalshi_service/engine.py:190) (3 samples, 0.14%)</title><rect x="78.6870%" y="244" width="0.1427%" height="15" fill="rgb(247,98,35)" fg:x="1654" fg:w="3"/><text x="78.9370%" y="254.50"></text></g><g><title>_on_message (poly_kalshi_service/feeds.py:306) (170 samples, 8.09%)</title><rect x="71.5509%" y="196" width="8.0875%" height="15" fill="rgb(247,138,52)" fg:x="1504" fg:w="170"/><text x="71.8009%" y="206.50">_on_message..</text></g><g><title>emit (poly_kalshi_service/app.py:112) (165 samples, 7.85%)</title><rect x="71.7888%" y="212" width="7.8497%" height="15" fill="rgb(213,79,30)" fg:x="1509" fg:w="165"/><text x="72.0388%" y="222.50">emit (poly_..</text></g><g><title>ingest (poly_kalshi_service/runtime.py:99) (15 samples, 0.71%)</title><rect x="78.9248%" y="228" width="0.7136%" height="15" fill="rgb(246,177,23)" fg:x="1659" fg:w="15"/><text x="79.1748%" y="238.50"></text></g><g><title>handle_line (poly_kalshi_service/engine.py:190) (4 samples, 0.19%)</title><rect x="79.4481%" y="244" width="0.1903%" height="15" fill="rgb(230,62,27)" fg:x="1670" fg:w="4"/><text x="79.6981%" y="254.50"></text></g><g><title>_evaluate (poly_kalshi_service/engine.py:472) (3 samples, 0.14%)</title><rect x="79.4957%" y="260" width="0.1427%" height="15" fill="rgb(216,154,8)" fg:x="1671" fg:w="3"/><text x="79.7457%" y="270.50"></text></g><g><title>add (poly_kalshi_service/metrics.py:46) (6 samples, 0.29%)</title><rect x="79.7336%" y="244" width="0.2854%" height="15" fill="rgb(244,35,45)" fg:x="1676" fg:w="6"/><text x="79.9836%" y="254.50"></text></g><g><title>handle_line (poly_kalshi_service/engine.py:176) (9 samples, 0.43%)</title><rect x="80.1618%" y="244" width="0.4282%" height="15" fill="rgb(251,115,12)" fg:x="1685" fg:w="9"/><text x="80.4118%" y="254.50"></text></g><g><title>_evaluate (poly_kalshi_service/engine.py:472) (3 samples, 0.14%)</title><rect x="80.6851%" y="260" width="0.1427%" height="15" fill="rgb(240,54,50)" fg:x="1696" fg:w="3"/><text x="80.9351%" y="270.50"></text></g><g><title>handle_line (poly_kalshi_service/engine.py:181) (10 samples, 0.48%)</title><rect x="80.5899%" y="244" width="0.4757%" height="15" fill="rgb(233,84,52)" fg:x="1694" fg:w="10"/><text x="80.8399%" y="254.50"></text></g><g><title>quotes (poly_kalshi_service/engine.py:433) (3 samples, 0.14%)</title><rect x="81.3511%" y="276" width="0.1427%" height="15" fill="rgb(207,117,47)" fg:x="1710" fg:w="3"/><text x="81.6011%" y="286.50"></text></g><g><title>quotes (poly_kalshi_service/engine.py:436) (4 samples, 0.19%)</title><rect x="81.4938%" y="276" width="0.1903%" height="15" fill="rgb(249,43,39)" fg:x="1713" fg:w="4"/><text x="81.7438%" y="286.50"></text></g><g><title>_none (poly_kalshi_service/decision.py:68) (3 samples, 0.14%)</title><rect x="81.5414%" y="292" width="0.1427%" height="15" fill="rgb(209,38,44)" fg:x="1714" fg:w="3"/><text x="81.7914%" y="302.50"></text></g><g><title>_evaluate (poly_kalshi_service/engine.py:464) (13 samples, 0.62%)</title><rect x="81.1608%" y="260" width="0.6185%" height="15" fill="rgb(236,212,23)" fg:x="1706" fg:w="13"/><text x="81.4108%" y="270.50"></text></g><g><title>_evaluate (poly_kalshi_service/engine.py:490) (3 samples, 0.14%)</title><rect x="81.9696%" y="260" width="0.1427%" height="15" fill="rgb(242,79,21)" fg:x="1723" fg:w="3"/><text x="82.2196%" y="270.50"></text></g><g><title>handle_line (poly_kalshi_service/engine.py:190) (28 samples, 1.33%)</title><rect x="81.1608%" y="244" width="1.3321%" height="15" fill="rgb(211,96,35)" fg:x="1706" fg:w="28"/><text x="81.4108%" y="254.50"></text></g><g><title>window_open (poly_kalshi_service/windows.py:45) (4 samples, 0.19%)</title><rect x="82.3026%" y="260" width="0.1903%" height="15" fill="rgb(253,215,40)" fg:x="1730" fg:w="4"/><text x="82.5526%" y="270.50"></text></g><g><title>ingest (poly_kalshi_service/runtime.py:102) (61 samples, 2.90%)</title><rect x="79.6860%" y="228" width="2.9020%" height="15" fill="rgb(211,81,21)" fg:x="1675" fg:w="61"/><text x="79.9360%" y="238.50">in..</text></g><g><title>ingest (poly_kalshi_service/runtime.py:99) (3 samples, 0.14%)</title><rect x="82.6832%" y="228" width="0.1427%" height="15" fill="rgb(208,190,38)" fg:x="1738" fg:w="3"/><text x="82.9332%" y="238.50"></text></g><g><title>run (poly_kalshi_service/feeds.py:152) (255 samples, 12.13%)</title><rect x="70.7422%" y="180" width="12.1313%" height="15" fill="rgb(235,213,38)" fg:x="1487" fg:w="255"/><text x="70.9922%" y="190.50">run (poly_kalshi_s..</text></g><g><title>_on_message (poly_kalshi_service/feeds.py:365) (68 samples, 3.24%)</title><rect x="79.6384%" y="196" width="3.2350%" height="15" fill="rgb(237,122,38)" fg:x="1674" fg:w="68"/><text x="79.8884%" y="206.50">_on..</text></g><g><title>emit (poly_kalshi_service/app.py:112) (68 samples, 3.24%)</title><rect x="79.6384%" y="212" width="3.2350%" height="15" fill="rgb(244,218,35)" fg:x="1674" fg:w="68"/><text x="79.8884%" y="222.50">emi..</text></g><g><title>&lt;module&gt; (poly-kalshi-service:10) (1,747 samples, 83.11%)</title><rect x="0.0000%" y="68" width="83.1113%" height="15" fill="rgb(240,68,47)" fg:x="0" fg:w="1747"/><text x="0.2500%" y="78.50">&lt;module&gt; (poly-kalshi-service:10)</text></g><g><title>run (poly_kalshi_service/main.py:17) (1,747 samples, 83.11%)</title><rect x="0.0000%" y="84" width="83.1113%" height="15" fill="rgb(210,16,53)" fg:x="0" fg:w="1747"/><text x="0.2500%" y="94.50">run (poly_kalshi_service/main.py:17)</text></g><g><title>serve (ta_core/cli.py:70) (1,747 samples, 83.11%)</title><rect x="0.0000%" y="100" width="83.1113%" height="15" fill="rgb(235,124,12)" fg:x="0" fg:w="1747"/><text x="0.2500%" y="110.50">serve (ta_core/cli.py:70)</text></g><g><title>run (uvicorn/main.py:621) (1,747 samples, 83.11%)</title><rect x="0.0000%" y="116" width="83.1113%" height="15" fill="rgb(224,169,11)" fg:x="0" fg:w="1747"/><text x="0.2500%" y="126.50">run (uvicorn/main.py:621)</text></g><g><title>run (uvicorn/server.py:77) (1,747 samples, 83.11%)</title><rect x="0.0000%" y="132" width="83.1113%" height="15" fill="rgb(250,166,2)" fg:x="0" fg:w="1747"/><text x="0.2500%" y="142.50">run (uvicorn/server.py:77)</text></g><g><title>run (asyncio/runners.py:194) (1,747 samples, 83.11%)</title><rect x="0.0000%" y="148" width="83.1113%" height="15" fill="rgb(242,216,29)" fg:x="0" fg:w="1747"/><text x="0.2500%" y="158.50">run (asyncio/runners.py:194)</text></g><g><title>run (asyncio/runners.py:118) (1,747 samples, 83.11%)</title><rect x="0.0000%" y="164" width="83.1113%" height="15" fill="rgb(230,116,27)" fg:x="0" fg:w="1747"/><text x="0.2500%" y="174.50">run (asyncio/runners.py:118)</text></g><g><title>run_asgi (uvicorn/protocols/http/httptools_impl.py:422) (5 samples, 0.24%)</title><rect x="82.8735%" y="180" width="0.2379%" height="15" fill="rgb(228,99,48)" fg:x="1742" fg:w="5"/><text x="83.1235%" y="190.50"></text></g><g><title>__call__ (uvicorn/middleware/proxy_headers.py:63) (5 samples, 0.24%)</title><rect x="82.8735%" y="196" width="0.2379%" height="15" fill="rgb(253,11,6)" fg:x="1742" fg:w="5"/><text x="83.1235%" y="206.50"></text></g><g><title>__call__ (fastapi/applications.py:1163) (5 samples, 0.24%)</title><rect x="82.8735%" y="212" width="0.2379%" height="15" fill="rgb(247,143,39)" fg:x="1742" fg:w="5"/><text x="83.1235%" y="222.50"></text></g><g><title>__call__ (starlette/applications.py:96) (5 samples, 0.24%)</title><rect x="82.8735%" y="228" width="0.2379%" height="15" fill="rgb(236,97,10)" fg:x="1742" fg:w="5"/><text x="83.1235%" y="238.50"></text></g><g><title>__call__ (starlette/middleware/errors.py:164) (5 samples, 0.24%)</title><rect x="82.8735%" y="244" width="0.2379%" height="15" fill="rgb(233,208,19)" fg:x="1742" fg:w="5"/><text x="83.1235%" y="254.50"></text></g><g><title>__call__ (starlette/middleware/exceptions.py:63) (5 samples, 0.24%)</title><rect x="82.8735%" y="260" width="0.2379%" height="15" fill="rgb(216,164,2)" fg:x="1742" fg:w="5"/><text x="83.1235%" y="270.50"></text></g><g><title>wrapped_app (starlette/_exception_handler.py:42) (5 samples, 0.24%)</title><rect x="82.8735%" y="276" width="0.2379%" height="15" fill="rgb(220,129,5)" fg:x="1742" fg:w="5"/><text x="83.1235%" y="286.50"></text></g><g><title>__call__ (fastapi/middleware/asyncexitstack.py:18) (5 samples, 0.24%)</title><rect x="82.8735%" y="292" width="0.2379%" height="15" fill="rgb(242,17,10)" fg:x="1742" fg:w="5"/><text x="83.1235%" y="302.50"></text></g><g><title>__call__ (starlette/routing.py:670) (5 samples, 0.24%)</title><rect x="82.8735%" y="308" width="0.2379%" height="15" fill="rgb(242,107,0)" fg:x="1742" fg:w="5"/><text x="83.1235%" y="318.50"></text></g><g><title>app (fastapi/routing.py:2734) (5 samples, 0.24%)</title><rect x="82.8735%" y="324" width="0.2379%" height="15" fill="rgb(251,28,31)" fg:x="1742" fg:w="5"/><text x="83.1235%" y="334.50"></text></g><g><title>handle (fastapi/routing.py:1281) (5 samples, 0.24%)</title><rect x="82.8735%" y="340" width="0.2379%" height="15" fill="rgb(233,223,10)" fg:x="1742" fg:w="5"/><text x="83.1235%" y="350.50"></text></g><g><title>handle (starlette/routing.py:280) (5 samples, 0.24%)</title><rect x="82.8735%" y="356" width="0.2379%" height="15" fill="rgb(215,21,27)" fg:x="1742" fg:w="5"/><text x="83.1235%" y="366.50"></text></g><g><title>app (fastapi/routing.py:158) (5 samples, 0.24%)</title><rect x="82.8735%" y="372" width="0.2379%" height="15" fill="rgb(232,23,21)" fg:x="1742" fg:w="5"/><text x="83.1235%" y="382.50"></text></g><g><title>wrapped_app (starlette/_exception_handler.py:42) (5 samples, 0.24%)</title><rect x="82.8735%" y="388" width="0.2379%" height="15" fill="rgb(244,5,23)" fg:x="1742" fg:w="5"/><text x="83.1235%" y="398.50"></text></g><g><title>app (fastapi/routing.py:144) (5 samples, 0.24%)</title><rect x="82.8735%" y="404" width="0.2379%" height="15" fill="rgb(226,81,46)" fg:x="1742" fg:w="5"/><text x="83.1235%" y="414.50"></text></g><g><title>app (fastapi/routing.py:706) (5 samples, 0.24%)</title><rect x="82.8735%" y="420" width="0.2379%" height="15" fill="rgb(247,70,30)" fg:x="1742" fg:w="5"/><text x="83.1235%" y="430.50"></text></g><g><title>run_endpoint_function (fastapi/routing.py:352) (5 samples, 0.24%)</title><rect x="82.8735%" y="436" width="0.2379%" height="15" fill="rgb(212,68,19)" fg:x="1742" fg:w="5"/><text x="83.1235%" y="446.50"></text></g><g><title>status (poly_kalshi_service/app.py:234) (5 samples, 0.24%)</title><rect x="82.8735%" y="452" width="0.2379%" height="15" fill="rgb(240,187,13)" fg:x="1742" fg:w="5"/><text x="83.1235%" y="462.50"></text></g><g><title>status (poly_kalshi_service/runtime.py:430) (5 samples, 0.24%)</title><rect x="82.8735%" y="468" width="0.2379%" height="15" fill="rgb(223,113,26)" fg:x="1742" fg:w="5"/><text x="83.1235%" y="478.50"></text></g><g><title>status (poly_kalshi_service/engine.py:816) (4 samples, 0.19%)</title><rect x="82.9210%" y="484" width="0.1903%" height="15" fill="rgb(206,192,2)" fg:x="1743" fg:w="4"/><text x="83.1710%" y="494.50"></text></g><g><title>snapshot (poly_kalshi_service/metrics.py:53) (4 samples, 0.19%)</title><rect x="82.9210%" y="500" width="0.1903%" height="15" fill="rgb(241,108,4)" fg:x="1743" fg:w="4"/><text x="83.1710%" y="510.50"></text></g><g><title>_write_line (poly_kalshi_service/recorder.py:269) (5 samples, 0.24%)</title><rect x="83.3016%" y="132" width="0.2379%" height="15" fill="rgb(247,173,49)" fg:x="1751" fg:w="5"/><text x="83.5516%" y="142.50"></text></g><g><title>_write_line (poly_kalshi_service/recorder.py:290) (3 samples, 0.14%)</title><rect x="83.5871%" y="132" width="0.1427%" height="15" fill="rgb(224,114,35)" fg:x="1757" fg:w="3"/><text x="83.8371%" y="142.50"></text></g><g><title>hour_path (poly_kalshi_service/recorder.py:72) (3 samples, 0.14%)</title><rect x="83.8725%" y="148" width="0.1427%" height="15" fill="rgb(245,159,27)" fg:x="1763" fg:w="3"/><text x="84.1225%" y="158.50"></text></g><g><title>flush_pending (poly_kalshi_service/recorder.py:119) (8 samples, 0.38%)</title><rect x="83.7298%" y="132" width="0.3806%" height="15" fill="rgb(245,172,44)" fg:x="1760" fg:w="8"/><text x="83.9798%" y="142.50"></text></g><g><title>hour_path (poly_kalshi_service/recorder.py:73) (4 samples, 0.19%)</title><rect x="84.7764%" y="148" width="0.1903%" height="15" fill="rgb(236,23,11)" fg:x="1782" fg:w="4"/><text x="85.0264%" y="158.50"></text></g><g><title>_run (poly_kalshi_service/recorder.py:229) (46 samples, 2.19%)</title><rect x="83.2540%" y="116" width="2.1884%" height="15" fill="rgb(205,117,38)" fg:x="1750" fg:w="46"/><text x="83.5040%" y="126.50">_..</text></g><g><title>get (queue.py:180) (24 samples, 1.14%)</title><rect x="84.3007%" y="132" width="1.1418%" height="15" fill="rgb(237,72,25)" fg:x="1772" fg:w="24"/><text x="84.5507%" y="142.50"></text></g><g><title>write (poly_kalshi_service/recorder.py:92) (10 samples, 0.48%)</title><rect x="84.9667%" y="148" width="0.4757%" height="15" fill="rgb(244,70,9)" fg:x="1786" fg:w="10"/><text x="85.2167%" y="158.50"></text></g><g><title>hour_path (poly_kalshi_service/recorder.py:71) (12 samples, 0.57%)</title><rect x="85.5376%" y="148" width="0.5709%" height="15" fill="rgb(217,125,39)" fg:x="1798" fg:w="12"/><text x="85.7876%" y="158.50"></text></g><g><title>hour_path (poly_kalshi_service/recorder.py:72) (10 samples, 0.48%)</title><rect x="86.1085%" y="148" width="0.4757%" height="15" fill="rgb(235,36,10)" fg:x="1810" fg:w="10"/><text x="86.3585%" y="158.50"></text></g><g><title>_write_line (poly_kalshi_service/recorder.py:269) (34 samples, 1.62%)</title><rect x="85.4900%" y="132" width="1.6175%" height="15" fill="rgb(251,123,47)" fg:x="1797" fg:w="34"/><text x="85.7400%" y="142.50"></text></g><g><title>hour_path (poly_kalshi_service/recorder.py:73) (11 samples, 0.52%)</title><rect x="86.5842%" y="148" width="0.5233%" height="15" fill="rgb(221,13,13)" fg:x="1820" fg:w="11"/><text x="86.8342%" y="158.50"></text></g><g><title>_run (poly_kalshi_service/recorder.py:243) (36 samples, 1.71%)</title><rect x="85.4900%" y="116" width="1.7127%" height="15" fill="rgb(238,131,9)" fg:x="1797" fg:w="36"/><text x="85.7400%" y="126.50"></text></g><g><title>_bootstrap (threading.py:1030) (89 samples, 4.23%)</title><rect x="83.2540%" y="68" width="4.2341%" height="15" fill="rgb(211,50,8)" fg:x="1750" fg:w="89"/><text x="83.5040%" y="78.50">_boot..</text></g><g><title>_bootstrap_inner (threading.py:1073) (89 samples, 4.23%)</title><rect x="83.2540%" y="84" width="4.2341%" height="15" fill="rgb(245,182,24)" fg:x="1750" fg:w="89"/><text x="83.5040%" y="94.50">_boot..</text></g><g><title>run (threading.py:1010) (89 samples, 4.23%)</title><rect x="83.2540%" y="100" width="4.2341%" height="15" fill="rgb(242,14,37)" fg:x="1750" fg:w="89"/><text x="83.5040%" y="110.50">run (..</text></g><g><title>_run (poly_kalshi_service/recorder.py:247) (5 samples, 0.24%)</title><rect x="87.2502%" y="116" width="0.2379%" height="15" fill="rgb(246,228,12)" fg:x="1834" fg:w="5"/><text x="87.5002%" y="126.50"></text></g><g><title>_write_line (poly_kalshi_service/recorder.py:269) (4 samples, 0.19%)</title><rect x="87.2978%" y="132" width="0.1903%" height="15" fill="rgb(213,55,15)" fg:x="1835" fg:w="4"/><text x="87.5478%" y="142.50"></text></g><g><title>consumes_window (poly_kalshi_service/decision.py:64) (3 samples, 0.14%)</title><rect x="87.7260%" y="148" width="0.1427%" height="15" fill="rgb(209,9,3)" fg:x="1844" fg:w="3"/><text x="87.9760%" y="158.50"></text></g><g><title>decide (poly_kalshi_service/decision.py:97) (3 samples, 0.14%)</title><rect x="87.7260%" y="164" width="0.1427%" height="15" fill="rgb(230,59,30)" fg:x="1844" fg:w="3"/><text x="87.9760%" y="174.50"></text></g><g><title>_evaluate (poly_kalshi_service/engine.py:464) (5 samples, 0.24%)</title><rect x="87.6784%" y="132" width="0.2379%" height="15" fill="rgb(209,121,21)" fg:x="1843" fg:w="5"/><text x="87.9284%" y="142.50"></text></g><g><title>_kalshi (poly_kalshi_service/engine.py:395) (3 samples, 0.14%)</title><rect x="88.2017%" y="132" width="0.1427%" height="15" fill="rgb(220,109,13)" fg:x="1854" fg:w="3"/><text x="88.4517%" y="142.50"></text></g><g><title>_on_message (poly_kalshi_service/feeds.py:306) (17 samples, 0.81%)</title><rect x="87.5833%" y="68" width="0.8088%" height="15" fill="rgb(232,18,1)" fg:x="1841" fg:w="17"/><text x="87.8333%" y="78.50"></text></g><g><title>emit (poly_kalshi_service/app.py:112) (15 samples, 0.71%)</title><rect x="87.6784%" y="84" width="0.7136%" height="15" fill="rgb(215,41,42)" fg:x="1843" fg:w="15"/><text x="87.9284%" y="94.50"></text></g><g><title>ingest (poly_kalshi_service/runtime.py:102) (15 samples, 0.71%)</title><rect x="87.6784%" y="100" width="0.7136%" height="15" fill="rgb(224,123,36)" fg:x="1843" fg:w="15"/><text x="87.9284%" y="110.50"></text></g><g><title>handle_line (poly_kalshi_service/engine.py:190) (15 samples, 0.71%)</title><rect x="87.6784%" y="116" width="0.7136%" height="15" fill="rgb(240,125,3)" fg:x="1843" fg:w="15"/><text x="87.9284%" y="126.50"></text></g><g><title>evaluate (poly_kalshi_service/shadow.py:120) (5 samples, 0.24%)</title><rect x="88.6299%" y="68" width="0.2379%" height="15" fill="rgb(205,98,50)" fg:x="1863" fg:w="5"/><text x="88.8799%" y="78.50"></text></g><g><title>decide (poly_kalshi_service/decision.py:97) (3 samples, 0.14%)</title><rect x="88.7250%" y="84" width="0.1427%" height="15" fill="rgb(205,185,37)" fg:x="1865" fg:w="3"/><text x="88.9750%" y="94.50"></text></g><g><title>quotes (poly_kalshi_service/engine.py:436) (5 samples, 0.24%)</title><rect x="89.2008%" y="148" width="0.2379%" height="15" fill="rgb(238,207,15)" fg:x="1875" fg:w="5"/><text x="89.4508%" y="158.50"></text></g><g><title>ingest (poly_kalshi_service/runtime.py:102) (17 samples, 0.81%)</title><rect x="88.8677%" y="100" width="0.8088%" height="15" fill="rgb(213,199,42)" fg:x="1868" fg:w="17"/><text x="89.1177%" y="110.50"></text></g><g><title>handle_line (poly_kalshi_service/engine.py:190) (17 samples, 0.81%)</title><rect x="88.8677%" y="116" width="0.8088%" height="15" fill="rgb(235,201,11)" fg:x="1868" fg:w="17"/><text x="89.1177%" y="126.50"></text></g><g><title>_evaluate (poly_kalshi_service/engine.py:464) (17 samples, 0.81%)</title><rect x="88.8677%" y="132" width="0.8088%" height="15" fill="rgb(207,46,11)" fg:x="1868" fg:w="17"/><text x="89.1177%" y="142.50"></text></g><g><title>set_level (poly_kalshi_service/book.py:80) (4 samples, 0.19%)</title><rect x="89.4862%" y="148" width="0.1903%" height="15" fill="rgb(241,35,35)" fg:x="1881" fg:w="4"/><text x="89.7362%" y="158.50"></text></g><g><title>_track_gap (poly_kalshi_service/engine.py:456) (8 samples, 0.38%)</title><rect x="89.9619%" y="148" width="0.3806%" height="15" fill="rgb(243,32,47)" fg:x="1891" fg:w="8"/><text x="90.2119%" y="158.50"></text></g><g><title>_track_gap (poly_kalshi_service/engine.py:457) (3 samples, 0.14%)</title><rect x="90.3425%" y="148" width="0.1427%" height="15" fill="rgb(247,202,23)" fg:x="1899" fg:w="3"/><text x="90.5925%" y="158.50"></text></g><g><title>quote (poly_kalshi_service/book.py:113) (4 samples, 0.19%)</title><rect x="90.9134%" y="164" width="0.1903%" height="15" fill="rgb(219,102,11)" fg:x="1911" fg:w="4"/><text x="91.1634%" y="174.50"></text></g><g><title>_evaluate (poly_kalshi_service/engine.py:472) (28 samples, 1.33%)</title><rect x="89.9144%" y="132" width="1.3321%" height="15" fill="rgb(243,110,44)" fg:x="1890" fg:w="28"/><text x="90.1644%" y="142.50"></text></g><g><title>evaluate (poly_kalshi_service/shadow.py:120) (12 samples, 0.57%)</title><rect x="90.6755%" y="148" width="0.5709%" height="15" fill="rgb(222,74,54)" fg:x="1906" fg:w="12"/><text x="90.9255%" y="158.50"></text></g><g><title>quote (poly_kalshi_service/book.py:115) (3 samples, 0.14%)</title><rect x="91.1037%" y="164" width="0.1427%" height="15" fill="rgb(216,99,12)" fg:x="1915" fg:w="3"/><text x="91.3537%" y="174.50"></text></g><g><title>_evaluate (poly_kalshi_service/engine.py:482) (8 samples, 0.38%)</title><rect x="91.2464%" y="132" width="0.3806%" height="15" fill="rgb(226,22,26)" fg:x="1918" fg:w="8"/><text x="91.4964%" y="142.50"></text></g><g><title>evaluate (poly_kalshi_service/shadow.py:120) (7 samples, 0.33%)</title><rect x="91.2940%" y="148" width="0.3330%" height="15" fill="rgb(217,163,10)" fg:x="1919" fg:w="7"/><text x="91.5440%" y="158.50"></text></g><g><title>quote (poly_kalshi_service/book.py:115) (4 samples, 0.19%)</title><rect x="91.4367%" y="164" width="0.1903%" height="15" fill="rgb(213,25,53)" fg:x="1922" fg:w="4"/><text x="91.6867%" y="174.50"></text></g><g><title>_none (poly_kalshi_service/decision.py:68) (10 samples, 0.48%)</title><rect x="92.0076%" y="164" width="0.4757%" height="15" fill="rgb(252,105,26)" fg:x="1934" fg:w="10"/><text x="92.2576%" y="174.50"></text></g><g><title>decide (poly_kalshi_service/decision.py:92) (3 samples, 0.14%)</title><rect x="92.6736%" y="164" width="0.1427%" height="15" fill="rgb(220,39,43)" fg:x="1948" fg:w="3"/><text x="92.9236%" y="174.50"></text></g><g><title>consumes_window (poly_kalshi_service/decision.py:64) (19 samples, 0.90%)</title><rect x="92.0076%" y="148" width="0.9039%" height="15" fill="rgb(229,68,48)" fg:x="1934" fg:w="19"/><text x="92.2576%" y="158.50"></text></g><g><title>mid (poly_kalshi_service/book.py:42) (3 samples, 0.14%)</title><rect x="93.1970%" y="164" width="0.1427%" height="15" fill="rgb(252,8,32)" fg:x="1959" fg:w="3"/><text x="93.4470%" y="174.50"></text></g><g><title>add (poly_kalshi_service/metrics.py:46) (75 samples, 3.57%)</title><rect x="89.8668%" y="116" width="3.5680%" height="15" fill="rgb(223,20,43)" fg:x="1889" fg:w="75"/><text x="90.1168%" y="126.50">add ..</text></g><g><title>_evaluate (poly_kalshi_service/engine.py:490) (31 samples, 1.47%)</title><rect x="91.9600%" y="132" width="1.4748%" height="15" fill="rgb(229,81,49)" fg:x="1933" fg:w="31"/><text x="92.2100%" y="142.50"></text></g><g><title>evaluate (poly_kalshi_service/shadow.py:120) (9 samples, 0.43%)</title><rect x="93.0067%" y="148" width="0.4282%" height="15" fill="rgb(236,28,36)" fg:x="1955" fg:w="9"/><text x="93.2567%" y="158.50"></text></g><g><title>handle_line (poly_kalshi_service/engine.py:189) (3 samples, 0.14%)</title><rect x="93.4348%" y="116" width="0.1427%" height="15" fill="rgb(249,185,26)" fg:x="1964" fg:w="3"/><text x="93.6848%" y="126.50"></text></g><g><title>_evaluate (poly_kalshi_service/engine.py:464) (6 samples, 0.29%)</title><rect x="93.5775%" y="132" width="0.2854%" height="15" fill="rgb(249,174,33)" fg:x="1967" fg:w="6"/><text x="93.8275%" y="142.50"></text></g><g><title>quotes (poly_kalshi_service/engine.py:436) (6 samples, 0.29%)</title><rect x="93.5775%" y="148" width="0.2854%" height="15" fill="rgb(233,201,37)" fg:x="1967" fg:w="6"/><text x="93.8275%" y="158.50"></text></g><g><title>get (websockets/asyncio/messages.py:158) (110 samples, 5.23%)</title><rect x="88.8677%" y="68" width="5.2331%" height="15" fill="rgb(221,78,26)" fg:x="1868" fg:w="110"/><text x="89.1177%" y="78.50">get (w..</text></g><g><title>get (websockets/asyncio/messages.py:43) (110 samples, 5.23%)</title><rect x="88.8677%" y="84" width="5.2331%" height="15" fill="rgb(250,127,30)" fg:x="1868" fg:w="110"/><text x="89.1177%" y="94.50">get (w..</text></g><g><title>ingest (poly_kalshi_service/runtime.py:103) (93 samples, 4.42%)</title><rect x="89.6765%" y="100" width="4.4244%" height="15" fill="rgb(230,49,44)" fg:x="1885" fg:w="93"/><text x="89.9265%" y="110.50">inges..</text></g><g><title>handle_line (poly_kalshi_service/engine.py:190) (11 samples, 0.52%)</title><rect x="93.5775%" y="116" width="0.5233%" height="15" fill="rgb(229,67,23)" fg:x="1967" fg:w="11"/><text x="93.8275%" y="126.50"></text></g><g><title>get (websockets/asyncio/messages.py:184) (19 samples, 0.90%)</title><rect x="94.1009%" y="68" width="0.9039%" height="15" fill="rgb(249,83,47)" fg:x="1978" fg:w="19"/><text x="94.3509%" y="78.50"></text></g><g><title>_book_for (poly_kalshi_service/engine.py:291) (3 samples, 0.14%)</title><rect x="95.0523%" y="148" width="0.1427%" height="15" fill="rgb(215,43,3)" fg:x="1998" fg:w="3"/><text x="95.3023%" y="158.50"></text></g><g><title>_evaluate (poly_kalshi_service/engine.py:464) (7 samples, 0.33%)</title><rect x="95.0523%" y="132" width="0.3330%" height="15" fill="rgb(238,154,13)" fg:x="1998" fg:w="7"/><text x="95.3023%" y="142.50"></text></g><g><title>get (websockets/asyncio/messages.py:51) (12 samples, 0.57%)</title><rect x="95.0048%" y="68" width="0.5709%" height="15" fill="rgb(219,56,2)" fg:x="1997" fg:w="12"/><text x="95.2548%" y="78.50"></text></g><g><title>emit (poly_kalshi_service/app.py:112) (12 samples, 0.57%)</title><rect x="95.0048%" y="84" width="0.5709%" height="15" fill="rgb(233,0,4)" fg:x="1997" fg:w="12"/><text x="95.2548%" y="94.50"></text></g><g><title>ingest (poly_kalshi_service/runtime.py:102) (12 samples, 0.57%)</title><rect x="95.0048%" y="100" width="0.5709%" height="15" fill="rgb(235,30,7)" fg:x="1997" fg:w="12"/><text x="95.2548%" y="110.50"></text></g><g><title>handle_line (poly_kalshi_service/engine.py:190) (11 samples, 0.52%)</title><rect x="95.0523%" y="116" width="0.5233%" height="15" fill="rgb(250,79,13)" fg:x="1998" fg:w="11"/><text x="95.3023%" y="126.50"></text></g><g><title>get (websockets/asyncio/messages.py:55) (3 samples, 0.14%)</title><rect x="95.5756%" y="68" width="0.1427%" height="15" fill="rgb(211,146,34)" fg:x="2009" fg:w="3"/><text x="95.8256%" y="78.50"></text></g><g><title>emit (poly_kalshi_service/app.py:112) (3 samples, 0.14%)</title><rect x="95.5756%" y="84" width="0.1427%" height="15" fill="rgb(228,22,38)" fg:x="2009" fg:w="3"/><text x="95.8256%" y="94.50"></text></g><g><title>parse (websockets/client.py:348) (3 samples, 0.14%)</title><rect x="95.7184%" y="68" width="0.1427%" height="15" fill="rgb(235,168,5)" fg:x="2012" fg:w="3"/><text x="95.9684%" y="78.50"></text></g><g><title>parse (websockets/protocol.py:601) (3 samples, 0.14%)</title><rect x="95.7184%" y="84" width="0.1427%" height="15" fill="rgb(221,155,16)" fg:x="2012" fg:w="3"/><text x="95.9684%" y="94.50"></text></g><g><title>parse (websockets/frames.py:313) (8 samples, 0.38%)</title><rect x="95.8611%" y="68" width="0.3806%" height="15" fill="rgb(215,215,53)" fg:x="2015" fg:w="8"/><text x="96.1111%" y="78.50"></text></g><g><title>parse (websockets/frames.py:289) (3 samples, 0.14%)</title><rect x="96.3368%" y="84" width="0.1427%" height="15" fill="rgb(223,4,10)" fg:x="2025" fg:w="3"/><text x="96.5868%" y="94.50"></text></g><g><title>parse (websockets/frames.py:300) (3 samples, 0.14%)</title><rect x="96.5747%" y="84" width="0.1427%" height="15" fill="rgb(234,103,6)" fg:x="2030" fg:w="3"/><text x="96.8247%" y="94.50"></text></g><g><title>parse (websockets/protocol.py:575) (16 samples, 0.76%)</title><rect x="96.2417%" y="68" width="0.7612%" height="15" fill="rgb(227,97,0)" fg:x="2023" fg:w="16"/><text x="96.4917%" y="78.50"></text></g><g><title>parse (websockets/frames.py:309) (4 samples, 0.19%)</title><rect x="96.8126%" y="84" width="0.1903%" height="15" fill="rgb(234,150,53)" fg:x="2035" fg:w="4"/><text x="97.0626%" y="94.50"></text></g><g><title>read (ssl.py:859) (27 samples, 1.28%)</title><rect x="97.0029%" y="68" width="1.2845%" height="15" fill="rgb(228,201,54)" fg:x="2039" fg:w="27"/><text x="97.2529%" y="78.50"></text></g><g><title>recv (websockets/asyncio/connection.py:297) (3 samples, 0.14%)</title><rect x="98.3349%" y="68" width="0.1427%" height="15" fill="rgb(222,22,37)" fg:x="2067" fg:w="3"/><text x="98.5849%" y="78.50"></text></g><g><title>handle_line (poly_kalshi_service/engine.py:183) (3 samples, 0.14%)</title><rect x="99.0961%" y="132" width="0.1427%" height="15" fill="rgb(237,53,32)" fg:x="2083" fg:w="3"/><text x="99.3461%" y="142.50"></text></g><g><title>_on_message (poly_kalshi_service/feeds.py:306) (6 samples, 0.29%)</title><rect x="99.0961%" y="84" width="0.2854%" height="15" fill="rgb(233,25,53)" fg:x="2083" fg:w="6"/><text x="99.3461%" y="94.50"></text></g><g><title>emit (poly_kalshi_service/app.py:112) (6 samples, 0.29%)</title><rect x="99.0961%" y="100" width="0.2854%" height="15" fill="rgb(210,40,34)" fg:x="2083" fg:w="6"/><text x="99.3461%" y="110.50"></text></g><g><title>ingest (poly_kalshi_service/runtime.py:102) (6 samples, 0.29%)</title><rect x="99.0961%" y="116" width="0.2854%" height="15" fill="rgb(241,220,44)" fg:x="2083" fg:w="6"/><text x="99.3461%" y="126.50"></text></g><g><title>handle_line (poly_kalshi_service/engine.py:190) (3 samples, 0.14%)</title><rect x="99.2388%" y="132" width="0.1427%" height="15" fill="rgb(235,28,35)" fg:x="2086" fg:w="3"/><text x="99.4888%" y="142.50"></text></g><g><title>_poly (poly_kalshi_service/engine.py:317) (5 samples, 0.24%)</title><rect x="99.6194%" y="148" width="0.2379%" height="15" fill="rgb(210,56,17)" fg:x="2094" fg:w="5"/><text x="99.8694%" y="158.50"></text></g><g><title>run (poly_kalshi_service/feeds.py:149) (31 samples, 1.47%)</title><rect x="98.4776%" y="68" width="1.4748%" height="15" fill="rgb(224,130,29)" fg:x="2070" fg:w="31"/><text x="98.7276%" y="78.50"></text></g><g><title>_on_message (poly_kalshi_service/feeds.py:365) (12 samples, 0.57%)</title><rect x="99.3815%" y="84" width="0.5709%" height="15" fill="rgb(235,212,8)" fg:x="2089" fg:w="12"/><text x="99.6315%" y="94.50"></text></g><g><title>emit (poly_kalshi_service/app.py:112) (12 samples, 0.57%)</title><rect x="99.3815%" y="100" width="0.5709%" height="15" fill="rgb(223,33,50)" fg:x="2089" fg:w="12"/><text x="99.6315%" y="110.50"></text></g><g><title>ingest (poly_kalshi_service/runtime.py:102) (12 samples, 0.57%)</title><rect x="99.3815%" y="116" width="0.5709%" height="15" fill="rgb(219,149,13)" fg:x="2089" fg:w="12"/><text x="99.6315%" y="126.50"></text></g><g><title>handle_line (poly_kalshi_service/engine.py:190) (11 samples, 0.52%)</title><rect x="99.4291%" y="132" width="0.5233%" height="15" fill="rgb(250,156,29)" fg:x="2090" fg:w="11"/><text x="99.6791%" y="142.50"></text></g><g><title>all (2,102 samples, 100%)</title><rect x="0.0000%" y="52" width="100.0000%" height="15" fill="rgb(216,193,19)" fg:x="0" fg:w="2102"/><text x="0.2500%" y="62.50"></text></g></svg></svg>
