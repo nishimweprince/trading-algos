@@ -1,0 +1,11 @@
+# /etc/cloudflared/config.yml on the leadlag (Tokyo) host. Copy, then replace
+# the <...> values. The tunnel connects outward; nothing listens publicly.
+tunnel: <TUNNEL-ID>
+credentials-file: /etc/cloudflared/<TUNNEL-ID>.json
+
+ingress:
+  # Only the read-only status page. The trader's admin API (8060, with halt)
+  # and the observer (8061) are never published.
+  - hostname: ll.<your-domain>
+    service: http://127.0.0.1:8062
+  - service: http_status:404

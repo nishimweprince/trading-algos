@@ -1,0 +1,30 @@
+# leadlag trader: Binance /market (aggTrade) and /public (bookTicker) feeds,
+# record engine (shadow policy from M5), admin API on 127.0.0.1:8060.
+# It has CPUs 2-3 to itself (deploy/DEPLOY.md moves everything else to 0-1)
+# and never touches the disk: frames go to the observer through a ring.
+[Unit]
+Description=leadlag trader (feeds + engine, shadow only)
+Wants=network-online.target leadlag-observer.service
+# Started after the observer so the tape begins with this run's hello; stopped
+# before it (reverse order) so the observer can drain the last frames.
+After=network-online.target time-sync.target leadlag-observer.service
+
+[Service]
+Type=simple
+User=ll
+Group=ll
+EnvironmentFile=/home/ll/leadlag/.env
+Environment=GOMAXPROCS=2 GOGC=400 GOMEMLIMIT=1GiB
+ExecStart=/home/ll/leadlag/current/leadlag
+Restart=always
+RestartSec=2
+TimeoutStopSec=30
+CPUAffinity=2 3
+Nice=-5
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
