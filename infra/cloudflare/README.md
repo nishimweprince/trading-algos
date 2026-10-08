@@ -98,3 +98,30 @@ curl -s -o /dev/null -w '%{http_code}\n' https://status.<your-domain>/api/summar
   update it in the same commit as the work, then `git pull` on the VM.
 - **If the page is down:** `systemctl status ofi-status cloudflared`. A crash of
   `ofi-status` sends a Telegram alert like the other services.
+
+## poly-kalshi status page (London VM)
+
+The same recipe publishes `pk-status` (`127.0.0.1:8051`), which shows paper results, gate progress and live window state. It uses a tunnel of its own on the London VM.
+
+```sh
+sudo systemctl enable --now pk-status && curl -s localhost:8051/health/live
+cloudflared tunnel login
+cloudflared tunnel create pk-status
+cloudflared tunnel route dns pk-status pk.<your-domain>
+sudo mkdir -p /etc/cloudflared && sudo cp ~/.cloudflared/<TUNNEL-ID>.json /etc/cloudflared/
+sudo cp ~/trading-algos/infra/cloudflare/config.pk.example.yml /etc/cloudflared/config.yml
+sudo nano /etc/cloudflared/config.yml            # <TUNNEL-ID> twice, <your-domain>
+sudo cloudflared --config /etc/cloudflared/config.yml service install
+```
+
+Give `cloudflared` a lower priority than the trader, as `pk-status.service` already has:
+
+```sh
+sudo mkdir -p /etc/systemd/system/cloudflared.service.d
+printf '[Service]\nNice=10\nCPUWeight=20\n' | sudo tee /etc/systemd/system/cloudflared.service.d/priority.conf
+sudo systemctl daemon-reload && sudo systemctl enable --now cloudflared && sudo systemctl restart cloudflared
+```
+
+Then add the Access application for `pk.<your-domain>` (step 4 above) before sharing the link, and verify it as in step 5.
+
+The trading process never serves a viewer. `pk-status` reads the trader's `/v1/status` once every 5 s and reads results from the journal on disk every 30 s; every page request is answered from that cache. The tunnel and the page can't add latency to the trading path: they're separate processes at lower CPU priority, and the tunnel only connects outward.

@@ -167,3 +167,86 @@ When free space drops below `OFI_MIN_FREE_DISK_GB` (default 10), the recorder:
 `/v1/status` → `recorder.disk_paused` is true while this lasts. Recording resumes on its own once free space is back above 120% of the floor.
 
 The service, features and risk keep running throughout. Only the recording stops.
+
+## poly-kalshi (London VM)
+
+`poly-kalshi-service.service`, `pk-status.service` and `pk-unit-alert@.service` run the
+Kalshi/Polymarket convergence recorder and paper trader (`services/poly-kalshi-service`).
+The host setup is the same as above, with these differences.
+
+- **Region:** London (Polymarket's CLOB is in AWS eu-west-2). The UK is close-only on Polymarket. This host records and paper-trades, but it can never place a real order.
+- **User and data:** user `pk`. Run `sudo mkdir -p /data/pk && sudo chown pk:pk /data/pk`, and set `PK_RECORD_DIR=/data/pk/raw/dev`. Size the disk for several GB/day of compressed tape.
+- **Kalshi key:** put the PEM where `KALSHI_PRIVATE_KEY_PATH` points, owned by `pk`, `chmod 600`.
+- **Ports:** no inbound rule for 8050 or 8051. Use `ssh -L 8050:127.0.0.1:8050 -L 8051:127.0.0.1:8051 pk@<vm>`.
+
+```sh
+cd ~/trading-algos && uv sync --python 3.12 --package poly-kalshi-service --group dev --extra research
+sudo cp infra/systemd/poly-kalshi-service.service infra/systemd/pk-status.service \
+        'infra/systemd/pk-unit-alert@.service' /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now poly-kalshi-service pk-status
+curl -s 127.0.0.1:8050/health/ready                      # both feeds up, all windows identified
+```
+
+- **Kill switch:** `touch services/poly-kalshi-service/data/KILL.dev`, `POST /v1/kill`, or `/kill` to the bot. These halt new paper entries only; recording continues.
+- **Read the gates:** `python -m research.readout --journal data/state/dev/journal`.
+- **Restarts:** each restart starts a new hour file (`pk_<day>_<hour>_<session>.gz`). It never appends to one a crash may have left truncated.
+
+## poly-kalshi on the Dublin host (`polymarket`, Azure North Europe)
+
+The poly-kalshi units here assume user `pk` and a `/data` disk. The Dublin host
+runs them as `poly` from `/home/poly/trading-algos`, recording to the OS disk.
+They were installed with:
+
+```sh
+for u in poly-kalshi-service.service pk-status.service pk-unit-alert@.service; do
+  sed -e 's/^User=pk$/User=poly/' -e 's/^Group=pk$/Group=poly/' \
+      -e 's#/home/pk/#/home/poly/#g' -e '/^RequiresMountsFor=\/data$/d' "$u" \
+    | sudo tee /etc/systemd/system/"$u" >/dev/null
+done
+sudo systemctl daemon-reload && sudo systemctl enable --now poly-kalshi-service pk-status
+```
+
+Before this (until 2026-10-07) they were started by hand, and a reboot left the
+tunnel (`poly.nishimweprince.dev` → `127.0.0.1:8051`) answering 502.
+
+## Moving poly-kalshi to AWS eu-west-1 (Dublin)
+
+Polymarket's CLOB origin is AWS eu-west-2 (London), behind Cloudflare. eu-west-1 is
+the nearest region Polymarket allows to trade from (the UK is close-only). The Azure
+North Europe host is also in Dublin, so the question is measured, not assumed:
+**is the AWS host's Polymarket feed lag and CLOB round trip better by enough?**
+
+1. **Instance.** Ubuntu 24.04, ≥ 4 vCPU on a compute-optimised type (c7i.xlarge or
+   c7g.xlarge), an EBS gp3 data volume of ≥ 200 GB mounted at `/data` (`/etc/fstab`
+   with `nofail`), chrony on (`sudo apt install chrony`; Amazon Time Sync is at
+   169.254.169.123 and is the default on the AWS images). Security group: inbound SSH
+   only. No 8050/8051/8052.
+2. **User, checkout, units.** As in "poly-kalshi (London VM)" above (user `pk`,
+   `/data/pk`). Copy `.env.dev` from Dublin, then change:
+   - `PK_HOST_TAG=aws-euw1`
+   - `PK_RECORD_DIR=/data/pk/raw/dev`
+   - **`PK_EXECUTION_MODE=off`** for the comparison (records, decides, observes; no
+     paper orders, no ledger change)
+   - **remove `PK_TELEGRAM_BOT_TOKEN`** until the cutover: two hosts polling one bot
+     token steal each other's updates.
+   - Same `PK_RESULTS_EPOCH` for now.
+3. **24 h side by side.** Both hosts run. On each:
+   `python -m research.netprobe --minutes 1440` (REST round trip to the CLOB and Kalshi),
+   and the live feed lags on the status page or `/v1/obs/status` → `engine.latency`:
+   `feed_ms_p` and `feed_ms_k` (receive time minus the venue's stamp; both hosts run
+   chrony against nearby sources, so the skew is small and similar), plus
+   `observer.behind_ms` and the trader's `loop_lag_ms`.
+4. **Decide** (PLAN 5.1): move if AWS improves `feed_ms_p` p50 by > 2 ms or p99 by > 10 ms,
+   or the CLOB round trip p50 by > 2 ms. Otherwise stay on Azure and stop the AWS host.
+5. **Cutover**, if it moves, at a window roll:
+   - On Azure: `sudo systemctl stop poly-kalshi-service pk-status`. Copy
+     `data/state/dev/` (journal and ledger) to the AWS host, so the page keeps the history.
+   - On AWS: `PK_EXECUTION_MODE=paper`, `PK_RESULTS_EPOCH=<n+1>` (fills depend on latency;
+     PREREG part 4 counts the epochs separately), restore `PK_TELEGRAM_BOT_TOKEN`, then
+     `sudo systemctl restart poly-kalshi-service pk-status`.
+   - Move the Cloudflare tunnel (`poly.nishimweprince.dev` → `127.0.0.1:8051`) to the AWS
+     host (infra/cloudflare/README.md).
+   - Leave the Azure host recording with `PK_EXECUTION_MODE=off` for a week if the disk
+     allows: two tapes of the same windows from two hosts measure the latency's effect on
+     the same decisions.

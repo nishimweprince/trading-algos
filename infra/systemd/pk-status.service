@@ -1,0 +1,28 @@
+# Read-only poly-kalshi status page on 127.0.0.1:8051. Publish only through an
+# authenticating proxy (the ofi Cloudflare Tunnel + Access recipe); never open
+# 8051 in the cloud firewall.
+[Unit]
+Description=pk-status (read-only poly-kalshi status page, profile dev)
+OnFailure=pk-unit-alert@%n.service
+Wants=network-online.target poly-kalshi-service.service
+After=network-online.target poly-kalshi-service.service
+
+[Service]
+Type=simple
+User=pk
+Group=pk
+WorkingDirectory=/home/pk/trading-algos/services/poly-kalshi-service
+ExecStart=/home/pk/trading-algos/.venv/bin/pk-status --profile dev
+Restart=always
+RestartSec=5
+# Never compete with the trader for CPU or memory: it reads the trader once per
+# 5 s and the journal from disk, whatever the number of viewers.
+Nice=10
+CPUWeight=20
+MemoryMax=256M
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,536 @@
+"""The live process: feeds -> one clock -> observer pipe + engine; window and resolution loops.
+
+``ingest(venue, text)`` is the only way a line enters. It stamps the line from
+one strictly increasing clock, hands it to the observer process (which writes
+the tape and computes every statistic, ``observer.py``), then to the trading
+engine, all on the event loop. The observer gets the lines in the same order
+with the same stamps, so the tape is still a faithful, ordered record of what
+the engine saw, and ``research.replay`` re-runs it exactly. With
+``PK_OBSERVER=false`` the recorder and the full engine run in this process, as
+before.
+
+**The event loop is the trade path.** Per line it does a stamp, a list append
+for the observer, and the engine's book update and live decision. Status is
+answered from state already in memory and serialised with orjson. After startup
+the garbage collector is tuned (``tune_gc``) and its pauses are measured
+(``gc_ms`` / ``gc2_ms``), next to ``loop_lag_ms`` and ``engine_us``.
+
+Loops:
+
+- **windows**: every ``TICK_SECONDS``, make sure the current window and (inside
+  ``discover_lead_seconds``) the next one are identified for every asset,
+  writing each identity to the tape as a control line before subscribing to
+  its ids. Alerts if a window is still unidentified 30 s after it opened.
+- **Kalshi closure**: before a stale-feed or unidentified-window alert, ask
+  Kalshi whether it is trading (cached ``KALSHI_STATUS_S``). During its weekly
+  closure nothing is listed and both feeds go quiet: those alerts are held and
+  one message marks the closure and one the reopening. Discovery keeps
+  running, so the first window after the reopening is found on time.
+- **resolutions**: each venue's outcome for every closed window, polled until
+  known, written as control lines (the engine settles paper positions from
+  Polymarket's). Polymarket's ``market_resolved`` WS event usually beats it.
+- **health**: stale feeds, heartbeat log line.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import gc
+import json
+import logging
+import os
+import time
+from collections.abc import Callable, Coroutine
+from typing import Any
+
+import httpx
+from ta_core.logging_config import log_event
+
+from .alerts import Alerts
+from .config import Settings
+from .decision import WINDOW_S
+from .engine import Engine
+from .feeds import KalshiFeed, PolyFeed, PolyShards
+from .metrics import Metrics
+from .observer import ObserverLink
+from .recorder import Recorder
+from .windows import Discovery, Window, window_open
+
+__all__ = ["Runtime", "tune_gc"]
+
+NS = 1_000_000_000
+TICK_SECONDS = 2.0
+RESOLUTION_POLL_SECONDS = 15.0
+RESOLUTION_GIVE_UP_S = 3600
+RECYCLE_POLY_AFTER_REMOVED = 60  # ~6 windows of 5 assets x 2 tokens
+# Kalshi answered 429 to a burst of per-asset discovery queries at restart:
+# assets are discovered this far apart.
+DISCOVER_STAGGER_S = 0.25
+# Young collections every 20k net allocations instead of 700. Everything alive
+# at startup (and again once the books are warm) is frozen out of the scans.
+GC_THRESHOLD = (20_000, 20, 100)
+GC_REFREEZE_AFTER_S = 60.0
+KALSHI_STATUS_S = 30.0
+
+
+_gc_metrics: list[Metrics] = []
+_gc_started = [0.0]
+
+
+def _gc_timer(phase: str, info: dict[str, Any]) -> None:
+    if phase == "start":
+        _gc_started[0] = time.perf_counter()
+        return
+    if _gc_metrics:
+        ms = (time.perf_counter() - _gc_started[0]) * 1000
+        _gc_metrics[0].add("gc2_ms" if info.get("generation") == 2 else "gc_ms", ms)
+
+
+def tune_gc(metrics: Metrics) -> None:
+    """Freeze the startup heap, raise the young threshold, time every collection."""
+    _gc_metrics[:] = [metrics]
+    gc.collect()
+    gc.freeze()
+    gc.set_threshold(*GC_THRESHOLD)
+    if _gc_timer not in gc.callbacks:
+        gc.callbacks.append(_gc_timer)
+
+
+class Runtime:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        engine: Engine,
+        discovery: Discovery,
+        kalshi: KalshiFeed | None,
+        poly: PolyFeed | PolyShards | None,
+        alerts: Alerts,
+        recorder: Recorder | None = None,
+        http: httpx.AsyncClient | None = None,
+        clock_ns: Callable[[], int] = time.time_ns,
+        observer: ObserverLink | None = None,
+    ) -> None:
+        self.settings = settings
+        self.engine = engine
+        self.discovery = discovery
+        self.kalshi = kalshi
+        self.poly = poly
+        self.alerts = alerts
+        self.recorder = recorder
+        self.observer = observer
+        self.http = http
+        self._clock = clock_ns
+        self._last_ns = 0
+        self._tasks: set[asyncio.Task[Any]] = set()
+        self._discover_failed: dict[tuple[str, int], float] = {}
+        self._resolution_given_up: set[tuple[str, int, str]] = set()
+        self.kalshi_closed = False
+        self._kalshi_status_at: float | None = None
+        self.started_ns: int | None = None
+        self.lines = 0
+        self.cpu_pct: float | None = None
+        self.telegram: Any = None  # set by the app when the command bot runs
+        self._cpu_mark = (time.monotonic(), time.process_time())
+
+    # --- the one entry point ----------------------------------------------------
+
+    def ingest(self, venue: str, text: str) -> None:
+        if "\n" in text or "\r" in text:
+            # The tape is one frame per line. A raw newline in valid JSON can only
+            # be whitespace (inside strings it is escaped), so this loses nothing;
+            # some venue frames arrive with a trailing one.
+            text = text.replace("\r", " ").replace("\n", " ").strip()
+        recv_ns = max(self._last_ns + 1, self._clock())
+        self._last_ns = recv_ns
+        self.lines += 1
+        if self.observer is not None:
+            self.observer.line(recv_ns, venue, text)
+        elif self.recorder is not None:
+            self.recorder.write(venue, recv_ns, text)
+        started = time.perf_counter_ns()
+        try:
+            self.engine.handle_line(recv_ns, venue, text)
+            self.engine.metrics.add("engine_us", (time.perf_counter_ns() - started) / 1000)
+        except Exception as exc:  # noqa: BLE001 - one bad frame must not stop the feed
+            self.engine.counters["engine_errors"] += 1
+            log_event(
+                "engine_error",
+                level=logging.ERROR,
+                venue=venue,
+                error=f"{type(exc).__name__}: {exc}"[:200],
+            )
+
+    def control(self, body: dict[str, Any]) -> None:
+        self.ingest("c", json.dumps(body, separators=(",", ":")))
+
+    # --- lifecycle --------------------------------------------------------------
+
+    def spawn(self, coro: Coroutine[Any, Any, Any], name: str) -> None:
+        task = asyncio.create_task(coro, name=name)
+        self._tasks.add(task)
+        task.add_done_callback(self._task_done)
+
+    def _task_done(self, task: asyncio.Task[Any]) -> None:
+        self._tasks.discard(task)
+        if not task.cancelled() and task.exception() is not None:
+            log_event(
+                "task_died",
+                level=logging.ERROR,
+                task=task.get_name(),
+                error=repr(task.exception())[:200],
+            )
+            self.alerts.send(
+                f"task:{task.get_name()}",
+                "poly-kalshi: a background task died",
+                [task.get_name(), repr(task.exception())[:300]],
+            )
+
+    async def start(self) -> None:
+        self.started_ns = self._clock()
+        if self.observer is not None:
+            await self.observer.start()
+        if self.recorder is not None:
+            self.recorder.start()
+        if self.settings.gc_freeze:
+            tune_gc(self.engine.metrics)
+            self.spawn(self._refreeze(), "pk-gc-refreeze")
+        if self.kalshi is not None:
+            self.spawn(self.kalshi.run(), "pk-kalshi")
+        if self.poly is not None:
+            self.spawn(self.poly.run(), "pk-poly")
+        self.spawn(self._loop(self.window_tick, TICK_SECONDS), "pk-windows")
+        self.spawn(self._loop(self.resolution_tick, RESOLUTION_POLL_SECONDS), "pk-resolutions")
+        self.spawn(self._loop_lag(), "pk-loop-lag")
+        self.spawn(
+            self._loop(self.health_tick, max(self.settings.heartbeat_seconds, 5)), "pk-health"
+        )
+
+    async def close(self) -> None:
+        for task in list(self._tasks):
+            task.cancel()
+        for task in list(self._tasks):
+            with contextlib.suppress(BaseException):
+                await task
+        if self.observer is not None:
+            await self.observer.close()
+        if self.recorder is not None:
+            self.recorder.stop()
+        await self.alerts.drain()
+
+    async def _refreeze(self) -> None:
+        """Once the books and windows are warm, freeze them too (one collection)."""
+        await asyncio.sleep(GC_REFREEZE_AFTER_S)
+        gc.collect()
+        gc.freeze()
+
+    async def _loop(self, tick: Callable[[], Coroutine[Any, Any, None]], seconds: float) -> None:
+        while True:
+            try:
+                await tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - the loop must survive one bad tick
+                log_event(
+                    "tick_failed",
+                    level=logging.WARNING,
+                    tick=getattr(tick, "__name__", "?"),
+                    error=f"{type(exc).__name__}: {exc}"[:200],
+                )
+            await asyncio.sleep(seconds)
+
+    async def _loop_lag(self, every: float = 0.5) -> None:
+        """How late the event loop wakes: the feeds' backlog shows here first."""
+        while True:
+            started = time.monotonic()
+            await asyncio.sleep(every)
+            self.engine.metrics.add("loop_lag_ms", (time.monotonic() - started - every) * 1000)
+
+    # --- windows ----------------------------------------------------------------
+
+    def _targets(self, now: float) -> list[int]:
+        current = window_open(now)
+        targets = [current]
+        if current + WINDOW_S - now <= self.settings.discover_lead_seconds:
+            targets.append(current + WINDOW_S)
+        return targets
+
+    async def _discover(self, asset: str, open_unix: int, now: float) -> None:
+        if open_unix in self.engine.windows.get(asset, {}):
+            return
+        failed_at = self._discover_failed.get((asset, open_unix))
+        if failed_at is not None and now - failed_at < 5:
+            return
+        try:
+            window = await self.discovery.discover(asset, open_unix)
+        except Exception as exc:  # noqa: BLE001 - retried next tick
+            window = None
+            log_event(
+                "discover_failed",
+                level=logging.WARNING,
+                asset=asset,
+                open_unix=open_unix,
+                error=f"{type(exc).__name__}: {exc}"[:200],
+            )
+        if window is None:
+            self._discover_failed[(asset, open_unix)] = now
+            return
+        self._discover_failed.pop((asset, open_unix), None)
+        self.control(window.control())
+        log_event(
+            "window_identified", asset=asset, open_unix=open_unix, kalshi=window.kalshi_ticker
+        )
+
+    async def window_tick(self) -> None:
+        now = self._clock() / NS
+        targets = self._targets(now)
+        todo = [
+            a for a in self.settings.assets
+            if any(o not in self.engine.windows.get(a, {}) for o in targets)
+        ]  # fmt: skip
+
+        async def discover_asset(i: int, asset: str) -> None:
+            if i:
+                await asyncio.sleep(i * DISCOVER_STAGGER_S)
+            for open_unix in targets:
+                await self._discover(asset, open_unix, now)
+
+        await asyncio.gather(*(discover_asset(i, a) for i, a in enumerate(todo)))
+        live = [
+            w
+            for a in self.settings.assets
+            for o in targets
+            if (w := self.engine.windows[a].get(o)) is not None
+        ]
+        if self.kalshi is not None:
+            await self.kalshi.set_wanted({w.kalshi_ticker for w in live})
+        if self.poly is not None:
+            if isinstance(self.poly, PolyShards):
+                groups: dict[str, set[str]] = {}
+                for w in live:
+                    groups.setdefault(w.asset, set()).update((w.yes_token, w.no_token))
+                await self.poly.set_wanted_groups(groups)
+            else:
+                await self.poly.set_wanted({t for w in live for t in (w.yes_token, w.no_token)})
+            sec_into = now - targets[0]
+            if self.poly.removed_since_connect >= RECYCLE_POLY_AFTER_REMOVED and 1 <= sec_into < 8:
+                # Inside entry_early_s: no decision can need these books yet.
+                log_event("poly_recycle", removed=self.poly.removed_since_connect)
+                if isinstance(self.poly, PolyShards):
+                    await self.poly.recycle(RECYCLE_POLY_AFTER_REMOVED)
+                else:
+                    await self.poly.recycle()
+        sec_into = now - targets[0]
+        if self.kalshi_closed:
+            await self._kalshi_is_closed(now)  # notices the reopening
+        if sec_into > 30:
+            missing = [a for a in self.settings.assets if targets[0] not in self.engine.windows[a]]
+            if missing and not await self._kalshi_is_closed(now):
+                self.alerts.send(
+                    "unidentified",
+                    "poly-kalshi: window not identified",
+                    [f"open_unix={targets[0]} assets={','.join(missing)}"],
+                )
+
+    async def _kalshi_is_closed(self, now: float) -> bool:
+        """Kalshi's trading status, asked only when an alert is due; an error reads as open."""
+        if self.discovery is None:
+            return False
+        if self._kalshi_status_at is not None and now - self._kalshi_status_at < KALSHI_STATUS_S:
+            return self.kalshi_closed
+        self._kalshi_status_at = now
+        try:
+            closed = not await self.discovery.kalshi_trading_active()
+        except Exception as exc:  # noqa: BLE001 - the alert goes out as before
+            log_event(
+                "kalshi_status_failed",
+                level=logging.WARNING,
+                error=f"{type(exc).__name__}: {exc}"[:200],
+            )
+            closed = False
+        if closed != self.kalshi_closed:
+            self.kalshi_closed = closed
+            log_event("kalshi_closed" if closed else "kalshi_reopened")
+            self.alerts.send(
+                "kalshi_closed" if closed else "kalshi_reopened",
+                f"poly-kalshi: Kalshi {'closed' if closed else 'reopened'}",
+                [
+                    "trading_active=false: no windows listed, feed and window alerts held"
+                    if closed
+                    else "trading_active=true: alerts resume"
+                ],
+                always=True,
+            )
+        return closed
+
+    # --- resolutions ------------------------------------------------------------
+
+    def _unresolved(self, now: float) -> list[tuple[Window, str]]:
+        work = []
+        for asset, windows in self.engine.windows.items():
+            for open_unix, window in windows.items():
+                age = now - window.close_unix
+                if age < 20:
+                    continue
+                known = self.engine.resolutions.get((asset, open_unix), {})
+                for venue in ("poly", "kalshi"):
+                    key = (asset, open_unix, venue)
+                    if venue in known or key in self._resolution_given_up:
+                        continue
+                    if age > RESOLUTION_GIVE_UP_S:
+                        self._resolution_given_up.add(key)
+                        log_event("resolution_given_up", level=logging.WARNING, key=list(key))
+                        continue
+                    work.append((window, venue))
+        return work
+
+    async def _poll(self, window: Window, venue: str) -> None:
+        try:
+            if venue == "poly":
+                outcome = await self.discovery.poly_outcome(window)
+            else:
+                outcome = await self.discovery.kalshi_outcome(window)
+        except Exception as exc:  # noqa: BLE001 - polled again next tick
+            log_event(
+                "resolution_poll_failed",
+                level=logging.WARNING,
+                venue=venue,
+                error=f"{type(exc).__name__}: {exc}"[:200],
+            )
+            return
+        if outcome is not None:
+            self.control(
+                {
+                    "type": "resolution",
+                    "venue": venue,
+                    "asset": window.asset,
+                    "open_unix": window.open_unix,
+                    "outcome": outcome,
+                }
+            )
+
+    async def _rediscover_open_positions(self) -> None:
+        """After a restart, open positions need their window back to be settled."""
+        for position in self.engine.ledger.open_positions():
+            if position.open_unix in self.engine.windows.get(position.asset, {}):
+                continue
+            try:
+                window = await self.discovery.discover(position.asset, position.open_unix)
+            except Exception:  # noqa: BLE001 - tried again next tick
+                continue
+            if window is not None:
+                self.control(window.control())
+
+    async def resolution_tick(self) -> None:
+        await self._rediscover_open_positions()
+        work = self._unresolved(self._clock() / NS)
+        for start in range(0, len(work), 8):
+            await asyncio.gather(*(self._poll(w, v) for w, v in work[start : start + 8]))
+
+    # --- health -----------------------------------------------------------------
+
+    def _sample_cpu(self) -> None:
+        """Process CPU % since the last sample (all threads; 100 = one full core)."""
+        wall, cpu = time.monotonic(), time.process_time()
+        last_wall, last_cpu = self._cpu_mark
+        if wall - last_wall > 0.5:
+            self.cpu_pct = round(100 * (cpu - last_cpu) / (wall - last_wall), 1)
+        self._cpu_mark = (wall, cpu)
+
+    def host(self) -> dict[str, Any]:
+        try:
+            load1 = round(os.getloadavg()[0], 2)
+        except OSError:
+            load1 = None
+        try:
+            loop = type(asyncio.get_running_loop()).__module__.split(".")[0]
+        except RuntimeError:
+            loop = None
+        # "uvloop" when uvicorn picked it up (PLAN 2.3), "asyncio" otherwise.
+        return {"cpu_pct": self.cpu_pct, "load1": load1, "cpus": os.cpu_count(), "loop": loop}
+
+    async def health_tick(self) -> None:
+        self._sample_cpu()
+        if self.observer is not None:
+            await self.observer.check()
+        now_ns = self._clock()
+        stale = self.settings.stale_feed_seconds
+        for venue, feed in (("k", self.kalshi), ("p", self.poly)):
+            if feed is None:
+                continue
+            last = self.engine.last_by_venue.get(venue)
+            started = self.started_ns or now_ns
+            age = (now_ns - (last or started)) / NS
+            if age > stale and not await self._kalshi_is_closed(now_ns / NS):
+                self.alerts.send(
+                    f"stale:{venue}",
+                    f"poly-kalshi: {'Kalshi' if venue == 'k' else 'Polymarket'} feed stale",
+                    [f"no message for {age:.0f}s", f"last_error={feed.last_error}"],
+                )
+        if self.settings.heartbeat_seconds:
+            ledger = self.engine.ledger.snapshot(now_ns)
+            log_event(
+                "heartbeat",
+                lines=self.lines,
+                books=len(self.engine.books),
+                counters=dict(self.engine.counters),
+                **self.host(),
+                cash=ledger["cash"],
+                open_positions=ledger["open_positions"],
+            )
+
+    # --- control and status -----------------------------------------------------
+
+    def kill(self, source: str, reason: str = "") -> bool:
+        fired = self.engine.risk.kill(source, reason)
+        if fired:
+            self.alerts.send(
+                "kill", "poly-kalshi HALTED", [f"source={source}", reason or "-"], always=True
+            )
+        return fired
+
+    def ready(self) -> tuple[bool, dict[str, Any]]:
+        feeds = {
+            "kalshi": self.kalshi.connected if self.kalshi else None,
+            "poly": self.poly.connected if self.poly else None,
+        }
+        identified = {a: s.window is not None for a, s in self.engine.state.items()}
+        ok = all(v is not False for v in feeds.values()) and all(identified.values())
+        return ok, {"feeds": feeds, "identified": identified}
+
+    def status(self) -> dict[str, Any]:
+        return {
+            "profile": self.settings.profile,
+            "execution_mode": self.settings.execution_mode.value,
+            "epoch": self.settings.results_epoch,
+            "build": self.engine.stamp.get("build"),
+            "config": self.engine.stamp.get("config"),
+            "host": self.settings.host_tag,
+            "assets": list(self.settings.assets),
+            "params": {
+                "gap_threshold": self.settings.gap_threshold,
+                "max_entry_px": self.settings.max_entry_px,
+                "notional_usd": self.settings.notional_usd,
+                "entry_early_s": self.settings.entry_early_s,
+                "entry_late_s": self.settings.entry_late_s,
+                "paper_latency_ms": self.settings.paper_latency_ms,
+                "limit_offset": self.settings.limit_offset,
+            },
+            "started_ns": self.started_ns,
+            "host_load": self.host(),
+            "telegram": self.telegram.stats() if self.telegram is not None else None,
+            "lines": self.lines,
+            "feeds": {
+                "kalshi": self.kalshi.stats() if self.kalshi else None,
+                "poly": self.poly.stats() if self.poly else None,
+            },
+            "recorder": self.recorder.stats()
+            if self.recorder
+            else {"enabled": self.observer is not None, "in": "observer"},
+            "observer": self.observer.stats() if self.observer else {"enabled": False},
+            "alerts": {"recent": self.alerts.sent[-10:], "suppressed": self.alerts.suppressed},
+            "kalshi_closed": self.kalshi_closed,
+            "engine": self.engine.status(),
+            "recent": list(self.engine.recent)[-50:][::-1],
+        }
