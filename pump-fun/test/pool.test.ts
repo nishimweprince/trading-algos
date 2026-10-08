@@ -207,6 +207,18 @@ describe('H7 liquidity floor + impact', () => {
   it('fails without a pool (never unknown)', () => {
     expect(checkLiquidityFloor(ctxWith(undefined)).status).toBe('fail');
   });
+  it('fails above the SOL ceiling (pool pumped inside the migrate slot)', () => {
+    const capped = ConfigSchema.parse({ mode: 'paper', guardrails: { maxPoolSol: 100 } });
+    const ctx = (sol: number) => ({
+      ...ctxWith({ ...POOL, quoteReserveLamports: BigInt(sol) * BigInt(LAMPORTS_PER_SOL) }),
+      config: capped,
+    });
+    expect(checkLiquidityFloor(ctx(85)).status).toBe('pass'); // canonical open
+    expect(checkLiquidityFloor(ctx(232)).status).toBe('fail'); // live 5PNXtB, 2026-10-06
+  });
+  it('has no ceiling by default', () => {
+    expect(checkLiquidityFloor(ctxWith({ ...POOL, quoteReserveLamports: BigInt(1275) * BigInt(LAMPORTS_PER_SOL) })).status).toBe('pass');
+  });
 });
 
 

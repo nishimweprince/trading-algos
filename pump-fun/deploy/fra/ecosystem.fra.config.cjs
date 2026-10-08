@@ -58,5 +58,11 @@ module.exports = {
       ...pinned(otherCores, ['--experimental-strip-types', 'src/dashboard/standalone.ts']),
       env: { NODE_ENV: 'production', CONFIG_PATH: 'config.yaml' },
     },
+    {
+      ...common,
+      name: 'pump-desk-racer',
+      ...pinned(otherCores, ['--experimental-strip-types', 'src/racer-worker.ts']),
+      env: { NODE_ENV: 'production', CONFIG_PATH: 'config.yaml', PUMPDESK_ROLE: 'racer' },
+    },
   ],
 };

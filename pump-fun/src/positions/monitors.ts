@@ -26,7 +26,7 @@ export interface EmergencySignal {
 }
 
 export interface EmergencyMonitorConfig {
-  /** Quote-reserve drop from window-max that fires LP_PULL, as a percent. */
+  /** Quote-reserve drop from window-max that fires LP_PULL, as a percent; 0 = off. */
   lpDropPct: number;
   /** Number of recent ticks forming the rolling window for the LP-pull high-water. */
   windowTicks: number;
@@ -87,7 +87,7 @@ export class EmergencyMonitor {
       this.windowTimes.shift();
     }
     const windowMax = this.window.reduce((m, v) => (v > m ? v : m), 0n);
-    if (windowMax > 0n && t.quoteReserveLamports < windowMax) {
+    if (this.cfg.lpDropPct > 0 && windowMax > 0n && t.quoteReserveLamports < windowMax) {
       const dropPct = (Number(windowMax - t.quoteReserveLamports) / Number(windowMax)) * 100;
       if (dropPct >= this.cfg.lpDropPct) {
         return { kind: 'LP_PULL', detail: `SOL reserve -${dropPct.toFixed(1)}% from window high` };

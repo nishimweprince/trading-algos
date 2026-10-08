@@ -1435,7 +1435,8 @@ export class PositionManager {
    * send→stream-seen, and how many slots after the migration it landed.
    */
   private withEntryTiming(mint: Mint, buy: BroadcastResult, ctx: OpenContext, streamFill: WalletTx | null): BroadcastResult {
-    const timing: EntryTiming = {};
+    // Keep the executor's stage timings (build / sign / prefetched state).
+    const timing: EntryTiming = { ...(buy.timing ?? {}) };
     if (ctx.preArmed !== undefined) timing.preArmed = ctx.preArmed;
     if (ctx.detectedAtNs !== undefined && buy.submittedAtNs !== undefined) {
       timing.detectToSendUs = Number((BigInt(buy.submittedAtNs) - ctx.detectedAtNs) / 1_000n);
@@ -1457,6 +1458,8 @@ export class PositionManager {
     sample('detect_to_send_us', timing.detectToSendUs);
     sample('send_to_stream', timing.sendToStreamMs);
     sample('migration_to_land_slots', timing.slotsFromMigration);
+    sample('buy_build_us', timing.buildUs);
+    sample('buy_sign_us', timing.signUs);
     this.log.info('entry timing', { mint, ...timing });
     return { ...buy, timing };
   }

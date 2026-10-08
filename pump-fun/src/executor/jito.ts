@@ -33,15 +33,38 @@ export class JitoTxSender implements TxSender {
     return { signature: res.result, ...(res.bundleId ? { bundleId: res.bundleId } : {}) };
   }
 
+  /**
+   * A tip account. Stale-while-revalidate: once any list is cached it is
+   * returned at once and a stale list is refreshed in the background, so a TTL
+   * expiry can never put an HTTP round trip on a send path. Only the very
+   * first call (before keep-warm has run) waits for the fetch.
+   */
   async getTipAccount(ttlMs = 60_000): Promise<string | undefined> {
-    const now = Date.now();
-    if (this.tipAccounts.length > 0 && now - this.tipAccountsFetchedAtMs < ttlMs) {
+    if (this.tipAccounts.length > 0) {
+      if (Date.now() - this.tipAccountsFetchedAtMs >= ttlMs) void this.refreshTipAccounts();
       return randomItem(this.tipAccounts);
     }
-    const res = await this.post<string[]>('/api/v1/getTipAccounts', 'getTipAccounts', []);
-    this.tipAccounts = res.result;
-    this.tipAccountsFetchedAtMs = now;
-    return randomItem(this.tipAccounts);
+    await this.refreshTipAccounts();
+    return this.tipAccounts.length ? randomItem(this.tipAccounts) : undefined;
+  }
+
+  private tipRefresh: Promise<void> | null = null;
+
+  /** Fetch the tip-account list (shared in-flight; failures keep the previous list). */
+  refreshTipAccounts(): Promise<void> {
+    if (this.tipRefresh) return this.tipRefresh;
+    this.tipRefresh = this.post<string[]>('/api/v1/getTipAccounts', 'getTipAccounts', [])
+      .then((res) => {
+        if (Array.isArray(res.result) && res.result.length) {
+          this.tipAccounts = res.result;
+          this.tipAccountsFetchedAtMs = Date.now();
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        this.tipRefresh = null;
+      });
+    return this.tipRefresh;
   }
 
   async getInflightBundleStatus(bundleId: string): Promise<string | null> {

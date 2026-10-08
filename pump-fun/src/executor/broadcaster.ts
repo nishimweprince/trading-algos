@@ -53,6 +53,12 @@ export interface EntryTiming {
   migrationSlot?: number;
   /** Landed slot − migration slot (0 = same slot as the migration). */
   slotsFromMigration?: number;
+  /** Buy instruction build (swap state + SDK quote), µs. */
+  buildUs?: number;
+  /** Assemble + sign (first attempt), µs. */
+  signUs?: number;
+  /** The buy used the fast screen's prefetched swap state (no RPC state read). */
+  prefetchedState?: boolean;
 }
 
 export interface BroadcastResult {
@@ -76,6 +82,10 @@ export interface BroadcastResult {
   timing?: EntryTiming | undefined;
   confirmedAtMs?: number | undefined;
   confirmLatencyMs?: number | undefined;
+  /** Which signal ended the confirm wait: the wallet account push or a status poll. */
+  landedBy?: 'push' | 'status' | undefined;
+  /** ms from submit to the landed push, when it arrived inside the wait. */
+  pushLatencyMs?: number | undefined;
   bundleId?: string | undefined;
   /** Compute units the pre-send simulation consumed (P4.1 CU tuning). */
   unitsConsumed?: number | undefined;
@@ -309,6 +319,8 @@ export class Broadcaster {
         submittedAtNs: dispatchedAtNs,
       confirmedAtMs: confirmed.confirmedAtMs,
       confirmLatencyMs: confirmed.confirmedAtMs - firstSent.submittedAtMs,
+      landedBy: confirmed.byPush ? 'push' : 'status',
+      ...(confirmed.pushedAtMs !== undefined ? { pushLatencyMs: confirmed.pushedAtMs - firstSent.submittedAtMs } : {}),
       confirmationStatus: confirmed.status?.confirmationStatus,
       slot: confirmed.status?.slot,
       submittedSlot,
@@ -365,12 +377,14 @@ export class Broadcaster {
     timeoutMs = this.confirmTimeoutMs,
     pollMs = this.confirmPollMs,
     extra: { acceptProcessed?: boolean; landed?: Promise<unknown> | undefined } = {},
-  ): Promise<{ confirmed: boolean; confirmedAtMs: number; status: ConfirmationResult | null; err?: unknown; byPush?: boolean }> {
+  ): Promise<{ confirmed: boolean; confirmedAtMs: number; status: ConfirmationResult | null; err?: unknown; byPush?: boolean; pushedAtMs?: number }> {
     const deadline = startedAtMs + timeoutMs;
     let last: ConfirmationResult | null = null;
     let pushed = false;
+    let pushedAtMs: number | undefined;
     void extra.landed?.then(() => {
       pushed = true;
+      pushedAtMs = Date.now();
     });
     const wake = extra.landed ? extra.landed.then(() => undefined) : null;
     const landedByPush = () => ({
@@ -378,6 +392,7 @@ export class Broadcaster {
       confirmedAtMs: Date.now(),
       status: { confirmationStatus: 'processed' as const, slot: last?.slot, err: null },
       byPush: true,
+      ...(pushedAtMs !== undefined ? { pushedAtMs } : {}),
     });
     // Always poll at least once, and never let a status-read error escape:
     // the tx is already out, so a throw here would drop a buy that may land.
@@ -394,7 +409,7 @@ export class Broadcaster {
         last?.confirmationStatus === 'finalized' ||
         (extra.acceptProcessed && last?.confirmationStatus === 'processed')
       ) {
-        return { confirmed: true, confirmedAtMs: Date.now(), status: last };
+        return { confirmed: true, confirmedAtMs: Date.now(), status: last, ...(pushedAtMs !== undefined ? { pushedAtMs } : {}) };
       }
       if (pushed) return landedByPush();
       if (Date.now() + pollMs > deadline) break;

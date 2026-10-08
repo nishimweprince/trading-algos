@@ -154,8 +154,16 @@ describe('Broadcaster mode gating (safety keystone)', () => {
     setTimeout(() => fire(), 20);
     const t0 = Date.now();
     const r = await b.broadcast(TX, 'exit', { landed });
-    expect(r).toMatchObject({ confirmed: true, confirmationStatus: 'processed' });
+    expect(r).toMatchObject({ confirmed: true, confirmationStatus: 'processed', landedBy: 'push' });
+    expect(r.pushLatencyMs).toBeGreaterThanOrEqual(0);
     expect(Date.now() - t0).toBeLessThan(500); // did not sleep out the 1 s poll
+  });
+
+  it('records a status-poll landing as landedBy status, with no push latency', async () => {
+    const confirmSignature = vi.fn(async () => ({ confirmationStatus: 'confirmed' as const, slot: 4, err: null }));
+    const r = await new Broadcaster('live', [sender('primary')], { confirmSignature, confirmPollMs: 1, confirmTimeoutMs: 50 }).broadcast(TX, 'buy');
+    expect(r).toMatchObject({ confirmed: true, landedBy: 'status' });
+    expect(r.pushLatencyMs).toBeUndefined();
   });
 
   it('live refuses to send when simulation fails', async () => {

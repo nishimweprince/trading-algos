@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { buildFeePlan } from '../src/executor/fees.ts';
+import { buildFeePlan, floorFeePlan } from '../src/executor/fees.ts';
 import { ConfigSchema } from '../src/config/schema.ts';
 import type { RpcClient } from '../src/core/rpc.ts';
 
@@ -136,5 +136,18 @@ describe('landing bid (2026-10-04): Sender Max buys, staked-only exits, scoped p
     const plan = await buildFeePlan({ getRecentPrioritizationFees } as unknown as RpcClient, cfg);
     expect(plan.priorityMicroLamports).toBeGreaterThanOrEqual(900_000);
     expect(getRecentPrioritizationFees.mock.calls[0]![0]).toHaveLength(2);
+  });
+});
+
+describe('floorFeePlan', () => {
+  it('is the network-free degraded plan: priority floor and minimum tips', () => {
+    const fetch = vi.fn(async () => { throw new Error('no network on a send path'); });
+    vi.stubGlobal('fetch', fetch);
+    const config = ConfigSchema.parse({});
+    const plan = floorFeePlan(config);
+    expect(plan.priorityMicroLamports).toBe(Math.min(config.fees.priorityFloorMicroLamports, config.fees.priorityCapMicroLamports));
+    if (config.heliusSender.enabled) expect(plan.jitoTipLamports).toBe(Math.min(config.heliusSender.tipCapLamports, config.heliusSender.minTipLamports));
+    expect(fetch).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
   });
 });

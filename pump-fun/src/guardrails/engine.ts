@@ -53,7 +53,7 @@ export interface CheckContext {
   walletSol: number;
 }
 
-type CheckFn = (ctx: CheckContext) => CheckResult | CheckResult[];
+export type CheckFn = (ctx: CheckContext) => CheckResult | CheckResult[];
 
 // H6 (creator holdings), H13 (creator funding cluster) and H12's mint-age /
 // pool-band rules were removed 2026-10-04: they took < 1 ms but vetoed ~20 %
@@ -73,11 +73,18 @@ export class GuardrailEngine {
   private readonly repos: Repositories;
   private readonly momentumOpts: MomentumScoringOpts;
   private readonly risk: GuardrailRisk | undefined;
+  private readonly checks: CheckFn[];
 
-  constructor(config: Config, repos: Repositories, risk?: GuardrailRisk) {
+  /**
+   * `extraChecks` run after the shared set. The trader passes its racer gate
+   * (R1) here; the racer's own screen does not, so its measurements stay
+   * independent of the gate.
+   */
+  constructor(config: Config, repos: Repositories, risk?: GuardrailRisk, extraChecks: readonly CheckFn[] = []) {
     this.config = config;
     this.repos = repos;
     this.risk = risk;
+    this.checks = [...CHECKS, ...extraChecks];
     this.momentumOpts = {
       strongInflowSol: config.guardrails.momentumStrongInflowSol,
       maxScoreBonus: config.guardrails.momentumMaxScoreBonus,
@@ -97,7 +104,7 @@ export class GuardrailEngine {
     };
 
     const hardChecks: CheckResult[] = [];
-    for (const check of CHECKS) {
+    for (const check of this.checks) {
       const out = check(ctx);
       if (Array.isArray(out)) hardChecks.push(...out);
       else hardChecks.push(out);

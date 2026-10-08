@@ -215,6 +215,145 @@ interface BreakerRow {
   at: string;
 }
 
+interface SlotDist {
+  n: number;
+  p50: number | null;
+  p90: number | null;
+}
+
+interface RacerSummary {
+  curves: { admitted: number; fired: number; open: number; migrated: number; completeNoPool: number; expired: number };
+  migrations: { total: number; tracked: number; fired: number; unpriced?: Record<string, number>; coverage?: Record<string, number> };
+  slots: { fireToComplete: SlotDist; completeToMigrate: SlotDist; fireToMigrate: SlotDist };
+  competition: { attempts: number; failedAttempts: number; failedPerMigration: number | null; contestedShare: number | null };
+  execution?: { slot1BuyAttempts: number; slot1Failed: number; observedOnChainFillRate: number | null; offChainDropRate: null;
+    slot0BuyVolumeSol: number | null; slot1BuyVolumeSol: number | null; slot0DistinctBuyerOwners: number; slot1DistinctBuyerOwners: number;
+    meanFailedNetworkFeeSol: number | null };
+  bundles: { curveBuyBeforeShare: number | null; poolBuyAfterShare: number | null };
+  topCallers: Array<{ caller: string; wins: number; share: number }>;
+  buyLeg: { okRate: number | null; avgMs: number | null };
+  paper: {
+    tracks: number;
+    openPriced: number;
+    realisticTracks?: number;
+    verifiedTracks?: number;
+    excludedReasons?: Record<string, number>;
+    highDepletionThresholdPct?: number;
+    armedShare?: number | null;
+    ruggedTracks?: number;
+    measuredCostShare?: number | null;
+    medianLiveCostSol?: number | null;
+    sizing?: { reasons: Record<string, number>; medianWalletBalanceSol: number | null; medianSizeSol: number | null };
+    horizons: Array<{
+      sec: number;
+      n: number;
+      medianOpenPct: number | null;
+      medianReachPct: number | null;
+      winRateOpen: number | null;
+      winRateReach: number | null;
+      entries?: Record<string, { n: number; median: number | null; winRate: number | null }>;
+      headline?: { mean: number | null; meanWithoutBest: number | null; ciLow: number | null; ciHigh: number | null; cumulativeFixedSizePnlSol: number; fixedSizePnlCurve?: Array<{ mint: string; exitAt: string; pnlSol: number; cumulativePnlSol: number }>; fixedSizeCurveUnavailable?: number; cumulativeWalletSizePnlSol?: number; walletSizePnlCurve?: Array<{ mint: string; exitAt: string; pnlSol: number; cumulativePnlSol: number }> };
+      cohorts?: {
+        belowHighDepletion: { n: number; mean: number | null; median: number | null; winRate: number | null };
+        highDepletion: { n: number; mean: number | null; median: number | null; winRate: number | null };
+        unknownDepletion?: { n: number; mean: number | null; median: number | null; winRate: number | null };
+        byCaller: Array<{ caller: string; stats: { n: number; mean: number | null; median: number | null; winRate: number | null } }>;
+      };
+      featureSplits?: Array<{ feature: string; cohort: string; stats: { n: number; mean: number | null; median: number | null; winRate: number | null; ciLow: number | null; ciHigh: number | null } }>;
+      sizeScenario?: { sizeSol: number; priced: number; unavailable: number; pnlSol: number; peakConcurrentSol: number; ataRentLockedSol: number; onChainFillAdjustedPnlSol: number | null };
+    }>;
+    pathRules?: Array<{ rule: string; n: number; unpriced: number; notCaptured?: number; unchangedFills?: number; result: { n: number; mean: number | null; median: number | null; winRate: number | null; ciLow: number | null; ciHigh: number | null }; sameTradeTimeBaseline: { n: number; mean: number | null; median: number | null; winRate: number | null } }>;
+    evaluation?: { verifiedCompleted: number; exploratoryRows: number; reservedLaterRows: number; selectionReady: boolean; validated: false };
+  };
+  latency?: {
+    detection: { racerSlots: SlotDist; liveMs: SlotDist; liveSlots: SlotDist };
+    sending: {
+      sendReadyMs: SlotDist;
+      stagesMs: { screen?: SlotDist; state: SlotDist; build: SlotDist; sign: SlotDist };
+      screenDecisions?: number;
+      screenAcceptRate?: number | null;
+      screenPreparedRate?: number | null;
+      synthesizedShare?: number | null;
+      synthChecks?: number;
+      synthMatchRate?: number | null;
+      synthVDeltaLamports?: SlotDist;
+      liveDetectToSendMs: SlotDist;
+    };
+    landing: {
+      modeledEntrySlot: number;
+      feasibleOffsetSlots?: SlotDist;
+      migrateSlotStillOpenShare?: number | null;
+      firstOutsideBuySlots: SlotDist;
+      sameSlotBuyShare: number | null;
+      onChainFillRate: number | null;
+      liveEntryLandSlots: SlotDist;
+      liveEntryConfirmMs: SlotDist;
+    };
+    exit: {
+      assumedExitLandMs: number | null;
+      horizonsFromStream?: number;
+      horizonsFromRpc?: number;
+      horizonNextSlotFills?: number;
+      horizonUnchangedFills?: number;
+      unchangedFillShare: number | null;
+      liveExitTriggerToSendMs: SlotDist;
+      liveExitSendToLandedMs: SlotDist;
+      liveExitLandSlots: SlotDist;
+    };
+  };
+  lastMigrateAt: string | null;
+  lastCurveAt: string | null;
+}
+
+interface RacerPaperRow {
+  mint: string;
+  poolAddress: string | null;
+  sizeSol: number;
+  openPrice: number | null;
+  reachPrice: number;
+  horizons: Array<{
+    sec: number;
+    price: number | null;
+    quoteSol: number | null;
+    pnlOpenPct: number | null;
+    pnlReachPct: number | null;
+    pnl?: Record<string, number | null>;
+    rugged?: boolean;
+  }>;
+  armed?: boolean | null;
+  liveCostSol?: number | null;
+  liveCostSource?: string | null;
+  entryQuality?: string;
+  openQuality?: string | null;
+  openRejectReason?: string | null;
+  sameSlotDepletionPct?: number | null;
+  migrationCaller?: string | null;
+  at: string;
+}
+
+interface RacerMigrationRow {
+  mint: string;
+  signature: string;
+  caller: string | null;
+  tracked: boolean;
+  fireToComplete: number | null;
+  completeToMigrate: number | null;
+  failedAttempts: number;
+  curveBuyBefore: boolean;
+  poolBuyAfter: boolean;
+  openPrice: number | null;
+  reachPrice: number | null;
+  unpricedReason?: string | null;
+  initialQuoteDepthSol?: number | null;
+  observedQuoteDepthSol?: number | null;
+  depthThresholdSol?: number | null;
+  migrateSlot?: number | null;
+  receiptSlot?: number | null;
+  feasibleSlot?: number | null;
+  sendReadyUs?: number | null;
+  at: string;
+}
+
 interface PositionRow {
   id: number;
   mint: string;
@@ -291,6 +430,23 @@ type Theme = 'dark' | 'light';
 type Track = 'live' | 'dry' | 'delta';
 
 type DragCohort = 'both' | 'dry_only' | 'live_only';
+
+/** Top-level workspace: the scalper (live / dry-run / Δ tracks) or the migration racer. */
+type View = 'scalper' | 'racer';
+const VIEWS: View[] = ['scalper', 'racer'];
+const VIEW_LABELS: Record<View, string> = { scalper: 'Scalper', racer: 'Migration racer' };
+
+/** `#racer` deep-links the racer tab; otherwise the last choice, else the scalper. */
+function initialView(): View {
+  if (typeof window === 'undefined') return 'scalper';
+  if (window.location.hash === '#racer') return 'racer';
+  if (window.location.hash === '#scalper') return 'scalper';
+  try {
+    return window.localStorage.getItem('pumpdesk-view') === 'racer' ? 'racer' : 'scalper';
+  } catch {
+    return 'scalper';
+  }
+}
 
 interface ExecutionDragRow {
   mint: string;
@@ -429,6 +585,19 @@ function App() {
   const [edge, setEdge] = useState<EdgeAnalytics | null>(null);
   const [walletRec, setWalletRec] = useState<WalletReconciliation | null>(null);
   const [breakers, setBreakers] = useState<BreakerRow[]>([]);
+  const [racerSummary, setRacerSummary] = useState<RacerSummary | null>(null);
+  const [racerEvents, setRacerEvents] = useState<RacerMigrationRow[]>([]);
+  const [racerPaper, setRacerPaper] = useState<RacerPaperRow[]>([]);
+  const [view, setView] = useState<View>(initialView);
+  const chooseView = (next: View) => {
+    setView(next);
+    try {
+      window.localStorage.setItem('pumpdesk-view', next);
+    } catch {
+      /* per-viewer convenience only */
+    }
+    if (typeof window !== 'undefined' && window.history?.replaceState) window.history.replaceState(null, '', `#${next}`);
+  };
   const [drag, setDrag] = useState<ExecutionDrag>(emptyDrag);
   const [positionFilter, setPositionFilter] = useState<PositionFilter>('open');
   const [pnlRange, setPnlRange] = useState<PnlRange>('7d');
@@ -441,6 +610,12 @@ function App() {
     trackChosen.current = true;
     setTrack(next);
   };
+  // Live mode shows real metrics only. The dry/Δ tracks and the veto dry-runs
+  // are paper surfaces — hidden in live mode. The racer workspace stays, but
+  // in its live-only form: measured latency / migration / race data, no paper
+  // P&L, cohorts or paper tracks.
+  const isLiveMode = summary.mode === 'live';
+  const effTrack: Track = isLiveMode ? 'live' : track;
   const [selectedDrag, setSelectedDrag] = useState<ExecutionDragRow | null>(null);
   const [status, setStatus] = useState<DashboardStatus>('connecting');
   const [streamReady, setStreamReady] = useState(false);
@@ -480,7 +655,7 @@ function App() {
     }
     // Δ mode reads wallet-shaped panels from the live track; the drag numbers
     // come from /api/analytics/execution-drag, whose type is unambiguous.
-    const dataTrack = track === 'delta' ? 'live' : track;
+    const dataTrack = effTrack === 'delta' ? 'live' : effTrack;
     // Keyed rather than a positional tuple: a 14-element destructure is one
     // careless reorder away from silently swapping two panels' data.
     const res = await allKeyed({
@@ -499,6 +674,9 @@ function App() {
       shadow: fetchJson<ShadowOutcomeRow[]>(`/api/shadow-outcomes?range=${vetoDryRunRange}&limit=80`),
       relaxed: fetchJson<RelaxedRiskAnalytics>('/api/analytics/relaxed-risk?range=24h'),
       breakers: fetchJson<BreakerRow[]>('/api/breakers?limit=8'),
+      racerSummary: fetchJson<RacerSummary>('/api/racer/summary'),
+      racerEvents: fetchJson<RacerMigrationRow[]>('/api/racer/migrations?limit=50'),
+      racerPaper: fetchJson<RacerPaperRow[]>('/api/racer/paper?limit=30'),
       // Optional panel: an older server without the route must not take the
       // whole refresh down.
       edge: fetchJson<EdgeAnalytics>(`/api/analytics/edge?track=${dataTrack}&window=100`).catch((err: unknown) => {
@@ -526,6 +704,9 @@ function App() {
     setEdge(res.edge ?? null);
     setWalletRec(res.walletRec ?? null);
     setBreakers(Array.isArray(res.breakers) ? res.breakers : []);
+    setRacerSummary(res.racerSummary ?? null);
+    setRacerEvents(Array.isArray(res.racerEvents) ? res.racerEvents : []);
+    setRacerPaper(Array.isArray(res.racerPaper) ? res.racerPaper : []);
     setStatus('live');
     setStreamReady(true);
   };
@@ -691,30 +872,38 @@ function App() {
     return { livePoints, dryPoints };
   }, [drag]);
 
-  const chartHeadline = track === 'delta' ? drag.totals.netPnlDeltaSol : finalPnl;
+  const chartHeadline = effTrack === 'delta' ? drag.totals.netPnlDeltaSol : finalPnl;
+  // Δ mode reads wallet-shaped panels from the live track; exports follow suit.
+  const dataTrack = effTrack === 'delta' ? 'live' : effTrack;
 
   return (
     <div class="app-stage">
       <div class="dashboard-frame">
-        <Sidebar theme={theme} onToggleTheme={toggleTheme} />
+        <Sidebar theme={theme} onToggleTheme={toggleTheme} view={view} views={VIEWS} onView={chooseView} />
 
-        <main class="workspace">
+        <main class={`workspace ${view === 'racer' ? 'racer-view' : ''}`}>
           <header class="topbar">
             <div class="breadcrumb">
               <span>Dashboard</span>
               <b>/</b>
-              <strong>{track === 'dry' && summary.mode === 'dry-run' ? 'Dry-run PnL' : 'Wallet PnL'}</strong>
+              <strong>
+                {view === 'racer' ? 'Migration racer' : effTrack === 'dry' && summary.mode === 'dry-run' ? 'Dry-run PnL' : 'Wallet PnL'}
+              </strong>
             </div>
             <div class="account-strip">
-              <Segmented value={track} values={['live', 'dry', 'delta']} labels={TRACK_LABELS} onChange={chooseTrack} />
+              <Segmented value={view} values={VIEWS} labels={VIEW_LABELS} onChange={chooseView} />
+              {view === 'scalper' && !isLiveMode && (
+                <Segmented value={effTrack} values={['live', 'dry', 'delta']} labels={TRACK_LABELS} onChange={chooseTrack} />
+              )}
+              {view === 'scalper' ? (
               <div class="export-row">
                 <ExportLink
-                  href={`/api/reports/trades.csv?range=7d&track=${track === 'delta' ? 'live' : track}`}
+                  href={`/api/reports/trades.csv?range=7d&track=${dataTrack}`}
                   onUnauthorized={() => setAuthOpen(true)}
                 >
                   Trades CSV
                 </ExportLink>
-                {track === 'delta' && (
+                {effTrack === 'delta' && (
                   <ExportLink href="/api/reports/execution-drag.csv?range=7d" onUnauthorized={() => setAuthOpen(true)}>
                     Drag CSV
                   </ExportLink>
@@ -725,7 +914,31 @@ function App() {
                 <ExportLink href="/api/reports/soak.json?range=7d" onUnauthorized={() => setAuthOpen(true)}>
                   Soak JSON
                 </ExportLink>
+                <ExportLink
+                  href={`/api/reports/full-bundle.json?range=${pnlRange}&track=${dataTrack}`}
+                  onUnauthorized={() => setAuthOpen(true)}
+                >
+                  Bundle JSON
+                </ExportLink>
               </div>
+              ) : (
+              <div class="export-row">
+                <ExportLink href="/api/reports/racer-migrations.csv" onUnauthorized={() => setAuthOpen(true)}>
+                  Migrations CSV
+                </ExportLink>
+                {!isLiveMode && (
+                  <ExportLink href="/api/reports/racer-paper.csv" onUnauthorized={() => setAuthOpen(true)}>
+                    Paper CSV
+                  </ExportLink>
+                )}
+                <ExportLink
+                  href={`/api/reports/full-bundle.json?range=${pnlRange}&track=${dataTrack}`}
+                  onUnauthorized={() => setAuthOpen(true)}
+                >
+                  Bundle JSON
+                </ExportLink>
+              </div>
+              )}
               <button type="button" class="refresh-button" onClick={handleManualRefresh} disabled={manualRefreshing}>
                 {manualRefreshing ? 'Refreshing' : 'Refresh'}
               </button>
@@ -744,6 +957,16 @@ function App() {
             </div>
           )}
 
+          {view === 'racer' ? (
+            <RacerWorkspace
+              summary={racerSummary}
+              migrations={racerEvents}
+              paper={racerPaper}
+              liveOnly={isLiveMode}
+              onUnauthorized={() => setAuthOpen(true)}
+            />
+          ) : (
+          <>
           {/* Banner and KPI row share ONE grid row. `.workspace` has a fixed
               grid-template-rows, so a bare extra child would shift every
               section down a row and clip the metric grid. */}
@@ -751,18 +974,18 @@ function App() {
           {/* The Δ track shows execution-drag differences, not balances — say so
               plainly. A dry-run bot's numbers live on the Dry-run tab under a
               banner; Live carries no banner (real capital only). */}
-          {track === 'dry' && summary.mode === 'dry-run' && (
+          {effTrack === 'dry' && summary.mode === 'dry-run' && (
             <div class="track-strip dry-run-strip" role="status">
               Dry-run — simulated trades only. Nothing is sent on-chain; PnL is modelled from pool prices, not the wallet.
             </div>
           )}
-          {track === 'delta' && (
+          {effTrack === 'delta' && (
             <div class="track-strip" role="status">
               Δ track — live minus dry-run. These are execution-drag differences, not wallet balances.
             </div>
           )}
 
-          {track === 'delta' ? (
+          {effTrack === 'delta' ? (
             <DragKpis drag={drag} />
           ) : (
           <section class="metric-grid metric-grid-wide" aria-label="Wallet metrics">
@@ -772,7 +995,7 @@ function App() {
               detail={`${summary.pnl.closedCount} closed · fees ${formatSol(summary.pnl.feesSol)}`}
               tone={summary.pnl.realizedSol >= 0 ? 'profit' : 'loss'}
             />
-            {track === 'live' && walletRec?.available && (
+            {effTrack === 'live' && walletRec?.available && (
               <KpiCard
                 label="Wallet vs Ledger"
                 value={formatSol(walletRec.walletDeltaSol)}
@@ -825,19 +1048,29 @@ function App() {
 
           <section class="content-grid">
             <Panel
-              title={track === 'delta' ? 'Live vs Dry-run' : 'PnL vs Time'}
+              title={effTrack === 'delta' ? 'Live vs Dry-run' : 'PnL vs Time'}
               wide
-              action={<Segmented value={pnlRange} values={['24h', '7d', '30d']} onChange={setPnlRange} />}
+              action={
+                <div class="panel-actions">
+                  <Segmented value={pnlRange} values={['24h', '7d', '30d']} onChange={setPnlRange} />
+                  <ExportLink
+                    href={`/api/reports/pnl.csv?range=${pnlRange}&track=${effTrack}`}
+                    onUnauthorized={() => setAuthOpen(true)}
+                  >
+                    PnL CSV
+                  </ExportLink>
+                </div>
+              }
             >
               <div class="chart-header">
                 <div>
-                  <span>{track === 'delta' ? 'Execution drag' : 'Current curve'}</span>
+                  <span>{effTrack === 'delta' ? 'Execution drag' : 'Current curve'}</span>
                   <strong class={chartHeadline >= 0 ? 'profit-text' : 'loss-text'}>{formatSol(chartHeadline)}</strong>
                 </div>
                 <div class="legend">
-                  <span class={track === 'delta' ? 'legend-dot live' : 'legend-dot pnl'} />
-                  <span>{track === 'delta' ? 'Live' : 'Realized PnL'}</span>
-                  {track === 'delta' && (
+                  <span class={effTrack === 'delta' ? 'legend-dot live' : 'legend-dot pnl'} />
+                  <span>{effTrack === 'delta' ? 'Live' : 'Realized PnL'}</span>
+                  {effTrack === 'delta' && (
                     <>
                       <span class="legend-dot dry" />
                       <span>Dry-run</span>
@@ -849,7 +1082,7 @@ function App() {
                   directly off the chart without doing arithmetic. */}
               <PnlChart
                 datasets={
-                  track === 'delta'
+                  effTrack === 'delta'
                     ? [
                         { label: 'Live', points: deltaSeries.livePoints, color: theme === 'light' ? '#000000' : '#ffffff' },
                         { label: 'Dry-run', points: deltaSeries.dryPoints, color: '#22c55e' },
@@ -859,20 +1092,50 @@ function App() {
               />
             </Panel>
 
-            <Panel title="Risk & Ops">
+            <Panel
+              title="Risk & Ops"
+              action={
+                <ExportLink href="/api/reports/ops.json" onUnauthorized={() => setAuthOpen(true)}>
+                  Ops JSON
+                </ExportLink>
+              }
+            >
               <RiskPanel risk={risk} summary={summary} funnel={funnel} />
             </Panel>
           </section>
 
           <section class="table-zone">
-            {track === 'delta' ? (
-              <Panel title="Execution drag per trade" action={<DragCoverageNote drag={drag} />}>
+            {effTrack === 'delta' ? (
+              <Panel
+                title="Execution drag per trade"
+                action={
+                  <div class="panel-actions">
+                    <DragCoverageNote drag={drag} />
+                    <ExportLink
+                      href={`/api/reports/execution-drag.csv?range=${pnlRange}`}
+                      onUnauthorized={() => setAuthOpen(true)}
+                    >
+                      Drag CSV
+                    </ExportLink>
+                  </div>
+                }
+              >
                 <DragTable rows={drag.rows} onSelect={setSelectedDrag} />
               </Panel>
             ) : (
               <Panel
-                title={track === 'dry' ? (summary.mode === 'dry-run' ? 'Dry-run positions' : 'Dry-run twins') : 'Positions'}
-                action={<Segmented value={positionFilter} values={['open', 'closed', 'all']} onChange={setPositionFilter} />}
+                title={effTrack === 'dry' ? (summary.mode === 'dry-run' ? 'Dry-run positions' : 'Dry-run twins') : 'Positions'}
+                action={
+                  <div class="panel-actions">
+                    <Segmented value={positionFilter} values={['open', 'closed', 'all']} onChange={setPositionFilter} />
+                    <ExportLink
+                      href={`/api/reports/positions.csv?state=${positionFilter}&track=${dataTrack}`}
+                      onUnauthorized={() => setAuthOpen(true)}
+                    >
+                      Positions CSV
+                    </ExportLink>
+                  </div>
+                }
               >
                 <PositionsTable rows={positions} onSelect={setSelectedPosition} />
               </Panel>
@@ -880,13 +1143,42 @@ function App() {
           </section>
 
           <section class="lower-grid">
-            <Panel title="Notifications">
+            <Panel
+              title="Notifications"
+              action={
+                <div class="export-row">
+                  <ExportLink
+                    href="/api/reports/events.csv?category=notification&limit=300"
+                    onUnauthorized={() => setAuthOpen(true)}
+                  >
+                    Notifications CSV
+                  </ExportLink>
+                  <ExportLink href="/api/reports/events.csv?limit=300" onUnauthorized={() => setAuthOpen(true)}>
+                    All events CSV
+                  </ExportLink>
+                </div>
+              }
+            >
               <EventList rows={notifications} empty="No notifications yet" compact onSelect={setSelectedEvent} />
             </Panel>
-            <Panel title="Recent Guardrails">
+            <Panel
+              title="Recent Guardrails"
+              action={
+                <ExportLink href="/api/reports/candidates.csv?limit=150" onUnauthorized={() => setAuthOpen(true)}>
+                  Candidates CSV
+                </ExportLink>
+              }
+            >
               <Candidates rows={candidates} onSelect={setSelectedCandidate} />
             </Panel>
-            <Panel title="Breakers">
+            <Panel
+              title="Breakers"
+              action={
+                <ExportLink href="/api/reports/breakers.csv?limit=200" onUnauthorized={() => setAuthOpen(true)}>
+                  Breakers CSV
+                </ExportLink>
+              }
+            >
               <BreakerList rows={breakers} />
             </Panel>
           </section>
@@ -895,15 +1187,21 @@ function App() {
             <Panel
               title="Why candidates were vetoed (24h)"
               action={
-                <ExportLink href="/api/reports/funnel.csv?range=24h" onUnauthorized={() => setAuthOpen(true)}>
-                  Checks CSV
-                </ExportLink>
+                <div class="export-row">
+                  <ExportLink href="/api/reports/funnel.csv?range=24h" onUnauthorized={() => setAuthOpen(true)}>
+                    Checks CSV
+                  </ExportLink>
+                  <ExportLink href="/api/reports/veto-reasons.csv?range=24h" onUnauthorized={() => setAuthOpen(true)}>
+                    Reasons CSV
+                  </ExportLink>
+                </div>
               }
             >
               <VetoReasonsPanel breakdown={vetoBreakdown} funnel={funnel} />
             </Panel>
           </section>
 
+          {!isLiveMode && (
           <section class="table-zone analytics-zone">
             <Panel
               title="Veto dry-runs"
@@ -938,18 +1236,43 @@ function App() {
               />
             </Panel>
           </section>
+          )}
 
           <section class="table-zone">
-            <Panel title="Edge — last 100 closed trades">
+            <Panel
+              title="Edge — last 100 closed trades"
+              action={
+                <div class="export-row">
+                  <ExportLink
+                    href={`/api/reports/edge.csv?track=${dataTrack}&window=100`}
+                    onUnauthorized={() => setAuthOpen(true)}
+                  >
+                    Edge CSV
+                  </ExportLink>
+                  <ExportLink href="/api/reports/latency.csv?range=7d" onUnauthorized={() => setAuthOpen(true)}>
+                    Latency CSV
+                  </ExportLink>
+                </div>
+              }
+            >
               <EdgePanel edge={edge} />
             </Panel>
           </section>
 
           <section class="table-zone">
-            <Panel title="Relaxed-risk rollout (24h)">
+            <Panel
+              title="Relaxed-risk rollout (24h)"
+              action={
+                <ExportLink href="/api/reports/relaxed-risk.csv?range=24h" onUnauthorized={() => setAuthOpen(true)}>
+                  Rollout CSV
+                </ExportLink>
+              }
+            >
               <RelaxedRiskPanel analytics={relaxedRisk} />
             </Panel>
           </section>
+          </>
+          )}
         </main>
       </div>
 
@@ -963,7 +1286,19 @@ function App() {
   );
 }
 
-function Sidebar({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () => void }) {
+function Sidebar({
+  theme,
+  onToggleTheme,
+  view,
+  views,
+  onView,
+}: {
+  theme: Theme;
+  onToggleTheme: () => void;
+  view: View;
+  views: readonly View[];
+  onView: (v: View) => void;
+}) {
   return (
     <aside class="sidebar">
       <div class="brand-row">
@@ -973,6 +1308,21 @@ function Sidebar({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () => 
           <span>Operator UI</span>
         </div>
       </div>
+      <nav class="sidebar-nav" aria-label="Workspaces">
+        {views.map((v) => (
+          <a
+            href={`#${v}`}
+            class={view === v ? 'active' : ''}
+            aria-current={view === v ? 'page' : undefined}
+            onClick={(e) => {
+              e.preventDefault();
+              onView(v);
+            }}
+          >
+            {VIEW_LABELS[v]}
+          </a>
+        ))}
+      </nav>
       <div class="sidebar-footer">
         <nav class="sidebar-links" aria-label="Creator links">
           <span class="sidebar-links-label">Creator</span>
@@ -1202,7 +1552,7 @@ interface ChartSeries {
  * curves is the execution drag, read without arithmetic. Labels come from the
  * LONGEST series so a shorter one doesn't truncate the x-axis.
  */
-function PnlChart({ datasets }: { datasets: ChartSeries[] }) {
+function PnlChart({ datasets, labelFormat = formatMonthish }: { datasets: ChartSeries[]; labelFormat?: (time: string) => string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<Chart | null>(null);
   const multi = datasets.length > 1;
@@ -1222,7 +1572,7 @@ function PnlChart({ datasets }: { datasets: ChartSeries[] }) {
     chartRef.current = new Chart(canvasRef.current, {
       type: 'line',
       data: {
-        labels: labelSource.map((p) => formatMonthish(p.time)),
+        labels: labelSource.map((p) => labelFormat(p.time)),
         datasets: datasets.map((d) => ({
           label: d.label,
           data: d.points.map((p) => p.cumulativePnlSol),
@@ -1256,7 +1606,7 @@ function PnlChart({ datasets }: { datasets: ChartSeries[] }) {
       },
     });
     return () => chartRef.current?.destroy();
-  }, [datasets]);
+  }, [datasets, labelFormat]);
 
   if (datasets.every((d) => d.points.length === 0)) {
     return <div class="empty chart-empty">No closed positions in this window</div>;
@@ -1556,6 +1906,672 @@ function RiskPanel({
         {live && risk.walletFloorSol != null ? ` · floor ${risk.walletFloorSol.toFixed(3)}` : ''}
         {summary.system.lastGraduationAt ? ` · last grad ${formatTime(summary.system.lastGraduationAt)}` : ''}
       </div>
+    </div>
+  );
+}
+
+function fmtPct(v: number | null | undefined, digits = 0): string {
+  return v === null || v === undefined ? '—' : `${(v * 100).toFixed(digits)}%`;
+}
+
+function fmtDist(d: SlotDist): string {
+  if (d.n === 0 || d.p50 === null) return '—';
+  return `p50 ${d.p50.toFixed(1)} · p90 ${d.p90 === null ? '—' : d.p90.toFixed(1)} (n=${d.n})`;
+}
+
+function fmtSignedPct(v: number | null): string {
+  return v === null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`;
+}
+
+function pnlTone(v: number | null): 'profit' | 'loss' | undefined {
+  return v === null ? undefined : v >= 0 ? 'profit' : 'loss';
+}
+
+/** Realistic entry columns: first in slot +1, the median position in slots +1..+3, and the per-migration feasible slot. */
+const REALISTIC_KEYS = ['slot1', 'slot1mid', 'slot2mid', 'slot3mid', 'feasiblemid'] as const;
+const REALISTIC_LABELS: Record<(typeof REALISTIC_KEYS)[number], string> = {
+  slot1: '+1 first',
+  slot1mid: '+1 mid',
+  slot2mid: '+2 mid',
+  slot3mid: '+3 mid',
+  feasiblemid: 'feasible mid',
+};
+/** The headline leg: landing mid-pack in the slot after the migrate. */
+const HEADLINE_KEY = 'slot1mid';
+
+function PnlCell({ v }: { v: number | null }) {
+  return <td class={v === null ? '' : v >= 0 ? 'profit-text' : 'loss-text'}>{fmtSignedPct(v)}</td>;
+}
+
+type LatencySource = 'measured' | 'proxy' | 'assumption' | 'live' | 'none';
+
+const SOURCE_TAG: Record<LatencySource, string> = {
+  measured: 'measured',
+  proxy: 'proxy',
+  assumption: 'assumption',
+  live: 'live',
+  none: 'no data',
+};
+
+const SOURCE_LABEL: Record<LatencySource, string> = {
+  measured: 'measured · racer',
+  proxy: 'proxy · other bots on-chain',
+  assumption: 'assumption · config',
+  live: 'live trader samples',
+  none: 'no data yet',
+};
+
+function fmtMs(d: SlotDist | undefined): string {
+  if (!d || d.n === 0 || d.p50 === null) return '—';
+  const f = (v: number) => (v >= 100 ? v.toFixed(0) : v.toFixed(1));
+  return `p50 ${f(d.p50)} ms · p90 ${d.p90 === null ? '—' : f(d.p90)} ms · n=${d.n}`;
+}
+
+function fmtSlots(d: SlotDist | undefined): string {
+  if (!d || d.n === 0 || d.p50 === null) return '—';
+  return `p50 ${d.p50.toFixed(1)} · p90 ${d.p90 === null ? '—' : d.p90.toFixed(1)} slots · n=${d.n}`;
+}
+
+/** One stage of the detection → send → land → exit chain. */
+function LatencyCard(props: {
+  stage: string;
+  value: string;
+  caption: string;
+  source: LatencySource;
+  rows: Array<[string, string, LatencySource]>;
+}) {
+  return (
+    <article class="latency-card">
+      <header>
+        <span class="latency-stage">{props.stage}</span>
+        <span class={`latency-source src-${props.source}`}>{SOURCE_LABEL[props.source]}</span>
+      </header>
+      <strong>{props.value}</strong>
+      <span class="latency-caption">{props.caption}</span>
+      <table class="kv-table latency-rows">
+        <tbody>
+          {props.rows.map(([k, v, src]) => (
+            <tr key={k}>
+              <th>{k}</th>
+              <td>
+                <span>{v}</span>
+                <em class={`src-${src}`}>{SOURCE_TAG[src]}</em>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </article>
+  );
+}
+
+/** Label / value pairs as a real two-column table (readable at any width). */
+function KvTable({ rows }: { rows: Array<[string, ComponentChildren]> }) {
+  return (
+    <table class="kv-table">
+      <tbody>
+        {rows.map(([k, v]) => (
+          <tr key={k}>
+            <th>{k}</th>
+            <td>{v}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function RacerLatencyPanel({ summary }: { summary: RacerSummary }) {
+  const l = summary.latency;
+  if (!l) return null;
+  const has = (d: SlotDist | undefined) => !!d && d.n > 0;
+  const det = l.detection.racerSlots;
+  const detSrc: LatencySource = has(det) ? 'measured' : 'none';
+  const send = l.sending.liveDetectToSendMs;
+  const ready = l.sending.sendReadyMs;
+  const st = l.sending.stagesMs;
+  const sendSrc: LatencySource = has(ready) ? 'measured' : has(send) ? 'live' : 'none';
+  const first = l.landing.firstOutsideBuySlots;
+  const exitLive = l.exit.liveExitSendToLandedMs;
+  return (
+    <section class="latency-grid" aria-label="Latency chain">
+      <LatencyCard
+        stage="1 · Detection"
+        value={has(det) ? `${det.p50!.toFixed(1)} slots` : '—'}
+        caption="Heartbeat slot when the landed migrate reached us − its slot (≤ 0: before the slot was marked processed)"
+        source={detSrc}
+        rows={[
+          ['Racer migrate receipt', fmtSlots(det), detSrc],
+          ['Trader feed → handler', fmtMs(l.detection.liveMs), has(l.detection.liveMs) ? 'live' : 'none'],
+          ['Trader detection lag', fmtSlots(l.detection.liveSlots), has(l.detection.liveSlots) ? 'live' : 'none'],
+        ]}
+      />
+      <LatencyCard
+        stage="2 · Sending"
+        value={has(ready) ? `${ready.p50!.toFixed(2)} ms` : '—'}
+        caption="Landed-migrate frame receipt → guardrail screen → signed post-migration buy (real local build, never sent; no wait for the pool push). Accepts only; a veto stops at the screen. Target ≤ 10 ms."
+        source={sendSrc}
+        rows={[
+          ['Send-ready (receipt → screened → signed)', fmtMs(ready), has(ready) ? 'measured' : 'none'],
+          ['Guardrail screen (hot path)', fmtMs(st.screen), has(st.screen) ? 'measured' : 'none'],
+          [
+            'Screen accept / inputs precomputed',
+            (l.sending.screenDecisions ?? 0) > 0
+              ? `${fmtPct(l.sending.screenAcceptRate ?? null)} / ${fmtPct(l.sending.screenPreparedRate ?? null)} (n=${l.sending.screenDecisions})`
+              : '—',
+            (l.sending.screenDecisions ?? 0) > 0 ? 'measured' : 'none',
+          ],
+          ['Built from synthesized pool (no wait)', fmtPct(l.sending.synthesizedShare ?? null), l.sending.synthesizedShare == null ? 'none' : 'measured'],
+          [
+            'Synth audit vs real pool',
+            (l.sending.synthChecks ?? 0) > 0 ? `${fmtPct(l.sending.synthMatchRate ?? null)} identical (n=${l.sending.synthChecks})` : '—',
+            (l.sending.synthChecks ?? 0) > 0 ? 'measured' : 'none',
+          ],
+          ['State / build / sign', has(st.build) ? `${st.state.p50!.toFixed(2)} / ${st.build.p50!.toFixed(2)} / ${st.sign.p50!.toFixed(2)} ms` : '—', has(st.build) ? 'measured' : 'none'],
+          ['Detect → send (live)', fmtMs(send), has(send) ? 'live' : 'none'],
+        ]}
+      />
+      <LatencyCard
+        stage="3 · Landing"
+        value={has(l.landing.feasibleOffsetSlots) ? `S+${l.landing.feasibleOffsetSlots!.p50!.toFixed(0)}` : `S+${l.landing.modeledEntrySlot} (model)`}
+        caption="Earliest slot a buy could land in: the slot in progress when a send leaving at send-ready (+ one-way) reaches the leader"
+        source={has(l.landing.feasibleOffsetSlots) ? 'measured' : 'assumption'}
+        rows={[
+          ['Feasible landing (slots after migrate)', fmtSlots(l.landing.feasibleOffsetSlots), has(l.landing.feasibleOffsetSlots) ? 'measured' : 'none'],
+          ['Migrate slot still open on arrival', fmtPct(l.landing.migrateSlotStillOpenShare ?? null), l.landing.migrateSlotStillOpenShare == null ? 'none' : 'measured'],
+          ['First outside buy lands', fmtSlots(first), has(first) ? 'proxy' : 'none'],
+          ['Outside buy inside migrate slot', fmtPct(l.landing.sameSlotBuyShare), l.landing.sameSlotBuyShare === null ? 'none' : 'proxy'],
+          ['S+1 on-chain fill rate', fmtPct(l.landing.onChainFillRate), l.landing.onChainFillRate === null ? 'none' : 'proxy'],
+          ['Trader send → land', fmtSlots(l.landing.liveEntryLandSlots), has(l.landing.liveEntryLandSlots) ? 'live' : 'none'],
+          ['Trader send → confirm seen', fmtMs(l.landing.liveEntryConfirmMs), has(l.landing.liveEntryConfirmMs) ? 'live' : 'none'],
+        ]}
+      />
+      <LatencyCard
+        stage="4 · Exit"
+        value={has(exitLive) ? `${exitLive.p50!.toFixed(0)} ms` : (l.exit.horizonsFromStream ?? 0) > 0 ? 'next slot' : l.exit.assumedExitLandMs === null ? '—' : `+${l.exit.assumedExitLandMs} ms`}
+        caption={
+          has(exitLive)
+            ? 'Exit send → landed (live trader)'
+            : 'Paper sells decide on the stream state at the horizon and fill on the first state in a later slot — no RPC'
+        }
+        source={has(exitLive) ? 'live' : (l.exit.horizonsFromStream ?? 0) > 0 ? 'measured' : 'assumption'}
+        rows={[
+          ['Horizons from stream / RPC fallback', `${l.exit.horizonsFromStream ?? 0} / ${l.exit.horizonsFromRpc ?? 0}`, (l.exit.horizonsFromStream ?? 0) > 0 ? 'measured' : 'none'],
+          ['Next-slot fill / unchanged pool', `${l.exit.horizonNextSlotFills ?? 0} / ${l.exit.horizonUnchangedFills ?? 0}`, (l.exit.horizonsFromStream ?? 0) > 0 ? 'measured' : 'none'],
+          ['Trigger → send (live)', fmtMs(l.exit.liveExitTriggerToSendMs), has(l.exit.liveExitTriggerToSendMs) ? 'live' : 'none'],
+          ['Send → landed (live)', fmtMs(exitLive), has(exitLive) ? 'live' : 'none'],
+          ['Path rules on an unchanged pool', fmtPct(l.exit.unchangedFillShare), l.exit.unchangedFillShare === null ? 'none' : 'measured'],
+        ]}
+      />
+    </section>
+  );
+}
+
+function RacerWorkspace({
+  summary,
+  migrations,
+  paper,
+  liveOnly = false,
+  onUnauthorized,
+}: {
+  summary: RacerSummary | null;
+  migrations: RacerMigrationRow[];
+  paper: RacerPaperRow[];
+  /** Live mode: measured racer data only — paper P&L, cohorts and tracks hidden. */
+  liveOnly?: boolean;
+  onUnauthorized: () => void;
+}) {
+  const [paperCohort, setPaperCohort] = useState<'all' | 'verified'>('all');
+  const shownPaper = paperCohort === 'verified' ? paper.filter((r) => r.entryQuality === 'verified') : paper;
+  if (!summary || !summary.curves) {
+    return (
+      <section class="table-zone">
+        <Panel title="Migration racer">
+          <div className="empty">Racer worker has not reported yet</div>
+        </Panel>
+      </section>
+    );
+  }
+  const { curves, migrations: m, slots, competition, bundles } = summary;
+  const horizons = summary.paper.horizons;
+  const last = horizons[horizons.length - 1] ?? null;
+  const lastSlot1 = last?.entries?.[HEADLINE_KEY] ?? null;
+  const excluded = Object.entries(summary.paper.excludedReasons ?? {});
+  const coverage = Object.entries(m.coverage ?? {}).sort((a, b) => b[1] - a[1]);
+  const coverageTotal = coverage.reduce((n, [, v]) => n + v, 0);
+  const verifiedDone = summary.paper.evaluation?.verifiedCompleted ?? 0;
+  // Cohort × hold pivot: one row per cohort, a column per hold.
+  const cohortRows = new Map<string, { label: string; byHold: Map<number, { n: number; mean: number | null }> }>();
+  for (const h of horizons) {
+    const list = [
+      { id: 'below', label: `Depletion < ${summary.paper.highDepletionThresholdPct ?? 90}%`, stats: h.cohorts?.belowHighDepletion },
+      { id: 'high', label: `Depletion ≥ ${summary.paper.highDepletionThresholdPct ?? 90}%`, stats: h.cohorts?.highDepletion },
+      { id: 'unknown', label: 'Depletion unknown', stats: h.cohorts?.unknownDepletion },
+      ...(h.cohorts?.byCaller ?? []).map((c) => ({ id: `caller:${c.caller}`, label: `Caller ${c.caller.slice(0, 6)}…`, stats: c.stats })),
+    ];
+    for (const c of list) {
+      if (!c.stats || c.stats.n === 0) continue;
+      const row = cohortRows.get(c.id) ?? { label: c.label, byHold: new Map() };
+      row.byHold.set(h.sec, { n: c.stats.n, mean: c.stats.mean });
+      cohortRows.set(c.id, row);
+    }
+  }
+  const cohortList = [...cohortRows.values()].sort(
+    (a, b) => Math.max(...[...b.byHold.values()].map((x) => x.n)) - Math.max(...[...a.byHold.values()].map((x) => x.n)),
+  );
+  return (
+    <div class="racer-stack">
+      {!liveOnly && (
+      <div class="track-strip dry-run-strip" role="status">
+        Measurement only — no wallet, nothing sent. {verifiedDone}/300 verified +1 mid tracks before any edge decision ·{' '}
+        {summary.paper.verifiedTracks ?? 0} verified of {summary.paper.tracks} tracks
+        {excluded.length ? ` (excluded: ${excluded.map(([r, n]) => `${r} ${n}`).join(', ')})` : ''}. “Reach” is idealised; realistic legs
+        pay fees + tips, sell where the sell lands and count rugs as −100%.
+      </div>
+      )}
+
+      <Panel title="Latency — detection → sending → landing → exit">
+        <RacerLatencyPanel summary={summary} />
+      </Panel>
+
+      <section class="metric-grid metric-grid-wide" aria-label="Racer headline">
+        {!liveOnly && (
+        <KpiCard
+          label={last ? `Verified ${last.sec}s +1 mid median (net)` : 'Verified +1 mid median'}
+          value={lastSlot1 ? fmtSignedPct(lastSlot1.median) : '—'}
+          detail={lastSlot1 ? `win ${fmtPct(lastSlot1.winRate)} · n=${lastSlot1.n} · reach ${fmtSignedPct(last!.medianReachPct)}` : 'no verified tracks yet'}
+          tone={pnlTone(lastSlot1?.median ?? null)}
+        />
+        )}
+        <KpiCard
+          label="Migrations seen"
+          value={String(m.total)}
+          detail={`${m.tracked} tracked · ${m.fired} fired · last ${summary.lastMigrateAt ? formatTime(summary.lastMigrateAt) : '—'}`}
+        />
+        <KpiCard
+          label="Complete → migrate"
+          value={slots.completeToMigrate.p50 === null ? '—' : `${slots.completeToMigrate.p50.toFixed(1)} slots`}
+          detail={`p90 ${slots.completeToMigrate.p90 === null ? '—' : slots.completeToMigrate.p90.toFixed(1)} · n=${slots.completeToMigrate.n}`}
+        />
+        <KpiCard
+          label="Fire → complete"
+          value={slots.fireToComplete.p50 === null ? '—' : `${slots.fireToComplete.p50.toFixed(1)} slots`}
+          detail={`p90 ${slots.fireToComplete.p90 === null ? '—' : slots.fireToComplete.p90.toFixed(1)} · n=${slots.fireToComplete.n}`}
+        />
+        <KpiCard
+          label="Lost attempts / migration"
+          value={competition.failedPerMigration === null ? '—' : competition.failedPerMigration.toFixed(2)}
+          detail={`contested ${fmtPct(competition.contestedShare)} · ${competition.attempts} attempts`}
+        />
+        <KpiCard
+          label="Top caller share"
+          value={summary.topCallers[0] ? fmtPct(summary.topCallers[0].share) : '—'}
+          detail={summary.topCallers[0] ? `${summary.topCallers[0].caller.slice(0, 6)}… · ${summary.topCallers[0].wins} wins` : 'no wins yet'}
+        />
+      </section>
+
+      {!liveOnly && (
+      <>
+      <Panel
+        title="Verified paper performance (+1 mid, 0.1 SOL per trade)"
+        action={
+          <ExportLink href="/api/reports/racer-summary.json" onUnauthorized={onUnauthorized}>
+            Summary JSON
+          </ExportLink>
+        }
+      >
+        {horizons.length === 0 ? (
+          <div className="empty">No completed paper tracks yet (horizons finish 5 min after a migration)</div>
+        ) : (
+          <div class="racer-two">
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>Hold</th><th>n</th><th>Mean</th><th>Median</th><th>Win</th><th>95% CI of mean</th><th>Mean ex best</th><th>Paper P&amp;L</th></tr>
+                </thead>
+                <tbody>
+                  {horizons.map((h) => (
+                    <tr key={h.sec}>
+                      <td>{h.sec}s</td>
+                      <td>{h.entries?.[HEADLINE_KEY]?.n ?? 0}</td>
+                      <PnlCell v={h.headline?.mean ?? null} />
+                      <PnlCell v={h.entries?.[HEADLINE_KEY]?.median ?? null} />
+                      <td>{fmtPct(h.entries?.[HEADLINE_KEY]?.winRate ?? null)}</td>
+                      <td>{h.headline?.ciLow == null || h.headline.ciHigh == null ? '—' : `${fmtSignedPct(h.headline.ciLow)} to ${fmtSignedPct(h.headline.ciHigh)}`}</td>
+                      <PnlCell v={h.headline?.meanWithoutBest ?? null} />
+                      <td>{h.headline ? `${h.headline.cumulativeFixedSizePnlSol >= 0 ? '+' : ''}${h.headline.cumulativeFixedSizePnlSol.toFixed(4)} SOL` : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Median by entry</th><th>Open</th><th>Reach</th>
+                    {REALISTIC_KEYS.map((k) => <th key={k}>{REALISTIC_LABELS[k]}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {horizons.map((h) => (
+                    <tr key={h.sec}>
+                      <td>{h.sec}s</td>
+                      <PnlCell v={h.medianOpenPct} />
+                      <PnlCell v={h.medianReachPct} />
+                      {REALISTIC_KEYS.map((k) => <PnlCell key={k} v={h.entries?.[k]?.median ?? null} />)}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+        <p class="panel-note">Percent stats are per-trade; SOL curves below show fixed 0.1 SOL and wallet-sized series — neither is an executable equity curve.</p>
+      </Panel>
+
+      <Panel title={`Cumulative paper P&L — ${last?.sec ?? 300}s +1 mid`}>
+        {!last?.headline?.fixedSizePnlCurve?.length ? (
+          <div className="empty">No verified completed exits yet</div>
+        ) : (
+          <div class="racer-chart">
+            <PnlChart
+              datasets={[
+                {
+                  label: `${last.sec}s · 0.1 SOL/trade`,
+                  color: '#3f8f74',
+                  points: last.headline.fixedSizePnlCurve.map((p) => ({ time: p.exitAt, mint: p.mint, pnlSol: p.pnlSol, cumulativePnlSol: p.cumulativePnlSol })),
+                },
+                ...(last.headline.walletSizePnlCurve?.length ? [{
+                  label: `${last.sec}s · wallet-sized`,
+                  color: '#7a6ff0',
+                  points: last.headline.walletSizePnlCurve.map((p) => ({ time: p.exitAt, mint: p.mint, pnlSol: p.pnlSol, cumulativePnlSol: p.cumulativePnlSol })),
+                }] : []),
+              ]}
+              labelFormat={formatTime}
+            />
+          </div>
+        )}
+        <p class="panel-note">Chronological exits (unavailable reprices: {last?.headline?.fixedSizeCurveUnavailable ?? 0}); wallet-sized uses each track's real-balance size ({last?.headline?.cumulativeWalletSizePnlSol == null ? '—' : `${last.headline.cumulativeWalletSizePnlSol >= 0 ? '+' : ''}${last.headline.cumulativeWalletSizePnlSol.toFixed(4)} SOL`}); no compounding or landing failures.</p>
+      </Panel>
+
+      <Panel title="Predeclared path exits vs same-trade 300 s exit">
+        {!summary.paper.pathRules?.some((x) => x.n > 0) ? (
+          <div className="empty">No verified complete vault paths yet</div>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Rule</th><th>n</th><th>Mean</th><th>Median</th><th>Win</th><th>95% CI</th><th>Same-trade 300 s mean</th><th>Unchanged-pool fills</th><th>Unpriced</th><th>No path</th></tr>
+              </thead>
+              <tbody>
+                {summary.paper.pathRules.map((x) => (
+                  <tr key={x.rule}>
+                    <td>{x.rule}</td><td>{x.n}</td>
+                    <PnlCell v={x.result.mean} /><PnlCell v={x.result.median} /><td>{fmtPct(x.result.winRate)}</td>
+                    <td>{x.result.ciLow == null || x.result.ciHigh == null ? '—' : `${fmtSignedPct(x.result.ciLow)} to ${fmtSignedPct(x.result.ciHigh)}`}</td>
+                    <PnlCell v={x.sameTradeTimeBaseline.mean} />
+                    <td>{x.unchangedFills ?? 0}</td><td>{x.unpriced}</td><td>{x.notCaptured ?? 0}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <p class="panel-note">
+          Exploratory set = first 300 verified tracks; later tracks are reserved. Fills use the next observed pool state, or the unchanged last state when nothing traded on a
+          continuous stream; a stream gap leaves the exit unpriced. No rule is validated for live use.
+        </p>
+      </Panel>
+
+      <div class="racer-two">
+        <Panel title="Migration coverage">
+          {coverage.length === 0 ? <div className="empty">No migrations yet</div> : (
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>Outcome</th><th>Migrations</th><th>Share</th></tr></thead>
+                <tbody>
+                  {coverage.map(([k, v]) => (
+                    <tr key={k}><td>{k}</td><td>{v}</td><td>{fmtPct(coverageTotal ? v / coverageTotal : null)}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p class="panel-note">Every migration reconciles to a verified track or a named exclusion. Rugged tracks scored −100%: {summary.paper.ruggedTracks ?? 0}.</p>
+        </Panel>
+        <Panel title="Execution &amp; capital (proxy)">
+          <KvTable
+            rows={[
+              ['S+1 buys / on-chain failures', `${summary.execution?.slot1BuyAttempts ?? 0} / ${summary.execution?.slot1Failed ?? 0}`],
+              ['S+1 on-chain fill proxy', fmtPct(summary.execution?.observedOnChainFillRate ?? null)],
+              ['Buy volume S / S+1', `${summary.execution?.slot0BuyVolumeSol?.toFixed(2) ?? '—'} / ${summary.execution?.slot1BuyVolumeSol?.toFixed(2) ?? '—'} SOL`],
+              ['Distinct buyers S / S+1', `${summary.execution?.slot0DistinctBuyerOwners ?? 0} / ${summary.execution?.slot1DistinctBuyerOwners ?? 0}`],
+              ['Failed-buy network fee (mean)', summary.execution?.meanFailedNetworkFeeSol == null ? '—' : `${summary.execution.meanFailedNetworkFeeSol.toFixed(6)} SOL`],
+              ['Live cost / round trip (measured share)', `${summary.paper.medianLiveCostSol == null ? '—' : `${summary.paper.medianLiveCostSol.toFixed(4)} SOL`} (${fmtPct(summary.paper.measuredCostShare ?? null)})`],
+              ['Wallet balance / paper size (median, verified)', `${summary.paper.sizing?.medianWalletBalanceSol == null ? '—' : `${summary.paper.sizing.medianWalletBalanceSol.toFixed(4)} SOL`} / ${summary.paper.sizing?.medianSizeSol == null ? '—' : `${summary.paper.sizing.medianSizeSol.toFixed(4)} SOL`}`],
+              ['Sizing reasons', summary.paper.sizing ? Object.entries(summary.paper.sizing.reasons).map(([k, v]) => `${k}: ${v}`).join(' · ') || '—' : '—'],
+              ['Size scenario', last?.sizeScenario ? `${last.sizeScenario.sizeSol} SOL · ${last.sizeScenario.priced} priced / ${last.sizeScenario.unavailable} unavailable` : '—'],
+              ['Scenario paper P&L / fill-adjusted', last?.sizeScenario ? `${last.sizeScenario.pnlSol.toFixed(4)} / ${last.sizeScenario.onChainFillAdjustedPnlSol == null ? '—' : last.sizeScenario.onChainFillAdjustedPnlSol.toFixed(4)} SOL` : '—'],
+              ['Peak capital / ATA rent locked', last?.sizeScenario ? `${last.sizeScenario.peakConcurrentSol.toFixed(4)} / ${last.sizeScenario.ataRentLockedSol.toFixed(4)} SOL` : '—'],
+            ]}
+          />
+          <p class="panel-note">S+1 flow is diagnostic only. Failed buys are no position; off-chain drops are unobservable, so the fill rate is a proxy, not our landing rate.</p>
+        </Panel>
+      </div>
+
+      <Panel title={`Cohorts — +1 mid mean by hold (n)`}>
+        {cohortList.length === 0 ? <div className="empty">Verified paper tracks will populate these cohorts</div> : (
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>Cohort</th>{horizons.map((h) => <th key={h.sec}>{h.sec}s</th>)}</tr></thead>
+              <tbody>
+                {cohortList.map((row) => (
+                  <tr key={row.label}>
+                    <td>{row.label}</td>
+                    {horizons.map((h) => {
+                      const cell = row.byHold.get(h.sec);
+                      return (
+                        <td key={h.sec} class={cell?.mean == null ? '' : cell.mean >= 0 ? 'profit-text' : 'loss-text'}>
+                          {cell ? `${fmtSignedPct(cell.mean)} (${cell.n})` : '—'}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <p class="panel-note">Depletion is the base-vault drain after the migrate tx; it does not show who bought. Small-n cohorts are anecdotes.</p>
+      </Panel>
+
+      <Panel title="Decision-time feature splits (+1 mid, longest hold)">
+        {!last?.featureSplits?.length ? <div className="empty">No verified feature snapshots yet</div> : (
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>Feature</th><th>Cohort</th><th>n</th><th>Mean</th><th>Median</th><th>Win</th><th>95% CI</th></tr></thead>
+              <tbody>
+                {last.featureSplits.map((x, i) => (
+                  <tr key={`${x.feature}-${x.cohort}`}>
+                    <td>{i > 0 && last.featureSplits![i - 1]!.feature === x.feature ? '' : x.feature}</td>
+                    <td title={x.cohort}>{x.cohort.length > 18 ? `${x.cohort.slice(0, 8)}…${x.cohort.slice(-4)}` : x.cohort}</td>
+                    <td>{x.stats.n}</td>
+                    <PnlCell v={x.stats.mean} /><PnlCell v={x.stats.median} /><td>{fmtPct(x.stats.winRate)}</td>
+                    <td>{x.stats.ciLow === null || x.stats.ciHigh === null ? '—' : `${fmtSignedPct(x.stats.ciLow)} to ${fmtSignedPct(x.stats.ciHigh)}`}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <p class="panel-note">
+          Exploratory rows {summary.paper.evaluation?.exploratoryRows ?? 0} / reserved {summary.paper.evaluation?.reservedLaterRows ?? 0}. Inputs are what was observable when the migrate reached the worker.
+        </p>
+      </Panel>
+
+      </>
+      )}
+
+      <div class="racer-two">
+        <Panel title="Race">
+          <KvTable
+            rows={[
+              ['Curves admitted / fired / open', `${curves.admitted} / ${curves.fired} / ${curves.open}`],
+              ['Outcomes: migrated / no-pool / expired', `${curves.migrated} / ${curves.completeNoPool} / ${curves.expired}`],
+              ['Fire → migrate', fmtDist(slots.fireToMigrate)],
+              ['Bundled completion / pool buy', `${fmtPct(bundles.curveBuyBeforeShare)} / ${fmtPct(bundles.poolBuyAfterShare)}`],
+              ['Last curve write', summary.lastCurveAt ? formatTime(summary.lastCurveAt) : '—'],
+            ]}
+          />
+        </Panel>
+        <Panel title="Top migrate callers">
+          {summary.topCallers.length === 0 ? <div className="empty">No migrations yet</div> : (
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>Caller</th><th>Wins</th><th>Share</th></tr></thead>
+                <tbody>
+                  {summary.topCallers.map((c) => (
+                    <tr key={c.caller}>
+                      <td title={c.caller}>{`${c.caller.slice(0, 6)}…${c.caller.slice(-4)}`}</td>
+                      <td>{c.wins}</td>
+                      <td>{fmtPct(c.share)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Panel>
+      </div>
+      <section class="table-zone analytics-zone">
+        <Panel
+          title="Recent migrations"
+          action={
+            <ExportLink href="/api/reports/racer-migrations.csv" onUnauthorized={onUnauthorized}>
+              Migrations CSV
+            </ExportLink>
+          }
+        >
+          {migrations.length === 0 ? (
+            <div className="empty">No migrations recorded yet</div>
+          ) : (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Mint</th>
+                    <th>Caller</th>
+                    <th>Tracked</th>
+                    <th>Fire→done</th>
+                    <th>Done→mig</th>
+                    <th>Lost</th>
+                    <th>Bundle</th>
+                    <th>Reach price</th>
+                    <th>Migrate slot</th>
+                    <th>Receipt / feasible</th>
+                    <th>Send-ready</th>
+                    <th>Depth open / observed / gate</th>
+                    <th>Exclusion</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {migrations.map((row) => (
+                    <tr key={row.signature}>
+                      <td>{formatTime(row.at)}</td>
+                      <td title={row.mint}>{`${row.mint.slice(0, 6)}…`}</td>
+                      <td title={row.caller ?? ''}>{row.caller ? `${row.caller.slice(0, 4)}…` : '—'}</td>
+                      <td>{row.tracked ? 'yes' : 'no'}</td>
+                      <td>{row.fireToComplete ?? '—'}</td>
+                      <td>{row.completeToMigrate ?? '—'}</td>
+                      <td>{row.failedAttempts}</td>
+                      <td>{[row.curveBuyBefore ? 'curve' : null, row.poolBuyAfter ? 'pool' : null].filter(Boolean).join('+') || '—'}</td>
+                      <td>{row.reachPrice === null ? 'unpriced' : row.reachPrice.toExponential(2)}</td>
+                      <td>{row.migrateSlot ?? '—'}</td>
+                      <td>
+                        {row.migrateSlot == null
+                          ? '—'
+                          : `${row.receiptSlot == null ? '—' : `S${row.receiptSlot - row.migrateSlot >= 0 ? '+' : ''}${row.receiptSlot - row.migrateSlot}`} / ${row.feasibleSlot == null ? '—' : `${row.feasibleSlot} (S+${row.feasibleSlot - row.migrateSlot})`}`}
+                      </td>
+                      <td>{row.sendReadyUs == null ? '—' : `${(row.sendReadyUs / 1000).toFixed(2)} ms`}</td>
+                      <td>{[row.initialQuoteDepthSol, row.observedQuoteDepthSol, row.depthThresholdSol].map((v) => v == null ? '—' : `${v.toFixed(2)} SOL`).join(' / ')}</td>
+                      <td>{row.unpricedReason ?? '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Panel>
+      </section>
+
+      {!liveOnly && (
+      <section class="table-zone analytics-zone">
+        <Panel
+          title="Paper tracks (0.1 SOL, fees + impact)"
+          action={
+            <>
+              <Segmented value={paperCohort} values={['all', 'verified']} onChange={(v) => setPaperCohort(v)} />
+              <ExportLink href="/api/reports/racer-paper.csv" onUnauthorized={onUnauthorized}>
+                Paper CSV
+              </ExportLink>
+            </>
+          }
+        >
+          {shownPaper.length === 0 ? (
+            <div className="empty">{paper.length === 0 ? 'No paper tracks yet' : 'No verified tracks in this window'}</div>
+          ) : (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Mint</th>
+                    <th>Armed</th>
+                    <th>Entry quality</th>
+                    <th>Open mark</th>
+                    <th>Same-slot depletion</th>
+                    {shownPaper[0]!.horizons.map((h) => (
+                      <th key={h.sec}>{`${h.sec}s reach / +1 mid`}</th>
+                    ))}
+                    <th>Live cost</th>
+                    <th>Entry depth</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {shownPaper.map((row) => (
+                    <tr key={row.mint}>
+                      <td>{formatTime(row.at)}</td>
+                      <td title={row.mint}>{`${row.mint.slice(0, 6)}…`}</td>
+                      <td>{row.armed === true ? 'early' : row.armed === false ? 'late' : '—'}</td>
+                      <td>{row.entryQuality ?? 'legacy-unverified'}</td>
+                      <td title={row.openRejectReason ?? ''}>{row.openQuality ?? '—'}</td>
+                      <td>{row.sameSlotDepletionPct == null ? '—' : `${row.sameSlotDepletionPct.toFixed(1)}%`}</td>
+                      {row.horizons.map((h) => {
+                        const s1 = h.pnl?.[HEADLINE_KEY] ?? null;
+                        if (h.rugged) return <td key={h.sec} class="loss-text">rugged −100%</td>;
+                        return (
+                          <td key={h.sec}>
+                            <span class={pnlTone(h.pnlReachPct) === 'loss' ? 'loss-text' : 'profit-text'}>{fmtSignedPct(h.pnlReachPct)}</span>
+                            {' / '}
+                            <span class={pnlTone(s1) === 'loss' ? 'loss-text' : s1 === null ? '' : 'profit-text'}>{fmtSignedPct(s1)}</span>
+                          </td>
+                        );
+                      })}
+                      <td>
+                        {row.liveCostSol == null ? '—' : `${row.liveCostSol.toFixed(4)}${row.liveCostSource === 'measured' ? '' : ' (default)'}`}
+                      </td>
+                      <td>{row.horizons[0]?.quoteSol == null ? '—' : `${row.horizons[0].quoteSol.toFixed(0)} SOL @${row.horizons[0].sec}s`}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Panel>
+      </section>
+      )}
     </div>
   );
 }

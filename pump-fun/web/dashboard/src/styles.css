@@ -1369,3 +1369,223 @@ button:focus-visible {
   color: var(--text, inherit);
   font-weight: 600;
 }
+
+/* Racer panel KPIs: two-column label/value rows. */
+.racer-kpis {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 12px;
+  margin: 0 0 12px;
+}
+.racer-kpis > div {
+  display: contents;
+}
+.racer-kpis dt {
+  opacity: 0.72;
+}
+.racer-kpis dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Workspace nav (Scalper / Migration racer). */
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 24px 0 0;
+}
+.sidebar-nav a {
+  font-size: 13px;
+  color: var(--soft-ink);
+  text-decoration: none;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+}
+.sidebar-nav a:hover {
+  color: var(--ink);
+  border-color: var(--rule);
+}
+.sidebar-nav a.active {
+  color: var(--ink);
+  background: var(--panel);
+  border-color: var(--rule);
+  font-weight: 600;
+}
+
+/* The racer view has its own row rhythm; the scalper's fixed rows don't apply. */
+.workspace.racer-view {
+  grid-template-rows: 52px max-content;
+  grid-auto-rows: max-content;
+}
+.racer-grid {
+  min-height: 0;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 0.7fr);
+}
+.racer-grid .panel {
+  min-height: 220px;
+}
+.racer-grid .racer-kpis {
+  padding: 8px 12px;
+}
+.racer-grid .racer-kpis dd {
+  white-space: nowrap;
+}
+@media (max-width: 1100px) {
+  .racer-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Racer workspace: one readable column of full-width sections ─────────── */
+.racer-stack {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+}
+.racer-stack > .panel,
+.racer-stack .racer-two > .panel {
+  overflow: visible;
+}
+.racer-two {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+@media (max-width: 1100px) {
+  .racer-two {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+/* Tables size to their panel; wide ones scroll inside their own wrapper. */
+.racer-stack .table-wrap {
+  overflow-x: auto;
+}
+.racer-stack table {
+  min-width: 520px;
+}
+.racer-stack td,
+.racer-stack th {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.panel-note {
+  margin: 0;
+  padding: 8px 12px 12px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.racer-chart {
+  height: 280px;
+  display: flex;
+}
+.racer-chart .chart-box {
+  width: 100%;
+}
+
+/* Key / value pairs as a two-column table. */
+table.kv-table {
+  min-width: 0;
+  width: 100%;
+}
+.kv-table th {
+  background: transparent;
+  width: 48%;
+  font-weight: 400;
+  color: var(--muted);
+  text-transform: none;
+  letter-spacing: 0;
+  white-space: normal;
+}
+.kv-table td {
+  text-align: right;
+  white-space: normal;
+}
+.kv-table em {
+  font-style: normal;
+  font-size: 11px;
+}
+
+/* Latency chain: four stage cards, prioritised at the top of the racer view. */
+.latency-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 0 12px 12px;
+}
+@media (max-width: 1280px) {
+  .latency-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 640px) {
+  .latency-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.latency-card {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--paper);
+}
+.latency-card header {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: baseline;
+}
+.latency-stage {
+  font-weight: 600;
+}
+.latency-card > strong {
+  font-size: 22px;
+  font-variant-numeric: tabular-nums;
+}
+.latency-caption {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  min-height: 2.8em;
+}
+.latency-card .kv-table th,
+.latency-card .kv-table td {
+  padding: 5px 0;
+  font-size: 12px;
+}
+.latency-source {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--rule);
+  white-space: nowrap;
+}
+.src-measured { color: var(--profit); }
+.src-live { color: var(--profit); }
+.src-proxy { color: var(--warning); }
+.src-assumption { color: var(--warning); }
+.src-none { color: var(--muted); }
+
+/* Latency rows: value on top, provenance tag underneath, both right-aligned. */
+.latency-rows th {
+  width: 42%;
+  vertical-align: top;
+}
+.latency-rows td span,
+.latency-rows td em {
+  display: block;
+}
+.latency-rows td em {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}

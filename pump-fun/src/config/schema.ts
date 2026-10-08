@@ -261,6 +261,23 @@ const EntryConfig = z
       })
       .strict()
       .default({}),
+    // Racer gate (guardrails/racerGate.ts): enter only migrations whose curve
+    // the racer worker would have fired on (racer_curves.fire_slot set). The
+    // check is one local SQLite point read at verdict time — after the fast
+    // read, so a fire written in the migrate slot is still seen. Needs the
+    // racer worker running: with no fires recorded nothing is entered.
+    racerGate: z
+      .object({
+        enabled: z.boolean().default(false),
+        // Poll for new fires (open fired curves, index-backed) to pre-arm
+        // their pool push before the migration lands.
+        pollMs: z.number().int().positive().default(100),
+        armOnFire: z.boolean().default(true),
+        // Fire → migrate is mostly 3–25 slots but has a tail of minutes.
+        fireArmTtlMs: z.number().int().positive().default(600_000),
+      })
+      .strict()
+      .default({}),
     confirm: z
       .object({
         delayMs: z.number().int().positive().default(15_000),
@@ -296,6 +313,10 @@ const GuardrailsConfig = z
     // checks that needed indexers or simulations (H1-H5, H9, H11, the soft
     // score gate, RugCheck) were removed — see engine.ts for why each went.
     minPoolSol: nonNeg.default(25),
+    // Ceiling on the same read: a canonical migration opens at ~68 SOL real, so a
+    // pool far above it was pumped inside the migrate slot (creator-bundled
+    // buy) and an S+1 entry pays that premium. Infinity disables it.
+    maxPoolSol: positive.default(Number.POSITIVE_INFINITY),
     maxBuyImpactPct: pct.default(3),
     // Fast read retry schedule (ms before each attempt) for a pool the RPC
     // node has not seen yet (it lags the gRPC feed by a slot at most).
@@ -461,6 +482,8 @@ const ExitsConfig = z
     deadMoneyEnabled: z.boolean().default(false),
     deadMoneyMinutes: positive.default(3),
     deadMoneyMaxMfePct: nonNeg.default(5),
+    // LP_PULL threshold (%); 0 = off. A full drain to 0 would be a 100 % drop,
+    // so 100 is NOT off — a suspect zero-reserve tick would still fire it.
     emergencyLpDropPct: pct.default(15),
     // Rolling window (in price-poll ticks) for the LP-pull high-water mark.
     lpDropWindowTicks: z.number().int().positive().default(5),
@@ -689,6 +712,103 @@ const PregradConfig = z
     priorityFeeSol: z.number().nonnegative().default(0.00001),
   })
   .strict();
+
+/**
+ * Migration-racer measurement worker (verdict: R=0, no migrate builder).
+ * Streams near-complete bonding curves and every migrate attempt over its own
+ * LaserStream subscription, records chain-slot race timings, and paper-tracks
+ * first position at the pool's open and first-reachable prices. Zero sends by
+ * construction: no signer, no broadcaster, no bundle assembly here.
+ */
+const RacerConfig = z
+  .object({
+    enabled: z.boolean().default(false),
+    // Stream band: curves with < bandValues·2^40 raw tokens left are pushed
+    // (12 ≈ 5.2 SOL to complete). Must cover admitCostSol.
+    streamBandValues: z.number().int().min(1).max(255).default(12),
+    // Admission: a streamed curve at or under this completion cost is tracked.
+    admitCostSol: z.number().nonnegative().default(5),
+    // Would-fire ceiling: completion cost at or under this is a fire.
+    maxCompletionCostSol: z.number().nonnegative().default(0.5),
+    // pump.fun curve trade fee, charged on top of the SOL in (completion cost gross-up).
+    curveFeeBps: z.number().int().min(0).max(1000).default(125),
+    maxTracked: z.number().int().positive().default(500),
+    trackWindowMinutes: positive.default(120),
+    // A completed curve with no landed migrate in this window closes as complete-no-pool.
+    completeNoPoolSec: positive.default(120),
+    // RPC concurrency for mint lookups / virtual-quote reads.
+    maxConcurrent: z.number().int().positive().default(4),
+    // Launch rows preloaded into the curve→mint map at boot.
+    bootLaunches: z.number().int().nonnegative().default(20_000),
+    // First-position paper horizons (seconds after the migrate tx).
+    paperHorizonsSec: z.array(z.number().int().positive()).default([30, 60, 300]),
+    paperSizeSol: positive.default(0.1),
+    // Paper tracks are sized from the real wallet balance (src/racer/walletSize.ts):
+    // min(paperSizeSol, balance − floor − headroom), floored here. paperSizeSol
+    // stays the max so funded history keeps its 0.1 SOL comparability.
+    minPaperSizeSol: positive.default(0.01),
+    // Read-only wallet identity for that sizing. An explicit pubkey here wins;
+    // otherwise the pubkey is derived from wallet.keypairEnvVar when set. The
+    // racer never signs with it and never sends — balance reads only.
+    walletPubkeyEnvVar: z.string().min(1).default('RACER_WALLET_PUBKEY'),
+    // Balance-read cache (ms). Reads stay off the migrate hot path; a failed
+    // refresh keeps the last good value, and sizing falls back flagged.
+    walletBalanceCacheMs: z.number().int().nonnegative().default(30_000),
+    // Recoverable ATA rent reserved per distinct paper position; capital, not P&L.
+    ataRentSol: z.number().nonnegative().default(0.00203928),
+    // No paper track below this pool quote depth (vault + virtual, SOL):
+    // degenerate pools (live 2026-10-05: 0.12 SOL, closed minutes later)
+    // would dominate the medians. The migration row is still recorded.
+    minPaperQuoteSol: z.number().nonnegative().default(10),
+    // Open-mark validation (src/racer/markChecks.ts): a migrate-derived open
+    // is rejected (NULL + reason, never a default) when the bundled buy
+    // supposedly drained more than this share of the pre-buy base, or when it
+    // disagrees with the first slot mark by more than maxOpenSlotDrift×.
+    maxOpenDrainShare: z.number().min(0).max(1).default(0.75),
+    maxOpenSlotDrift: z.number().positive().default(20),
+    // Realistic entries: the pool at the end of slot migrate+k−1 for each k
+    // (src/racer/slotEntry.ts), priced from the base vault armed at admission.
+    realisticSlots: z.array(z.number().int().positive().max(20)).default([1, 2, 3]),
+    // Wait this long after a landed migrate before pricing them (slots ≈ 400 ms).
+    realisticSettleMs: z.number().int().nonnegative().default(2_500),
+    // Live execution cost per round trip charged to realistic entries:
+    // priority fee + Sender/Jito tip on buy and sell plus network fees
+    // (≈ 0.001 buy tip+CU, 0.0005 sell, 4× 5000-lamport sigs; ATA rent is
+    // recoverable and excluded).
+    liveCostSol: z.number().nonnegative().default(0.002),
+    // Measured cost: median fee + tips of up to this many buyers that landed
+    // in migrate slot +1 (src/racer/costs.ts) replaces the buy side of
+    // liveCostSol; the sell side is liveSellCostSol. 0 disables.
+    costSampleBuyers: z.number().int().nonnegative().default(5),
+    // Fill model (src/racer/fills.ts): per-leg land probability from the
+    // trailing pool-buy attempts in this window, bucketed by slot offset and
+    // contention. Failed attempts are charged at the trailing mean failed fee.
+    fillLookbackHours: z.number().positive().default(168),
+    // Landing distribution (src/racer/landing.ts): trailing send-ready probe
+    // samples in this window, pushed through the slot boundaries to weight
+    // the feasible leg's landing offsets. Shorter than the fill window —
+    // pipeline latency regimes shift faster than pool-buy competition.
+    landingLookbackHours: z.number().positive().default(24),
+    liveSellCostSol: z.number().nonnegative().default(0.0005),
+    // Realistic exits are marked this long after each horizon: send → land
+    // was 164 ms p50 + about one slot on the live bot.
+    exitLandMs: z.number().int().nonnegative().default(450),
+    // Stream-priced horizon exits wait this long after the horizon so the next
+    // slot's pool states have arrived (≈ 2 slots); exitLandMs is the RPC fallback.
+    pathExitWindowMs: z.number().int().nonnegative().default(900),
+    // Send-ready probe (src/racer/sendReady.ts): on each landed migrate, build
+    // and sign — never send — the post-migration buy with an ephemeral key, timing
+    // frame receipt → signed bytes. Replaces the trade-local remote build probe.
+    sendReadyProbeEnabled: z.boolean().default(true),
+    // One-way send allowance added to send-ready time when estimating the
+    // earliest slot a buy could land in (Frankfurt → Helius Sender ≈ 1–2 ms).
+    sendOneWayMs: z.number().nonnegative().default(2),
+    // Keep the send-ready build/sign path JIT-hot between migrations (0 = off).
+    sendReadyWarmMs: z.number().int().nonnegative().default(1_000),
+    slippagePct: z.number().nonnegative().default(5),
+  })
+  .strict();
+export type Racer = z.infer<typeof RacerConfig>;
 
 /**
  * Subset of ExitsConfig the twin may override for a strategy experiment. Every
@@ -921,6 +1041,11 @@ const ExecutionConfig = z
     // price cheaper and more attractive to leaders.
     dynamicComputeUnits: z.boolean().default(false),
     buyConfirmPollMs: z.number().int().positive().default(250),
+    // Count a buy as landed at 'processed' (status poll or the wallet push),
+    // as exits do (exits.landAtProcessed), instead of waiting for 'confirmed'
+    // — the position starts being managed ~1 slot sooner. A processed tx
+    // that is later dropped is caught by the fill reconciliation.
+    buyLandAtProcessed: z.boolean().default(false),
     /**
      * Simulate all buy slippage tiers CONCURRENTLY and send only the tightest
      * one that passes, instead of discovering a 6004 serially one tier at a
@@ -1121,6 +1246,7 @@ export const ConfigSchema = z
     launchTrack: LaunchTrackConfig.default({}),
     pregrad: PregradConfig.default({}),
     dryRunTwin: DryRunTwinConfig.default({}),
+    racer: RacerConfig.default({}),
     fees: FeesConfig.default({}),
     simulator: SimulatorConfig.default({}),
     // Experiment discipline (work plan 2026-09-25 P3.6): one change per config

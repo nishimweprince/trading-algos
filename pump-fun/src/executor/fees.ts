@@ -69,6 +69,25 @@ export async function buildFeePlan(
 }
 
 /**
+ * The plan buildFeePlan degrades to, computed WITHOUT any network call: the
+ * priority floor and the configured minimum tips. Served when no plan has been
+ * fetched yet, so a cold cache can never put a round trip on a send path.
+ */
+export function floorFeePlan(config: Config): FeePlan {
+  const h = config.heliusSender;
+  const buyTip = h.enabled
+    ? Math.min(h.tipCapLamports, h.minTipLamports)
+    : config.jito
+      ? clampTip(config.jito.fallbackTipLamports, config)
+      : 0;
+  return {
+    priorityMicroLamports: Math.min(config.fees.priorityFloorMicroLamports, config.fees.priorityCapMicroLamports),
+    jitoTipLamports: buyTip,
+    exitTipLamports: h.enabled && h.exitSwqosOnly ? SENDER_MIN_TIP_LAMPORTS.swqosOnly : buyTip,
+  };
+}
+
+/**
  * Helius Sender tip (P4.1). SWQoS-only routing is not an auction: the
  * documented minimum is the whole price. Max routing rides Jito, so it bids
  * the landed-tip percentile plus a buffer, clamped to [min, cap].
