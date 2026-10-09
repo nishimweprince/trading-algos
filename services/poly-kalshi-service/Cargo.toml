@@ -47,6 +47,8 @@ tracing-appender = "0.2"
 crossbeam-channel = "0.5"
 cpu-time = "1"
 dotenvy = "0.15"
+memmap2 = "0.9"
+rustfft = "6"
 
 pk-stats = { path = "crates/pk-stats" }
 pk-exec = { path = "crates/pk-exec" }

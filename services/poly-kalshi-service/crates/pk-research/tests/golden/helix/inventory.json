@@ -1,0 +1,345 @@
+{
+"streams": {
+"Polymarket_Window": {
+"20261001": {
+"bytes": 5729,
+"records": 46,
+"blocks": 7,
+"subfiles": 2,
+"tags": {
+"32": 26,
+"7": 2,
+"33": 17,
+"8": 1
+},
+"span_s": 1789061557.0,
+"largest_gap_s": 1789056122.1,
+"checksum": "OK"
+},
+"20261002": {
+"bytes": 5718,
+"records": 46,
+"blocks": 7,
+"subfiles": 2,
+"tags": {
+"46": 26,
+"7": 2,
+"47": 17,
+"8": 1
+},
+"span_s": 1789164054.4,
+"largest_gap_s": 1789158619.5,
+"checksum": "OK"
+}
+},
+"Polymarket_CLOB_Yes_BBO": {
+"20261001": {
+"bytes": 517043,
+"records": 19147,
+"blocks": 42,
+"subfiles": 2,
+"tags": {
+"27": 19147
+},
+"span_s": 5468.6,
+"largest_gap_s": 1.5,
+"checksum": "not in manifest",
+"decoded_rows_15m": 19132
+},
+"20261002": {
+"bytes": 521476,
+"records": 19370,
+"blocks": 43,
+"subfiles": 2,
+"tags": {
+"14": 600,
+"27": 18770
+},
+"span_s": 10944056.4,
+"largest_gap_s": 10938768.2,
+"checksum": "not in manifest",
+"decoded_rows_15m": 19355
+}
+},
+"Polymarket_CLOB_No_BBO": {
+"20261001": {
+"bytes": 519616,
+"records": 19147,
+"blocks": 42,
+"subfiles": 2,
+"tags": {
+"27": 19147
+},
+"span_s": 5468.6,
+"largest_gap_s": 1.6,
+"checksum": "not in manifest"
+},
+"20261002": {
+"bytes": 526311,
+"records": 19370,
+"blocks": 42,
+"subfiles": 2,
+"tags": {
+"27": 19370
+},
+"span_s": 5469.3,
+"largest_gap_s": 1.6,
+"checksum": "not in manifest"
+}
+},
+"Polymarket_CLOB_Trade": {
+"20261001": {
+"bytes": 65197,
+"records": 2397,
+"blocks": 12,
+"subfiles": 1,
+"tags": {
+"25": 2397
+},
+"span_s": 5458.6,
+"largest_gap_s": 5.2,
+"checksum": "not in manifest"
+},
+"20261002": {
+"bytes": 66901,
+"records": 2442,
+"blocks": 13,
+"subfiles": 1,
+"tags": {
+"25": 2442
+},
+"span_s": 5466.5,
+"largest_gap_s": 6.5,
+"checksum": "not in manifest"
+}
+},
+"Polymarket_CLOB_No_Trade": {
+"20261001": {
+"bytes": 63739,
+"records": 2362,
+"blocks": 12,
+"subfiles": 1,
+"tags": {
+"25": 2362
+},
+"span_s": 5460.6,
+"largest_gap_s": 6.8,
+"checksum": "not in manifest"
+},
+"20261002": {
+"bytes": 63490,
+"records": 2356,
+"blocks": 12,
+"subfiles": 1,
+"tags": {
+"25": 2356
+},
+"span_s": 5466.2,
+"largest_gap_s": 8.9,
+"checksum": "not in manifest"
+}
+},
+"PolymarketChainlink_BBO": {
+"20261001": {
+"bytes": 374000,
+"records": 16705,
+"blocks": 21,
+"subfiles": 1,
+"tags": {
+"43": 16705
+},
+"span_s": 5580.1,
+"largest_gap_s": 0.9,
+"checksum": "not in manifest"
+},
+"20261002": {
+"bytes": 375740,
+"records": 16767,
+"blocks": 21,
+"subfiles": 1,
+"tags": {
+"43": 16767
+},
+"span_s": 5579.9,
+"largest_gap_s": 1.0,
+"checksum": "not in manifest"
+}
+},
+"Kalshi_Window": {
+"20261001": {
+"bytes": 235,
+"records": 18,
+"blocks": 1,
+"subfiles": 1,
+"tags": {
+"48": 18
+},
+"span_s": 4500.0,
+"largest_gap_s": 0.0,
+"checksum": "not in manifest"
+},
+"20261002": {
+"bytes": 235,
+"records": 18,
+"blocks": 1,
+"subfiles": 1,
+"tags": {
+"48": 18
+},
+"span_s": 4500.0,
+"largest_gap_s": 0.0,
+"checksum": "not in manifest"
+}
+},
+"Kalshi_Yes_BBO": {
+"20261001": {
+"bytes": 281271,
+"records": 13119,
+"blocks": 23,
+"subfiles": 1,
+"tags": {
+"15": 400,
+"22": 12719
+},
+"span_s": 10841551.7,
+"largest_gap_s": 10836318.8,
+"checksum": "not in manifest",
+"decoded_rows_15m": 12454
+},
+"20261002": {
+"bytes": 280993,
+"records": 13006,
+"blocks": 22,
+"subfiles": 1,
+"tags": {
+"43": 13006
+},
+"span_s": 5395.7,
+"largest_gap_s": 1.4,
+"checksum": "not in manifest",
+"decoded_rows_15m": 12358
+}
+},
+"Kalshi_No_BBO": {
+"20261001": {
+"bytes": 282791,
+"records": 13119,
+"blocks": 22,
+"subfiles": 1,
+"tags": {
+"22": 13119
+},
+"span_s": 5397.0,
+"largest_gap_s": 1.9,
+"checksum": "not in manifest"
+},
+"20261002": {
+"bytes": 280367,
+"records": 13006,
+"blocks": 22,
+"subfiles": 1,
+"tags": {
+"43": 13006
+},
+"span_s": 5395.7,
+"largest_gap_s": 1.4,
+"checksum": "not in manifest"
+}
+},
+"Kalshi_Yes_Trade": {
+"20261001": {
+"bytes": 6566,
+"records": 262,
+"blocks": 6,
+"subfiles": 1,
+"tags": {
+"45": 262
+},
+"span_s": 0.0,
+"largest_gap_s": 0.0,
+"checksum": "FAILED"
+},
+"20261002": {
+"bytes": 5693,
+"records": 0,
+"blocks": 0,
+"subfiles": 1,
+"tags": {},
+"span_s": null,
+"largest_gap_s": 0.0,
+"checksum": "not in manifest"
+}
+}
+},
+"assets": {
+"20261001": {
+"BTC": {
+"windows": 6,
+"with_kalshi": 6,
+"with_poly": 6,
+"kalshi_rows": 4008,
+"poly_yes_rows": 5341
+},
+"ETH": {
+"windows": 6,
+"with_kalshi": 6,
+"with_poly": 6,
+"kalshi_rows": 4217,
+"poly_yes_rows": 5438
+},
+"XRP": {
+"windows": 6,
+"with_kalshi": 6,
+"with_poly": 6,
+"kalshi_rows": 4088,
+"poly_yes_rows": 5460
+}
+},
+"20261002": {
+"BTC": {
+"windows": 6,
+"with_kalshi": 6,
+"with_poly": 6,
+"kalshi_rows": 4120,
+"poly_yes_rows": 5501
+},
+"ETH": {
+"windows": 6,
+"with_kalshi": 6,
+"with_poly": 6,
+"kalshi_rows": 4106,
+"poly_yes_rows": 5536
+},
+"XRP": {
+"windows": 6,
+"with_kalshi": 6,
+"with_poly": 6,
+"kalshi_rows": 4003,
+"poly_yes_rows": 5458
+}
+}
+},
+"days": {
+"20261001": {
+"regime": "spot",
+"role": "earlier_regime",
+"kalshi_window_hours": 1.5,
+"usable": false,
+"reasons": [
+"Kalshi covers 1.5 h of windows",
+"checksum failed: Kalshi_Yes_Trade"
+],
+"chainlink": true
+},
+"20261002": {
+"regime": "twap",
+"role": "holdout",
+"kalshi_window_hours": 1.5,
+"usable": false,
+"reasons": [
+"Kalshi covers 1.5 h of windows"
+],
+"chainlink": true
+}
+}
+}

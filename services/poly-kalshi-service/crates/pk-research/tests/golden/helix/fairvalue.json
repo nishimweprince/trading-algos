@@ -1,0 +1,621 @@
+{
+"split": "discovery",
+"days": [
+"20261001",
+"20261002"
+],
+"settlement": {
+"windows": 24,
+"last_tick >= strike (tape)": 0.5833,
+"twap60 >= strike (tape)": 0.625,
+"last_tick >= last_tick at open": 0.625,
+"twap60 >= twap60 at open": 0.4583
+},
+"kalshi_gap_per_second": {
+"0.08": {
+"n": 18,
+"per_day": 9.0,
+"win_rate": 0.5,
+"avg_px": 0.3678,
+"net_cents": 11.74,
+"se": 12.4,
+"day_t": 0.64,
+"median_sec": 251.0,
+"by_asset": {
+"BTC": {
+"n": 7,
+"net_cents": -3.19
+},
+"ETH": {
+"n": 6,
+"net_cents": 18.8
+},
+"XRP": {
+"n": 5,
+"net_cents": 24.19
+}
+}
+},
+"0.10": {
+"n": 19,
+"per_day": 9.5,
+"win_rate": 0.4211,
+"avg_px": 0.3451,
+"net_cents": 6.1,
+"se": 11.27,
+"day_t": 0.29,
+"median_sec": 330.0,
+"by_asset": {
+"BTC": {
+"n": 8,
+"net_cents": 0.18
+},
+"ETH": {
+"n": 5,
+"net_cents": 6.53
+},
+"XRP": {
+"n": 6,
+"net_cents": 13.63
+}
+}
+},
+"0.12": {
+"n": 19,
+"per_day": 9.5,
+"win_rate": 0.4211,
+"avg_px": 0.3404,
+"net_cents": 6.58,
+"se": 11.42,
+"day_t": 0.3,
+"median_sec": 330.0,
+"by_asset": {
+"BTC": {
+"n": 8,
+"net_cents": 1.34
+},
+"ETH": {
+"n": 5,
+"net_cents": 6.53
+},
+"XRP": {
+"n": 6,
+"net_cents": 13.63
+}
+}
+},
+"0.15": {
+"n": 17,
+"per_day": 8.5,
+"win_rate": 0.4118,
+"avg_px": 0.3316,
+"net_cents": 6.56,
+"se": 12.45,
+"day_t": 0.17,
+"median_sec": 383.0,
+"by_asset": {
+"BTC": {
+"n": 8,
+"net_cents": -0.04
+},
+"ETH": {
+"n": 5,
+"net_cents": 6.53
+},
+"XRP": {
+"n": 4,
+"net_cents": 19.8
+}
+}
+}
+},
+"fair_value": {
+"W120": {
+"calibration": {
+"(-0.001, 0.1]": {
+"n": 67,
+"up_rate": 0.567
+},
+"(0.1, 0.2]": {
+"n": 25,
+"up_rate": 0.76
+},
+"(0.2, 0.3]": {
+"n": 26,
+"up_rate": 0.731
+},
+"(0.3, 0.4]": {
+"n": 25,
+"up_rate": 0.4
+},
+"(0.4, 0.5]": {
+"n": 33,
+"up_rate": 0.485
+},
+"(0.5, 0.6]": {
+"n": 21,
+"up_rate": 0.286
+},
+"(0.6, 0.7]": {
+"n": 28,
+"up_rate": 0.393
+},
+"(0.7, 0.8]": {
+"n": 33,
+"up_rate": 0.242
+},
+"(0.8, 0.9]": {
+"n": 27,
+"up_rate": 0.407
+},
+"(0.9, 1.0]": {
+"n": 53,
+"up_rate": 0.566
+}
+},
+"brier": 0.4097,
+"brier_poly_mid": 0.2555,
+"brier_kalshi_mid": 0.2563,
+"edges": {
+"0.02": {
+"n": 24,
+"per_day": 12.0,
+"win_rate": 0.375,
+"avg_px": 0.3868,
+"net_cents": -2.78,
+"se": 10.83,
+"day_t": -0.88,
+"median_sec": 20.0,
+"by_asset": {
+"BTC": {
+"n": 8,
+"net_cents": 13.52
+},
+"ETH": {
+"n": 8,
+"net_cents": -19.5
+},
+"XRP": {
+"n": 8,
+"net_cents": -2.34
+}
+}
+},
+"0.04": {
+"n": 24,
+"per_day": 12.0,
+"win_rate": 0.4167,
+"avg_px": 0.3739,
+"net_cents": 2.69,
+"se": 10.82,
+"day_t": 0.36,
+"median_sec": 20.0,
+"by_asset": {
+"BTC": {
+"n": 8,
+"net_cents": 14.15
+},
+"ETH": {
+"n": 8,
+"net_cents": -3.99
+},
+"XRP": {
+"n": 8,
+"net_cents": -2.08
+}
+}
+},
+"0.06": {
+"n": 24,
+"per_day": 12.0,
+"win_rate": 0.5,
+"avg_px": 0.3717,
+"net_cents": 11.26,
+"se": 10.71,
+"day_t": 1.46,
+"median_sec": 20.0,
+"by_asset": {
+"BTC": {
+"n": 8,
+"net_cents": 15.3
+},
+"ETH": {
+"n": 8,
+"net_cents": 9.64
+},
+"XRP": {
+"n": 8,
+"net_cents": 8.83
+}
+}
+},
+"0.08": {
+"n": 23,
+"per_day": 11.5,
+"win_rate": 0.4783,
+"avg_px": 0.3887,
+"net_cents": 7.36,
+"se": 10.99,
+"day_t": 3.47,
+"median_sec": 27.0,
+"by_asset": {
+"BTC": {
+"n": 8,
+"net_cents": 24.51
+},
+"ETH": {
+"n": 8,
+"net_cents": -3.87
+},
+"XRP": {
+"n": 7,
+"net_cents": 0.59
+}
+}
+},
+"0.10": {
+"n": 22,
+"per_day": 11.0,
+"win_rate": 0.4545,
+"avg_px": 0.3838,
+"net_cents": 5.49,
+"se": 11.22,
+"day_t": 1.32,
+"median_sec": 36.0,
+"by_asset": {
+"BTC": {
+"n": 7,
+"net_cents": 18.22
+},
+"ETH": {
+"n": 8,
+"net_cents": 8.64
+},
+"XRP": {
+"n": 7,
+"net_cents": -10.84
+}
+}
+}
+}
+},
+"W300": {
+"calibration": {
+"(-0.001, 0.1]": {
+"n": 68,
+"up_rate": 0.574
+},
+"(0.1, 0.2]": {
+"n": 23,
+"up_rate": 0.783
+},
+"(0.2, 0.3]": {
+"n": 27,
+"up_rate": 0.704
+},
+"(0.3, 0.4]": {
+"n": 24,
+"up_rate": 0.375
+},
+"(0.4, 0.5]": {
+"n": 32,
+"up_rate": 0.469
+},
+"(0.5, 0.6]": {
+"n": 22,
+"up_rate": 0.273
+},
+"(0.6, 0.7]": {
+"n": 28,
+"up_rate": 0.393
+},
+"(0.7, 0.8]": {
+"n": 27,
+"up_rate": 0.222
+},
+"(0.8, 0.9]": {
+"n": 31,
+"up_rate": 0.387
+},
+"(0.9, 1.0]": {
+"n": 53,
+"up_rate": 0.585
+}
+},
+"brier": 0.4102,
+"brier_poly_mid": 0.2564,
+"brier_kalshi_mid": 0.2573,
+"edges": {
+"0.02": {
+"n": 24,
+"per_day": 12.0,
+"win_rate": 0.375,
+"avg_px": 0.3714,
+"net_cents": -1.19,
+"se": 10.65,
+"day_t": -0.25,
+"median_sec": 20.0,
+"by_asset": {
+"BTC": {
+"n": 8,
+"net_cents": 15.2
+},
+"ETH": {
+"n": 8,
+"net_cents": -17.29
+},
+"XRP": {
+"n": 8,
+"net_cents": -1.46
+}
+}
+},
+"0.04": {
+"n": 24,
+"per_day": 12.0,
+"win_rate": 0.4583,
+"avg_px": 0.3572,
+"net_cents": 8.57,
+"se": 10.49,
+"day_t": 0.64,
+"median_sec": 20.0,
+"by_asset": {
+"BTC": {
+"n": 8,
+"net_cents": 15.83
+},
+"ETH": {
+"n": 8,
+"net_cents": 11.1
+},
+"XRP": {
+"n": 8,
+"net_cents": -1.21
+}
+}
+},
+"0.06": {
+"n": 24,
+"per_day": 12.0,
+"win_rate": 0.5,
+"avg_px": 0.3543,
+"net_cents": 13.04,
+"se": 10.42,
+"day_t": 1.42,
+"median_sec": 20.0,
+"by_asset": {
+"BTC": {
+"n": 8,
+"net_cents": 16.98
+},
+"ETH": {
+"n": 8,
+"net_cents": 12.36
+},
+"XRP": {
+"n": 8,
+"net_cents": 9.79
+}
+}
+},
+"0.08": {
+"n": 23,
+"per_day": 11.5,
+"win_rate": 0.4348,
+"avg_px": 0.3604,
+"net_cents": 5.9,
+"se": 10.73,
+"day_t": 0.8,
+"median_sec": 26.0,
+"by_asset": {
+"BTC": {
+"n": 8,
+"net_cents": 17.11
+},
+"ETH": {
+"n": 8,
+"net_cents": -1.66
+},
+"XRP": {
+"n": 7,
+"net_cents": 1.73
+}
+}
+},
+"0.10": {
+"n": 22,
+"per_day": 11.0,
+"win_rate": 0.4091,
+"avg_px": 0.356,
+"net_cents": 3.77,
+"se": 10.94,
+"day_t": 0.29,
+"median_sec": 42.0,
+"by_asset": {
+"BTC": {
+"n": 7,
+"net_cents": 8.44
+},
+"ETH": {
+"n": 8,
+"net_cents": 11.1
+},
+"XRP": {
+"n": 7,
+"net_cents": -9.28
+}
+}
+}
+}
+},
+"W900": {
+"calibration": {
+"(-0.001, 0.1]": {
+"n": 69,
+"up_rate": 0.565
+},
+"(0.1, 0.2]": {
+"n": 23,
+"up_rate": 0.783
+},
+"(0.2, 0.3]": {
+"n": 23,
+"up_rate": 0.696
+},
+"(0.3, 0.4]": {
+"n": 21,
+"up_rate": 0.286
+},
+"(0.4, 0.5]": {
+"n": 31,
+"up_rate": 0.452
+},
+"(0.5, 0.6]": {
+"n": 21,
+"up_rate": 0.238
+},
+"(0.6, 0.7]": {
+"n": 25,
+"up_rate": 0.48
+},
+"(0.7, 0.8]": {
+"n": 25,
+"up_rate": 0.16
+},
+"(0.8, 0.9]": {
+"n": 31,
+"up_rate": 0.452
+},
+"(0.9, 1.0]": {
+"n": 54,
+"up_rate": 0.556
+}
+},
+"brier": 0.4088,
+"brier_poly_mid": 0.2639,
+"brier_kalshi_mid": 0.2647,
+"edges": {
+"0.02": {
+"n": 24,
+"per_day": 12.0,
+"win_rate": 0.375,
+"avg_px": 0.3635,
+"net_cents": -0.38,
+"se": 10.53,
+"day_t": -0.07,
+"median_sec": 20.0,
+"by_asset": {
+"BTC": {
+"n": 8,
+"net_cents": 13.77
+},
+"ETH": {
+"n": 8,
+"net_cents": -17.56
+},
+"XRP": {
+"n": 8,
+"net_cents": 2.65
+}
+}
+},
+"0.04": {
+"n": 24,
+"per_day": 12.0,
+"win_rate": 0.4583,
+"avg_px": 0.3493,
+"net_cents": 9.38,
+"se": 10.34,
+"day_t": 0.66,
+"median_sec": 20.0,
+"by_asset": {
+"BTC": {
+"n": 8,
+"net_cents": 14.41
+},
+"ETH": {
+"n": 8,
+"net_cents": 10.83
+},
+"XRP": {
+"n": 8,
+"net_cents": 2.9
+}
+}
+},
+"0.06": {
+"n": 24,
+"per_day": 12.0,
+"win_rate": 0.4583,
+"avg_px": 0.3405,
+"net_cents": 10.27,
+"se": 10.44,
+"day_t": 0.75,
+"median_sec": 20.0,
+"by_asset": {
+"BTC": {
+"n": 8,
+"net_cents": 15.56
+},
+"ETH": {
+"n": 8,
+"net_cents": 11.84
+},
+"XRP": {
+"n": 8,
+"net_cents": 3.41
+}
+}
+},
+"0.08": {
+"n": 24,
+"per_day": 12.0,
+"win_rate": 0.4583,
+"avg_px": 0.3496,
+"net_cents": 9.36,
+"se": 10.46,
+"day_t": 1.92,
+"median_sec": 25.0,
+"by_asset": {
+"BTC": {
+"n": 8,
+"net_cents": 15.68
+},
+"ETH": {
+"n": 8,
+"net_cents": -1.92
+},
+"XRP": {
+"n": 8,
+"net_cents": 14.32
+}
+}
+},
+"0.10": {
+"n": 22,
+"per_day": 11.0,
+"win_rate": 0.4091,
+"avg_px": 0.3474,
+"net_cents": 4.65,
+"se": 10.78,
+"day_t": 0.35,
+"median_sec": 42.0,
+"by_asset": {
+"BTC": {
+"n": 7,
+"net_cents": 6.82
+},
+"ETH": {
+"n": 8,
+"net_cents": 10.84
+},
+"XRP": {
+"n": 7,
+"net_cents": -4.58
+}
+}
+}
+}
+}
+}
+}

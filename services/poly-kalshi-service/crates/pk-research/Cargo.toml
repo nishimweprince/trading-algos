@@ -17,6 +17,9 @@ tracing.workspace = true
 reqwest = { workspace = true, features = ["blocking"] }
 rand.workspace = true
 zstd.workspace = true
+memmap2.workspace = true
+fs2.workspace = true
+rustfft.workspace = true
 parquet.workspace = true
 arrow-array.workspace = true
 arrow-schema.workspace = true

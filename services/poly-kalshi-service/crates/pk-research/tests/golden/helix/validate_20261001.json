@@ -1,0 +1,100 @@
+{
+"identity": {
+"poly_bbo": {
+"records": 19132,
+"wall": true,
+"recv": true,
+"bid": true,
+"ask": true,
+"sizes": true,
+"token": true
+},
+"kalshi_bbo": {
+"records": 13119,
+"wall": false,
+"bid_ask": false,
+"asset": false,
+"changed": false
+},
+"pass": false
+},
+"day": "20261001",
+"windows": 18,
+"resolutions": 18,
+"kalshi_span_hours": 1.5,
+"poly_mirror": {
+"ticks": 17448,
+"exact": 0.1721,
+"within_1c": 0.5959
+},
+"kalshi_yes_no_mirror": {
+"ticks": 12324,
+"exact": 0.9753
+},
+"window_span": {
+"inside": 16239,
+"before_open": 1081,
+"after_close": 146,
+"inside_share": 0.9297
+},
+"convergence_5s_before_close": {
+"agree": 2,
+"disagree": 1,
+"undecided_0.1_0.9": 15,
+"agree_share_of_decided": 0.6667
+},
+"tick_rates_per_s": {
+"poly_yes_raw": 0.2,
+"poly_yes_dedup": 0.2,
+"poly_no_raw": 0.2,
+"kalshi_yes_raw": 0.1,
+"kalshi_yes_dedup": 0.1
+},
+"clocks": {
+"wall_minus_mono_poly_s": {
+"p1": 0.0014,
+"p50": 0.0755,
+"p99": 0.15,
+"n": 17466
+},
+"kalshi_vs_poly_offset_same_instant_ms": {
+"p1": -0.0003,
+"p50": 0.0,
+"p99": 0.0008,
+"n": 12327
+},
+"poly_bbo_recv_minus_pub_ms": {
+"p1": 111000.0,
+"p50": 111000.0,
+"p99": 111000.0,
+"n": 17466
+},
+"poly_trade_recv_minus_venue_ms": {
+"p1": 39.9997,
+"p50": 40.0,
+"p99": 40.0003,
+"n": 2397
+},
+"kalshi_trade_recv_minus_venue_ms": {
+"p1": 25.0,
+"p50": 25.0,
+"p99": 25.0,
+"n": 262
+}
+},
+"kalshi_roll": {
+"switch_after_open_ms": {
+"p1": 196.8919,
+"p50": 4090.2144,
+"p90": 5380.4192,
+"p99": 5924.68,
+"n": 18
+},
+"old_contract_rows_after_open": {
+"p50": 1.0,
+"p99": 1.0,
+"n": 18
+},
+"windows_without_seq_break": 4
+}
+}

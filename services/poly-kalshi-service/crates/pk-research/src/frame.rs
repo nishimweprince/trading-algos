@@ -12,6 +12,9 @@ use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde_json::Value;
 
+/// A row whose keys keep their insertion order.
+pub type Row = IndexMap<String, Value>;
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Col {
     I64(Vec<Option<i64>>),
@@ -97,8 +100,16 @@ impl Frame {
 
     /// From JSON rows, as `pandas.DataFrame(rows)`: columns in first-seen
     /// order, a missing key is null, the type from the values (any float makes
-    /// a numeric column float).
+    /// a numeric column float). `serde_json::Map` sorts its keys, so rows
+    /// whose column order matters are [`Row`]s ([`Frame::from_records`]).
     pub fn from_rows(rows: &[serde_json::Map<String, Value>]) -> Self {
+        let rows: Vec<Row> =
+            rows.iter().map(|r| r.iter().map(|(k, v)| (k.clone(), v.clone())).collect()).collect();
+        Self::from_records(&rows)
+    }
+
+    /// From ordered rows, as `pandas.DataFrame(rows)`.
+    pub fn from_records(rows: &[Row]) -> Self {
         let mut names: IndexMap<String, ()> = IndexMap::new();
         for r in rows {
             for k in r.keys() {
