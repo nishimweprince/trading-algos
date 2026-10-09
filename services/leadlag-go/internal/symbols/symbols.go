@@ -42,11 +42,12 @@ func (t *Table) Get(sym string) (Info, bool) {
 	return i, ok
 }
 
-// Perpetuals lists trading USDT perpetuals onboarded before cutoff, sorted.
-func (t *Table) Perpetuals(cutoff time.Time) []Info {
+// Perpetuals lists trading perpetuals margined in quote (USDT, USDC) and
+// onboarded before cutoff (zero: any), sorted.
+func (t *Table) Perpetuals(quote string, cutoff time.Time) []Info {
 	var out []Info
 	for _, i := range t.Symbols {
-		if i.Status == "TRADING" && i.ContractType == "PERPETUAL" && i.QuoteAsset == "USDT" &&
+		if i.Status == "TRADING" && i.ContractType == "PERPETUAL" && i.QuoteAsset == quote &&
 			(cutoff.IsZero() || i.OnboardMs < cutoff.UnixMilli()) {
 			out = append(out, i)
 		}

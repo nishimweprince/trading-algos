@@ -15,6 +15,10 @@
 //     whether E equals the next trade's T.
 //
 //     llprobe --duration 30m --out probe.json
+//
+// llprobe fees reads the account's commission rates (fees.go):
+//
+//	llprobe fees --symbols SOLUSDC,SOLUSDT
 package main
 
 import (
@@ -72,6 +76,13 @@ type Report struct {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "fees" {
+		if err := runFees(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "llprobe fees:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	dur := flag.Duration("duration", 30*time.Minute, "how long to probe")
 	out := flag.String("out", "", "write the JSON report here (default probe-<az>.json)")
 	rest := flag.String("rest", "https://fapi.binance.com", "REST base")

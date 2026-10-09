@@ -111,6 +111,9 @@ func (h *Hub) OnFrame(conn byte, recvNs int64, frame []byte) {
 
 // fresh drops events already seen (overlap after a reconnect) and counts id jumps.
 func (h *Hub) fresh(e *model.Event) bool {
+	if e.Kind == model.KindLiq {
+		return true // no id; Binance does not resend them on reconnect
+	}
 	if e.Kind == model.KindTrade {
 		last := h.lastTrade[e.Sym]
 		if last != 0 && e.ID <= last {

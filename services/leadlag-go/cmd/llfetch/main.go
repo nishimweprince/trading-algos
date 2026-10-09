@@ -6,6 +6,8 @@
 //	llfetch fetch      --symbols BTCUSDT,ETHUSDT --from 2025-10-01 --to 2026-01-31
 //	llfetch verify     --symbols BTCUSDT,ETHUSDT --from 2025-10-01 --to 2026-01-31
 //	llfetch candidates --n 30
+//	llfetch candidates --quote USDC --onboarded-before ""   (USDC-M followers, explore-3)
+//	llfetch ticks      --symbols SOLUSDC,XRPUSDC            (tick sizes for a shadow params file)
 package main
 
 import (
@@ -46,6 +48,8 @@ func main() {
 		err = runVerify(args)
 	case "candidates":
 		err = runCandidates(ctx, args)
+	case "ticks":
+		err = runTicks(ctx, args)
 	default:
 		usage()
 	}
@@ -56,7 +60,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: llfetch plan|fetch|verify|candidates [flags]  (-h for flags)")
+	fmt.Fprintln(os.Stderr, "usage: llfetch plan|fetch|verify|candidates|ticks [flags]  (-h for flags)")
 	os.Exit(2)
 }
 
@@ -276,13 +280,17 @@ func runCandidates(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("candidates", flag.ExitOnError)
 	n := fs.Int("n", 30, "number of candidates")
 	days := fs.Int("days", 30, "volume lookback in days (median of daily quote volume)")
-	onboardBefore := fs.String("onboarded-before", "2025-01-01", "only contracts listed before this day")
+	onboardBefore := fs.String("onboarded-before", "2025-01-01", "only contracts listed before this day (empty: any)")
+	quote := fs.String("quote", "USDT", "margin asset: USDT or USDC")
 	exclude := fs.String("exclude", "BTCUSDT,ETHUSDT,USDCUSDT,BTCDOMUSDT", "symbols to leave out (leaders, stables, indices)")
 	cache := fs.String("cache", envOr("LL_SYMBOLS_CACHE", filepath.Join(os.TempDir(), "leadlag-exchangeinfo.json")), "exchangeInfo cache")
 	fs.Parse(args)
-	cutoff, err := time.Parse(time.DateOnly, *onboardBefore)
-	if err != nil {
-		return err
+	var cutoff time.Time
+	if *onboardBefore != "" {
+		var err error
+		if cutoff, err = time.Parse(time.DateOnly, *onboardBefore); err != nil {
+			return err
+		}
 	}
 	client := &http.Client{Timeout: 30 * time.Second}
 	tbl, err := symbols.Load(ctx, client, *cache, 24*time.Hour)
@@ -294,7 +302,7 @@ func runCandidates(ctx context.Context, args []string) error {
 		skip[strings.TrimSpace(s)] = true
 	}
 	var syms []string
-	for _, i := range tbl.Perpetuals(cutoff) {
+	for _, i := range tbl.Perpetuals(strings.ToUpper(*quote), cutoff) {
 		if !skip[i.Symbol] {
 			syms = append(syms, i.Symbol)
 		}
@@ -308,9 +316,40 @@ func runCandidates(ctx context.Context, args []string) error {
 		syms = syms[:*n]
 	}
 	for i, s := range syms {
-		fmt.Fprintf(os.Stderr, "%2d %-16s %8.0f M USDT median daily (%d d)\n", i+1, s, vols[s]/1e6, *days)
+		fmt.Fprintf(os.Stderr, "%2d %-16s %8.0f M %s median daily (%d d)\n", i+1, s, vols[s]/1e6, strings.ToUpper(*quote), *days)
 	}
 	fmt.Println(strings.Join(syms, ","))
+	return nil
+}
+
+// runTicks prints {"SYM": tick_e8, …} for the symbols, the "ticks" object of a
+// quoter params file (explore-3). Ticks are fixed in the params file rather
+// than read at start so that a replay makes the same decisions.
+func runTicks(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("ticks", flag.ExitOnError)
+	list := fs.String("symbols", "", "comma-separated symbols")
+	cache := fs.String("cache", envOr("LL_SYMBOLS_CACHE", filepath.Join(os.TempDir(), "leadlag-exchangeinfo.json")), "exchangeInfo cache")
+	fs.Parse(args)
+	tbl, err := symbols.Load(ctx, &http.Client{Timeout: 30 * time.Second}, *cache, 24*time.Hour)
+	if err != nil && tbl == nil {
+		return err
+	}
+	ticks := map[string]int64{}
+	for _, s := range strings.Split(*list, ",") {
+		if s = strings.ToUpper(strings.TrimSpace(s)); s == "" {
+			continue
+		}
+		i, ok := tbl.Get(s)
+		if !ok || i.Tick <= 0 {
+			return fmt.Errorf("%s: not in exchangeInfo (or no tick size)", s)
+		}
+		if i.Status != "TRADING" {
+			fmt.Fprintf(os.Stderr, "warning: %s status %s\n", s, i.Status)
+		}
+		ticks[s] = i.Tick
+	}
+	b, _ := json.Marshal(ticks)
+	fmt.Println(string(b))
 	return nil
 }
 

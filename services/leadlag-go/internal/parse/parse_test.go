@@ -43,6 +43,36 @@ func TestBookTicker(t *testing.T) {
 	}
 }
 
+// Documented forceOrder shape (developers.binance.com, Liquidation Order Streams).
+const liqFrame = `{"stream":"btcusdt@forceOrder","data":{"e":"forceOrder","E":1568014460893,"o":{"s":"BTCUSDT","S":"SELL","o":"LIMIT","f":"IOC","q":"0.014","p":"9910","ap":"9910.5","X":"FILLED","l":"0.014","z":"0.012","T":1568014460891}}}`
+
+func TestForceOrder(t *testing.T) {
+	var e model.Event
+	if err := Frame([]byte(liqFrame), syms, &e); err != nil {
+		t.Fatal(err)
+	}
+	want := model.Event{ExchMs: 1568014460893, TradeMs: 1568014460891, Px: 991_050_000_000, Qty: 1_200_000,
+		Sym: 1, Kind: model.KindLiq, BuyerMaker: true}
+	if e != want {
+		t.Fatalf("got  %+v\nwant %+v", e, want)
+	}
+	if e.TakerSign() != -1 {
+		t.Fatal("a SELL liquidation has sign -1")
+	}
+	buy := `{"stream":"ethusdt@forceOrder","data":{"e":"forceOrder","E":2,"o":{"s":"ETHUSDT","S":"BUY","q":"1","p":"10","ap":"0","z":"0","T":1}}}`
+	if err := Frame([]byte(buy), syms, &e); err != nil || e.TakerSign() != 1 || e.Px != 10*model.Scale || e.Qty != model.Scale {
+		t.Fatalf("buy: %+v %v", e, err)
+	}
+	for _, bad := range []string{
+		`{"stream":"x@forceOrder","data":{"e":"forceOrder","E":1}}`,
+		`{"stream":"x@forceOrder","data":{"E":1,"o":{"s":"BTCUSDT","S":"HOLD","q":"1","p":"1","T":1}}}`,
+	} {
+		if err := Frame([]byte(bad), syms, &e); err != ErrField {
+			t.Errorf("%s: %v", bad, err)
+		}
+	}
+}
+
 func TestRejects(t *testing.T) {
 	var e model.Event
 	cases := map[string]error{
@@ -70,11 +100,12 @@ func TestEnvelopeWhitespaceAndNesting(t *testing.T) {
 }
 
 func TestFrameNoAlloc(t *testing.T) {
-	a, b := []byte(aggFrame), []byte(bookFrame)
+	a, b, l := []byte(aggFrame), []byte(bookFrame), []byte(liqFrame)
 	var e model.Event
 	n := testing.AllocsPerRun(1000, func() {
 		_ = Frame(a, syms, &e)
 		_ = Frame(b, syms, &e)
+		_ = Frame(l, syms, &e)
 	})
 	if n != 0 {
 		t.Fatalf("Frame allocates %v per run", n)
