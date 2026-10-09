@@ -154,6 +154,12 @@ def test_rules_cli_writes_a_loadable_model(tmp_path: Path, capsys) -> None:
         and model.policy.reentry_cooldown_ms == 60000
         and model.scorer.params.z_entry == 4
     )  # type: ignore[union-attr]
+    assert model.policy.exit_mode == "market" and model.policy.guard_z is None
+    guarded = ["--model-dir", str(tmp_path), "--version", "rules-g1", "--guard-z", "3"]
+    assert rules_main([*guarded, "--exit-mode", "maker_chase", "--exit-chase-ms", "20000"]) == 0
+    policy = load_model(tmp_path, "rules-g1", require_pass=False).policy
+    assert policy.guard_z == 3 and policy.exit_mode == "maker_chase"
+    assert policy.exit_chase_ms == 20000
     assert rules_main(args) == 1  # never overwrites
     assert "exists" in capsys.readouterr().err
 

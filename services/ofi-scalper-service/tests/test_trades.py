@@ -82,6 +82,8 @@ def test_summary_and_daily_lines(tmp_path) -> None:
     assert report["gross_bp_mean"] == pytest.approx(0.0, abs=1e-3)  # +8 bp and -8 bp
     assert report["cost_bp_mean"] == pytest.approx(4.0, abs=0.01)  # two maker legs
     assert report["exit_liquidity"] == {"maker": 2}
+    # 10% of 4 bp of fees back with BNB.
+    assert report["net_bp_mean_with_bnb"] == pytest.approx(report["mean_net_bp"] + 0.4, abs=0.01)
     assert any("gross 0.0, costs 4.0" in line for line in _trading_lines(report))
     assert any("maker fill 66.7%" in line for line in _trading_lines(report))
     assert trading_summary(tmp_path, date(2026, 9, 22)) is None

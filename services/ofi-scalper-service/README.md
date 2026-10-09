@@ -132,6 +132,11 @@ to a trained model instead; a model without a gates pass is still ungated.
   after any cycle. rules-v4 used 60 s / 12 bp / 5 s cooldown and lost ~6 bp a trade
   on demo: ~0 bp gross against ~6.5 bp of fees. Write variants with
   `ofi-rules-model --version rules-v6 --z-entry 4 --barrier-bp 25`.
+- **Maker exits and the flow guard** (policy fields, off by default; set with
+  `ofi-rules-model --exit-mode maker_chase --guard-z 3 --guard-tfi 0.3`, compare
+  with `research.backtest --arm`): the time stop rests a post-only exit at the
+  near touch for `exit_chase_ms`, repricing as it moves, then closes at market;
+  the guard skips or cancels entries into hard opposite flow and ends a chase.
 - **Shadow mirror** (`OFI_SHADOW_MIRROR`, testnet only): a second bridge in
   shadow mode on the mainnet feed with its own simulated account and risk
   state. Feed pauses and the kill switch reach it; demo execution faults do

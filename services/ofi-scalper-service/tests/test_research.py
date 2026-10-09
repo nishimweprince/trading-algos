@@ -401,6 +401,19 @@ def test_barriers_by_horizon_takes_one_value_or_one_per_horizon() -> None:
     assert candidate_dir_name(300.0, 25.0, several=True) == "h300-b25"
 
 
+def test_backtest_arms_parse_into_policy_fields() -> None:
+    from research.backtest import parse_arm
+
+    assert parse_arm("guard3:guard_z=3,guard_tfi=0.3,exit_mode=maker_chase") == (
+        "guard3",
+        (("guard_z", 3), ("guard_tfi", 0.3), ("exit_mode", "maker_chase")),
+    )
+    with pytest.raises(ValueError, match="not a policy field"):
+        parse_arm("x:guard=3")
+    with pytest.raises(ValueError, match="NAME:field"):
+        parse_arm("guard3")
+
+
 def test_feature_files_written_before_a_feature_existed_are_replayed(tmp_path) -> None:
     import pyarrow as pa
     import pyarrow.parquet as pq

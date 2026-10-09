@@ -32,6 +32,7 @@ from .policy import Cycle
 
 __all__ = [
     "ADVERSE_HORIZONS_S",
+    "BNB_DISCOUNT",
     "SIGNAL_HORIZONS_S",
     "BackgroundAppender",
     "JsonlDaily",
@@ -43,6 +44,8 @@ __all__ = [
 ]
 
 ADVERSE_HORIZONS_S = (1, 5, 30)
+# Fees paid in BNB cost 10% less (OFI_BNB_FEE_DISCOUNT).
+BNB_DISCOUNT = 0.9
 SIGNAL_HORIZONS_S = (0.1, 0.5, 1, 5, 30, 60, 300, 600, 900)
 NS = 1_000_000_000
 # A held signal repeats every grid step; one episode per symbol and side this long.
@@ -399,6 +402,12 @@ def time_to_fill(entries: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _fee_bp(trade: dict[str, Any]) -> float:
+    """A trade's fees in bp of its entry notional."""
+    notional = float(trade.get("entry_price") or 0) * float(trade.get("entry_qty") or 0)
+    return trade.get("fees_usd", 0.0) / notional * 10_000 if notional > 0 else 0.0
+
+
 def summarise(trades: list[dict[str, Any]], signals: list[dict[str, Any]] | None = None) -> dict:
     """The daily report: P&L, fees, win rate, fill rate, adverse selection, Brier."""
     entries = [t for t in trades if t.get("entry_qty_ordered")]
@@ -424,6 +433,12 @@ def summarise(trades: list[dict[str, Any]], signals: list[dict[str, Any]] | None
         if priced
         else None,
         "cost_bp_mean": round(sum(t["gross_bp"] - t["net_bp"] for t in priced) / len(priced), 3)
+        if priced
+        else None,
+        # What paying fees in BNB would have added (gates stay on undiscounted fees).
+        "net_bp_mean_with_bnb": round(
+            sum(t["net_bp"] + (1 - BNB_DISCOUNT) * _fee_bp(t) for t in priced) / len(priced), 3
+        )
         if priced
         else None,
         "exit_liquidity": {},

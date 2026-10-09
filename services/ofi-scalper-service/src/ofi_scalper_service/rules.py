@@ -43,8 +43,10 @@ from .policy import Scores
 
 __all__ = [
     "DEFAULT_POLICY",
+    "EwStats",
     "RuleParams",
     "RuleScorer",
+    "ew_update",
     "main",
 ]
 
@@ -108,11 +110,42 @@ class RuleParams:
 
 
 @dataclass
-class _SymbolState:
+class EwStats:
+    """Exponentially weighted mean and variance of one signal, on event time."""
+
     mean: float = 0.0
     var: float = 0.0
     first_ns: int | None = None
     last_ns: int | None = None
+
+    def warm(self, t_ns: int, warmup_s: float) -> bool:
+        return (
+            self.first_ns is not None
+            and t_ns - self.first_ns >= warmup_s * NS_PER_S
+            and self.var > 0
+        )
+
+    def z(self, x: float) -> float:
+        return (x - self.mean) / math.sqrt(self.var)
+
+
+def ew_update(state: EwStats, x: float, t_ns: int, halflife_s: float) -> None:
+    """Fold ``x`` at ``t_ns`` into the weighted mean and variance (half-life in seconds)."""
+    if state.first_ns is None or state.last_ns is None:
+        state.first_ns = state.last_ns = t_ns
+        state.mean, state.var = x, 0.0
+        return
+    dt_s = max(t_ns - state.last_ns, 0) / NS_PER_S
+    state.last_ns = t_ns
+    alpha = 1.0 - 0.5 ** (dt_s / halflife_s)
+    diff = x - state.mean
+    increment = alpha * diff
+    state.mean += increment
+    state.var = (1 - alpha) * (state.var + diff * increment)
+
+
+@dataclass
+class _SymbolState(EwStats):
     held_side: str | None = None
     held_until_ns: int = 0
 
@@ -175,18 +208,7 @@ class RuleScorer:
         return None
 
     def _update(self, state: _SymbolState, x: float, t_ns: int) -> None:
-        """Exponentially weighted mean and variance, decaying on event time."""
-        if state.first_ns is None or state.last_ns is None:
-            state.first_ns = state.last_ns = t_ns
-            state.mean, state.var = x, 0.0
-            return
-        dt_s = max(t_ns - state.last_ns, 0) / NS_PER_S
-        state.last_ns = t_ns
-        alpha = 1.0 - 0.5 ** (dt_s / self.params.halflife_s)
-        diff = x - state.mean
-        increment = alpha * diff
-        state.mean += increment
-        state.var = (1 - alpha) * (state.var + diff * increment)
+        ew_update(state, x, t_ns, self.params.halflife_s)
 
     def latency(self) -> dict[str, float] | None:
         if not self.latency_us:
@@ -225,6 +247,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--reentry-cooldown-ms", type=int, default=DEFAULT_POLICY["reentry_cooldown_ms"]
     )
+    parser.add_argument("--exit-mode", choices=("market", "maker_chase"), default="market")
+    parser.add_argument("--exit-chase-ms", type=int, default=None)
+    parser.add_argument("--guard-z", type=float, default=None, help="flow guard; off if unset")
+    parser.add_argument("--guard-tfi", type=float, default=None)
+    parser.add_argument("--guard-imb", type=float, default=None)
+    parser.add_argument("--guard-window-ms", type=int, default=None)
     args = parser.parse_args(argv)
 
     model_dir = args.model_dir
@@ -248,6 +276,10 @@ def main(argv: list[str] | None = None) -> int:
         "time_stop_mult": args.time_stop_mult,
         "reentry_cooldown_ms": args.reentry_cooldown_ms,
     }
+    if args.exit_mode != "market":
+        policy["exit_mode"] = args.exit_mode
+    optional = ("exit_chase_ms", "guard_z", "guard_tfi", "guard_imb", "guard_window_ms")
+    policy.update({k: getattr(args, k) for k in optional if getattr(args, k) is not None})
     if args.hold_ms < args.entry_timeout_ms:
         print(
             f"--hold-ms {args.hold_ms} < --entry-timeout-ms {args.entry_timeout_ms}: entries "

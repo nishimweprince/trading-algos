@@ -154,6 +154,54 @@ def test_shadow_stop_closes_at_the_bid(tmp_path: Path) -> None:
     assert trade["legs"]["close1"]["liquidity"] == "taker"
 
 
+def test_shadow_time_stop_exits_as_a_maker_and_the_guard_cancels_entries(tmp_path: Path) -> None:
+    from tests.model_fixture import POLICY
+
+    dial = Dial()
+    settings = make_settings(
+        tmp_path, OFI_EXECUTION_MODE="shadow", OFI_MODEL_VERSION="v1", OFI_ORDER_NOTIONAL_USD=180
+    )
+    policy = {**POLICY, "exit_mode": "maker_chase", "exit_chase_ms": 5000, "guard_z": 3.0}
+    bridge = ExecutionBridge(
+        settings,
+        risk=RiskState(RiskLimits.from_settings(settings)),
+        alerts=Alerts(RecordingNotifier()),
+        model=dial_model(tmp_path / "models", dial, policy=policy),
+        filters=dict(DEFAULT_FILTERS),
+        fees=lambda _s: FEES,
+    )
+    assert bridge.flow_guard is not None and bridge.flow_guard.enabled
+    dial.set(up=0.8, down=0.05)
+    bridge.on_sample(sample(T0), GATE_ON)
+    bridge.on_trade("BTCUSDT", T0 + 2, 59999.9)
+    btc = bridge.policies["BTCUSDT"]
+    assert btc.phase is Phase.OPEN
+    dial.set()
+    bridge.on_sample(sample(T0 + 10 * S + 2, bid=60001.0, ask=60001.1), GATE_ON)
+    exit1 = bridge.orders[f"{btc.cycle.cycle_id}|exit1"]
+    assert exit1.post_only and exit1.reduce_only and exit1.price == "60001.1"
+    bridge.on_trade("BTCUSDT", T0 + 11 * S, 60001.2)  # bought through our ask
+    assert btc.phase is Phase.FLAT
+    bridge.flush_pending()
+    (trade,) = bridge.book.recent_trades
+    assert trade["exit_reason"] == "time_stop" and trade["legs"]["exit1"]["liquidity"] == "maker"
+    assert trade["exit_price"] == 60001.1
+    # Fees: maker on both legs, no taker.
+    assert trade["fees_usd"] == pytest.approx(0.003 * (60000 + 60001.1) * 2 / 10_000, abs=1e-6)
+
+    # The guard: after warming, a burst of selling flow cancels a resting bid.
+    t = T0 + 20 * S
+    for i in range(3100):
+        t += 100_000_000
+        bridge.on_sample({**sample(t), "ofi_int_1000ms": 1.0 if i % 2 else -1.0}, GATE_ON)
+    dial.set(up=0.8, down=0.05)
+    t += 100_000_000
+    bridge.on_sample(sample(t), GATE_ON)
+    assert btc.phase is Phase.ENTRY_RESTING
+    bridge.on_sample({**sample(t + 100_000_000), "ofi_int_1000ms": -100.0}, GATE_ON)
+    assert btc.phase is Phase.FLAT and bridge.flow_guard.flagged["buy"] == 1
+
+
 def test_shadow_blocks_entries_without_gate_fees_or_while_paused(tmp_path: Path) -> None:
     dial = Dial()
     bridge, risk = shadow_bridge(tmp_path, dial)

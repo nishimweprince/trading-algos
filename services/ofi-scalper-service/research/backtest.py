@@ -29,7 +29,7 @@ from typing import Any
 from ofi_scalper_service.latency import order_rtt_p50
 from ofi_scalper_service.policy import PolicyParams
 from ofi_scalper_service.risk import RiskLimits
-from ofi_scalper_service.trades import summarise
+from ofi_scalper_service.trades import BNB_DISCOUNT, summarise
 
 from .replay import ShadowConfig, Variant, find_session, hour_files, replay_files
 from .scores import PrecomputedScorer, load_table
@@ -105,6 +105,30 @@ class VariantSpec:
     buffer_bp: float = 0.0
     entry_timeout_ms: int = ENTRY_TIMEOUT_MS
     time_stop_mult: float = 2.0
+    # Further PolicyParams fields (flow guard, exit mode), as (name, value) pairs.
+    policy_extra: tuple[tuple[str, Any], ...] = ()
+
+
+def parse_arm(text: str) -> tuple[str, tuple[tuple[str, Any], ...]]:
+    """``"guard3:guard_z=3,guard_tfi=0.3"`` -> the arm's name and policy fields."""
+    name, _, fields = text.partition(":")
+    if not name or not fields:
+        raise ValueError(f"--arm wants NAME:field=value[,field=value]: {text!r}")
+    known = set(PolicyParams.__dataclass_fields__)
+    pairs: list[tuple[str, Any]] = []
+    for token in fields.split(","):
+        key, _, raw = token.partition("=")
+        if key not in known:
+            raise ValueError(f"--arm {name}: {key!r} is not a policy field")
+        value: Any = raw
+        for cast in (int, float):
+            try:
+                value = cast(raw)
+                break
+            except ValueError:
+                continue
+        pairs.append((key, value))
+    return name, tuple(pairs)
 
 
 @dataclass(frozen=True)
@@ -138,6 +162,7 @@ def _variants(job: DayJob) -> list[Variant]:
             buffer_bp=spec.buffer_bp,
             entry_timeout_ms=spec.entry_timeout_ms,
             time_stop_mult=spec.time_stop_mult,
+            **dict(spec.policy_extra),
         )
         variants.append(
             Variant(
@@ -263,7 +288,7 @@ def job_settings(settings: Any) -> dict[str, Any]:
     maker = settings.maker_fee_bp if settings.maker_fee_bp is not None else 2.0
     taker = settings.taker_fee_bp if settings.taker_fee_bp is not None else 5.0
     if settings.bnb_fee_discount:
-        maker, taker = maker * 0.9, taker * 0.9
+        maker, taker = maker * BNB_DISCOUNT, taker * BNB_DISCOUNT
     return {
         "limits": RiskLimits.from_settings(settings),
         "gate": {
@@ -302,6 +327,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--entry-timeout-ms", type=int, default=ENTRY_TIMEOUT_MS)
     parser.add_argument("--order-rtt-ms", type=float, default=None)
     parser.add_argument("--jobs", type=int, default=1)
+    parser.add_argument(
+        "--arm",
+        action="append",
+        default=[],
+        metavar="NAME:FIELD=VALUE,...",
+        help="also run this policy variant in the same pass, e.g. "
+        "guard3:guard_z=3,guard_tfi=0.3 or chase:exit_mode=maker_chase",
+    )
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args(argv)
 
@@ -309,29 +342,59 @@ def main(argv: list[str] | None = None) -> int:
 
     settings = load_settings(args.profile)
     latency = Latency.from_file(Path("research/latency.json"), order_rtt_ms=args.order_rtt_ms)
-    spec = VariantSpec(
-        "run",
-        str(args.candidate),
-        args.scores,
-        args.threshold,
-        queue_model=args.queue,
-        latency_multiple=args.latency_mult,
-        entry_timeout_ms=args.entry_timeout_ms,
+    arms = [("run", ())] + [parse_arm(text) for text in args.arm]
+    specs = tuple(
+        VariantSpec(
+            name,
+            str(args.candidate),
+            args.scores,
+            args.threshold,
+            queue_model=args.queue,
+            latency_multiple=args.latency_mult,
+            entry_timeout_ms=args.entry_timeout_ms,
+            policy_extra=extra,
+        )
+        for name, extra in arms
     )
     common = job_settings(settings)
     jobs = [
-        DayJob(day, str(settings.record_dir), (spec,), latency, **common)
+        DayJob(day, str(settings.record_dir), specs, latency, **common)
         for day in days_between(args.start, args.end)
     ]
-    report = aggregate(run_days(jobs, args.jobs), capital_usd=settings.shadow_equity_usd)["run"]
+    reports = aggregate(run_days(jobs, args.jobs), capital_usd=settings.shadow_equity_usd)
     out = args.out or settings.research_dir / "backtests" / f"{args.candidate.name}-{args.start}"
     out.mkdir(parents=True, exist_ok=True)
-    (out / "trades.jsonl").write_text(
-        "".join(json.dumps(t, default=str) + "\n" for t in report.pop("trades"))
-    )
-    (out / "summary.json").write_text(json.dumps(report, indent=2, default=str))
-    print(json.dumps(report, indent=2, default=str))
+    for name, _ in arms:
+        report = reports[name]
+        prefix = "" if name == "run" else f"{name}-"
+        (out / f"{prefix}trades.jsonl").write_text(
+            "".join(json.dumps(t, default=str) + "\n" for t in report.pop("trades"))
+        )
+        (out / f"{prefix}summary.json").write_text(json.dumps(report, indent=2, default=str))
+    if len(arms) == 1:
+        print(json.dumps(reports["run"], indent=2, default=str))
+    else:
+        print(compare_arms(reports))
     return 0
+
+
+def compare_arms(reports: dict[str, dict[str, Any]]) -> str:
+    """One line per arm: what the flow guard and exit mode change."""
+    lines = [
+        "| arm | trades | fill rate | gross bp | cost bp | net bp | net bp, BNB | mark 1/5/30 s "
+        "| exits |",
+        "|---|---|---|---|---|---|---|---|---|",
+    ]
+    for name, report in reports.items():
+        s = report.get("summary", report)
+        marks = " / ".join(str(s.get("adverse_bp_mean", {}).get(k)) for k in ("1s", "5s", "30s"))
+        lines.append(
+            f"| {name} | {s.get('trades')} | {s.get('maker_fill_rate')} | {s.get('gross_bp_mean')} "
+            f"| {s.get('cost_bp_mean')} | {s.get('mean_net_bp')} | {s.get('net_bp_mean_with_bnb')} "
+            f"| {marks} "
+            f"| {s.get('exit_liquidity')} |"
+        )
+    return "\n".join(lines)
 
 
 if __name__ == "__main__":

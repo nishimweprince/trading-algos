@@ -47,6 +47,7 @@ from ta_core.logging_config import log_event
 
 from .alerts import Alerts
 from .config import ExecutionMode
+from .flow_guard import FlowGuard
 from .model import LoadedModel
 from .policy import (
     Action,
@@ -469,6 +470,7 @@ class ExecutionBridge:
         self.risk = risk
         self.alerts = alerts
         self.model = model
+        self.flow_guard = FlowGuard(model.policy) if model is not None else None
         self.client = client
         self.quotes = quotes
         self.clock_ns = clock_ns
@@ -706,6 +708,7 @@ class ExecutionBridge:
         if policy is None or self.model is None:
             return
         scores = self.model.scorer.score(sample)
+        against = self.flow_guard.against(sample) if self.flow_guard is not None else frozenset()
         fees = self.fees(symbol)
         blocked = self._blocked(symbol, gate, bid, ask, fees, entering=policy.phase is Phase.FLAT)
         maker, taker = fees if fees is not None else (0.0, 0.0)
@@ -721,6 +724,7 @@ class ExecutionBridge:
                 blocked=blocked,
                 threshold_mult=float((gate or {}).get("threshold_mult", 1.0)),
                 size_mult=float((gate or {}).get("max_inventory_mult", 1.0)),
+                flow_against=against,
             )
         )
         refused = self.execute(step.actions, t_ns)
@@ -1235,6 +1239,8 @@ class ExecutionBridge:
             out["controls"] = list(self.gateway.controls)[-10:]
         if self.quotes is not None:
             out["venue_quotes"] = self.quotes.status()
+        if self.flow_guard is not None and self.flow_guard.enabled:
+            out["flow_guard"] = dict(self.flow_guard.flagged)
         if self.shadow is not None:
             out["shadow_fills"] = {
                 "queue_model": self.shadow.queue_model,

@@ -45,12 +45,12 @@ from .regime_gate import RegimeGate
 from .risk import RiskState
 from .sample_log import SampleLog
 from .state_engine import EngineConfig, GridClock, MarketState
+from .trades import BNB_DISCOUNT
 
 __all__ = ["ScalperRuntime"]
 
 GATE_SECONDS = 5.0
 GATE_NS = int(GATE_SECONDS * 1e9)
-BNB_DISCOUNT = 0.9
 KILL_POLL_SECONDS = 1.0
 HEALTH_SECONDS = 10.0
 LATENCY_RESERVOIR = 2000
