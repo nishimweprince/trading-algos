@@ -1,0 +1,5 @@
+/data/
+/runs/
+/state/
+# The root .gitignore drops services/**/data/; this one is source code.
+!/src/zone_trend/data/

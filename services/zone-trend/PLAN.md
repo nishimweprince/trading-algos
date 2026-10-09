@@ -157,3 +157,24 @@ The spec's layout is kept, with these adaptations:
 - M4: `zt wf`, `zt mc`, `zt ablate` produce an acceptance-criteria table (pass/fail per row) and the benchmark comparison. **Go/no-go is decided with the user.**
 - M5: plugin and zone-trend integration tests against the fakes; a 2-week shadow run with the parity replay at ≥95%.
 - Pre-flight before any live stage: Futures API is enabled on the Rwanda account; the key is futures-only with withdrawals disabled and IP-whitelisted.
+
+## Progress log
+
+### M1 data pipeline (2026-10-09)
+Built: `data/vision.py` (S3 listing, month planner, checksum-verified atomic downloads), `parse.py`, `store.py`, `sync.py`, `validate.py`, `exchange.py`, `universe.py`, and the `zt data symbols|sync|exchange-info|validate|universe` commands.
+
+Decisions and findings from real data (BTC/ETH, 2019-09 to 2026-10):
+- **Storage.** Zips are kept under `data/raw` (pass `--drop-raw` to delete them). Parquet month files use zstd level 9 with delta-encoded integer columns, and datetimes are derived on load. That makes them 393 MB against 474 MB of zips; the default encoding was 875 MB.
+- **Month planner.** Monthly archives are used where they exist and daily archives otherwise. A month built from dailies is rebuilt once its monthly archive is published, and never touched after that.
+- **Last-price klines are complete:** no gaps and no OHLC errors. The only defects are 1m volume losses around exchange incidents (2021-05-15, 2023-11-10, 2025-01-29, ...), which leave 10 quarantined days per symbol.
+- **Mark and index klines on Vision miss whole days** (BTC 2019-12-25..30, 2021-07-24..27, 2022-07-31, ...). These are **flagged, not quarantined**:
+  - nothing in the strategy reads index prices;
+  - the M3 broker must fall back to last-price 1m for stop triggers where mark data is missing, because positions stay open through no-trade days anyway.
+  - `zt data validate --strict` gives the spec's literal reading.
+- **Mark/last divergence > 2%** is flagged, not quarantined (only 2020-03-13 on BTC), so crash days are not dropped from the backtest.
+- **Funding.** `calc_time` carries 1–2 ms of jitter; `settle_time` rounds it to the second.
+- **Universe.**
+  - The candidates are every USDT perpetual on Vision (delisted ones included), minus stablecoin bases and dated contracts.
+  - Pool = the top 3 × size by 30-day median quote volume. The range filter is applied against that pool's median.
+  - tickSize comes from the current exchangeInfo snapshot, so a delisted symbol skips the tick check and is listed in `no_tick`.
+- **Leverage brackets** need a signed request, so they are deferred to M5. The backtester uses conservative defaults.
