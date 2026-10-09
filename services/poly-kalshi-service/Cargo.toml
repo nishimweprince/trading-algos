@@ -15,7 +15,7 @@ thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.13", default-features = false, features = ["http2", "rustls", "json"] }
+reqwest = { version = "0.13", default-features = false, features = ["http2", "rustls", "json", "query"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 clap = { version = "4", features = ["derive", "env"] }
@@ -31,12 +31,25 @@ parking_lot = "0.12"
 secrecy = "0.10"
 url = "2"
 indexmap = { version = "2", features = ["serde"] }
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+rsa = { version = "0.9", features = ["sha2"] }
+rand = "0.8"
+flate2 = "1"
+zstd = "0.13"
+fs2 = "0.4"
+tracing-appender = "0.2"
+crossbeam-channel = "0.5"
+cpu-time = "1"
 dotenvy = "0.15"
 
 pk-stats = { path = "crates/pk-stats" }
 pk-exec = { path = "crates/pk-exec" }
 pk-core = { path = "crates/pk-core" }
 pk-engine = { path = "crates/pk-engine" }
+pk-tape = { path = "crates/pk-tape" }
+pk-svc = { path = "crates/pk-svc" }
+pk-feeds = { path = "crates/pk-feeds" }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

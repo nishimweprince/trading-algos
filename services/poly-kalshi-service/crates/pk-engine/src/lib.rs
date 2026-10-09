@@ -89,6 +89,7 @@ pub struct AssetState {
     pub last_gap: Option<f64>,
     pub max_abs_gap_full: f64,
     pub first_cross: [Option<(f64, &'static str)>; 5],
+    pub last_hint_ns: i64,
 }
 
 impl AssetState {
@@ -132,7 +133,22 @@ pub struct OrderIntent {
     pub limit_px: f64,
     pub contracts: i64,
     pub decision_ns: i64,
+    /// The leg's touch at the decision, for pricing a probe against.
+    pub best_bid: Option<f64>,
+    pub best_ask: Option<f64>,
 }
+
+/// An asset's gap is nearing the threshold: sign an order for this leg ahead.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PresignHint {
+    pub asset: String,
+    pub token: String,
+    pub best_bid: Option<f64>,
+    pub best_ask: Option<f64>,
+}
+
+/// Hints start at this fraction of the threshold, at most one per asset per second.
+pub const PRESIGN_FRACTION: f64 = 0.75;
 
 pub type Alert = Box<dyn FnMut(&str, &str, &[String]) + Send>;
 
@@ -209,6 +225,7 @@ pub struct Engine {
     age_outlier_ms: Option<f64>,
     emit_intents: bool,
     pub intents: Vec<OrderIntent>,
+    pub hints: Vec<PresignHint>,
     prev_p_ns: Option<i64>,
     last_reconnect_p_ns: Option<i64>,
 }
@@ -259,6 +276,7 @@ impl Engine {
             age_outlier_ms: cfg.age_outlier_ms,
             emit_intents: cfg.emit_intents,
             intents: Vec::new(),
+            hints: Vec::new(),
             prev_p_ns: None,
             last_reconnect_p_ns: None,
             assets: cfg.assets,
@@ -772,6 +790,9 @@ impl Engine {
             st.max_abs_gap = st.max_abs_gap.max(gap.abs());
         }
         if !decision.consumes_window() {
+            if self.emit_intents && self.trade {
+                self.maybe_hint(idx, &window, &decision, recv_ns);
+            }
             return;
         }
         self.state[idx].traded = true;
@@ -873,6 +894,49 @@ impl Engine {
         self.write(recv_ns, record, false);
     }
 
+    fn maybe_hint(&mut self, idx: usize, w: &Window, d: &Decision, recv_ns: i64) {
+        let Some(gap) = d.gap else { return };
+        if d.reason != "below_threshold" || gap.abs() < self.params.gap_threshold * PRESIGN_FRACTION {
+            return;
+        }
+        if recv_ns - self.state[idx].last_hint_ns < NS {
+            return;
+        }
+        self.state[idx].last_hint_ns = recv_ns;
+        let token = if gap > 0.0 { &w.yes_token } else { &w.no_token };
+        let book = self.books.get(token);
+        self.hints.push(PresignHint {
+            asset: w.asset.clone(),
+            token: token.clone(),
+            best_bid: book.and_then(Book::best_bid),
+            best_ask: book.and_then(Book::best_ask),
+        });
+    }
+
+    /// Whether `asset`'s window opening at `open_unix` is identified.
+    pub fn has_window(&self, asset: &str, open_unix: i64) -> bool {
+        self.asset_index(asset).is_some_and(|i| self.windows[i].contains_key(&open_unix))
+    }
+
+    pub fn window(&self, asset: &str, open_unix: i64) -> Option<&Window> {
+        self.asset_index(asset).and_then(|i| self.windows[i].get(&open_unix))
+    }
+
+    /// Every identified window, all assets.
+    pub fn all_windows(&self) -> impl Iterator<Item = &Window> {
+        self.windows.iter().flat_map(|w| w.values())
+    }
+
+    pub fn resolution_known(&self, asset: &str, open_unix: i64, venue: &str) -> bool {
+        self.resolutions
+            .get(&(asset.to_owned(), open_unix))
+            .is_some_and(|s| s.iter().any(|(v, _)| v == venue))
+    }
+
+    pub fn markouts_open(&self) -> usize {
+        self.markouts.len()
+    }
+
     fn count_invalid_legs(&mut self, w: &Window) {
         let since = Some(w.open_unix * NS);
         let keys: Vec<String> = w
@@ -918,7 +982,10 @@ impl Engine {
         let side = side_str(d.buy_yes);
         let token = if d.buy_yes == Some(true) { w.yes_token.clone() } else { w.no_token.clone() };
         if self.emit_intents {
+            let book = self.books.get(&token);
             self.intents.push(OrderIntent {
+                best_bid: book.and_then(Book::best_bid),
+                best_ask: book.and_then(Book::best_ask),
                 asset: w.asset.clone(),
                 open_unix: w.open_unix,
                 token: token.clone(),
