@@ -137,11 +137,13 @@ def load(
     if end_ms is not None:
         last = _month(end_ms - 1)
         files = [f for f in files if f.stem <= last]
+    key = "settle_time" if tf == EVENT_TF else "open_time"
+    if columns is not None and key not in columns:
+        columns = [key, *columns]  # always read the time key: it orders and clips the rows
     if not files:
         return pd.DataFrame(columns=columns)
     tables = [pq.read_table(f, columns=columns) for f in files]
     df = pd.concat([t.to_pandas() for t in tables], ignore_index=True)
-    key = "settle_time" if tf == EVENT_TF else "open_time"
     if start_ms is not None:
         df = df[df[key] >= start_ms]
     if end_ms is not None:

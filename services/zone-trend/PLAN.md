@@ -208,3 +208,33 @@ BTCUSDT smoke run over the full history (59k 1H bars, 12 s):
 - 4H trend: Range 63% of hours, Up 21%, Down 16%.
 - 29 signals (19 long, 10 short) and 67 rejections. By reason: slope 23, no_room 17, vol_filter 11, vol_history 8, stop_too_wide 5, momentum_decay 2, trend 1.
 - About 4 signals a year on BTC is thin against the M4 requirement of ≥15 out-of-sample trades per symbol. Watch trade counts once the full universe is in.
+
+### M3 risk and backtester (2026-10-09)
+Built:
+- `risk/sizing.py`, `liquidation.py`, `displacement.py`, `portfolio.py`.
+- `backtest/tape.py`: the per-symbol core replay, parallel and cached under `data/cache/tapes`. Also the EMA 20/100 benchmark tape.
+- `backtest/market.py`: 1m last and mark minutes, loaded a month at a time and only for symbols with orders. Also funding.
+- `backtest/broker_sim.py`, `engine.py`, `metrics.py`, `report.py`.
+- The `zt backtest` command (`--benchmark`, `--slippage-mult`, `--symbols` or the universe history).
+- Outputs in `runs/{id}/`: config.yaml, snapshot_id, meta.json with a summary, trades/fills/equity/signals Parquet (every rejection with its stage and reason), and report.html.
+
+Tests:
+- The spec's sizing worked-examples table.
+- Liquidation distance at 5x.
+- Breakers and each entry check.
+- Broker scenarios: fills, slippage, a gap through the stop, TP1 → breakeven, TP2, single TP, same-minute conflict, mark-triggered stop, funding sign and timing, liquidation.
+- An end-to-end engine run on synthetic data through the real store. With everything flat at the end, final cash = start + Σ net, and cached reruns are identical.
+
+Interpretations:
+- `k_sym` scales the risk budget *inside* the margin cap (the spec's formula multiplies after the `min`, which could exceed the cap).
+- A "single take-profit" closes the whole position at TP1.
+- The breakeven stop moves at the TP1 fill, mirroring the OMS.
+- Same-minute stop/TP resolves as the stop, and conflicts are counted.
+- The funding filter uses the last settled rate, 8h-normalised.
+- The weekly breaker anchors at Monday 00:00 UTC.
+- Rejected signals on quarantined days get reason `quarantine`; days flagged for mark/last divergence get `data_sanity`.
+
+Smoke run, BTC+ETH 2021-01..2026-09, $500:
+- 43 trades, PF 1.23, +0.03R per trade, max DD 1.5%, Sharpe 0.26. At 2x slippage, PF is 1.18.
+- Every BTC trade is single-TP, because of the 0.001 step and $100 minimum.
+- The EMA benchmark made only 9 trades: its 2×ATR1D stops usually exceed `max_stop_pct` (6%). Decide at M4 whether the benchmark should get its own stop cap; the spec says "identical sizing".

@@ -182,6 +182,58 @@ def _data_universe(args: argparse.Namespace) -> int:
     return 0
 
 
+def _backtest(args: argparse.Namespace) -> int:
+    # Imported here so `zt data ...` does not pay for the backtester's imports.
+    from zone_trend.backtest.engine import RunSpec, run
+    from zone_trend.backtest.metrics import summary
+    from zone_trend.backtest.report import write_run
+
+    paths = DataPaths.from_env(args.data_dir)
+    cfg = load_config(args.config)
+    universe = None
+    symbols = [s.upper() for s in _csv(args.symbols)] if args.symbols else None
+    if symbols is None:
+        hist = paths.root / "universe" / "history.json"
+        if not hist.exists():
+            raise SystemExit(
+                "no universe history: run `zt data universe --from ...` or pass --symbols"
+            )
+        universe = json.loads(hist.read_text())["months"]
+    end = args.end or f"{datetime.now(UTC):%Y-%m}"
+    spec = RunSpec(
+        start=args.start,
+        end=end,
+        symbols=symbols,
+        universe=universe,
+        kind="ema" if args.benchmark else "zone",
+        equity=args.equity,
+        slippage_mult=args.slippage_mult,
+        workers=args.workers,
+        use_cache=not args.no_cache,
+    )
+    result = run(paths, cfg, spec)
+    out = write_run(result, cfg, args.runs_dir)
+    stats = summary(result.trades, result.equity)
+    keys = (
+        "trades",
+        "win_rate",
+        "profit_factor",
+        "expectancy_r",
+        "cagr",
+        "max_drawdown",
+        "sharpe_daily",
+        "end_equity",
+    )
+    print(
+        "  ".join(
+            f"{k} {stats[k]:.4g}" if isinstance(stats[k], float) else f"{k} {stats[k]}"
+            for k in keys
+        )
+    )
+    print(f"# {out}/report.html")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="zt", description="Zone-trend strategy tooling")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -225,6 +277,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--from", dest="start", default="2020-01")
     p.add_argument("--to", dest="end", default=None)
     p.set_defaults(func=_data_universe)
+
+    p = sub.add_parser("backtest", parents=[common], help="event-driven portfolio backtest")
+    p.add_argument("--config", type=Path, default=DEFAULT_PATH)
+    p.add_argument("--from", dest="start", default="2021-01", help="YYYY-MM")
+    p.add_argument("--to", dest="end", default=None, help="YYYY-MM inclusive (default: now)")
+    p.add_argument("--symbols", default=None, help="fixed list (default: universe history)")
+    p.add_argument("--benchmark", action="store_true", help="1D EMA 20/100 rule instead")
+    p.add_argument("--equity", type=float, default=500.0)
+    p.add_argument("--slippage-mult", type=float, default=1.0)
+    p.add_argument("--workers", type=int, default=4)
+    p.add_argument("--no-cache", action="store_true", help="rebuild symbol tapes")
+    p.add_argument("--runs-dir", type=Path, default=Path("runs"))
+    p.set_defaults(func=_backtest)
     return parser
 
 
