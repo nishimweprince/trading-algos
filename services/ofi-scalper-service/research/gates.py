@@ -129,6 +129,7 @@ def gate_table(
     split: Split,
     selection: dict[str, Any],
     daily_loss_limit_usd: float,
+    cost_bp: float | None = None,
 ) -> dict[str, dict[str, Any]]:
     th = thresholds_for(split)
     shallow = tier_of(split) == "shallow"
@@ -215,7 +216,26 @@ def gate_table(
             stress is not None and (worst is None or worst >= loss_cap) and not faults,
             note=f"execution-fault halts: {len(faults)}",
         ),
+        "signal_edge_covers_cost": signal_edge_gate(
+            base, (selection.get("chosen") or {}).get("horizon_s"), cost_bp
+        ),
     }
+
+
+def signal_edge_gate(
+    arm: dict[str, Any], horizon_s: float | None, cost_bp: float | None
+) -> dict[str, Any]:
+    """The mean mid move from signal time at the policy's horizon covers the round trip.
+
+    Before any fill: a policy that only profits through lucky fills, or a signal
+    whose move is gone before the horizon, fails here whatever its P&L.
+    """
+    marks = (arm.get("markouts") or {}).get("overall", {})
+    stats = marks.get(f"{horizon_s:g}s", {}) if horizon_s is not None else {}
+    mean = stats.get("mean_bp")
+    if cost_bp is None or mean is None:
+        return _gate(mean, cost_bp, False, note="not measured", required=False)
+    return _gate(mean, round(cost_bp, 3), mean >= cost_bp, note=f"{stats.get('n')} signal episodes")
 
 
 def passed_all(gates: dict[str, dict[str, Any]]) -> bool:
@@ -433,7 +453,11 @@ def evaluate(
     jobs += [DayJob(day, str(record_dir), stress, latency, **common) for day in stress_days]
     agg = aggregate(run_days(jobs, n_jobs), capital_usd=common["shadow_equity_usd"])
     gates = gate_table(
-        agg, split=split, selection=selection, daily_loss_limit_usd=daily_loss_limit_usd
+        agg,
+        split=split,
+        selection=selection,
+        daily_loss_limit_usd=daily_loss_limit_usd,
+        cost_bp=common["maker_bp"] + common["taker_bp"],
     )
     passed = passed_all(gates)
     cv = json.loads((candidate.path / "cv_report.json").read_text())

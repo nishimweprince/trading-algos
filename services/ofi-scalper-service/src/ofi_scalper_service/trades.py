@@ -353,7 +353,7 @@ class TradeBook:
         self.trades = JsonlDaily(None if state_dir is None else state_dir / "trades", writer)
         self.signals = JsonlDaily(None if state_dir is None else state_dir / "signals", writer)
         self.marks = SignalMarks(
-            JsonlDaily(None if state_dir is None else state_dir / "markouts", writer)
+            JsonlDaily(None if state_dir is None else state_dir / "markouts", writer), keep=keep
         )
         self.recent_trades: deque[dict[str, Any]] = deque(maxlen=keep)
         self.recent_signals: deque[dict[str, Any]] = deque(maxlen=keep)

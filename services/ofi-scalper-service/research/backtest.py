@@ -29,7 +29,7 @@ from typing import Any
 from ofi_scalper_service.latency import order_rtt_p50
 from ofi_scalper_service.policy import PolicyParams
 from ofi_scalper_service.risk import RiskLimits
-from ofi_scalper_service.trades import BNB_DISCOUNT, summarise
+from ofi_scalper_service.trades import BNB_DISCOUNT, summarise, summarise_markouts
 
 from .replay import ShadowConfig, Variant, find_session, hour_files, replay_files
 from .scores import PrecomputedScorer, load_table
@@ -97,8 +97,8 @@ SHORTER_ENTRY_TIMEOUT_MS = 3000
 @dataclass(frozen=True)
 class VariantSpec:
     name: str
-    candidate: str  # candidate directory
-    scores: str  # "oof" | "final"
+    candidate: str  # candidate directory, or a rule model's directory with scores "rules"
+    scores: str  # "oof" | "final" | "rules" (a rule model scoring live in the replay)
     threshold: float
     queue_model: str = "queue"
     latency_multiple: float = 1.0
@@ -150,6 +150,9 @@ def _variants(job: DayJob) -> list[Variant]:
     tables: dict[tuple[str, str], PrecomputedScorer] = {}
     variants = []
     for spec in job.specs:
+        if spec.scores == "rules":
+            variants.append(_rules_variant(spec, job))
+            continue
         candidate = Candidate.load(Path(spec.candidate))
         key = (spec.candidate, spec.scores)
         if key not in tables:
@@ -175,6 +178,23 @@ def _variants(job: DayJob) -> list[Variant]:
     return variants
 
 
+def _rules_variant(spec: VariantSpec, job: DayJob) -> Variant:
+    """A rule model's own policy (plus the spec's extra fields), its own scorer state."""
+    from dataclasses import replace
+
+    from ofi_scalper_service.model import load_model
+
+    path = Path(spec.candidate)
+    model = load_model(path.parent, path.name, require_pass=False)
+    policy = replace(model.policy, **dict(spec.policy_extra))
+    return Variant(
+        spec.name,
+        BacktestModel(model.version, policy, model.scorer),
+        queue_model=spec.queue_model,
+        delay_ns=job.latency.delay_ns(spec.latency_multiple),
+    )
+
+
 def run_day(job: DayJob) -> dict[str, Any]:
     """Replay one UTC day for every variant; returns their trades, counts and halts."""
     logging.disable(logging.WARNING)
@@ -198,6 +218,8 @@ def run_day(job: DayJob) -> dict[str, Any]:
         shadow=shadow,
         **job.overrides,
     )
+    for v in variants:
+        v.book.marks.flush()
     return {
         "day": job.day,
         "files": len(paths),
@@ -205,8 +227,12 @@ def run_day(job: DayJob) -> dict[str, Any]:
             v.name: {
                 "trades": list(v.book.recent_trades),
                 "signals": len(v.book.recent_signals),
+                "markouts": list(v.book.marks.recent),
                 "halts": v.halts,
-                "scored": {"hits": v.model.scorer.hits, "misses": v.model.scorer.misses},
+                "scored": {
+                    "hits": getattr(v.model.scorer, "hits", None),
+                    "misses": getattr(v.model.scorer, "misses", None),
+                },
             }
             for v in variants
         },
@@ -229,6 +255,7 @@ def aggregate(results: list[dict[str, Any]], *, capital_usd: float) -> dict[str,
     names = sorted({name for r in results for name in r["variants"]})
     for name in names:
         trades: list[dict[str, Any]] = []
+        marks: list[dict[str, Any]] = []
         daily: dict[str, float] = {}
         halts: list[dict[str, Any]] = []
         for result in sorted(results, key=lambda r: r["day"]):
@@ -236,6 +263,7 @@ def aggregate(results: list[dict[str, Any]], *, capital_usd: float) -> dict[str,
                 continue  # this variant did not run that day (e.g. stress days only)
             part = result["variants"][name]
             trades += part["trades"]
+            marks += part.get("markouts", [])
             halts += part["halts"]
             daily[result["day"]] = round(
                 sum(t.get("net_usd", 0.0) for t in part["trades"] if t.get("filled")), 6
@@ -245,6 +273,8 @@ def aggregate(results: list[dict[str, Any]], *, capital_usd: float) -> dict[str,
             "daily_net_usd": daily,
             "by_symbol_net_usd": _by(trades, "symbol"),
             "stats": risk_stats(list(daily.values()), capital_usd),
+            # Signal-time mid moves: the edge before any fill or fee.
+            "markouts": summarise_markouts(marks),
             "halts": halts,
             "trades": trades,
         }

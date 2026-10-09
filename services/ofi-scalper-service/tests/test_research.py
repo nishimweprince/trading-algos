@@ -245,6 +245,8 @@ def test_gate_table_pass_and_fail() -> None:
     split = Split("p1", "week", ("a", "b", "c"), ("d",), {}, False, "now")
     selection = {"chosen": {"by_period_net_usd": {"b": 1.0, "c": 0.5}}}
     gates = gate_table(agg, split=split, selection=selection, daily_loss_limit_usd=15.0)
+    # Without a cost (or markouts) the signal-edge gate is informational only.
+    assert gates.pop("signal_edge_covers_cost")["required"] is False
     assert all(g["passed"] for g in gates.values()), {
         k: g for k, g in gates.items() if not g["passed"]
     }
@@ -428,3 +430,46 @@ def test_feature_files_written_before_a_feature_existed_are_replayed(tmp_path) -
     assert not _features_current(path)
     pq.write_table(pa.table({n: [0.0] for n in names}), path)
     assert _features_current(path)
+
+
+def _arm(net_usd: float, trades: int = 40, mean_net_bp: float = 2.0, marks: float = 9.0) -> dict:
+    return {
+        "summary": {"trades": trades, "mean_net_bp": mean_net_bp, "t_stat": 2.5, "win_rate": 0.6},
+        "stats": {"net_usd": net_usd, "max_drawdown_pct": 1.0},
+        "markouts": {"overall": {"300s": {"n": 50, "mean_bp": marks}}},
+        "halts": [],
+    }
+
+
+def test_signal_edge_gate_needs_the_move_at_the_horizon_to_cover_the_round_trip() -> None:
+    from research.gates import signal_edge_gate
+
+    assert signal_edge_gate(_arm(1.0, marks=9.0), 300.0, 7.0)["passed"]
+    failed = signal_edge_gate(_arm(1.0, marks=3.0), 300.0, 7.0)
+    assert not failed["passed"] and failed.get("required", True)
+    unmeasured = signal_edge_gate({"markouts": {}}, 300.0, 7.0)
+    assert unmeasured["required"] is False and unmeasured["note"] == "not measured"
+
+
+def test_rule_models_are_gated_and_the_verdict_is_written_once(tmp_path) -> None:
+    from ofi_scalper_service.model import ModelError, load_model, write_rules_model
+    from ofi_scalper_service.rules import DEFAULT_POLICY, RuleParams
+    from research.evaluate_rules import rules_gate_table, write_gates
+    from research.gates import passed_all
+
+    agg = {"base": _arm(3.0), "pessimistic": _arm(1.0), "latency_2x": _arm(0.5)}
+    gates = rules_gate_table(agg, days=3, horizon_s=300.0, cost_bp=7.0)
+    assert passed_all(gates) and gates["min_trades"]["threshold"] == 20  # shallow bars
+    agg["base"]["markouts"]["overall"]["300s"]["mean_bp"] = 2.0  # no signal edge
+    assert not passed_all(rules_gate_table(agg, days=7, horizon_s=300.0, cost_bp=7.0))
+
+    path = write_rules_model(
+        tmp_path, "rules-x", rules=RuleParams().as_dict(), policy=dict(DEFAULT_POLICY)
+    )
+    with pytest.raises(ModelError, match="ungated"):
+        load_model(tmp_path, "rules-x")
+    write_gates(path, {"passed": True, "gates": gates})
+    model = load_model(tmp_path, "rules-x")  # hash-pinned, and now passing
+    assert model.gates.passed and not model.ungated
+    with pytest.raises(FileExistsError):
+        write_gates(path, {"passed": False})
