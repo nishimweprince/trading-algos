@@ -45,12 +45,22 @@ def test_unknown_key_is_refused(raw):
         ("exchange", {"margin_type": "CROSSED"}),
         ("entries", {"fib_band": [0.8, 0.3]}),
         ("exits", {"tp2_r": 1.0}),
-        ("sizing", {"risk_pct": 0.05}),
+        ("sizing", {"risk_pct": 0.11}),
     ],
 )
 def test_out_of_range_is_refused(raw, section, values):
     with pytest.raises(ValidationError):
         _validate(raw, **{section: values})
+
+
+def test_research_risk_is_backtest_only(raw):
+    assert _validate(raw, sizing={"risk_pct": 0.05}).sizing.risk_pct == 0.05
+    for mode in ("shadow", "live"):
+        data = copy.deepcopy(raw)
+        data["mode"] = mode
+        data["sizing"]["risk_pct"] = 0.05
+        with pytest.raises(ValidationError, match="backtest-only"):
+            Config.model_validate(data)
 
 
 def test_cli_config_check(capsys):

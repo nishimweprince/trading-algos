@@ -171,7 +171,9 @@ class Displacement(_Section):
 
 class Sizing(_Section):
     mode: Literal["movement", "fixed_margin"]
-    risk_pct: float = Field(gt=0, le=0.03)
+    # Above 0.03 is a backtest-only research override (enforced on Config):
+    # shadow/live refuse to start with it.
+    risk_pct: float = Field(gt=0, le=0.10)
     margin_pct: float = Field(gt=0, le=0.5)
     max_margin_pct: float = Field(gt=0, le=0.5)
     slippage_pct: float = Field(ge=0, le=0.01)
@@ -238,6 +240,12 @@ class Config(_Section):
     portfolio: Portfolio
     live: Live
     notify: Notify
+
+    @model_validator(mode="after")
+    def _research_risk(self) -> Self:
+        if self.sizing.risk_pct > 0.03 and self.mode is not Mode.BACKTEST:
+            raise ValueError("sizing.risk_pct above 0.03 is backtest-only research")
+        return self
 
 
 def load_config(path: Path | str = DEFAULT_PATH) -> Config:
