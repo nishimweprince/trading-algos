@@ -70,8 +70,10 @@ __all__ = [
 
 GRID_NS = 100_000_000  # 100 ms
 LEVELS = 10
-OFI_WINDOWS_MS = (100, 1_000, 5_000, 30_000)
-TFI_WINDOWS_MS = (1_000, 5_000, 30_000)
+# 60 s and 300 s windows carry the slower flow a 300-900 s horizon needs: the 5 s
+# OFI rule's move from signal peaks within seconds and is gone by 300 s.
+OFI_WINDOWS_MS = (100, 1_000, 5_000, 30_000, 60_000, 300_000)
+TFI_WINDOWS_MS = (1_000, 5_000, 30_000, 60_000, 300_000)
 RV_WINDOWS_S = (10, 60, 300)
 TREND_WINDOWS_S = (30, 120, 600)
 DEPTH_BANDS_BP = (5, 10)

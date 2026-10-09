@@ -100,7 +100,7 @@ def load_days(features_dir: Path, days: Iterable[str]) -> pd.DataFrame:
                 frame = pd.DataFrame([json.loads(line) for line in handle])
         else:
             raise FileNotFoundError(f"no features for {day} in {features_dir}")
-        frame = _compact(frame)
+        frame = _compact(frame).copy()  # consolidated: ~150 columns otherwise fragment
         frame["day"] = day
         frames.append(frame)
     if not frames:
@@ -204,6 +204,9 @@ def apply_pca(df: pd.DataFrame, weights: Sequence[float]) -> pd.DataFrame:
     out = df.copy(deep=False)  # whole columns are replaced, never edited in place
     w = np.asarray(weights, dtype=float)
     for window in OFI_WINDOWS_MS:
-        levels = out[_level_columns(window)].to_numpy(dtype=float)
+        columns = _level_columns(window)
+        if not set(columns) <= set(out.columns):
+            continue  # rows written before this window existed
+        levels = out[columns].to_numpy(dtype=float)
         out[f"ofi_int_{window}ms"] = levels @ w
     return out

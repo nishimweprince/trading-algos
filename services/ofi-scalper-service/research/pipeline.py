@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from ofi_scalper_service.daily_check import summarise as day_summary
+from ofi_scalper_service.state_engine import feature_names
 
 from .backtest import Latency, days_between, job_settings
 from .cv import load_or_create_split
@@ -82,11 +83,21 @@ def _features_day(args: tuple[str, str, str, dict[str, Any]]) -> str:
     return str(_write_rows(rows, Path(out_dir) / f"{day}.parquet")[0])
 
 
+def _features_current(path: Path) -> bool:
+    """The file exists and has every (single-asset) feature the engine now produces."""
+    if not path.is_file():
+        return False
+    import pyarrow.parquet as pq
+
+    columns = set(pq.read_schema(path).names)
+    return set(feature_names(cross=False)) <= columns
+
+
 def ensure_features(
     record_dir: Path, features_dir: Path, days: list[str], overrides: dict[str, Any], n_jobs: int
 ) -> list[str]:
-    """Replay any day that has no feature file yet."""
-    missing = [d for d in days if not (features_dir / f"{d}.parquet").is_file()]
+    """Replay any day that has no feature file yet, or one written before a feature existed."""
+    missing = [d for d in days if not _features_current(features_dir / f"{d}.parquet")]
     work = [(str(record_dir), str(features_dir), d, overrides) for d in missing]
     if n_jobs <= 1 or len(work) <= 1:
         return [_features_day(w) for w in work]
@@ -94,18 +105,26 @@ def ensure_features(
         return list(pool.map(_features_day, work))
 
 
-def barriers_by_horizon(spec: str, horizons: list[float]) -> dict[float, float]:
-    """``"15"`` for every horizon, or ``"60:12,300:20"`` naming each one."""
+def barriers_by_horizon(spec: str, horizons: list[float]) -> dict[float, list[float]]:
+    """``"15"`` for every horizon, or ``"60:12,300:20|25"`` naming each one's barriers.
+
+    Several barriers for one horizon (``|``) train one candidate per pair.
+    """
     if ":" not in spec:
-        return dict.fromkeys(horizons, float(spec))
-    given: dict[float, float] = {}
+        return {h: [float(b) for b in spec.split("|")] for h in horizons}
+    given: dict[float, list[float]] = {}
     for token in spec.split(","):
-        horizon, _, barrier = token.partition(":")
-        given[float(horizon)] = float(barrier)
+        horizon, _, barriers = token.partition(":")
+        given[float(horizon)] = [float(b) for b in barriers.split("|")]
     missing = [h for h in horizons if h not in given]
     if missing:
         raise SystemExit(f"--barrier-bp names no barrier for horizon(s) {missing}")
     return {h: given[h] for h in horizons}
+
+
+def candidate_dir_name(horizon_s: float, barrier_bp: float, *, several: bool) -> str:
+    """``h300``, or ``h300-b20`` when the horizon has more than one barrier."""
+    return f"h{horizon_s:g}-b{barrier_bp:g}" if several else f"h{horizon_s:g}"
 
 
 def _say(step: str, **fields: Any) -> None:
@@ -181,21 +200,23 @@ def main(argv: list[str] | None = None) -> int:
     horizons = [float(h) for h in args.horizons.split(",")]
     barriers = barriers_by_horizon(args.barrier_bp, horizons)
     for horizon in horizons:
-        out = research_dir / "candidates" / run / f"h{horizon:g}"
-        if (out / "candidate.json").is_file():
-            candidates.append(Candidate.load(out))
-        else:
-            candidates.append(
-                train_candidate(
-                    split,
-                    features_dir=features_dir,
-                    out_dir=out,
-                    horizon_s=horizon,
-                    barrier_bp=barriers[horizon],
-                    row_stride=args.row_stride,
+        for barrier in barriers[horizon]:
+            name = candidate_dir_name(horizon, barrier, several=len(barriers[horizon]) > 1)
+            out = research_dir / "candidates" / run / name
+            if (out / "candidate.json").is_file():
+                candidates.append(Candidate.load(out))
+            else:
+                candidates.append(
+                    train_candidate(
+                        split,
+                        features_dir=features_dir,
+                        out_dir=out,
+                        horizon_s=horizon,
+                        barrier_bp=barrier,
+                        row_stride=args.row_stride,
+                    )
                 )
-            )
-        _say("candidate", horizon_s=horizon, path=str(out))
+            _say("candidate", horizon_s=horizon, barrier_bp=barrier, path=str(out))
 
     latency = Latency.from_file(Path("research/latency.json"), order_rtt_ms=args.order_rtt_ms)
     common = job_settings(settings)

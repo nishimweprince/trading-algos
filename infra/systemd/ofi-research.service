@@ -17,7 +17,9 @@ WorkingDirectory=/home/ofi/trading-algos/services/ofi-scalper-service
 Environment=OFI_RESEARCH_DIR=/data/ofi/research
 # Sized for 4 vCPU / 16 GB (D4ads_v6): 2 jobs (~2 GB each) leave 2 cores and ~5 GB
 # for the recorder, the demo bridge and execution-service. Keep --jobs <= vCPUs - 2.
-Environment="OFI_RESEARCH_ARGS=--shallow --jobs 2 --row-stride 3"
+# 300-900 s horizons at 20-40 bp: shorter ones cannot pay the round trip (shallow-2).
+# A run's split is fixed once written: bump --run (long-2, long-3, ...) to use new days.
+Environment="OFI_RESEARCH_ARGS=--shallow --run long-1 --jobs 2 --row-stride 3 --horizons 300,600,900 --barrier-bp 300:20|25,600:25|30,900:30|40"
 ExecStart=/bin/sh -c 'exec /home/ofi/trading-algos/.venv/bin/python -m research.pipeline --profile dev $OFI_RESEARCH_ARGS'
 Nice=19
 CPUWeight=10

@@ -404,7 +404,7 @@ def evaluate(
         (research_dir / "REPORT.md").write_text(report)
         return {"passed": False, "evaluated": False, "report": str(research_dir / "REPORT.md")}
     candidate = Candidate.load(Path(chosen["candidate"]))
-    version = version or f"{split.run}-h{candidate.horizon_s:g}-{datetime.now(UTC):%Y%m%d%H%M}"
+    version = version or f"{split.run}-{candidate.version}-{datetime.now(UTC):%Y%m%d%H%M}"
     record_holdout_use(research_dir / "holdout_ledger.json", split, version)
 
     held_out = split.days_of(split.holdout)

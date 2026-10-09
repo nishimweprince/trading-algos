@@ -356,7 +356,7 @@ def test_score_diagnostics_show_a_barrier_too_small_for_the_fees(tmp_path: Path)
     from research.selection import score_diagnostics
 
     class FakeCandidate:
-        horizon_s, barrier_bp = 30.0, 6.0
+        horizon_s, barrier_bp, version = 30.0, 6.0, "h30"
 
         def oof_dir(self) -> Path:
             return tmp_path
@@ -383,9 +383,35 @@ def test_score_diagnostics_show_a_barrier_too_small_for_the_fees(tmp_path: Path)
 
 
 def test_barriers_by_horizon_takes_one_value_or_one_per_horizon() -> None:
-    from research.pipeline import barriers_by_horizon
+    from research.pipeline import barriers_by_horizon, candidate_dir_name
 
-    assert barriers_by_horizon("6", [1.0, 30.0]) == {1.0: 6.0, 30.0: 6.0}
-    assert barriers_by_horizon("60:12,120:15,300:20", [60.0, 300.0]) == {60.0: 12.0, 300.0: 20.0}
+    assert barriers_by_horizon("6", [1.0, 30.0]) == {1.0: [6.0], 30.0: [6.0]}
+    assert barriers_by_horizon("60:12,120:15,300:20", [60.0, 300.0]) == {
+        60.0: [12.0],
+        300.0: [20.0],
+    }
+    assert barriers_by_horizon("300:20|25,900:30|40", [300.0, 900.0]) == {
+        300.0: [20.0, 25.0],
+        900.0: [30.0, 40.0],
+    }
     with pytest.raises(SystemExit, match="300"):
         barriers_by_horizon("60:12", [60.0, 300.0])
+    # One barrier keeps the old directory name, so earlier runs' candidates are reused.
+    assert candidate_dir_name(300.0, 20.0, several=False) == "h300"
+    assert candidate_dir_name(300.0, 25.0, several=True) == "h300-b25"
+
+
+def test_feature_files_written_before_a_feature_existed_are_replayed(tmp_path) -> None:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from ofi_scalper_service.state_engine import feature_names
+    from research.pipeline import _features_current
+
+    path = tmp_path / "2026-10-08.parquet"
+    assert not _features_current(path)
+    names = feature_names(cross=False)
+    pq.write_table(pa.table({n: [0.0] for n in names if "300000ms" not in n}), path)
+    assert not _features_current(path)
+    pq.write_table(pa.table({n: [0.0] for n in names}), path)
+    assert _features_current(path)
