@@ -196,3 +196,17 @@ order. Paper's 150 ms is an assumption until then.
 **Assets and the next tests:** PREREG part 4 (A1 without BTC and SOL, A2 cap 0.50, A3
 0.20 under a 0.50 cap, A4 Polymarket spread ≤ 1¢, A5 stale-frame filter `plag250`).
 These come with new shadow variants and `research.readout --exclude-assets`.
+
+## 2026-10-09: BTC and SOL reinstated (epoch 6 continues)
+
+- Dublin `.env.dev`: `PK_ASSETS=BTC,ETH,SOL,XRP,BNB,DOGE,HYPE` again. The pair had
+  been dropped from live paper on 2026-10-07, when the AWS-outage restore started
+  epoch 6 (paper bankroll $1000 → $100 with /10 risk scaling); that drop was never
+  written down outside the env file, and it went beyond PREREG part 4 A1, which
+  reads the journal with and without BTC/SOL while both keep trading.
+- Bankroll and risk unchanged ($100 cash, $5 notional, $50 max open, $25 daily
+  loss): 7 × $5 = $35 at most open, under the cap. No epoch bump: the asset set
+  is per-record in the journal and outside the config hash, so epoch-6 results
+  stay comparable and A1 reads both legs again from here.
+- Redeployed `poly-kalshi-service` and `pk-status` on Dublin; `/health/ready`
+  reports all 7 windows identified on both feeds.
