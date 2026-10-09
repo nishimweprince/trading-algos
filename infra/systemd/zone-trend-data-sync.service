@@ -1,0 +1,17 @@
+# Daily Binance Vision sync for the traded symbols, then validation: keeps the local store
+# current for `zt parity` (shadow vs backtest) and the weekly report.
+[Unit]
+Description=zone-trend daily Vision sync and validation
+OnFailure=zone-trend-unit-alert@%n.service
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=zt
+Group=zt
+WorkingDirectory=/home/zt/trading-algos/services/zone-trend
+EnvironmentFile=/home/zt/trading-algos/services/zone-trend/.env.zt
+ExecStart=/bin/sh -c '/home/zt/trading-algos/.venv/bin/zt data sync --symbols "$$ZT_SYMBOLS,BTCUSDT" --from $$(date -u -d "-40 days" +%%Y-%%m) --datasets klines,markPriceKlines,fundingRate && /home/zt/trading-algos/.venv/bin/zt data validate --quiet'
+TimeoutStartSec=3600
+NoNewPrivileges=true
+PrivateTmp=true

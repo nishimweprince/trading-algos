@@ -1,0 +1,15 @@
+# Daily consistent copy of the live database (sqlite3 .backup is safe while the bot writes),
+# kept 30 days locally and copied off-site when ZT_BACKUP_REMOTE (an rclone remote) is set.
+[Unit]
+Description=zone-trend database backup
+OnFailure=zone-trend-unit-alert@%n.service
+
+[Service]
+Type=oneshot
+User=zt
+Group=zt
+WorkingDirectory=/home/zt/trading-algos/services/zone-trend
+EnvironmentFile=/home/zt/trading-algos/services/zone-trend/.env.zt
+ExecStart=/bin/sh -c 'mkdir -p backups && f=backups/zt-$$(date -u +%%Y%%m%%d).db && sqlite3 state/zt.db ".backup $$f" && gzip -f $$f && find backups -name "zt-*.db.gz" -mtime +30 -delete && if [ -n "$$ZT_BACKUP_REMOTE" ]; then rclone copy backups "$$ZT_BACKUP_REMOTE"; fi'
+NoNewPrivileges=true
+PrivateTmp=true

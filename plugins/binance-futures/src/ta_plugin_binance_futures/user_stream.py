@@ -43,8 +43,10 @@ class UserStream:
         ws_connect: WsConnect | None = None,
         sleep: Callable[[float], Any] = asyncio.sleep,
         max_backoff_seconds: float = 30.0,
+        events: str = EVENTS,
     ) -> None:
         self._rest = rest
+        self._events = events
         self._root = ws_root.rstrip("/")
         self._on_event = on_event
         self._on_connected = on_connected
@@ -57,7 +59,7 @@ class UserStream:
         self.last_error: str | None = None
 
     def url(self, listen_key: str) -> str:
-        return f"{self._root}/private/ws?listenKey={listen_key}&events={EVENTS}"
+        return f"{self._root}/private/ws?listenKey={listen_key}&events={self._events}"
 
     async def _listen_key(self, method: str) -> str | None:
         response = await self._rest.raw(

@@ -1,0 +1,32 @@
+# zone-trend LIVE: real money. Not enabled by default; start it by hand once the M4 gate
+# and the shadow parity gate have passed:  sudo systemctl start zone-trend-live
+# Needs ZT_LIVE_ACK, BINANCE_FUTURES_ENV=mainnet and the trading key in .env.zt.
+# After a drawdown halt it refuses to start; review, then run `zt live --resume` once by hand.
+# Stopping it leaves every position's stop on the exchange.
+[Unit]
+Description=zone-trend LIVE (Binance USD-M, real money)
+OnFailure=zone-trend-unit-alert@%n.service
+Wants=network-online.target
+After=network-online.target time-sync.target notification-service.service
+Conflicts=zone-trend-shadow.service
+
+[Service]
+Type=simple
+User=zt
+Group=zt
+WorkingDirectory=/home/zt/trading-algos/services/zone-trend
+EnvironmentFile=/home/zt/trading-algos/services/zone-trend/.env.zt
+ExecStart=/home/zt/trading-algos/.venv/bin/zt live
+# on-failure, not always: a refusal to start (halted, missing ack) exits non-zero once and
+# alerts; it must not crash-loop against the exchange.
+Restart=on-failure
+RestartSec=30
+StartLimitIntervalSec=900
+StartLimitBurst=3
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

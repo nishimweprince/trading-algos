@@ -17,6 +17,8 @@ from .market_data import BinanceFuturesMarketData
 from .quotes import TouchQuotes
 from .rest import FapiRest
 from .streams import FuturesStreams, RawSink
+from .trading import ALGO_EVENTS, FuturesTrading
+from .user_stream import UserStream
 
 __all__ = [
     "EXECUTION_FACTORY",
@@ -83,6 +85,30 @@ class BinanceFuturesExecutionFactory:
 
     def execution(self, settings: Any, **overrides: Any) -> BinanceFuturesExecution:
         return BinanceFuturesExecution(settings, **overrides)
+
+    def trading_rest(self, settings: Any, **overrides: Any) -> FapiRest:
+        """A REST client on the environment's order host, signing with the trading key."""
+        return FapiRest(
+            settings,
+            base_url=settings.binance_futures_order_rest_url,
+            api_key=settings.binance_futures_trading_api_key,
+            api_secret=settings.binance_futures_trading_api_secret,
+            **overrides,
+        )
+
+    def trading(self, settings: Any, *, rest: FapiRest | None = None) -> FuturesTrading:
+        """Direct trading calls (orders, algo stops/TPs, account setup, brackets)
+        for a service that runs its own order manager."""
+        return FuturesTrading(rest or self.trading_rest(settings))
+
+    def user_stream(
+        self, settings: Any, rest: FapiRest, on_event: Any, *, on_connected: Any, **kw: Any
+    ) -> UserStream:
+        """Order, account and algo-order updates for the trading account."""
+        kw.setdefault("events", ALGO_EVENTS)
+        return UserStream(
+            rest, settings.binance_futures_order_ws_url, on_event, on_connected=on_connected, **kw
+        )
 
 
 EXECUTION_FACTORY = BinanceFuturesExecutionFactory()

@@ -1,0 +1,101 @@
+# Zone-Trend Strategy Spec v1.1 defaults. Validated by zone_trend.config at
+# startup; any unknown key or out-of-range value refuses to start.
+mode: backtest            # backtest | shadow | live
+exchange:
+  margin_type: ISOLATED
+  position_mode: ONE_WAY
+  leverage: 5
+  fee_maker: 0.0002
+  fee_taker: 0.0005
+universe:
+  size: 10
+  min_listing_days: 180
+  rebalance: monthly
+  exclude: []
+  coins_only: true         # drop Binance TradFi perpetuals (XAUUSDT, TSLAUSDT, ...)
+timeframes: {zones: [1d, 4h], trend: 4h, entry: 1h}
+swings:
+  d1: {left: 3, right: 3}
+  h4: {left: 5, right: 5}
+  h1: {left: 3, right: 3}
+  k_atr: 1.0
+structure:
+  ema_period: 50
+  decay_ratio: 0.6
+  slope_gate: true         # ablation switch: impulse-vs-correction slope and momentum decay
+zones:
+  lookback_days: {d1: 365, h4: 90}
+  width_atr: {min: 0.25, max: 0.6}
+  merge_atr_d1: 0.5
+  max_width_atr_d1: 1.0
+  break_atr_h4: 0.25
+  keep_per_side: 6
+  use_d1: true             # ablation switch: seed zones from 1D swings as well as 4H
+  hvn_lookback_days: 90
+  range_min_strength: 70
+entries:
+  enabled: [B]             # A, B, C
+  breakout_buffer_atr: 0.10
+  min_body_ratio: 0.5
+  volume_mult: 1.3
+  retest_window_bars: 48
+  retest_tolerance_atr: 0.25
+  fib_band: [0.382, 0.786]
+  fib_quality_band: [0.5, 0.618]
+  limit_valid_bars: 3
+  max_chase_atr: 0.8
+  # Rejection candle (not defined in the spec; decided 2026-10-09): the
+  # zone-side wick is at least this share of the range, and the close sits in
+  # the outer third of the bar, outside the zone.
+  rejection_min_wick: 0.4
+  rejection_close_frac: 0.333
+exits:
+  stop_anchor: retest       # retest | zone | further (spec: "the retest swing or zone edge")
+  stop_buffer_atr: 0.3
+  min_stop_atr_h1: 0.4
+  max_stop_atr_h4: 3.0
+  max_stop_pct: 0.06
+  tp1_r: 1.5
+  tp1_fraction: 0.4
+  tp1_from_displacement: false
+  tp2_r: 3.0
+  tp2_rule: nearer         # nearer of opposing zone and tp2_r
+  min_room_r: 1.0
+  trail_atr: 3.0
+  trail_atr_decay: 2.0
+  trail_min_step_atr: 0.25
+  time_stop_bars: 72
+  time_stop_min_r: 0.5
+sizing:
+  mode: movement           # movement | fixed_margin
+  risk_pct: 0.005
+  margin_pct: 0.05         # fixed_margin mode
+  max_margin_pct: 0.05     # cap in movement mode
+  slippage_pct: 0.0002
+  displacement: {enabled: true, min_trades: 30, clamp: [0.5, 1.5], live_weight: 0.3}
+filters:
+  vol_percentiles: [0.10, 0.95]
+  funding_max_8h: 0.0005
+  funding_blackout_min: 15
+  corr_threshold: 0.7
+  corr_window_days: 30
+  btc_gate: true
+  mark_last_max_diff: 0.01
+portfolio:
+  max_positions: 3
+  max_total_notional_pct: 0.75
+  max_same_dir_correlated: 2
+  daily_loss_pct: 0.03
+  weekly_loss_pct: 0.06
+  dd_halve_pct: 0.15
+  dd_halt_pct: 0.25
+  consec_losses_halve: 6
+live:
+  db_url: sqlite:///state/zt.db
+  reconcile_interval_s: 60
+  stale_stream_s: 30
+  weight_budget_frac: 0.3
+notify:
+  service: ta-notify
+  channels: [telegram, email]
+  heartbeat_min: 15

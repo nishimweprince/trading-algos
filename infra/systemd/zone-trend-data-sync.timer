@@ -1,0 +1,10 @@
+[Unit]
+Description=zone-trend daily Vision sync (Vision publishes the previous day by ~02:00 UTC)
+
+[Timer]
+OnCalendar=*-*-* 03:10:00 UTC
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

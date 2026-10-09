@@ -1,0 +1,21 @@
+# Read-only status page, /health and /metrics on loopback :8060. Publish it only through a
+# tunnel with access control (see infra/cloudflare), never on a public port.
+[Unit]
+Description=zone-trend status page
+OnFailure=zone-trend-unit-alert@%n.service
+After=network-online.target
+
+[Service]
+Type=simple
+User=zt
+Group=zt
+WorkingDirectory=/home/zt/trading-algos/services/zone-trend
+ExecStart=/home/zt/trading-algos/.venv/bin/zt status --db sqlite:///state/zt.db --runs-dir runs --host 127.0.0.1 --port 8060
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
