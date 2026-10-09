@@ -22,7 +22,7 @@ __all__ = ["LIVE_ACK", "STAGES", "LiveSettings", "Stage"]
 
 LIVE_ACK = "real-money-zone-trend"
 
-Stage = Literal["micro", "half", "full"]
+Stage = Literal["micro", "half", "full", "auto"]
 
 # Rollout stages (spec: Shadow -> Micro -> Half -> Full). Code, not configuration.
 STAGES: dict[str, dict] = {
@@ -50,6 +50,9 @@ class LiveSettings(BinanceFuturesSettingsMixin, NotificationSettings):
     zt_capital: float = Field(default=500.0, gt=0, validation_alias="ZT_CAPITAL")
     zt_stage: Stage = Field(default="micro", validation_alias="ZT_STAGE")
     zt_live_ack: str = Field(default="", validation_alias="ZT_LIVE_ACK")
+    # The walk-forward whose OOS trades the weekly report and k_sym compare against.
+    zt_wf_dir: Path | None = Field(default=None, validation_alias="ZT_WF_DIR")
+    zt_status_port: int = Field(default=8060, validation_alias="ZT_STATUS_PORT")
     zt_lock_file: Path = Field(default=Path("state/zt.lock"), validation_alias="ZT_LOCK_FILE")
     zt_max_clock_drift_ms: int = Field(default=500, validation_alias="ZT_MAX_CLOCK_DRIFT_MS")
     zt_critical_channels_csv: str = Field(

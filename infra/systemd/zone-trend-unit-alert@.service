@@ -1,0 +1,17 @@
+# Alert (critical channels) when a zone-trend unit fails. Units opt in with
+#   OnFailure=zone-trend-unit-alert@%n.service
+# System python3 on a standard-library script, so it works when the venv is what broke.
+[Unit]
+Description=Alert that %i failed
+
+[Service]
+Type=oneshot
+User=zt
+Group=zt
+SupplementaryGroups=systemd-journal
+StateDirectory=zone-trend-unit-alert
+ExecStart=/usr/bin/python3 /home/zt/trading-algos/services/zone-trend/ops/unit_alert.py %i --env-file /home/zt/trading-algos/services/zone-trend/.env.zt
+TimeoutStartSec=60
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full

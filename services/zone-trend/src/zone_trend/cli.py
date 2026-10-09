@@ -360,6 +360,17 @@ def _parity(args: argparse.Namespace) -> int:
     return 0 if res["match_rate"] >= 0.95 else 1
 
 
+def _status(args: argparse.Namespace) -> int:
+    import uvicorn
+
+    from zone_trend.live.status import create_app
+
+    uvicorn.run(
+        create_app(args.db, args.runs_dir), host=args.host, port=args.port, log_level="warning"
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="zt", description="Zone-trend strategy tooling")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -472,6 +483,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--to", dest="end", required=True, help="YYYY-MM-DD (exclusive)")
     p.add_argument("--config", type=Path, default=DEFAULT_PATH)
     p.set_defaults(func=_parity)
+
+    p = sub.add_parser("status", help="read-only dashboard, /health and /metrics")
+    p.add_argument("--db", default="sqlite:///state/zt.db")
+    p.add_argument("--runs-dir", type=Path, default=Path("runs"))
+    p.add_argument("--host", default="127.0.0.1", help="loopback by default; tunnel to expose")
+    p.add_argument("--port", type=int, default=8060)
+    p.set_defaults(func=_status)
     return parser
 
 

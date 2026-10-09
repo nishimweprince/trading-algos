@@ -46,6 +46,7 @@ from zone_trend.core.indicators import pearson
 from zone_trend.core.replay import replay
 from zone_trend.core.signals import signal_id
 from zone_trend.core.symbol import SymbolCore
+from zone_trend.live import ops
 from zone_trend.live.settings import STAGES, LiveSettings
 from zone_trend.live.venues import LiveVenue, Venue
 from zone_trend.persistence.repo import Repo
@@ -133,7 +134,16 @@ class Runner:
         self.rank = {s: i for i, s in enumerate(symbols)}
         self.now = clock_ms
         self.mode = venue.mode
-        self.stage = STAGES[settings.zt_stage] if self.mode == "live" else STAGES["full"]
+        self.auto_stage = settings.zt_stage == "auto"
+        if self.mode != "live":
+            self.stage_name = "full"
+        elif self.auto_stage:
+            self.stage_name = repo.get_state("stage", {"name": "micro"})["name"]
+            if repo.get_state("stage") is None:
+                repo.set_state("stage", {"name": "micro", "since": clock_ms()})
+        else:
+            self.stage_name = settings.zt_stage
+        self.stage = STAGES[self.stage_name]
         limits = cfg.portfolio
         if "max_positions" in self.stage:
             limits = limits.model_copy(update={"max_positions": self.stage["max_positions"]})
@@ -294,7 +304,48 @@ class Runner:
         self.last_t = t
         self.repo.set_state("last_hour", t)
         self.repo.set_state("guard", {k: getattr(self.guard, k) for k in GUARD_FIELDS})
+        self._equity = equity
+        if (t + 1) % DAY == 0:
+            await self._daily(t, equity)
         return summary
+
+    async def _daily(self, t: int, equity: float) -> None:
+        positions = self.venue.positions()
+        open_risk = sum(p.qty_open * abs(p.entry - p.stop) for p in positions.values())
+        lines = ops.daily_summary(self.repo, t, equity, max(self.guard.peak, equity), open_risk)
+        await self.alerts(
+            "warning" if self.guard.halted else "info", f"daily summary ({self.mode})", lines
+        )
+        day = (t + 1) // DAY
+        if (day + 3) % 7 == 0:  # Monday 00:00 UTC
+            report = ops.weekly_report(
+                self.repo, self.settings.zt_wf_dir, self.cfg, self.rank, self.now()
+            )
+            await self.alerts("info", "weekly report", report)
+        if self.mode == "live":
+            gate = ops.stage_gates(self.repo, self.settings.zt_wf_dir, self.rank, self.now())
+            if gate.passed and gate.next_stage and self.auto_stage:
+                self.repo.set_state("stage", {"name": gate.next_stage, "since": self.now()})
+                self.stage_name, self.stage = gate.next_stage, STAGES[gate.next_stage]
+                limits = self.cfg.portfolio
+                if "max_positions" in self.stage:
+                    limits = limits.model_copy(
+                        update={"max_positions": self.stage["max_positions"]}
+                    )
+                self.guard.limits = limits
+                await self.alerts("warning", f"stage advanced to {gate.next_stage}", gate.detail)
+            elif gate.passed and gate.next_stage:
+                await self.alerts(
+                    "info", f"gate to {gate.next_stage} passed (ZT_STAGE is fixed)", gate.detail
+                )
+            elif (day + 3) % 7 == 0 and gate.next_stage:
+                await self.alerts("info", f"still at {gate.stage}: gate not met", gate.detail)
+
+    def _k_sym(self, sym: str, entry_type: str) -> float:
+        if not self.cfg.sizing.displacement.enabled:
+            return 1.0
+        rows = self.repo.get_state("k_sym_cache")
+        return float((rows or {}).get(f"{sym}|{entry_type}", 1.0))
 
     def _allowed(self, sym: str) -> bool:
         if "symbols" in self.stage and sym not in self.stage["symbols"]:
@@ -356,6 +407,7 @@ class Runner:
             tp1_fraction=self.cfg.exits.tp1_fraction,
             bracket=self.brackets.get(sym, DEFAULT_BRACKET),
             stage_mult=self.stage.get("size_mult", 1.0),
+            k_sym=self._k_sym(sym, sig.entry_type),
         )
         d = decide(sig, ctx, self.cfg, self.guard)
         if d.accepted and self.stage.get("min_size"):
@@ -366,7 +418,7 @@ class Runner:
         if not d.accepted:
             return False
         self.guard.trade_opened()
-        await self.venue.open(sig, d, 1.0)
+        await self.venue.open(sig, d, ctx.k_sym)
         return True
 
     async def _manage(self, t: int) -> None:
@@ -396,6 +448,7 @@ class Runner:
         tasks = []
         if reconciler is not None:
             tasks.append(asyncio.create_task(self._reconcile_loop(reconciler)))
+        tasks.append(asyncio.create_task(self._heartbeat_loop()))
         try:
             while True:
                 nxt = self.last_t + H
@@ -416,6 +469,27 @@ class Runner:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
+
+    async def _heartbeat_loop(self) -> None:
+        limiter = getattr(getattr(self.t, "rest", None), "limiter", None)
+        while True:
+            try:
+                positions = self.venue.positions()
+                ops.write_metrics(
+                    self.repo,
+                    self.now(),
+                    equity=getattr(self, "_equity", self.settings.zt_capital),
+                    peak=self.guard.peak,
+                    open_positions=len(positions),
+                    last_hour=self.last_t,
+                    halted=int(self.guard.halted),
+                    api_weight_used=limiter.used() if limiter else 0,
+                    stage=self.stage_name,
+                    mode=self.mode,
+                )
+            except Exception:  # noqa: BLE001 - the heartbeat must keep beating
+                log.exception("heartbeat failed")
+            await asyncio.sleep(60)
 
     async def _reconcile_loop(self, reconciler) -> None:
         while True:

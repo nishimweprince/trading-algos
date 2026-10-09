@@ -2743,6 +2743,7 @@ name = "zone-trend"
 version = "0.1.0"
 source = { editable = "services/zone-trend" }
 dependencies = [
+    { name = "fastapi" },
     { name = "httpx" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
@@ -2756,6 +2757,7 @@ dependencies = [
     { name = "ta-notify" },
     { name = "ta-plugin-api" },
     { name = "ta-plugin-binance-futures" },
+    { name = "uvicorn", extra = ["standard"] },
 ]
 
 [package.dev-dependencies]
@@ -2769,6 +2771,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "fastapi", specifier = ">=0.115,<1" },
     { name = "httpx", specifier = ">=0.27,<1" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pandas", specifier = ">=2.2" },
@@ -2781,6 +2784,7 @@ requires-dist = [
     { name = "ta-notify", editable = "packages/ta-notify" },
     { name = "ta-plugin-api", editable = "packages/ta-plugin-api" },
     { name = "ta-plugin-binance-futures", editable = "plugins/binance-futures" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.32,<1" },
 ]
 
 [package.metadata.requires-dev]

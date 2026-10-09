@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from xml.etree import ElementTree
@@ -59,6 +60,24 @@ class ChecksumError(ValueError):
     pass
 
 
+RETRIES = 5
+BACKOFF_S = 2.0
+
+
+def _get(client: httpx.Client, url: str, **kw) -> httpx.Response:
+    """GET with retries on timeouts, connection errors and 5xx (the S3 bucket throttles)."""
+    for attempt in range(RETRIES):
+        try:
+            response = client.get(url, **kw)
+            if response.status_code < 500:
+                return response
+        except (httpx.TimeoutException, httpx.TransportError):
+            if attempt == RETRIES - 1:
+                raise
+        time.sleep(BACKOFF_S * 2**attempt)
+    return response
+
+
 def prefix(dataset: str, symbol: str, interval: str | None, period: str) -> str:
     if dataset not in DATASETS:
         raise ValueError(f"unknown dataset {dataset!r}")
@@ -89,7 +108,7 @@ def _list(client: httpx.Client, pfx: str) -> tuple[list[str], list[str]]:
         params = {"delimiter": "/", "prefix": pfx}
         if marker:
             params["marker"] = marker
-        response = client.get(BUCKET_URL, params=params)
+        response = _get(client, BUCKET_URL, params=params)
         response.raise_for_status()
         page_keys, page_prefixes, marker = parse_listing(response.text)
         keys += page_keys
@@ -157,9 +176,9 @@ def download(client: httpx.Client, key: str, raw_root: Path) -> Path:
     if target.exists():
         return target
     url = f"{DATA_URL}/{key}"
-    response = client.get(url)
+    response = _get(client, url)
     response.raise_for_status()
-    checksum = client.get(url + ".CHECKSUM")
+    checksum = _get(client, url + ".CHECKSUM")
     checksum.raise_for_status()
     expected = checksum.text.split()[0].lower()
     actual = hashlib.sha256(response.content).hexdigest()

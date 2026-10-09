@@ -1,0 +1,26 @@
+# zone-trend in shadow mode: the strategy on live Binance data, paper fills, no orders.
+# Install: see services/zone-trend/DEPLOY.md. Secrets live in .env.zt (chmod 600), never here.
+[Unit]
+Description=zone-trend shadow (Binance USD-M zone/trend strategy, paper fills)
+OnFailure=zone-trend-unit-alert@%n.service
+Wants=network-online.target
+After=network-online.target time-sync.target notification-service.service
+# Shadow and live share the lock file; only one of them can run.
+Conflicts=zone-trend-live.service
+
+[Service]
+Type=simple
+User=zt
+Group=zt
+WorkingDirectory=/home/zt/trading-algos/services/zone-trend
+EnvironmentFile=/home/zt/trading-algos/services/zone-trend/.env.zt
+ExecStart=/home/zt/trading-algos/.venv/bin/zt shadow
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
