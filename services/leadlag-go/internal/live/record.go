@@ -13,6 +13,7 @@ type RecordEngine struct {
 type SymState struct {
 	Trades   uint64 `json:"trades"`
 	Quotes   uint64 `json:"quotes"`
+	Liqs     uint64 `json:"liqs,omitempty"`
 	LastPx   int64  `json:"last_px_e8"`
 	Bid      int64  `json:"bid_e8"`
 	Ask      int64  `json:"ask_e8"`
@@ -25,10 +26,14 @@ func NewRecordEngine(n int) *RecordEngine { return &RecordEngine{Last: make([]Sy
 // OnEvent implements Engine.
 func (r *RecordEngine) OnEvent(e *model.Event) {
 	s := &r.Last[e.Sym]
-	if e.Kind == model.KindTrade {
+	switch e.Kind {
+	case model.KindTrade:
 		s.Trades++
 		s.LastPx = e.Px
-	} else {
+	case model.KindLiq:
+		s.Liqs++
+		return
+	default:
 		s.Quotes++
 		s.Bid, s.Ask = e.Bid, e.Ask
 	}

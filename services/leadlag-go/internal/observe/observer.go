@@ -296,6 +296,9 @@ func (o *Observer) aggregate(recv int64, frame []byte) {
 			a.hQuoteLag.Reset()
 		}
 	}
+	if e.Kind == model.KindLiq {
+		return // liquidations are taped; they have no feed statistics
+	}
 	a := o.per[e.Sym]
 	lagUs := recv/1000 - e.ExchMs*1000
 	if e.Kind == model.KindTrade {

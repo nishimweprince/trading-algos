@@ -289,11 +289,12 @@ journalctl -u leadlag -n 5 --no-pager | grep "shadow engine"          # run, par
 - Signals start after the detector's 30-minute warm-up.
 - Every completed trade goes through the ring to the observer, which appends it to
   `/data/leadlag/shadow/<UTC day>.jsonl` (`LL_JOURNAL_DIR`). The trader still never writes to disk.
-- The page's Shadow panel shows totals, per-follower results and the last trades, labelled exploratory.
+- The page shows one Shadow panel per run: totals, per-follower results and the last trades, labelled
+  exploratory. Quoter runs also show attempts, the fill rate and fill-versus-miss markouts.
 - `curl -XPOST localhost:8060/v1/halt` stops new entries; open positions still close at their horizon.
-- `sudo systemctl start leadlag-research@shadow-verify.service` replays the tape with the same params,
-  only for the runs whose hello carries their sha256. It fails if the replayed trades differ from the
-  journal.
+- `sudo systemctl start leadlag-research@shadow-verify.service` replays the tape once with every params
+  file in `LL_SHADOW_PARAMS`, each only for the trader runs whose hello lists its sha256. It fails if any
+  run's replayed records differ from the journal.
 - A halt isn't on the tape, so check a halted run's journal by hand.
 
 **Start a new epoch** (a new run label, e.g. `explore-2`, PREREG Part 3). The trader keeps its stats in
@@ -312,6 +313,39 @@ sudo install -o ll -g ll -m 600 deploy/env/shadow-explore-2.example.json /home/l
 sudo systemctl start leadlag-observer leadlag leadlag-status
 journalctl -u leadlag -n 5 --no-pager | grep "shadow engine"          # run, trigger, exit, params sha256
 ```
+
+**Add the explore-3 runs** (PREREG Part 4, next to explore-2). Each run needs its own params file and run
+label. All of them go in `LL_SHADOW_PARAMS`, comma-separated.
+
+```sh
+# 1. Fees first: the runs assume 0 bp maker / 4 bp taker on USDC-M (a promotion). Read-only key in .env.
+sudo -u ll sh -c 'set -a; . /home/ll/leadlag/.env; /home/ll/leadlag/current/llprobe fees \
+  --symbols SOLUSDC,XRPUSDC,DOGEUSDC,SUIUSDC,BNBUSDC,ZECUSDC,NEARUSDC,SOLUSDT --out /home/ll/leadlag/fees.json'
+#    Append the output to PREREG Part 4 as 4.2a; if it differs, set maker_fee_bp/taker_fee_bp in the
+#    3a/3b/3c files to it before the start (4.2).
+# 2. Which USDC-M followers are listed, and their tick sizes for the quoter files.
+/home/ll/leadlag/current/llfetch candidates --quote USDC --onboarded-before "" --n 40
+/home/ll/leadlag/current/llfetch ticks --symbols SOLUSDC,XRPUSDC,DOGEUSDC,SUIUSDC,BNBUSDC,ZECUSDC,NEARUSDC
+# 3. Install the params (paste the ticks into 3a and 3b; the trader refuses mismatching ticks).
+for r in 3a 3b 3c 3d; do sudo install -o ll -g ll -m 600 deploy/env/shadow-explore-$r.example.json /home/ll/leadlag/shadow-explore-$r.json; done
+# 4. In .env: add the USDC symbols to LL_FOLLOWERS, and list all params files in LL_SHADOW_PARAMS
+#    (explore-2's shadow.json first). Then restart.
+sudo systemctl restart leadlag-observer leadlag leadlag-status
+journalctl -u leadlag -n 10 --no-pager | grep "shadow engine"         # one line per run
+```
+
+- **Tape budget:** each added symbol costs ~0.2–0.3 GB/day of tape, so seven USDC followers add
+  ~1.5–2 GB/day. The leaders' `forceOrder` streams are negligible. Check `LL_DISK_MAX_PCT` headroom
+  first.
+- **Start-up:** the quoter runs (3a, 3c) skip followers for the first 30 min (rolling β warm-up,
+  `beta_warmup`).
+- **Journal records:** the quoter's trades appear in the journal about 30 s after their exit, once
+  their markouts are in (`rec_ns`). Arm A also writes one `kind: "attempt"` record per entry order.
+- **Kill criteria:** `llresearch shadow --journal /data/leadlag/shadow --run explore-3a --quoter`
+  reports the day-block CI, f and the PREREG 4.7 verdict. Add `--maker-fee 2 --taker-fee 5` to
+  re-price at USDT-M rates.
+- **+1 h placebo:**
+  `leadlag --replay /data/leadlag/tape --shadow-params /home/ll/leadlag/shadow-explore-3a.json --shadow-all --leader-shift 1h --shadow-trades /data/leadlag/shadow/control-3a.jsonl`.
 
 `shadow-verify` reads a run's archived journals from `<journal dir>/<run>/`. To re-check an old run
 (the unit's `.env` always names the current params), run the job directly:

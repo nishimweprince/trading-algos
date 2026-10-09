@@ -72,18 +72,7 @@ footer { color: var(--muted); font-size: 12px; margin-top: 32px; }
     "agg E−T" is how long after the trade Binance published the aggregate trade; "E = next T" is the share published
     exactly when the next trade happened. The backtest uses these to decide when an archive trade was observable.</p>
 
-  <div id="shadow-wrap" hidden>
-  <h2>Shadow trading <span id="shadow-label" class="pill warn"></span></h2>
-  <div class="tiles" id="shadow-tiles"></div>
-  <div class="panel" style="margin-top:10px"><table id="shadow-f"><thead><tr>
-    <th>follower</th><th>trades</th><th>mean gross bp</th><th>mean net bp</th><th>hit rate</th><th>t</th><th>net $</th>
-  </tr></thead><tbody></tbody></table></div>
-  <div class="panel" style="margin-top:10px"><table id="shadow-g"><thead><tr id="shadow-g-head"></tr></thead><tbody></tbody></table></div>
-  <div class="panel" style="margin-top:10px"><table id="shadow-r"><thead><tr>
-    <th>exit</th><th>leader → follower</th><th>side</th><th>z / move bp</th><th>gap bp</th><th>entry</th><th>exit px</th><th>exit kind</th><th>spread bp</th><th>gross bp</th><th>net bp</th>
-  </tr></thead><tbody></tbody></table></div>
-  <p class="note" id="shadow-note"></p>
-  </div>
+  <div id="shadow-runs"></div>
 
   <h2>Latency probe</h2>
   <div class="panel" id="probe"><p class="note" style="padding:0 12px">No probe file yet (run llprobe; see deploy/DEPLOY.md).</p></div>
@@ -95,7 +84,7 @@ footer { color: var(--muted); font-size: 12px; margin-top: 32px; }
     <div class="tile"><div class="k">M3 · G1 signal</div><div class="v">pending</div><div class="d">screen · event study · placebo</div></div>
     <div class="tile"><div class="k">M4 · G2–G4</div><div class="v">pending</div><div class="d">backtest · prereg · held-out</div></div>
     <div class="tile"><div class="k">M5 · G5 live shadow</div><div class="v">pending</div><div class="d">starts after the M4 freeze · then ≥ 3 weeks, n ≥ 200</div></div>
-    <div class="tile"><div class="k">Exploratory shadow</div><div class="v" id="explore">off</div><div class="d">PREREG Parts 2–3 · counts toward no gate</div></div>
+    <div class="tile"><div class="k">Exploratory shadow</div><div class="v" id="explore">off</div><div class="d">PREREG Parts 2–4 · counts toward no gate</div></div>
   </div>
 
   <footer>build {{.Version}} · read-only · refreshed every 5 s from cached data; viewers never reach the trader</footer>
@@ -111,6 +100,85 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&
 
 function tile(k, v, d, cls) {
   return `<div class="tile"><div class="k">${esc(k)}</div><div class="v ${cls || ""}">${esc(v)}</div>${d ? `<div class="d">${esc(d)}</div>` : ""}</div>`;
+}
+
+// renderRun is one shadow run's section: tiles, followers, groups, recent trades, notes.
+function renderRun(sh, now) {
+  const tot = sh.total || {}, prm = sh.params || {}, qd = sh.quoter;
+  const sk = sh.skipped || {};
+  const fmt = (v, d) => (v == null ? "–" : v.toFixed(d));
+  const tiles = [
+    tile("signals", String(sh.signals), `open now ${sh.open}`),
+    tile("trades", String(tot.n || 0), `hit ${tot.n ? (tot.hit_rate * 100).toFixed(1) + "%" : "–"} · t ${tot.n > 1 ? tot.t_stat : "–"}`),
+    tile("mean net bp", tot.n ? tot.mean_net_bp.toFixed(2) : "–", `gross ${tot.n ? tot.mean_gross_bp.toFixed(2) : "–"} · fees ${tot.n ? (tot.mean_gross_bp - tot.mean_net_bp).toFixed(1) : "–"}`, tot.n ? (tot.mean_net_bp > 0 ? "ok-t" : "bad-t") : ""),
+    tile("net $", tot.n ? tot.net_usd.toFixed(2) : "–", `$${prm.notional_usd} per trade`),
+    tile("taker exits", tot.n ? (sh.taker_exit_frac * 100).toFixed(0) + "%" : "–", "f: the share of round trips that crossed to exit"),
+  ];
+  if (qd) {
+    const mf = qd.markouts_filled || [], mu = qd.markouts_unfilled || [];
+    tiles.push(
+      tile("attempts", String(qd.attempts || 0), qd.arm === "A" ? `fill rate ${qd.attempts_done ? (qd.fill_rate * 100).toFixed(1) + "%" : "–"} · ` +
+        Object.entries(qd.attempt_ends || {}).filter(([, v]) => v).map(([k, v]) => `${k} ${v}`).join(" · ") : `arm B · quotes sent ${qd.quotes_sent}`),
+      tile("fill vs miss markout", mf.length ? fmt(mf[mf.length - 1], 2) + " / " + fmt(mu[mu.length - 1], 2) : "–", "bp from the post, last markout: filled / not filled"));
+  }
+  tiles.push(tile("skipped", String(Object.values(sk).reduce((a, b) => a + b, 0)), Object.entries(sk).filter(([, v]) => v).map(([k, v]) => `${k} ${v}`).join(" · ") || "none"));
+  const fr = Object.entries(sh.by_follower || {}).sort((a, b) => b[1].n - a[1].n).map(([name, f]) =>
+    `<tr><td>${esc(name)}</td><td>${f.n}</td><td>${f.n ? f.mean_gross_bp.toFixed(2) : "–"}</td>
+     <td class="${f.n ? (f.mean_net_bp > 0 ? "ok-t" : "bad-t") : ""}">${f.n ? f.mean_net_bp.toFixed(2) : "–"}</td>
+     <td>${f.n ? (f.hit_rate * 100).toFixed(1) + "%" : "–"}</td><td>${f.n > 1 ? f.t_stat : "–"}</td><td>${f.n ? f.net_usd.toFixed(2) : "–"}</td></tr>`);
+  // Groups: by leader move (or |z|), by exit kind and reason, total; with the mean markout curve.
+  const mo = sh.markouts_ms || [];
+  const ghead = `<th>group</th><th>trades</th><th>mean gross bp</th><th>mean net bp</th><th>hit rate</th>` +
+    mo.map((m) => `<th>${qd ? "fill" : "mid"} +${m >= 1000 ? m / 1000 + " s" : m + " ms"}</th>`).join("");
+  const grow = (name, f) => `<tr><td>${esc(name)}</td><td>${f.n}</td><td>${f.n ? f.mean_gross_bp.toFixed(2) : "–"}</td>
+     <td class="${f.n ? (f.mean_net_bp > 0 ? "ok-t" : "bad-t") : ""}">${f.n ? f.mean_net_bp.toFixed(2) : "–"}</td>
+     <td>${f.n ? (f.hit_rate * 100).toFixed(1) + "%" : "–"}</td>` +
+    mo.map((_, i) => `<td>${f.mean_markouts_bp && f.mean_markouts_bp[i] !== undefined ? f.mean_markouts_bp[i].toFixed(2) : "–"}</td>`).join("") + `</tr>`;
+  const gr = (sh.by_move || []).map((b) => grow(b.bucket, b.summary))
+    .concat(Object.entries(sh.by_exit || {}).map(([k, f]) => grow(k + " exit", f)),
+      Object.entries(sh.by_exit_reason || {}).map(([k, f]) => grow("exit on " + k, f)), [grow("total", tot)]);
+  const rr = (sh.recent || []).slice(0, 20).map((x) =>
+    `<tr><td>${ago(x.exit_recv_ns, now)}</td><td>${esc(x.leader || "–")} → ${esc(x.follower)}</td><td>${x.dir > 0 ? "long" : "short"}</td>
+     <td>${x.z.toFixed(1)}</td><td>${x.gap_bp ? x.gap_bp.toFixed(1) : "–"}</td><td>${x.entry_px.toPrecision(6)}</td><td>${x.exit_px.toPrecision(6)}</td>
+     <td>${esc((x.entry_kind ? x.entry_kind + "/" : "") + (x.exit_kind || "taker"))}${x.exit_reason ? " · " + esc(x.exit_reason) : ""}</td><td>${x.entry_spread_bp.toFixed(2)}</td>
+     <td>${x.gross_bp.toFixed(2)}</td><td class="${x.net_bp > 0 ? "ok-t" : "bad-t"}">${x.net_bp.toFixed(2)}</td></tr>`);
+  const price = sh.trigger === "price", trg = prm.trigger || {}, ex = prm.exit || {}, qc = prm.quoter || {};
+  const beta = trg.beta === "rolling" ? "β-adjusted " : "";
+  const signal = price
+    ? `a leader mid move ≥ ${trg.strong_move_bp ? `${trg.strong_move_bp} bp (or ≥ ${trg.min_move_bp} bp with a same-direction liquidation)` : `${trg.min_move_bp} bp`} within ${trg.window_ms} ms (cooldown ${trg.cooldown_ms} ms), into the ${prm.top_k || "all"} follower(s) lagging it by a ${beta}gap ≥ ${trg.min_gap_bp} bp`
+    : `a leader flow event (|z| ≥ ${(prm.detector || {}).theta})`;
+  let note;
+  if (qd && qc.arm === "A") {
+    note = `Simulated post-only orders, queue position modelled conservatively (behind all displayed size; filled only by trades). ` +
+      `Arm A: on ${signal}, a bid (long) or ask (short) at the follower's touch, ${prm.latency_ms} ms latency; repriced ≤ ${qc.max_reprices}×, ` +
+      `cancelled after ${qc.entry_timeout_ms} ms, on a ${qc.reverse_bp} bp leader reversal or once the gap closes. Exit: post-only target ` +
+      `max(1 tick, ${qc.target_gap_frac} × gap), moved to the touch when the residual gap ≤ ${qc.close_gap_bp} bp; taker after ${prm.horizon_ms} ms or a ${qc.stop_mult} × gap stop. ` +
+      `Fees ${qc.maker_fee_bp} bp maker, ${prm.taker_fee_bp} bp taker. Markouts are from the fill price.`;
+  } else if (qd) {
+    note = `Simulated post-only orders, queue position modelled conservatively. Arm B: a bid and an ask at every follower's touch; a leader move ≥ ${qc.pull_move_bp} bp ` +
+      `within ${trg.window_ms} ms pulls the side it would run over. A fill is held until the other side fills, ${prm.horizon_ms} ms (then taker) or a ${qc.stop_bp} bp stop. ` +
+      `Fees ${qc.maker_fee_bp} bp maker, ${prm.taker_fee_bp} bp taker.`;
+  } else {
+    const exit = sh.exit_mode === "gap"
+      ? `a limit at our own touch once the ${beta}gap closes to ≤ ${ex.close_gap_bp} bp or ${prm.horizon_ms} ms pass (${ex.maker_fee_bp} bp), else a taker cross after ${ex.maker_timeout_ms} ms; a ${ex.stop_mult} × gap stop`
+      : sh.exit_mode === "maker"
+      ? `a limit at our own touch ${prm.horizon_ms} ms later, filled only when the book trades through it (${ex.maker_fee_bp} bp), else a taker cross after ${ex.maker_timeout_ms} ms`
+      : `${prm.horizon_ms} ms later at the opposite side`;
+    note = `Simulated fills on the live book. Entry ${prm.latency_ms} ms after ${signal}, as a taker at the ask (long) or bid (short)` +
+      `${prm.max_entry_spread_bp ? `, skipped if the spread is over ${prm.max_entry_spread_bp} bp` : ""}. Exit: ${exit}. Taker fee ${prm.taker_fee_bp} bp. ` +
+      `Markouts are the follower mid after entry, signed, in bp.`;
+  }
+  note += ` No orders are sent. params sha256 ${String(sh.params_sha256).slice(0, 12)}…`;
+  return `<h2>Shadow trading · ${esc(sh.run)} <span class="pill warn">${sh.exploratory ? "exploratory · not a gate" : "counts"} · ${esc(sh.exit_mode)}</span></h2>
+  <div class="tiles">${tiles.join("")}</div>
+  <div class="panel" style="margin-top:10px"><table><thead><tr>
+    <th>follower</th><th>trades</th><th>mean gross bp</th><th>mean net bp</th><th>hit rate</th><th>t</th><th>net $</th>
+  </tr></thead><tbody>${fr.join("")}</tbody></table></div>
+  <div class="panel" style="margin-top:10px"><table><thead><tr>${ghead}</tr></thead><tbody>${gr.join("")}</tbody></table></div>
+  <div class="panel" style="margin-top:10px"><table><thead><tr>
+    <th>exit</th><th>leader → follower</th><th>side</th><th>z / move bp</th><th>gap bp</th><th>entry</th><th>exit px</th><th>kind</th><th>spread bp</th><th>gross bp</th><th>net bp</th>
+  </tr></thead><tbody>${rr.join("") || `<tr><td colspan="11">no trades yet${price ? "" : " (the detector warms up for 30 min)"}</td></tr>`}</tbody></table></div>
+  <p class="note">${esc(note)}</p>`;
 }
 
 function render(s) {
@@ -165,55 +233,10 @@ function render(s) {
   });
   document.querySelector("#syms tbody").innerHTML = rows.join("") || `<tr><td colspan="12">no data yet</td></tr>`;
 
-  const sh = t.shadow;
-  $("shadow-wrap").hidden = !sh;
-  $("explore").textContent = sh ? (sh.exploratory ? "running" : "running (not exploratory)") : "off";
-  $("explore").className = "v " + (sh ? "ok-t" : "");
-  if (sh) {
-    const tot = sh.total || {}, prm = sh.params || {};
-    $("shadow-label").textContent = (sh.exploratory ? "exploratory · not a gate" : "counts") + " · " + sh.run;
-    const sk = sh.skipped || {};
-    $("shadow-tiles").innerHTML = [
-      tile("signals", String(sh.signals), `open now ${sh.open}`),
-      tile("trades", String(tot.n || 0), `hit ${tot.n ? (tot.hit_rate * 100).toFixed(1) + "%" : "–"} · t ${tot.n > 1 ? tot.t_stat : "–"}`),
-      tile("mean net bp", tot.n ? tot.mean_net_bp.toFixed(2) : "–", `gross ${tot.n ? tot.mean_gross_bp.toFixed(2) : "–"} · fees ${tot.n ? (tot.mean_gross_bp - tot.mean_net_bp).toFixed(1) : "–"}`, tot.n ? (tot.mean_net_bp > 0 ? "ok-t" : "bad-t") : ""),
-      tile("net $", tot.n ? tot.net_usd.toFixed(2) : "–", `$${prm.notional_usd} per trade`),
-      tile("skipped", String(Object.values(sk).reduce((a, b) => a + b, 0)), Object.entries(sk).filter(([, v]) => v).map(([k, v]) => `${k} ${v}`).join(" · ") || "none"),
-    ].join("");
-    const fr = Object.entries(sh.by_follower || {}).sort((a, b) => b[1].n - a[1].n).map(([name, f]) =>
-      `<tr><td>${esc(name)}</td><td>${f.n}</td><td>${f.n ? f.mean_gross_bp.toFixed(2) : "–"}</td>
-       <td class="${f.n ? (f.mean_net_bp > 0 ? "ok-t" : "bad-t") : ""}">${f.n ? f.mean_net_bp.toFixed(2) : "–"}</td>
-       <td>${f.n ? (f.hit_rate * 100).toFixed(1) + "%" : "–"}</td><td>${f.n > 1 ? f.t_stat : "–"}</td><td>${f.n ? f.net_usd.toFixed(2) : "–"}</td></tr>`);
-    document.querySelector("#shadow-f tbody").innerHTML = fr.join("");
-    // Groups: by leader move (or |z|), by exit kind, total; with the mean markout curve.
-    const mo = sh.markouts_ms || [];
-    $("shadow-g-head").innerHTML = `<th>group</th><th>trades</th><th>mean gross bp</th><th>mean net bp</th><th>hit rate</th>` +
-      mo.map((m) => `<th>mid +${m >= 1000 ? m / 1000 + " s" : m + " ms"}</th>`).join("");
-    const grow = (name, f) => `<tr><td>${esc(name)}</td><td>${f.n}</td><td>${f.n ? f.mean_gross_bp.toFixed(2) : "–"}</td>
-       <td class="${f.n ? (f.mean_net_bp > 0 ? "ok-t" : "bad-t") : ""}">${f.n ? f.mean_net_bp.toFixed(2) : "–"}</td>
-       <td>${f.n ? (f.hit_rate * 100).toFixed(1) + "%" : "–"}</td>` +
-      mo.map((_, i) => `<td>${f.mean_markouts_bp && f.mean_markouts_bp[i] !== undefined ? f.mean_markouts_bp[i].toFixed(2) : "–"}</td>`).join("") + `</tr>`;
-    const gr = (sh.by_move || []).map((b) => grow(b.bucket, b.summary))
-      .concat(Object.entries(sh.by_exit || {}).map(([k, f]) => grow(k + " exit", f)), [grow("total", tot)]);
-    document.querySelector("#shadow-g tbody").innerHTML = gr.join("");
-    const rr = (sh.recent || []).slice(0, 20).map((x) =>
-      `<tr><td>${ago(x.exit_recv_ns, now)}</td><td>${esc(x.leader)} → ${esc(x.follower)}</td><td>${x.dir > 0 ? "long" : "short"}</td>
-       <td>${x.z.toFixed(1)}</td><td>${x.gap_bp ? x.gap_bp.toFixed(1) : "–"}</td><td>${x.entry_px.toPrecision(6)}</td><td>${x.exit_px.toPrecision(6)}</td>
-       <td>${esc(x.exit_kind || "taker")}</td><td>${x.entry_spread_bp.toFixed(2)}</td>
-       <td>${x.gross_bp.toFixed(2)}</td><td class="${x.net_bp > 0 ? "ok-t" : "bad-t"}">${x.net_bp.toFixed(2)}</td></tr>`);
-    const price = sh.trigger === "price", trg = prm.trigger || {}, ex = prm.exit || {};
-    document.querySelector("#shadow-r tbody").innerHTML = rr.join("") ||
-      `<tr><td colspan="11">no trades yet${price ? "" : " (the detector warms up for 30 min)"}</td></tr>`;
-    const signal = price
-      ? `a leader mid move ≥ ${trg.min_move_bp} bp within ${trg.window_ms} ms (cooldown ${trg.cooldown_ms} ms), into the ${prm.top_k || "all"} follower(s) lagging it by ≥ ${trg.min_gap_bp} bp`
-      : `a leader flow event (|z| ≥ ${(prm.detector || {}).theta})`;
-    const exit = sh.exit_mode === "maker"
-      ? `a limit at our own touch ${prm.horizon_ms} ms later, filled only when the book trades through it (${ex.maker_fee_bp} bp), else a taker cross after ${ex.maker_timeout_ms} ms`
-      : `${prm.horizon_ms} ms later at the opposite side`;
-    $("shadow-note").textContent = `Simulated fills on the live book. Entry ${prm.latency_ms} ms after ${signal}, as a taker at the ask (long) or bid (short)` +
-      `${prm.max_entry_spread_bp ? `, skipped if the spread is over ${prm.max_entry_spread_bp} bp` : ""}. Exit: ${exit}. Taker fee ${prm.taker_fee_bp} bp. ` +
-      `Markouts are the follower mid after entry, signed, in bp. No orders are sent. params sha256 ${String(sh.params_sha256).slice(0, 12)}…`;
-  }
+  const runs = t.shadow_runs || (t.shadow ? [t.shadow] : []);
+  $("explore").textContent = runs.length ? runs.map((r) => r.run).join(" · ") : "off";
+  $("explore").className = "v " + (runs.length ? "ok-t" : "");
+  $("shadow-runs").innerHTML = runs.map((sh) => renderRun(sh, now)).join("");
 
   const p = s.probe;
   if (p && p.feed_lag_us) {

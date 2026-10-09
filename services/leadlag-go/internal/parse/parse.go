@@ -1,5 +1,5 @@
 // Package parse decodes Binance USDⓈ-M combined-stream frames (aggTrade,
-// bookTicker) into model.Events without allocating. It scans the fixed shapes
+// bookTicker, forceOrder) into model.Events without allocating. It scans the fixed shapes
 // Binance sends; anything it does not need is skipped, so added fields
 // (e.g. "nq") are harmless. Control frames go through encoding/json elsewhere.
 package parse
@@ -47,6 +47,8 @@ func Frame(b []byte, syms Symbols, e *model.Event) error {
 		return AggTrade(data, syms, e)
 	case bytes.HasSuffix(stream, []byte("@bookTicker")):
 		return BookTicker(data, syms, e)
+	case bytes.HasSuffix(stream, []byte("@forceOrder")):
+		return ForceOrder(data, syms, e)
 	}
 	return ErrUnknownStream
 }
@@ -201,6 +203,103 @@ func BookTicker(data []byte, syms Symbols, e *model.Event) error {
 	}
 	if seen != 127 {
 		return ErrField
+	}
+	return nil
+}
+
+// ForceOrder decodes a forceOrder (liquidation) data object:
+// {"e":"forceOrder","E":…,"o":{"s":"BTCUSDT","S":"SELL","o":"LIMIT","f":"IOC","q":"…","p":"…","ap":"…","X":"FILLED","l":"…","z":"…","T":…}}
+// Px is the average price "ap" (the order price "p" when ap is 0) and Qty the
+// filled quantity "z" (the order quantity "q" when z is 0).
+func ForceOrder(data []byte, syms Symbols, e *model.Event) error {
+	var sc scanner
+	sc.b = data
+	if !sc.open() {
+		return ErrFrame
+	}
+	*e = model.Event{Kind: model.KindLiq}
+	var order []byte
+	var seen uint8
+	for {
+		key, val, ok, end := sc.member()
+		if end {
+			break
+		}
+		if !ok {
+			return ErrFrame
+		}
+		switch string(key) {
+		case "E":
+			var err error
+			if e.ExchMs, err = atoi(val); err != nil {
+				return ErrField
+			}
+			seen |= 1
+		case "o":
+			order = val
+		}
+	}
+	if order == nil {
+		return ErrField
+	}
+	sc = scanner{b: order}
+	if !sc.open() {
+		return ErrFrame
+	}
+	var px, ap, q, z int64
+	for {
+		key, val, ok, end := sc.member()
+		if end {
+			break
+		}
+		if !ok {
+			return ErrFrame
+		}
+		var err error
+		switch string(key) {
+		case "s":
+			idx, found := syms[string(val)]
+			if !found {
+				return ErrUnknownSymbol
+			}
+			e.Sym = idx
+			seen |= 2
+		case "S":
+			switch string(val) {
+			case "SELL":
+				e.BuyerMaker = true
+			case "BUY":
+			default:
+				err = ErrField
+			}
+			seen |= 4
+		case "p":
+			px, err = fixed.ParseE8(val)
+			seen |= 8
+		case "ap":
+			ap, err = fixed.ParseE8(val)
+		case "q":
+			q, err = fixed.ParseE8(val)
+			seen |= 16
+		case "z":
+			z, err = fixed.ParseE8(val)
+		case "T":
+			e.TradeMs, err = atoi(val)
+			seen |= 32
+		}
+		if err != nil {
+			return ErrField
+		}
+	}
+	if seen != 63 {
+		return ErrField
+	}
+	e.Px, e.Qty = ap, z
+	if e.Px == 0 {
+		e.Px = px
+	}
+	if e.Qty == 0 {
+		e.Qty = q
 	}
 	return nil
 }

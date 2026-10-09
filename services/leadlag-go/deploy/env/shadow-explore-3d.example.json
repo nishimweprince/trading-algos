@@ -1,0 +1,16 @@
+{
+  "run": "explore-3d",
+  "exploratory": true,
+  "leaders": ["BTCUSDT", "ETHUSDT"],
+  "followers": ["SOLUSDT", "XRPUSDT", "DOGEUSDT", "SUIUSDT", "BNBUSDT", "ZECUSDT", "UNIUSDT", "ENAUSDT", "1000PEPEUSDT"],
+  "trigger": {"kind": "price", "window_ms": 1000, "min_move_bp": 4, "cooldown_ms": 5000, "min_gap_bp": 2},
+  "top_k": 3,
+  "max_entry_spread_bp": 1.5,
+  "latency_ms": 5,
+  "horizon_ms": 30000,
+  "exit": {"mode": "gap", "maker_timeout_ms": 2000, "maker_fee_bp": 2, "close_gap_bp": 0.5},
+  "markouts_ms": [100, 1000, 5000, 10000, 30000],
+  "notional_usd": 25,
+  "taker_fee_bp": 5,
+  "max_quote_age_ms": 1000
+}

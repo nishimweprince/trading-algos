@@ -7,7 +7,13 @@
 // Part 3) fires when a leader's mid moves at least min_move_bp within
 // window_ms, and opens the top_k followers that lag the leader most. The exit
 // is a taker cross, or ("maker") a limit at our own touch that fills only when
-// the book trades through it, crossing as a taker after maker_timeout_ms.
+// the book trades through it, crossing as a taker after maker_timeout_ms, or
+// ("gap", explore-3c/3d) that maker exit started as soon as the follower's
+// β-residual gap to the leader closes, with a stop (beta.go).
+//
+// The "quoter" engine (explore-3a/3b, quoter.go) enters passively instead:
+// post-only orders at the follower's touch with a queue-position fill model
+// (queue.go).
 //
 // The engine runs inside the hub (under its lock) like the record engine: it
 // never blocks, never touches the disk and keeps its state in fixed slices.
@@ -37,13 +43,34 @@ type TriggerCfg struct {
 	MinMoveBp  float64 `json:"min_move_bp"` // price: |leader mid move| that fires
 	CooldownMs int64   `json:"cooldown_ms"` // price: per leader
 	MinGapBp   float64 `json:"min_gap_bp"`  // price: a follower must lag the leader by at least this much
+	// Beta: "one" (the default, explore-2: gap = leader move − follower move)
+	// or "rolling": gap = β·leader move − follower move, with β an EWMA
+	// regression of the follower's 1 s mid returns on the leader's (beta.go).
+	Beta           string `json:"beta,omitempty"`
+	BetaHalfLifeMs int64  `json:"beta_half_life_ms,omitempty"` // default 30 min
+	BetaWarmupMs   int64  `json:"beta_warmup_ms,omitempty"`    // default 30 min
+	// StrongMoveBp > 0: the move must reach it, or reach min_move_bp with a
+	// same-direction leader liquidation (forceOrder) of at least liq_min_usd
+	// within liq_window_ms (explore-3c).
+	StrongMoveBp float64 `json:"strong_move_bp,omitempty"`
+	// LiqWindowMs > 0: a leader liquidation of at least liq_min_usd against
+	// the move within the window skips the signal (liq_opposite).
+	LiqWindowMs int64   `json:"liq_window_ms,omitempty"`
+	LiqMinUSD   float64 `json:"liq_min_usd,omitempty"`
 }
+
+func (t *TriggerCfg) rollingBeta() bool { return t != nil && t.Beta == "rolling" }
 
 // ExitCfg selects the exit. Absent (nil) means a taker exit.
 type ExitCfg struct {
-	Mode           string  `json:"mode"` // "taker" | "maker"
+	Mode           string  `json:"mode"` // "taker" | "maker" | "gap"
 	MakerTimeoutMs int64   `json:"maker_timeout_ms"`
 	MakerFeeBp     float64 `json:"maker_fee_bp"`
+	// gap: start the maker exit when the residual gap is at most CloseGapBp;
+	// exit as a taker when the follower moves StopMult × the entry gap
+	// against the position (0: no stop).
+	CloseGapBp float64 `json:"close_gap_bp,omitempty"`
+	StopMult   float64 `json:"stop_mult,omitempty"`
 }
 
 // MaxMarkouts bounds markouts_ms (the slot keeps them in a fixed array).
@@ -69,10 +96,21 @@ type Params struct {
 	TakerFeeBp       float64  `json:"taker_fee_bp"`
 	MaxQuoteAgeMs    int64    `json:"max_quote_age_ms"`
 	MaxEntrySpreadBp float64  `json:"max_entry_spread_bp,omitempty"`
+	// Engine: "taker" (the default: taker entry) or "quoter" (passive entry, quoter.go).
+	Engine string `json:"engine,omitempty"`
+	// Ticks: each follower's tick size, E8 (llfetch ticks). Required by the quoter.
+	Ticks  map[string]int64 `json:"ticks,omitempty"`
+	Quoter *QuoterCfg       `json:"quoter,omitempty"`
 }
 
 func (p *Params) priceTrigger() bool { return p.Trigger != nil && p.Trigger.Kind == "price" }
-func (p *Params) makerExit() bool    { return p.Exit != nil && p.Exit.Mode == "maker" }
+func (p *Params) gapExit() bool      { return p.Exit != nil && p.Exit.Mode == "gap" }
+
+// makerExit: the exit rests a limit at our own touch first ("maker", "gap").
+func (p *Params) makerExit() bool {
+	return p.Exit != nil && (p.Exit.Mode == "maker" || p.Exit.Mode == "gap")
+}
+func (p *Params) quoter() bool { return p.Engine == "quoter" }
 
 // TriggerKind and ExitMode name the run's trigger and exit.
 func (p *Params) TriggerKind() string {
@@ -82,8 +120,11 @@ func (p *Params) TriggerKind() string {
 	return "flow"
 }
 func (p *Params) ExitMode() string {
-	if p.makerExit() {
-		return "maker"
+	if p.quoter() {
+		return "quoter-" + p.Quoter.Arm
+	}
+	if p.Exit != nil && p.Exit.Mode != "" {
+		return p.Exit.Mode
 	}
 	return "taker"
 }
@@ -109,9 +150,35 @@ func (p *Params) Validate() error {
 			if t.WindowMs <= 0 || t.MinMoveBp <= 0 || t.CooldownMs < 0 {
 				return errors.New("shadow: price trigger needs window_ms > 0, min_move_bp > 0, cooldown_ms >= 0")
 			}
+			switch t.Beta {
+			case "", "one", "rolling":
+			default:
+				return fmt.Errorf("shadow: trigger beta %q (want one or rolling)", t.Beta)
+			}
+			if t.BetaHalfLifeMs < 0 || t.BetaWarmupMs < 0 || t.LiqWindowMs < 0 || t.LiqMinUSD < 0 {
+				return errors.New("shadow: beta_half_life_ms, beta_warmup_ms, liq_window_ms and liq_min_usd must be >= 0")
+			}
+			if t.StrongMoveBp != 0 && (t.StrongMoveBp < t.MinMoveBp || t.LiqWindowMs <= 0) {
+				return errors.New("shadow: strong_move_bp needs strong_move_bp >= min_move_bp and liq_window_ms > 0")
+			}
 		default:
 			return fmt.Errorf("shadow: trigger kind %q (want flow or price)", t.Kind)
 		}
+	}
+	switch p.Engine {
+	case "", "taker":
+		if p.Quoter != nil {
+			return errors.New("shadow: quoter params need engine quoter")
+		}
+	case "quoter":
+		if !p.priceTrigger() || p.Quoter == nil || p.Exit != nil {
+			return errors.New("shadow: engine quoter needs the price trigger and quoter params, and no exit params")
+		}
+		if err := p.Quoter.validate(p); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("shadow: engine %q (want taker or quoter)", p.Engine)
 	}
 	if !p.priceTrigger() {
 		if p.Detector.WMs <= 0 || p.Detector.Theta <= 0 || p.Detector.HalfLifeMs <= 0 {
@@ -124,19 +191,23 @@ func (p *Params) Validate() error {
 	if x := p.Exit; x != nil {
 		switch x.Mode {
 		case "taker":
-		case "maker":
+		case "maker", "gap":
 			if x.MakerTimeoutMs <= 0 {
 				return errors.New("shadow: maker exit needs maker_timeout_ms > 0")
 			}
+			if x.Mode == "gap" && (!p.priceTrigger() || x.CloseGapBp < 0 || x.StopMult < 0) {
+				return errors.New("shadow: gap exit needs the price trigger, close_gap_bp >= 0 and stop_mult >= 0")
+			}
 		default:
-			return fmt.Errorf("shadow: exit mode %q (want taker or maker)", x.Mode)
+			return fmt.Errorf("shadow: exit mode %q (want taker, maker or gap)", x.Mode)
 		}
 	}
 	if len(p.MarkoutsMs) > MaxMarkouts {
 		return fmt.Errorf("shadow: at most %d markouts_ms", MaxMarkouts)
 	}
 	for i, m := range p.MarkoutsMs {
-		if m <= 0 || m > p.HorizonMs || (i > 0 && m <= p.MarkoutsMs[i-1]) {
+		// The quoter keeps measuring after the exit, so its markouts may outlast the horizon.
+		if m <= 0 || (m > p.HorizonMs && !p.quoter()) || (i > 0 && m <= p.MarkoutsMs[i-1]) {
 			return errors.New("shadow: markouts_ms must be ascending, > 0 and <= horizon_ms")
 		}
 	}
@@ -162,6 +233,8 @@ func LoadParams(path string) (Params, string, error) {
 
 // Trade is one completed shadow round trip.
 type Trade struct {
+	// Kind: empty for the taker engine (as explore-1/2 journals), "trade" for the quoter.
+	Kind        string  `json:"kind,omitempty"`
 	Run         string  `json:"run"`
 	Exploratory bool    `json:"exploratory"`
 	Leader      string  `json:"leader"`
@@ -182,13 +255,29 @@ type Trade struct {
 	NetBp       float64 `json:"net_bp"`
 	NetUSD      float64 `json:"net_usd"`
 	ExitKind    string  `json:"exit_kind"` // "taker" | "maker"
+	// ExitReason: why the exit started: timeout (the horizon), gap_closed,
+	// target (quoter: the resting target filled), stop.
+	ExitReason string `json:"exit_reason,omitempty"`
 	// Price trigger: |leader move| over the window, the follower's own signed
 	// move over it, and the gap (leader − follower), all in bp.
 	LeaderMoveBp float64 `json:"leader_move_bp,omitempty"`
 	PreMoveBp    float64 `json:"pre_move_bp,omitempty"`
 	GapBp        float64 `json:"gap_bp,omitempty"`
-	// MarkoutsBp: the follower mid at each markouts_ms after entry, signed, bp from the entry mid.
+	// MarkoutsBp: the follower mid at each markouts_ms after entry, signed, bp
+	// from the entry mid (taker engine) or from the entry fill price (quoter).
 	MarkoutsBp []float64 `json:"markouts_bp,omitempty"`
+	// Beta: the β used for the gap (rolling β only).
+	Beta float64 `json:"beta,omitempty"`
+	// Quoter only.
+	Arm        string  `json:"arm,omitempty"`        // "A" | "B"
+	EntryKind  string  `json:"entry_kind,omitempty"` // "maker"
+	QueueAhead float64 `json:"queue_ahead,omitempty"`
+	FillWaitMs float64 `json:"fill_wait_ms,omitempty"` // post → entry fill
+	// ExitMarkoutsBp: the mid at each markouts_ms after the exit, bp from the
+	// exit price, signed for the exit order (positive: the exit was not picked off).
+	ExitMarkoutsBp []float64 `json:"exit_markouts_bp,omitempty"`
+	// RecNs: when the record was emitted (quoter: after the last markout).
+	RecNs int64 `json:"rec_ns,omitempty"`
 }
 
 // Agg accumulates trades for one group (overall, a follower, a leader).
@@ -259,9 +348,12 @@ func round(v float64, d int) float64 {
 }
 
 type quote struct {
-	bid, ask int64 // E8
-	recvNs   int64
+	bid, ask       int64 // E8
+	bidQty, askQty int64 // E8
+	recvNs         int64
 }
+
+func (q *quote) mid() float64 { return float64(q.bid+q.ask) / 2 / model.Scale }
 
 // histCap bounds each symbol's mid history. Only mid changes are kept, so
 // this covers far more than any trigger window even in a burst.
@@ -332,6 +424,8 @@ type slot struct {
 	move     float64 // price trigger: |leader move|, follower pre-move, gap (bp)
 	preMove  float64
 	gap      float64
+	base     gapBase // gap exit: the mids the residual is measured from
+	reason   string  // exit_reason once the exit has started
 	nMarks   int
 	marks    [MaxMarkouts]float64
 }
@@ -375,6 +469,11 @@ type Engine struct {
 	cand     []int     // scratch: candidate followers
 	candGap  []float64 // scratch: their gaps
 	candPre  []float64
+	candBase []gapBase
+	betas    *betaSet   // rolling β; nil with beta "one"
+	liqNs    [][2]int64 // per leader: last qualifying liquidation receive time, [sell, buy]
+
+	q *quoterState // engine quoter only
 
 	buckets []float64
 
@@ -385,6 +484,7 @@ type Engine struct {
 	ByLeader  []Agg
 	ByExit    [2]Agg // taker, maker
 	ByMove    []Agg  // len(buckets)+1
+	ByReason  [len(exitReasons)]Agg
 	Ring      [RingSize]Trade
 	RingNext  int
 	RingCount int
@@ -440,11 +540,38 @@ func New(p Params, symbols []string, halted *atomic.Bool, sink func(*Trade)) *En
 		e.buckets = priceBuckets
 	}
 	e.ByMove = make([]Agg, len(e.buckets)+1)
-	for _, k := range []string{"halted", "busy", "no_quote", "stale_quote", "crossed", "wide_spread", "no_lagger"} {
+	e.candBase = make([]gapBase, len(e.followers))
+	e.liqNs = make([][2]int64, len(e.leaders))
+	for i := range e.liqNs {
+		e.liqNs[i] = [2]int64{math.MinInt64 / 2, math.MinInt64 / 2}
+	}
+	if price && p.Trigger.rollingBeta() {
+		e.betas = newBetaSet(len(e.leaders), len(e.followers), p.Trigger.BetaHalfLifeMs, p.Trigger.BetaWarmupMs)
+	}
+	for _, k := range []string{"halted", "busy", "no_quote", "stale_quote", "crossed", "wide_spread", "no_lagger",
+		"beta_warmup", "liq_opposite"} {
 		e.Skipped[k] = 0 // preallocated: OnEvent never grows the map
+	}
+	if p.quoter() {
+		e.q = newQuoterState(e)
 	}
 	return e
 }
+
+// exitReasons index ByReason.
+var exitReasons = [...]string{"timeout", "gap_closed", "target", "stop"}
+
+func reasonIndex(r string) int {
+	for i, x := range exitReasons {
+		if x == r {
+			return i
+		}
+	}
+	return 0
+}
+
+// Run is the run label.
+func (e *Engine) Run() string { return e.p.Run }
 
 // Followers and Leaders name the engine's groups in index order.
 func (e *Engine) Followers() []string { return e.followers }
@@ -453,6 +580,13 @@ func (e *Engine) Leaders() []string   { return e.leaders }
 // OnEvent implements live.Engine.
 func (e *Engine) OnEvent(ev *model.Event) {
 	now := ev.RecvNs
+	if e.betas != nil {
+		e.betas.tick(now, e.lhist, e.fhist)
+	}
+	if e.q != nil {
+		e.quoterEvent(ev)
+		return
+	}
 	// Timers first: a fill uses the book as it was before this event arrived.
 	if e.active > 0 {
 		e.runTimers(now)
@@ -460,7 +594,7 @@ func (e *Engine) OnEvent(ev *model.Event) {
 	if f := e.followerOf[ev.Sym]; f >= 0 {
 		switch ev.Kind {
 		case model.KindQuote:
-			e.quotes[f] = quote{bid: ev.Bid, ask: ev.Ask, recvNs: now}
+			e.quotes[f] = quote{bid: ev.Bid, ask: ev.Ask, bidQty: ev.BidQty, askQty: ev.AskQty, recvNs: now}
 			if e.fhist != nil && ev.Bid > 0 && ev.Ask > ev.Bid {
 				e.fhist[f].push(now, float64(ev.Bid+ev.Ask)/2/model.Scale)
 			}
@@ -485,7 +619,10 @@ func (e *Engine) OnEvent(ev *model.Event) {
 		return
 	}
 	if e.p.priceTrigger() {
-		if ev.Kind == model.KindQuote && ev.Bid > 0 && ev.Ask > ev.Bid {
+		switch {
+		case ev.Kind == model.KindLiq:
+			e.onLeaderLiq(l, now, ev)
+		case ev.Kind == model.KindQuote && ev.Bid > 0 && ev.Ask > ev.Bid:
 			e.onLeaderQuote(l, now, ev.ExchMs, float64(ev.Bid+ev.Ask)/2/model.Scale)
 		}
 		return
@@ -515,40 +652,78 @@ func (e *Engine) OnEvent(ev *model.Event) {
 	}
 }
 
-// onLeaderQuote runs the price trigger: the leader's mid moved at least
-// min_move_bp over window_ms (crossing up from below, after the cooldown).
-func (e *Engine) onLeaderQuote(l int, now, exchMs int64, mid float64) {
+// onLeaderLiq records a leader liquidation of at least liq_min_usd.
+func (e *Engine) onLeaderLiq(l int, now int64, ev *model.Event) {
+	if e.p.Trigger.LiqWindowMs <= 0 {
+		return
+	}
+	usd := float64(ev.Px) / model.Scale * float64(ev.Qty) / model.Scale
+	if usd < e.p.Trigger.LiqMinUSD {
+		return
+	}
+	side := 0 // sell
+	if ev.TakerSign() > 0 {
+		side = 1
+	}
+	e.liqNs[l][side] = now
+}
+
+// liqWithin reports a qualifying liquidation in direction dir within the window.
+func (e *Engine) liqWithin(l int, now int64, dir int8) bool {
+	side := 0
+	if dir > 0 {
+		side = 1
+	}
+	return now-e.liqNs[l][side] <= e.p.Trigger.LiqWindowMs*1_000_000
+}
+
+// trigger runs the price trigger on a leader quote: the leader's mid moved at
+// least min_move_bp over window_ms (crossing up from below, after the
+// cooldown). With strong_move_bp, a move counts only at strong_move_bp, or at
+// min_move_bp with a same-direction liquidation in the window. It returns the
+// signed move in bp.
+func (e *Engine) trigger(l int, now int64, mid float64) (move float64, fire bool) {
 	tc := e.p.Trigger
 	h := &e.lhist[l]
 	h.push(now, mid)
-	win := tc.WindowMs * 1_000_000
-	past, ok := h.at(now - win)
+	past, ok := h.at(now - tc.WindowMs*1_000_000)
 	if !ok || past <= 0 {
-		return
+		return 0, false
 	}
-	move := (mid - past) / past * 1e4
+	move = (mid - past) / past * 1e4
 	hit := math.Abs(move) >= tc.MinMoveBp
-	fire := hit && !e.above[l] && now-e.lastFire[l] >= tc.CooldownMs*1_000_000
+	if hit && tc.StrongMoveBp > 0 && math.Abs(move) < tc.StrongMoveBp {
+		dir := int8(1)
+		if move < 0 {
+			dir = -1
+		}
+		hit = e.liqWithin(l, now, dir)
+	}
+	fire = hit && !e.above[l] && now-e.lastFire[l] >= tc.CooldownMs*1_000_000
 	e.above[l] = hit
-	if !fire {
-		return
+	if fire {
+		e.lastFire[l] = now
 	}
-	e.lastFire[l] = now
-	e.Signals++
-	if e.halted != nil && e.halted.Load() {
-		e.Skipped["halted"]++
-		return
-	}
+	return move, fire
+}
+
+// laggers fills e.cand with the followers that lag leader l by at least
+// min_gap_bp, by gap descending (ties keep follower order), and returns the
+// signal's direction. free reports whether a follower can take a position
+// (the caller counts busy skips). Followers whose rolling β is still warming
+// up are skipped.
+func (e *Engine) laggers(l int, now int64, move float64, free func(f int) bool) int8 {
+	tc := e.p.Trigger
+	win := tc.WindowMs * 1_000_000
 	dir := int8(1)
 	if move < 0 {
 		dir = -1
 	}
 	d := float64(dir)
-	// Candidates: idle followers that lag the leader by at least min_gap_bp.
+	lWas, _ := e.lhist[l].at(now - win)
 	e.cand = e.cand[:0]
-	for f := range e.slots {
-		if e.slots[f].state != idle {
-			e.Skipped["busy"]++
+	for f := range e.followers {
+		if !free(f) {
 			continue
 		}
 		fh := &e.fhist[f]
@@ -557,12 +732,25 @@ func (e *Engine) onLeaderQuote(l int, now, exchMs int64, mid float64) {
 		if !ok1 || !ok2 || was <= 0 {
 			continue
 		}
+		beta := 1.0
+		if e.betas != nil {
+			b, warm := e.betas.beta(l, f)
+			if !warm {
+				e.Skipped["beta_warmup"]++
+				continue
+			}
+			beta = b
+		}
 		pre := d * (cur - was) / was * 1e4
 		gap := d*move - pre
+		if e.betas != nil {
+			gap = d*beta*move - pre
+		}
 		if gap < tc.MinGapBp {
 			continue
 		}
 		e.candGap[f], e.candPre[f] = gap, pre
+		e.candBase[f] = gapBase{leader: lWas, follower: was, beta: beta}
 		// insertion by gap, descending; ties keep follower order
 		i := len(e.cand)
 		e.cand = append(e.cand, f)
@@ -572,6 +760,31 @@ func (e *Engine) onLeaderQuote(l int, now, exchMs int64, mid float64) {
 		}
 		e.cand[i] = f
 	}
+	return dir
+}
+
+// onLeaderQuote opens taker positions in the top_k laggers when the price trigger fires.
+func (e *Engine) onLeaderQuote(l int, now, exchMs int64, mid float64) {
+	move, fire := e.trigger(l, now, mid)
+	if !fire {
+		return
+	}
+	e.Signals++
+	if e.halted != nil && e.halted.Load() {
+		e.Skipped["halted"]++
+		return
+	}
+	if e.p.Trigger.LiqWindowMs > 0 && e.liqWithin(l, now, -sign(move)) {
+		e.Skipped["liq_opposite"]++
+		return
+	}
+	dir := e.laggers(l, now, move, func(f int) bool {
+		if e.slots[f].state != idle {
+			e.Skipped["busy"]++
+			return false
+		}
+		return true
+	})
 	if len(e.cand) == 0 {
 		e.Skipped["no_lagger"]++
 		return
@@ -583,9 +796,16 @@ func (e *Engine) onLeaderQuote(l int, now, exchMs int64, mid float64) {
 	due := now + e.p.LatencyMs*1_000_000
 	for _, f := range e.cand[:k] {
 		e.slots[f] = slot{state: pending, dueNs: due, leader: l, dir: dir, z: round(move, 3), leaderT: exchMs, signalNs: now,
-			move: math.Abs(move), preMove: e.candPre[f], gap: e.candGap[f]}
+			move: math.Abs(move), preMove: e.candPre[f], gap: e.candGap[f], base: e.candBase[f]}
 		e.active++
 	}
+}
+
+func sign(v float64) int8 {
+	if v < 0 {
+		return -1
+	}
+	return 1
 }
 
 func (e *Engine) runTimers(now int64) {
@@ -601,6 +821,19 @@ func (e *Engine) runTimers(now int64) {
 				mid := float64(q.bid+q.ask) / 2 / model.Scale
 				s.marks[s.nMarks] = float64(s.dir) * (mid - s.entryMid) / s.entryMid * 1e4
 				s.nMarks++
+			}
+		}
+		if s.state == open && e.p.gapExit() {
+			if r, ok := e.residual(f, s); ok {
+				if r <= e.p.Exit.CloseGapBp {
+					s.reason = "gap_closed"
+					s.dueNs = now // rest the maker exit now
+				} else if x := e.p.Exit.StopMult; x > 0 && q.bid > 0 && q.ask > q.bid &&
+					float64(s.dir)*(q.mid()-s.entryMid)/s.entryMid*1e4 <= -x*s.gap {
+					s.reason = "stop"
+					e.takerExit(f, s, now, q)
+					continue
+				}
 			}
 		}
 		if now < s.dueNs {
@@ -670,6 +903,17 @@ func (e *Engine) closeSlot(f int, s *slot, now int64, exitPx float64, maker bool
 	e.active--
 }
 
+// residual is the β-adjusted gap still open: dir × (β·leader move − follower
+// move), both measured from the signal window's start.
+func (e *Engine) residual(f int, s *slot) (float64, bool) {
+	lc, ok1 := e.lhist[s.leader].last()
+	fc, ok2 := e.fhist[f].last()
+	if !ok1 || !ok2 || s.base.leader <= 0 || s.base.follower <= 0 {
+		return 0, false
+	}
+	return s.base.residual(s.dir, lc, fc), true
+}
+
 func (e *Engine) close(f int, s *slot, now int64, exitPx float64, maker bool) {
 	gross := float64(s.dir) * (exitPx - s.entryPx) / s.entryPx * 1e4
 	fees, kind := 2*e.p.TakerFeeBp, "taker"
@@ -684,30 +928,49 @@ func (e *Engine) close(f int, s *slot, now int64, exitPx float64, maker bool) {
 			marks[i] = round(s.marks[i], 4)
 		}
 	}
-	t := &e.Ring[e.RingNext]
-	*t = Trade{
+	t := &Trade{
 		Run: e.p.Run, Exploratory: e.p.Exploratory, Leader: e.leaders[s.leader], Follower: e.followers[f],
 		Dir: s.dir, Z: round(s.z, 3), LeaderTMs: s.leaderT, SignalNs: s.signalNs, EntryNs: s.entryNs, ExitNs: now,
 		EntryPx: s.entryPx, ExitPx: exitPx, SpreadBp: round(s.spreadBp, 3), Qty: s.qty, NotionalUSD: e.p.NotionalUSD,
 		GrossBp: round(gross, 4), FeesBp: fees, NetBp: round(net, 4), NetUSD: round(net/1e4*e.p.NotionalUSD, 6),
 		ExitKind: kind, LeaderMoveBp: round(s.move, 3), PreMoveBp: round(s.preMove, 3), GapBp: round(s.gap, 3),
-		MarkoutsBp: marks,
+		MarkoutsBp: marks, ExitReason: reasonOr(s.reason),
 	}
+	if e.betas != nil {
+		t.Beta = round(s.base.beta, 4)
+	}
+	e.record(t, s.leader, f, maker, s.move, s.z)
+}
+
+func reasonOr(r string) string {
+	if r == "" {
+		return "timeout"
+	}
+	return r
+}
+
+// record adds a finished trade to the ring and the aggregates and sends it to the sink.
+func (e *Engine) record(tr *Trade, leader, f int, maker bool, move, z float64) {
+	t := &e.Ring[e.RingNext]
+	*t = *tr
 	e.RingNext = (e.RingNext + 1) % RingSize
 	if e.RingCount < RingSize {
 		e.RingCount++
 	}
 	e.Total.add(t)
 	e.ByFollow[f].add(t)
-	e.ByLeader[s.leader].add(t)
+	if leader >= 0 {
+		e.ByLeader[leader].add(t)
+	}
 	if maker {
 		e.ByExit[1].add(t)
 	} else {
 		e.ByExit[0].add(t)
 	}
-	size := math.Abs(s.z)
+	e.ByReason[reasonIndex(t.ExitReason)].add(t)
+	size := math.Abs(z)
 	if e.p.priceTrigger() {
-		size = s.move
+		size = move
 	}
 	b := 0
 	for b < len(e.buckets) && size >= e.buckets[b] {
@@ -767,12 +1030,27 @@ func (e *Engine) Status(paramsSHA string) map[string]any {
 	for k, v := range e.Skipped {
 		skipped[k] = v
 	}
-	return map[string]any{
+	byR := map[string]Summary{}
+	for i, r := range exitReasons {
+		if e.ByReason[i].N > 0 {
+			byR[r] = e.ByReason[i].Summarize()
+		}
+	}
+	takerFrac := 0.0
+	if e.Total.N > 0 {
+		takerFrac = round(float64(e.ByExit[0].N)/float64(e.Total.N), 4)
+	}
+	doc := map[string]any{
 		"run": e.p.Run, "exploratory": e.p.Exploratory, "params_sha256": paramsSHA, "params": e.p,
 		"trigger": e.p.TriggerKind(), "exit_mode": e.p.ExitMode(), "markouts_ms": e.p.MarkoutsMs,
 		"signals": e.Signals, "open": e.active, "skipped": skipped,
 		"total": e.Total.Summarize(), "by_follower": byF, "by_leader": byL,
-		"by_exit": map[string]Summary{"taker": e.ByExit[0].Summarize(), "maker": e.ByExit[1].Summarize()},
+		"by_exit":        map[string]Summary{"taker": e.ByExit[0].Summarize(), "maker": e.ByExit[1].Summarize()},
+		"by_exit_reason": byR, "taker_exit_frac": takerFrac,
 		"by_move": byM, "recent": e.Recent(),
 	}
+	if e.q != nil {
+		e.q.status(doc)
+	}
+	return doc
 }

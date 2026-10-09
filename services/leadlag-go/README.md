@@ -2,10 +2,18 @@
 
 BTC/ETH order flow → alt USDⓈ-M perpetual lead–lag, in Go. The plan is shadow only: no demo or live orders.
 
-The strategy works like this:
+The original strategy:
 1. Watch taker flow in the two leaders (BTCUSDT, ETHUSDT).
 2. When a burst of one-sided flow appears, look at the alts that tend to follow.
 3. Take the follower in the same direction, as a taker, if its expected move clears the round-trip taker fee.
+
+explore-1 and explore-2 showed that the response is real (+0.6 to +4 bp) but far below a VIP 0 taker round trip
+(~10 bp). explore-3 (PREREG Part 4) therefore tests the signal as a **maker** tool on the **USDC-margined**
+followers, which are reported to have 0 bp maker fees:
+- a signal-gated post-only quoter (arm A);
+- a two-sided quoter that pulls the side a leader move would run over (arm B);
+- a large-move taker entry with a β-gap-closure exit (3c);
+- explore-2 with a gap-closure exit (3d).
 
 The research runs on Binance's free aggTrades archive (data.binance.vision). Live shadow trading runs
 on an AWS EC2 instance in Tokyo. There, mainnet feeds produce signals, and simulated fills against the
@@ -20,7 +28,7 @@ mainnet book produce P&L. A separate, read-only stats page is published through 
 | M2 | Live ingest + recorder, observer, status page, `llprobe`, EC2 deploy kit | built; running on the ofi VM (shared host) while the AWS host is down |
 | M3 | Flow features, screen, event study, placebo → gate G1 | — |
 | M4 | Policy, fill model, backtest, prereg freeze, validation, held-out → G2–G4 | — |
-| M5 | Live shadow with the frozen parameters → G5 | engine built. `explore-1` (flow trigger, 1 s taker exit) is finished: the response was real but small, and it lost after fees (PREREG Part 3). **Exploratory** run `explore-2` is live (price-move trigger, top-3 lagging followers, 30 s maker exit, markouts). Neither counts toward a gate; G5 starts at the M4 freeze |
+| M5 | Live shadow with the frozen parameters → G5 | engine built. `explore-1` (flow trigger, 1 s taker exit) is finished: the response was real but small, and it lost after fees (PREREG Part 3). **Exploratory** run `explore-2` is live (price-move trigger, top-3 lagging followers, 30 s maker exit, markouts). **explore-3a–3d** (PREREG Part 4: USDC-M passive quoter with a queue model, β-gap exits, liquidation filter) are built and run next to it once `llprobe fees` confirms the USDC-M rates. None counts toward a gate; G5 starts at the M4 freeze |
 
 ## Layout
 
@@ -28,12 +36,14 @@ mainnet book produce P&L. A separate, read-only stats page is published through 
 cmd/leadlag            trader: feeds → hub (tape ring → parse → engine); admin :8060; --replay for parity
 cmd/leadlag-observer   tape writer + feed statistics; unix socket in, loopback :8061
 cmd/leadlag-status     read-only page :8062 (the only thing behind cloudflared)
-cmd/llprobe            latency probe: REST RTT, cold connects, feed lag, aggTrade publish delay
-cmd/llfetch            archive downloader: plan | fetch | verify | candidates
+cmd/llprobe            latency probe: REST RTT, cold connects, feed lag, aggTrade publish delay; `fees`: commissionRate
+cmd/llfetch            archive downloader: plan | fetch | verify | candidates [--quote USDC] | ticks
+cmd/llresearch         M3 study; `shadow`: a shadow run's net CI and PREREG Part 4 kill criteria
 internal/live          Hub (one lock; dedupe; digest), record engine, tape replay
-internal/shadow        shadow engine: leader flow or price-move events → simulated fills (taker, or maker exit) → journal
+internal/shadow        shadow engines: leader flow or price-move events → simulated fills → journal. Taker entry with taker,
+                       maker or β-gap exits; or the quoter (post-only orders, conservative queue model, arms A/B)
 internal/ws            reconnecting combined-stream client (receive stamp at frame completion)
-internal/parse         zero-allocation aggTrade / bookTicker decoder
+internal/parse         zero-allocation aggTrade / bookTicker / forceOrder decoder
 internal/ipc           SPSC byte ring + record protocol + producer (never blocks the hot path)
 internal/observe       observer core: tape, aggregates, disk guard
 internal/tape          hourly .jsonl.zst tape + manifest; reader

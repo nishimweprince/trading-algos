@@ -15,6 +15,11 @@ const (
 	KindTrade Kind = 1
 	// KindQuote is a best bid/ask update (@bookTicker frame).
 	KindQuote Kind = 2
+	// KindLiq is a liquidation order (@forceOrder frame). Px is its average
+	// fill price, Qty its filled quantity, and BuyerMaker is true for a SELL
+	// liquidation (a long was closed), so TakerSign is the order's direction.
+	// Binance pushes at most one per symbol per 1000 ms. ID is 0.
+	KindLiq Kind = 3
 )
 
 // Event is a market event for one symbol. Sym indexes the run's symbol list.

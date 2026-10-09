@@ -46,14 +46,30 @@ type Hello struct {
 	Symbols  []string `json:"symbols"`
 	StartNs  int64    `json:"start_ns"`
 	Hostname string   `json:"hostname"`
-	// ParamsSHA256 is the shadow params file's sha256 (shadow mode only), so a
-	// replay can tell which parameters a run used.
+	// ParamsSHA256 is the (first) shadow params file's sha256 (shadow mode
+	// only), so a replay can tell which parameters a run used.
 	ParamsSHA256 string `json:"params_sha256,omitempty"`
+	// ParamsSHA256s lists every shadow params file's sha256 when the trader
+	// runs several shadow engines (explore-2 next to explore-3).
+	ParamsSHA256s []string `json:"params_sha256s,omitempty"`
 	// Cumulative counters at connect time: bytes drained while no observer was
 	// connected, and records dropped on a full ring. A rise since the previous
 	// hello means a hole in the tape.
 	DiscardedBytes uint64 `json:"discarded_bytes"`
 	Dropped        uint64 `json:"dropped"`
+}
+
+// UsedParams reports whether the run used the params file with this sha256.
+func (h *Hello) UsedParams(sha string) bool {
+	if h.ParamsSHA256 == sha {
+		return true
+	}
+	for _, s := range h.ParamsSHA256s {
+		if s == sha {
+			return true
+		}
+	}
+	return false
 }
 
 // ProtoVersion is bumped on any incompatible change to the record layout.

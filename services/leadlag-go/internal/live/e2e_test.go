@@ -96,6 +96,8 @@ func TestLiveTapeReplayParity(t *testing.T) {
 			// reconnect overlap: the same trade again, and a subscription reply
 			hub.OnFrame(ipc.ConnMarket, recv+1, aggFrame("BTCUSDT", exch, ids["BTCUSDT"], exch-3, "101.00", false))
 			hub.OnFrame(ipc.ConnMarket, recv+2, []byte(`{"result":null,"id":1}`))
+			// a leader liquidation (forceOrder has no id: never a duplicate)
+			hub.OnFrame(ipc.ConnMarket, recv+3, fmt.Appendf(nil, `{"stream":"btcusdt@forceOrder","data":{"e":"forceOrder","E":%d,"o":{"s":"BTCUSDT","S":"SELL","o":"LIMIT","f":"IOC","q":"0.5","p":"99.0","ap":"99.5","X":"FILLED","l":"0.5","z":"0.5","T":%d}}}`, exch, exch-1))
 		}
 	}
 	liveSt := hub.Snapshot()
@@ -111,7 +113,7 @@ func TestLiveTapeReplayParity(t *testing.T) {
 		t.Fatalf("live stats: %+v (captured %d)", liveSt, len(eng.events))
 	}
 	st := obs.Stats()
-	if st.Frames != 3002 || st.Trader.Hellos != 1 || st.Trader.Gaps != 0 {
+	if st.Frames != 3003 || st.Trader.Hellos != 1 || st.Trader.Gaps != 0 {
 		t.Fatalf("observer: frames %d hellos %d gaps %d", st.Frames, st.Trader.Hellos, st.Trader.Gaps)
 	}
 
