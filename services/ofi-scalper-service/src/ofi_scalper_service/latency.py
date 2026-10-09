@@ -32,7 +32,9 @@ from ta_plugin_binance_futures.streams import AggTrade, BookSnapshot, BookTick, 
 
 from .config import PROVIDER, load_settings
 
-__all__ = ["percentiles", "run"]
+__all__ = ["default_latency_path", "order_rtt_p50", "order_delay_ms", "percentiles", "run"]
+
+SERVICE_ROOT = Path(__file__).resolve().parents[2]
 
 
 def percentiles(values: list[float]) -> dict[str, float] | None:
@@ -51,6 +53,35 @@ def percentiles(values: list[float]) -> dict[str, float] | None:
         "mean": round(statistics.fmean(ordered), 3),
         "n": len(ordered),
     }
+
+
+def default_latency_path() -> Path | None:
+    """Where ``ofi-latency`` writes, if it has run from this checkout or here."""
+    for candidate in (SERVICE_ROOT / "research" / "latency.json", Path("research/latency.json")):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def order_rtt_p50(raw: dict[str, Any]) -> float:
+    """Order round trip P50 of a latency file: measured, else the signed REST proxy."""
+    rtt = (
+        raw.get("order_rtt_ms")
+        or ((raw.get("rest_rtt_ms") or {}).get("signed"))
+        or ((raw.get("rest_rtt_ms") or {}).get("unsigned"))
+    )
+    return float(rtt["p50"]) if isinstance(rtt, dict) and "p50" in rtt else 0.0
+
+
+def order_delay_ms(path: Path | None) -> float:
+    """One-way order delay (half the round trip): what backtests apply at 1x latency."""
+    if path is None or not path.is_file():
+        return 0.0
+    try:
+        raw = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return 0.0
+    return order_rtt_p50(raw) / 2 if isinstance(raw, dict) else 0.0
 
 
 async def measure(settings: Any, seconds: float, samples: int) -> dict[str, Any]:

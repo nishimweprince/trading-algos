@@ -36,6 +36,7 @@ from .alerts import Alerts
 from .config import PROVIDER, ExecutionMode, Settings, load_settings
 from .dashboard import DASHBOARD_HTML
 from .execution_bridge import ExecutionBridge
+from .latency import default_latency_path, order_delay_ms
 from .model import LoadedModel, load_model
 from .recorder import Recorder
 from .regime_gate import RegimeGate
@@ -80,6 +81,14 @@ def load_pinned_model(settings: Settings) -> LoadedModel | None:
     return load_model(settings.model_dir, settings.model_version, require_pass=require_pass)
 
 
+def shadow_fills(settings: Settings) -> dict[str, Any]:
+    """The fill model of shadow mode and the mirror: research's, at 1x latency."""
+    delay_ms = settings.shadow_delay_ms
+    if delay_ms is None:
+        delay_ms = order_delay_ms(default_latency_path())
+    return {"queue_model": settings.shadow_queue_model, "delay_ns": int(delay_ms * 1e6)}
+
+
 def build_bridge(
     settings: Settings,
     *,
@@ -118,6 +127,7 @@ def build_bridge(
         fees=fees,
         # Trade and signal records are written off the decision loop.
         book=TradeBook(settings.state_dir, writer=BackgroundAppender()),
+        **(shadow_fills(settings) if settings.execution_mode is ExecutionMode.SHADOW else {}),
     )
     return bridge, http
 
@@ -140,6 +150,7 @@ def build_mirror(
         model=model,
         state_dir=settings.state_dir / "shadow",
         fees=fees,
+        **shadow_fills(settings),
     )
 
 

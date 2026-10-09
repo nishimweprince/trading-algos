@@ -318,6 +318,7 @@ async def test_the_shadow_mirror_gets_the_feed_pauses_and_the_kill_switch(build,
     assert mirror is not None and mirror.mode.value == "shadow"
     assert mirror.book.trades.directory == tmp_path / "state" / "shadow" / "trades"
     assert mirror.risk is not runtime.risk
+    assert mirror.status()["shadow_fills"]["queue_model"] == "queue"
     mirror.configure(dict(DEFAULT_FILTERS))
     runtime.mirror = mirror
 

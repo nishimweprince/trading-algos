@@ -47,7 +47,8 @@ MARK = "# ofi-go-live"
 # rules-v1 had no re-entry cooldown: on demo it re-entered every 100 ms after rejections.
 # rules-v4 adds the 5 s entry timeout and hold (rules-v2/v3 exist on the VM with other
 # parameters; model directories are hash-pinned, so a name is never reused).
-DEFAULT_RULES_VERSION = "rules-v4"
+# rules-v5 moves to the 300 s horizon and 20 bp barrier.
+DEFAULT_RULES_VERSION = "rules-v5"
 
 
 def read_env(path: Path) -> dict[str, str]:

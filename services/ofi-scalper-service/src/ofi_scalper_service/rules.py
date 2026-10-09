@@ -52,16 +52,19 @@ LATENCY_RESERVOIR = 2000
 NS_PER_MS = 1_000_000
 NS_PER_S = 1_000_000_000
 
-# Wide enough that the maker round trip (~4 bp) plus the buffer is well inside
-# the barrier, with a minute-scale horizon (6 bp at 1-30 s left no room).
+# rules-v5: the 300 s horizon and 20 bp barrier. At 60 s / 12 bp (rules-v4) the
+# demo export (2026-10-09) showed ~0 bp gross per trade against ~6.5 bp of costs,
+# and research's shallow-2 run found only 300 s could clear the maker round trip.
 DEFAULT_POLICY: dict[str, Any] = {
-    "horizon_s": 60.0,
+    "horizon_s": 300.0,
     "threshold": 0.5,
-    "barrier_bp": 12.0,
+    "barrier_bp": 20.0,
     "buffer_bp": 2.0,
     "entry_timeout_ms": 5000,  # 1.5 s almost never filled at the touch (2026-10-08)
     "time_stop_mult": 2.0,
-    "reentry_cooldown_ms": 5000,
+    # One entry per signal episode: a held 5 s rule would re-enter all through a
+    # five-minute trade's aftermath.
+    "reentry_cooldown_ms": 60000,
 }
 
 
@@ -207,7 +210,7 @@ def main(argv: list[str] | None = None) -> int:
         prog="ofi-rules-model", description="Write a rule model directory (ungated)."
     )
     parser.add_argument("--profile", default=None)
-    parser.add_argument("--version", default="rules-v4")
+    parser.add_argument("--version", default="rules-v5")
     parser.add_argument("--model-dir", type=Path, default=None)
     defaults = RuleParams()
     for name in ("z_entry", "halflife_s", "warmup_s", "imbalance_min", "max_spread_ticks"):

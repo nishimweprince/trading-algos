@@ -1233,4 +1233,9 @@ class ExecutionBridge:
             out["controls"] = list(self.gateway.controls)[-10:]
         if self.quotes is not None:
             out["venue_quotes"] = self.quotes.status()
+        if self.shadow is not None:
+            out["shadow_fills"] = {
+                "queue_model": self.shadow.queue_model,
+                "delay_ms": round(self.shadow.delay_ns / 1e6, 3),
+            }
         return out

@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 from enum import StrEnum
 from pathlib import Path
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from ta_core import PLACEHOLDER_PREFIX, BaseServiceSettings
@@ -95,6 +95,16 @@ class Settings(BaseServiceSettings, NotificationSettings, BinanceFuturesSettings
     # Testnet only: also run a shadow bridge on the mainnet feed beside the demo
     # one, so one process yields demo fills and live-book would-have fills.
     shadow_mirror: bool = Field(default=False, validation_alias="OFI_SHADOW_MIRROR")
+    # Simulated fills in shadow mode and the mirror: "queue" joins behind the displayed
+    # size (as research backtests do), "pessimistic" fills only on a trade through.
+    shadow_queue_model: Literal["queue", "pessimistic"] = Field(
+        default="queue", validation_alias="OFI_SHADOW_QUEUE_MODEL"
+    )
+    # Decision-to-venue delay of those fills. Empty: half the order round trip from
+    # research/latency.json, the delay backtests use at 1x latency (0 without it).
+    shadow_delay_ms: float | None = Field(
+        default=None, ge=0, le=5_000, validation_alias="OFI_SHADOW_DELAY_MS"
+    )
 
     # The bridge's link to execution-service (testnet mode).
     execution_url: str = Field(default="http://127.0.0.1:8010", validation_alias="EXECUTION_URL")
@@ -199,6 +209,7 @@ class Settings(BaseServiceSettings, NotificationSettings, BinanceFuturesSettings
         "taker_fee_bp",
         "telegram_bot_token",
         "model_version",
+        "shadow_delay_ms",
         "execution_api_key",
         mode="before",
     )

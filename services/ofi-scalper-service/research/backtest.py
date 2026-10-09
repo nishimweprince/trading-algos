@@ -26,6 +26,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from ofi_scalper_service.latency import order_rtt_p50
 from ofi_scalper_service.policy import PolicyParams
 from ofi_scalper_service.risk import RiskLimits
 from ofi_scalper_service.trades import summarise
@@ -80,12 +81,7 @@ class Latency:
         raw: dict[str, Any] = json.loads(path.read_text()) if path.is_file() else {}
         feed = ((raw.get("feed_latency_ms") or {}).get("depth") or {}).get("p50") or 0.0
         if order_rtt_ms is None:
-            rtt = (
-                raw.get("order_rtt_ms")
-                or ((raw.get("rest_rtt_ms") or {}).get("signed"))
-                or ((raw.get("rest_rtt_ms") or {}).get("unsigned"))
-            )
-            order_rtt_ms = float(rtt["p50"]) if isinstance(rtt, dict) and "p50" in rtt else 0.0
+            order_rtt_ms = order_rtt_p50(raw)
         return cls(feed_ms=max(float(feed), 0.0), order_ms=order_rtt_ms / 2)
 
 

@@ -147,10 +147,11 @@ def test_manifest_features_must_be_the_rules_inputs(tmp_path: Path) -> None:
 def test_rules_cli_writes_a_loadable_model(tmp_path: Path, capsys) -> None:
     args = ["--model-dir", str(tmp_path), "--z-entry", "4", "--barrier-bp", "15"]
     assert rules_main(args) == 0
-    model = load_model(tmp_path, "rules-v4", require_pass=False)
+    model = load_model(tmp_path, "rules-v5", require_pass=False)
     assert (
         model.policy.barrier_bp == 15
-        and model.policy.reentry_cooldown_ms == 5000
+        and model.policy.horizon_s == 300
+        and model.policy.reentry_cooldown_ms == 60000
         and model.scorer.params.z_entry == 4
     )  # type: ignore[union-attr]
     assert rules_main(args) == 1  # never overwrites

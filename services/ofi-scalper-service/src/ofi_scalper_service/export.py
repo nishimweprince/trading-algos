@@ -31,11 +31,10 @@ from ta_core import base_parser, load_or_exit
 
 from . import status as builders
 from .config import Settings, load_settings
+from .latency import default_latency_path
 from .trades import summarise
 
 __all__ = ["build_export", "default_latency_path", "export_filename", "run", "scrub_paths"]
-
-SERVICE_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _read_json(path: Path) -> Any | None:
@@ -188,14 +187,6 @@ def _model(model_dir: Path, version: str | None) -> dict[str, Any] | None:
             if content is not None:
                 files[path.name] = content
     return {"version": version, "found": directory.is_dir(), "files": files}
-
-
-def default_latency_path() -> Path | None:
-    """Where ``ofi-latency`` writes, if it has run from this checkout or here."""
-    for candidate in (SERVICE_ROOT / "research" / "latency.json", Path("research/latency.json")):
-        if candidate.is_file():
-            return candidate
-    return None
 
 
 def build_export(
