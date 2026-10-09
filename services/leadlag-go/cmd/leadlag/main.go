@@ -129,6 +129,7 @@ func run(cfg config, log *slog.Logger) error {
 		sh = shadow.New(params, symbols, &halted, journal)
 		eng = live.Engines{rec, sh}
 		log.Info("shadow engine", "run", params.Run, "exploratory", params.Exploratory, "params_sha256", paramsSHA,
+			"trigger", params.TriggerKind(), "exit", params.ExitMode(), "top_k", params.TopK,
 			"latency_ms", params.LatencyMs, "horizon_ms", params.HorizonMs, "notional_usd", params.NotionalUSD)
 	}
 	hub := live.NewHub(symbols, eng, prod)
@@ -421,8 +422,8 @@ func runReplay(path, shadowParams, shadowTrades string, shadowAll bool) error {
 		if sh, ok := engines[i]; ok {
 			fmt.Printf("  tape_end_ns %d\n", s.LastNs)
 			t := sh.Total.Summarize()
-			fmt.Printf("  shadow signals %d trades %d mean net %.3f bp hit %.3f t %.2f net $%.4f\n",
-				sh.Signals, t.N, t.MeanNet, t.HitRate, t.TStat, t.NetUSD)
+			fmt.Printf("  shadow signals %d trades %d mean net %.3f bp hit %.3f t %.2f net $%.4f (maker exits %d)\n",
+				sh.Signals, t.N, t.MeanNet, t.HitRate, t.TStat, t.NetUSD, sh.ByExit[1].N)
 		}
 	}
 	return err

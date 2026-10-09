@@ -296,6 +296,27 @@ journalctl -u leadlag -n 5 --no-pager | grep "shadow engine"          # run, par
   journal.
 - A halt isn't on the tape, so check a halted run's journal by hand.
 
+**Start a new epoch** (a new run label, e.g. `explore-2`, PREREG Part 3). The trader keeps its stats in
+memory, so a restart resets them. The steps below make the journal start empty too. The tape is kept
+as research data.
+
+```sh
+# on the host, from an up-to-date checkout: build and install (see "Without push.sh"). If the host has
+# no GitHub credentials, pull with a one-shot token header that is never stored:
+#   git -c http.extraHeader="Authorization: Basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)" pull --ff-only origin main
+sudo systemctl stop leadlag-status leadlag leadlag-observer
+old=$(sudo python3 -c 'import json; print(json.load(open("/home/ll/leadlag/shadow.json"))["run"])')
+sudo -u ll mkdir -p /data/leadlag/shadow/$old && sudo -u ll sh -c "mv /data/leadlag/shadow/*.jsonl /data/leadlag/shadow/$old/"
+sudo -u ll cp /home/ll/leadlag/shadow.json /home/ll/leadlag/shadow-$old.json
+sudo install -o ll -g ll -m 600 deploy/env/shadow-explore-2.example.json /home/ll/leadlag/shadow.json
+sudo systemctl start leadlag-observer leadlag leadlag-status
+journalctl -u leadlag -n 5 --no-pager | grep "shadow engine"          # run, trigger, exit, params sha256
+```
+
+`shadow-verify` reads a run's archived journals from `<journal dir>/<run>/`. To re-check an old run
+(the unit's `.env` always names the current params), run the job directly:
+`sudo -u ll LL_SHADOW_PARAMS=/home/ll/leadlag/shadow-explore-1.json nice -n 19 bash /home/ll/leadlag/jobs/shadow-verify.sh`.
+
 **First numbers on the ofi VM (2026-10-08, 14 symbols, ofi research running):**
 
 | Measure | ofi VM (azure:japanwest) | AWS Tokyo (README, 2026-10-07) |

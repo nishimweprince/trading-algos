@@ -179,3 +179,86 @@ net USD, and skips by reason. These are descriptive. No pass/fail rule applies t
 - Host: the AWS AZ probe and the dedicated c7i host. Numbers here describe Osaka → Tokyo with an unpinned
   trader.
 - The exit rule is a fixed 1 s time exit with no stop or take-profit: a measurement, not a strategy.
+
+---
+
+## Part 3: explore-1 as run, its result, and exploratory run `explore-2` (written 2026-10-09, before any explore-2 trade)
+
+### 3.1 explore-1 as it actually ran
+
+Part 2 §2.2 fixed the Osaka host and `L` = 20 ms. explore-1 actually ran on the **AWS Tokyo host**
+(t2.xlarge, apne1-az1) from 2026-10-08 18:22 UTC, with **`latency_ms` = 5**. Everything else matched
+§2.2. This part records the change after the fact. explore-1 still counts toward no gate.
+
+### 3.2 explore-1 result (2026-10-08 18:22 → 2026-10-09 12:20 UTC)
+
+1,748 signals and 20,976 trades over 12 followers. Follower mid response is signed in the signal's
+direction, measured from signal + 5 ms on the bookTicker tape. The control is the same signals moved
++1 h.
+
+| Horizon | Mid response | Control | Taker in, taker out (net) | Maker in, maker out (net, both fills assumed) |
+|---|---|---|---|---|
+| 100 ms | +0.61 bp | +0.01 | −10.6 | −2.2 |
+| 1 s | +0.79 | +0.02 | −10.4 | −2.0 |
+| 30 s | +1.35 (peak) | −0.03 | −9.9 | −1.4 |
+| 5 min | +0.42 | +0.23 | −10.8 | −2.4 |
+
+- **The response is real, and it is too small.** No execution mode clears VIP 0 fees.
+- **Half the move comes before entry.** Followers had already moved +0.69 bp in the 500 ms before entry.
+- **Flow z doesn't scale the response.** At 1 s, |z| ≥ 10 gives +0.86 bp and |z| 3–4 gives +0.81 bp.
+- **The leader's own price move does.** Over the last 1 s, a leader move of 0–1 bp gives +0.99 bp at
+  30 s; 2–4 bp gives +2.55; 4–8 bp gives +4.09 (n = 156).
+- **So does how far the follower lags.** The gap is the leader's move minus the follower's, over the
+  last 1 s. A gap of 2–4 bp gives +1.82 bp at 30 s.
+- **The follower's spread decides its gross result.** ADA's 4.2 bp spread costs about 5× the response.
+
+### 3.3 explore-2
+
+**§2.1 is broken here, knowingly.** Its parameters were chosen by looking at explore-1. So explore-2 is
+**exploratory**:
+- it counts toward no gate;
+- it is never pooled with explore-1;
+- it doesn't replace M3. The price-move hypothesis still has to pass G1 on the archive before any
+  freeze.
+
+| Item | Value |
+|---|---|
+| Host | AWS Tokyo (as in §3.1) |
+| Leaders | BTCUSDT, ETHUSDT, each with its own trigger |
+| Followers | SOL, XRP, DOGE, SUI, BNB, ZEC, UNI, ENA, 1000PEPE. ADA, WLD and NEAR are still recorded but don't trade: their 2–4 bp spreads cost more than the response. |
+| Trigger (`price`) | A leader's bookTicker mid moves ≥ **4 bp** against its mid **1000 ms** earlier. It fires on the upward crossing of that threshold, re-arms below it, and has a **5 s** cooldown per leader. No warm-up. |
+| Follower selection | The gap is `dir × (leader move − follower move)` over the same 1000 ms. A follower needs a gap ≥ **2 bp**, and the **top 3** by gap are opened. Followers with a position are skipped (`busy`). |
+| Entry | Taker at the far touch, **5 ms** after the signal. It is skipped if the spread is over **1.5 bp** (`wide_spread`). |
+| Exit | At **30 s** after entry, a limit order at our own touch: a long sells at the ask, a short buys at the bid. |
+| Maker fill rule | It fills when the opposite best price reaches the limit, or a follower trade prints strictly through it. This is optimistic: queue position isn't modelled. Otherwise the order crosses as a taker after **2 s**. |
+| Fees | 5 bp taker, 2 bp maker (VIP 0) |
+| Size | $25 notional |
+| Markouts | The follower mid at +100 ms, 1 s, 5 s, 10 s and 30 s after entry, signed, in bp from the entry mid. Recorded on every trade. |
+
+The status page reports the following, all descriptive, with no pass/fail rule:
+- results by leader move (4–8, 8–15 and 15+ bp);
+- results by exit kind;
+- the mean markout curve;
+- skips by reason.
+
+The trades are also reported with a taker exit (`exit_kind` = taker, after a timeout), so the maker
+fill model's optimism is visible.
+
+**Replay.** `deploy/env/shadow-explore-2.example.json` is the params file. A replay of the tape with
+it must reproduce the journal (`deploy/jobs/shadow-verify.sh`).
+
+**Before the explore-2 start, an in-sample replay** used the same tape explore-1 was chosen from, with
+`--shadow-all`. It is a code check, not a result. Its numbers:
+
+| Measure | Value |
+|---|---|
+| Signals / trades | 216 / 325 |
+| Exits filled as maker | 33% |
+| Mean gross | +1.10 bp |
+| Mean fees | 9.0 bp |
+| Mean net | **−7.9 bp** |
+| 30 s markout | +2.03 bp (explore-1: +1.35) |
+
+Even in-sample, explore-2 doesn't clear its fees. It is a measurement run.
+
+With the new binary, explore-1's journal replays exactly: 21,456 trades, none extra or missing.

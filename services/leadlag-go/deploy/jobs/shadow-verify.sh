@@ -19,10 +19,12 @@ mkdir -p "$out"
 python3 - "$out" "$run" <<'PY'
 import glob, json, sys
 out, run = sys.argv[1], sys.argv[2]
-key = lambda t: (t["follower"], t["signal_recv_ns"], t["entry_recv_ns"], t["exit_recv_ns"], t["net_bp"])
+key = lambda t: (t["follower"], t["signal_recv_ns"], t["entry_recv_ns"], t["exit_recv_ns"], t["net_bp"], t.get("exit_kind", "taker"))
 ends = [int(l.split()[1]) for l in open(f"{out}/replay-{run}.txt") if l.strip().startswith("tape_end_ns")]
 tape_end = max(ends, default=0)
-live_all = sorted(key(t) for f in sorted(glob.glob(f"{out}/[0-9]*.jsonl")) for t in map(json.loads, open(f)) if t.get("run") == run)
+# a finished epoch's journals are archived under <run>/ (DEPLOY.md, "Start a new epoch")
+journals = sorted(glob.glob(f"{out}/[0-9]*.jsonl") + glob.glob(f"{out}/{run}/[0-9]*.jsonl"))
+live_all = sorted(key(t) for f in journals for t in map(json.loads, open(f)) if t.get("run") == run)
 live = [t for t in live_all if t[3] <= tape_end]  # t[3] = exit_recv_ns
 pending = len(live_all) - len(live)
 replayed = sorted(key(t) for t in map(json.loads, open(f"{out}/replay-{run}.jsonl")))
