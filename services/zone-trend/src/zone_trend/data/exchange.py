@@ -38,7 +38,8 @@ def fetch_exchange_info(paths: DataPaths, client: httpx.Client | None = None) ->
 
 
 class SymbolFilters(dict):
-    """symbol -> {"tick", "step", "min_qty", "min_notional", "status", "contract_type"}."""
+    """symbol -> {"tick", "step", "min_qty", "min_notional", "status", "contract_type",
+    "underlying_type"}."""
 
     snapshot: str | None = None
 
@@ -59,5 +60,6 @@ def latest_filters(paths: DataPaths) -> SymbolFilters:
             "min_notional": float(by_type.get("MIN_NOTIONAL", {}).get("notional", 0) or 0),
             "status": row.get("status"),
             "contract_type": row.get("contractType"),
+            "underlying_type": row.get("underlyingType"),
         }
     return out

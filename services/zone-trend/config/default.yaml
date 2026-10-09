@@ -12,6 +12,7 @@ universe:
   min_listing_days: 180
   rebalance: monthly
   exclude: []
+  coins_only: true         # drop Binance TradFi perpetuals (XAUUSDT, TSLAUSDT, ...)
 timeframes: {zones: [1d, 4h], trend: 4h, entry: 1h}
 swings:
   d1: {left: 3, right: 3}

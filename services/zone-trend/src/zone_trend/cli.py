@@ -148,6 +148,7 @@ def _data_universe(args: argparse.Namespace) -> int:
         size=cfg.universe.size,
         min_listing_days=cfg.universe.min_listing_days,
         exclude=tuple(cfg.universe.exclude),
+        coins_only=cfg.universe.coins_only,
         quarantine=quarantine,
         filters=filters,
         daily=daily,

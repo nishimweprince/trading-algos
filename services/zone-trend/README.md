@@ -9,6 +9,8 @@ It ships its own Binance Vision backtester and a live runner, and both use the s
 
 - Spec: `Zone-Trend Strategy Spec v1.1` (kept outside the repo).
 - Plan, milestones and spec-review notes: [PLAN.md](PLAN.md).
+- Research on a VM (data download, walk-forward, M4 verdict): [RESEARCH-VM.md](RESEARCH-VM.md).
+- Running the bot (shadow, live, status page): [DEPLOY.md](DEPLOY.md).
 
 **Status:** scaffold only. The milestones are M1 data → M2 core → M3 backtester → M4 validation gate → M5 live/shadow → M6 ops. M5 and M6 are built only if M4 passes.
 

@@ -67,3 +67,13 @@ def test_only_bars_closed_before_asof_are_used(paths):
     put(paths, "klines", "BUSDT", "1d", b)
     res = universe_at(paths, ASOF, size=1)
     assert res.symbols == ["AUSDT"]
+
+
+def test_tradfi_perpetuals_are_dropped(paths):
+    for s in ("AAAUSDT", "XAUUSDT"):
+        daily(paths, s, "2023-01-01", 517, volume=1000 if s == "AAAUSDT" else 9000)
+        hourly(paths, s, "2024-05-01", 31 * 24)
+    filters = {"XAUUSDT": {"underlying_type": "COMMODITY"}, "AAAUSDT": {"underlying_type": "COIN"}}
+    assert universe_at(paths, ASOF, size=5, filters=filters).symbols == ["AAAUSDT"]
+    both = universe_at(paths, ASOF, size=5, filters=filters, coins_only=False).symbols
+    assert both == ["XAUUSDT", "AAAUSDT"]

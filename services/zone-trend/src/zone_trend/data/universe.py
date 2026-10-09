@@ -8,6 +8,12 @@ their 30-day median daily quote volume, using only bars that closed before
 range is over 3x the pool median, or when tickSize / price exceeds 0.05%; the
 first ``size`` survivors are the universe.
 
+With ``coins_only`` (the default), symbols whose exchangeInfo ``underlyingType``
+is not COIN are dropped: Binance lists tokenised equities and commodities
+(TSLAUSDT, XAUUSDT, ...) as ``TRADIFI_PERPETUAL`` USDT contracts, and they are
+not the crypto majors the strategy targets. Delisted symbols have no
+exchangeInfo row and are kept (every delisted USDT perpetual so far was a coin).
+
 Delisted symbols stay in the candidate set (their history comes from the Vision
 listing), so historical universes carry no survivorship bias. tickSize is only
 known from the current exchangeInfo snapshot; for a delisted symbol the tick
@@ -87,6 +93,7 @@ def universe_at(
     quarantine: dict[str, dict[str, list[str]]] | None = None,
     filters: dict[str, dict] | None = None,
     daily: DailyCache | None = None,
+    coins_only: bool = True,
 ) -> UniverseResult:
     daily = daily or DailyCache(paths)
     quarantine = quarantine or {}
@@ -97,6 +104,9 @@ def universe_at(
     eligible: list[tuple[str, float, float]] = []  # (symbol, median quote volume, last close)
     for symbol, df in daily.frames.items():
         if symbol in exclude or df.empty:
+            continue
+        underlying = filters.get(symbol, {}).get("underlying_type")
+        if coins_only and underlying not in (None, "COIN"):
             continue
         past = df[df["open_time"] + _DAY_MS <= t]  # bars closed before asof
         if past.empty or past["open_time"].iloc[0] > t - min_listing_days * _DAY_MS:

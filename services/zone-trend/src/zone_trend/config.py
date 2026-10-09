@@ -51,6 +51,7 @@ class Universe(_Section):
     min_listing_days: int = Field(ge=0, le=1000)
     rebalance: Literal["monthly"]
     exclude: list[str] = []
+    coins_only: bool = True  # drop TradFi perpetuals (equities, commodities)
 
 
 class Timeframes(_Section):
