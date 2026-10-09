@@ -87,7 +87,7 @@ pub fn day_series(
         &tokens,
         Extra { recv: true, ..Default::default() },
     )?;
-    let aids: Vec<u8> = HELIX_15M.iter().map(|(a, _)| *a).collect();
+    let aids: Vec<u16> = HELIX_15M.iter().map(|(a, _)| *a).collect();
     let ky =
         kalshi_quote_series(root, "Kalshi_Yes_BBO", day, &aids, Extra { seq: true, ..Default::default() })?;
     let clock = MonoToWall::new(&yes, 100_000);

@@ -29,7 +29,7 @@ use super::container::{blocks, tags};
 use super::gamma::GammaCache;
 use super::pd::quantile;
 use super::records::{
-    TAG_POLY_BBO_NS, TAG_QUOTE_NS, iter_poly_bbo, iter_poly_trades, iter_quotes, iter_resolutions,
+    TAG_POLY_BBO_NS, TAG_QUOTE_NS, asset_of, iter_poly_bbo, iter_poly_trades, iter_quotes, iter_resolutions,
     iter_trades, iter_windows,
 };
 use super::series::{
@@ -72,9 +72,15 @@ pub fn check_identity(day: &str, root: &Path, n: usize) -> anyhow::Result<Value>
         |file: &Path, canonical: u8, rsz: usize, limit: usize| -> anyhow::Result<(Vec<Vec<u8>>, i64)> {
             let mut out = Vec::new();
             let mut scale = None;
-            for (raw, s) in blocks(file, &tags(canonical), rsz)? {
-                scale.get_or_insert(s);
-                out.extend(raw.chunks_exact(rsz).map(<[u8]>::to_vec));
+            for raw in blocks(file, &tags(canonical), rsz)? {
+                scale.get_or_insert(raw.scale);
+                // The block's tag is appended to each record, so
+                // the asset check can apply the tag's rule.
+                out.extend(raw.records().map(|r| {
+                    let mut v = r.to_vec();
+                    v.push(raw.tag);
+                    v
+                }));
                 if out.len() >= limit {
                     break;
                 }
@@ -113,7 +119,10 @@ pub fn check_identity(day: &str, root: &Path, n: usize) -> anyhow::Result<Value>
         "records": typed.len(),
         "wall": all(&|i| i64_at(&k[i], 40) * scale == typed[i].ts_wall_ns),
         "bid_ask": all(&|i| f64_at(&k[i], 0) == typed[i].bid) && all(&|i| f64_at(&k[i], 8) == typed[i].ask),
-        "asset": all(&|i| k[i][58] == typed[i].asset_id),
+        "asset": all(&|i| {
+            let r = &k[i];
+            asset_of(r[r.len() - 1], r[58], u16::from_le_bytes([r[60], r[61]])) == typed[i].asset_id
+        }),
         "changed": all(&|i| k[i][59] == typed[i].changed),
     });
     let pass = [&poly, &kalshi]
@@ -160,7 +169,7 @@ pub fn check_day(
         Extra { recv: true, publ: true, seq: false },
     )?;
     let no = poly_bbo_series(root, "Polymarket_CLOB_No_BBO", day, &no_tokens, Extra::default())?;
-    let aids: Vec<u8> = HELIX_15M.iter().map(|(a, _)| *a).collect();
+    let aids: Vec<u16> = HELIX_15M.iter().map(|(a, _)| *a).collect();
     let ky = kalshi_quote_series(
         root,
         "Kalshi_Yes_BBO",
@@ -231,7 +240,7 @@ pub fn check_day(
         before += t.iter().filter(|x| **x < o).count();
         after += t.iter().filter(|x| **x >= c).count();
         inside += t.iter().filter(|x| **x >= o && **x < c).count();
-        let Some(r) = res.get(&(w.asset as u16, w.open_unix)) else { continue };
+        let Some(r) = res.get(&(w.asset, w.open_unix)) else { continue };
         if w.strike == 0.0 || w.strike.is_nan() {
             continue;
         }
@@ -272,7 +281,7 @@ pub fn check_day(
         let mut rows = Vec::new();
         for k in picks {
             let w = &windows[k];
-            let Some(r) = res.get(&(w.asset as u16, w.open_unix)) else { continue };
+            let Some(r) = res.get(&(w.asset, w.open_unix)) else { continue };
             let outcome = gamma.outcome(asset_name(w.asset).expect("15-minute asset"), w.open_unix);
             rows.push((outcome, if r.close_px >= w.strike { "yes" } else { "no" }));
         }

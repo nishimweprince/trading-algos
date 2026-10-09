@@ -244,3 +244,22 @@ fn inventory_matches_python() {
     .unwrap();
     same("inventory", &ours, &json("inventory.json"));
 }
+
+#[test]
+fn kalshi_windows_decode_and_join() {
+    for day in DAYS {
+        let ws = helix::records::iter_kalshi_windows(day, &tape()).unwrap();
+        assert!(!ws.is_empty(), "{day}: Kalshi_Window decoded no rows");
+        for w in &ws {
+            let name = helix::asset_name(w.asset).expect("15-minute asset");
+            assert_eq!(w.ticker, format!("KX{name}15M"));
+            let at = helix::records::kalshi_ticker_at(&ws, w.asset, w.ts_recorded_ns).unwrap();
+            assert!(at.ts_recorded_ns == w.ts_recorded_ns && at.asset == w.asset);
+        }
+        // Every Polymarket token joins back to a 15-minute window.
+        let windows = helix::records::iter_windows(day, &tape()).unwrap();
+        let idx = helix::records::token_index(&windows);
+        assert_eq!(idx.len(), windows.len() * 2);
+        assert!(windows.iter().all(|w| w.open_unix % 900 == 0 && idx[&w.token_yes].open_unix == w.open_unix));
+    }
+}

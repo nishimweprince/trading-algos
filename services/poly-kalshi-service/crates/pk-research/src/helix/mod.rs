@@ -28,12 +28,14 @@ pub mod validate;
 
 pub const NS: i64 = 1_000_000_000;
 
-/// Helix asset id → our asset, 15-minute markets (the even ids are 5-minute ones).
-pub const HELIX_15M: [(u8, &str); 7] =
+/// Helix asset id → our asset, 15-minute markets (the even ids are 5-minute
+/// ones). The 14 windowed slots (0..=13) are frozen; spot slots start at 14
+/// (`UsdcSpot`). Ids are u16: the wide tags carry them as `asset_wide`.
+pub const HELIX_15M: [(u16, &str); 7] =
     [(1, "BTC"), (3, "ETH"), (5, "SOL"), (7, "XRP"), (9, "BNB"), (11, "DOGE"), (13, "HYPE")];
 
 /// Chainlink reference prices are keyed by the asset's *Spot slot.
-pub const CHAINLINK_SPOT: [(&str, u8); 7] =
+pub const CHAINLINK_SPOT: [(&str, u16); 7] =
     [("BTC", 15), ("ETH", 16), ("SOL", 17), ("XRP", 18), ("BNB", 19), ("DOGE", 20), ("HYPE", 21)];
 
 pub const STREAMS: [&str; 11] = [
@@ -50,15 +52,15 @@ pub const STREAMS: [&str; 11] = [
     "Kalshi_No_Trade",
 ];
 
-pub fn asset_name(aid: u8) -> Option<&'static str> {
+pub fn asset_name(aid: u16) -> Option<&'static str> {
     HELIX_15M.iter().find(|(a, _)| *a == aid).map(|(_, n)| *n)
 }
 
-pub fn asset_id(name: &str) -> Option<u8> {
+pub fn asset_id(name: &str) -> Option<u16> {
     HELIX_15M.iter().find(|(_, n)| *n == name).map(|(a, _)| *a)
 }
 
-pub fn chainlink_id(name: &str) -> Option<u8> {
+pub fn chainlink_id(name: &str) -> Option<u16> {
     CHAINLINK_SPOT.iter().find(|(n, _)| *n == name).map(|(_, a)| *a)
 }
 
