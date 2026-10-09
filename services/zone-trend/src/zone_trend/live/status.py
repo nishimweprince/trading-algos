@@ -30,6 +30,7 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
+from yaml import YAMLError, safe_load
 
 from zone_trend.live.ops import HEARTBEAT_STALE_MS
 from zone_trend.persistence import models as m
@@ -74,6 +75,39 @@ def _table(rows: list[dict], cols: list[tuple[str, str]], empty: str = "none yet
     return f'<div class="scroll"><table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>'
 
 
+def _sortable_table(
+    rows: list[list[tuple[str, str]]], cols: list[tuple[str, bool]], empty: str = "none yet"
+) -> str:
+    """A table whose headers sort its column when clicked (needs SORT_JS on the page).
+
+    ``cols`` is (label, numeric); each row cell is (display_html, sort_value).
+    """
+    if not rows:
+        return f'<p class="muted">{empty}</p>'
+    head = "".join(
+        f'<th data-c="{i}" data-n="{"1" if num else "0"}">'
+        f'{html.escape(label)}<span class="arr"></span></th>'
+        for i, (label, num) in enumerate(cols)
+    )
+    body = "".join(
+        "<tr>"
+        + "".join(f'<td data-v="{html.escape(sv, quote=True)}">{disp}</td>' for disp, sv in r)
+        + "</tr>"
+        for r in rows
+    )
+    return f'<div class="scroll"><table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>'
+
+
+def _entry_tf(run_dir: Path) -> str:
+    """The run's entry timeframe from its config, or '–' when unreadable."""
+    try:
+        cfg = safe_load((run_dir / "config.yaml").read_text())
+        tf = (cfg or {}).get("timeframes", {}).get("entry")
+        return str(tf) if tf else "–"
+    except (OSError, YAMLError, AttributeError):
+        return "–"
+
+
 def _svg(points: list[tuple[int, float]], w: int = 900, h: int = 220) -> str:
     if len(points) < 2:
         return '<p class="muted">no equity history yet</p>'
@@ -111,20 +145,44 @@ border-color:var(--bad)}.warn{color:var(--warn);border-color:var(--warn)}
 font-size:12px}.scroll{overflow-x:auto}table{border-collapse:collapse;width:100%;
 font-variant-numeric:tabular-nums;background:var(--panel)}th,td{padding:5px 10px;text-align:right;
 border-bottom:1px solid var(--line);white-space:nowrap}th:first-child,td:first-child{text-align:left}
-th{color:var(--muted);font-weight:500;font-size:12px}.muted{color:var(--muted)}
+th{color:var(--muted);font-weight:500;font-size:12px}th[data-c]{cursor:pointer;user-select:none}
+th[data-c]:hover{color:var(--fg)}.arr{font-size:10px}.muted{color:var(--muted)}
 .chart{width:100%;height:220px;background:var(--panel);border:1px solid var(--line);border-radius:10px}
 .chart polyline{fill:none;stroke:var(--accent);stroke-width:1.5;vector-effect:non-scaling-stroke}
 a{color:var(--accent)}
 """
 
 
-def _page(title: str, body: str, refresh: bool = False) -> HTMLResponse:
+SORT_JS = """
+<script>
+document.addEventListener('click',function(e){
+var th=e.target.closest('th[data-c]');if(!th)return;
+var tb=th.closest('table').tBodies[0],c=+th.dataset.c,num=th.dataset.n==='1';
+var rows=Array.prototype.slice.call(tb.rows),dir=th.dataset.d==='a'?'d':'a';
+function key(r){return r.cells[c].dataset.v;}
+rows.sort(function(a,b){
+var x=key(a),y=key(b),o;
+if(num){x=parseFloat(x);y=parseFloat(y);
+x=isNaN(x)?(dir==='a'?Infinity:-Infinity):x;y=isNaN(y)?(dir==='a'?Infinity:-Infinity):y;
+o=dir==='a'?x-y:y-x;}
+else{o=dir==='a'?String(x).localeCompare(String(y)):String(y).localeCompare(String(x));}
+return o||a.cells[0].dataset.v.localeCompare(b.cells[0].dataset.v);});
+rows.forEach(function(r){tb.appendChild(r);});
+Array.prototype.forEach.call(th.closest('table').querySelectorAll('th[data-c]'),
+function(h){h.dataset.d='';h.querySelector('.arr').textContent='';});
+th.dataset.d=dir;th.querySelector('.arr').textContent=dir==='a'?' ▲':' ▼';});
+</script>
+"""
+
+
+def _page(title: str, body: str, refresh: bool = False, extra: str = "") -> HTMLResponse:
     meta = '<meta http-equiv="refresh" content="60">' if refresh else ""
     return HTMLResponse(
         f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
         f'<meta name="viewport" content="width=device-width,initial-scale=1">{meta}'
         f"<title>{html.escape(title)}</title><style>{CSS}</style></head><body><main>"
-        f'<nav><a href="/">Live</a><a href="/research">Research</a></nav>{body}</main></body></html>'
+        f'<nav><a href="/">Live</a><a href="/research">Research</a></nav>{body}</main>'
+        f"{extra}</body></html>"
     )
 
 
@@ -321,38 +379,68 @@ def _research(runs_dir: Path) -> str:
             )
         )
     reports = sorted(runs_dir.glob("*/report.html"), key=lambda p: p.stat().st_mtime, reverse=True)
+
+    def num(v: Any, fmt: str = ",.2f") -> tuple[str, str]:
+        if v is None or (isinstance(v, float) and math.isnan(v)):
+            return ("–", "")
+        return (_num(v, fmt), repr(v))
+
     rows = []
     for r in reports[:100]:
         meta_path = r.parent / "meta.json"
         meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
         st = meta.get("summary", {})
+        rng = meta.get("range", [])
+        syms = meta.get("symbols", [])
+        slip = meta.get("slippage_mult")
+        if isinstance(slip, float) and slip.is_integer():
+            slip = int(slip)
         rows.append(
-            {
-                "_run": f'<a href="/runs/{r.parent.name}/report.html">{html.escape(r.parent.name)}</a>',
-                "_kind": html.escape(str(meta.get("kind", ""))),
-                "_range": html.escape(" → ".join(meta.get("range", []))),
-                "_syms": str(len(meta.get("symbols", []))),
-                "trades": st.get("trades"),
-                "profit_factor": st.get("profit_factor"),
-                "expectancy_r": st.get("expectancy_r"),
-                "max_drawdown": st.get("max_drawdown"),
-                "sharpe_daily": st.get("sharpe_daily"),
-            }
+            [
+                (
+                    f'<a href="/runs/{r.parent.name}/report.html">{html.escape(r.parent.name)}</a>',
+                    r.parent.name,
+                ),
+                (html.escape(str(meta.get("kind", "–"))), str(meta.get("kind", ""))),
+                (html.escape(tf := _entry_tf(r.parent)), tf),
+                (
+                    html.escape(" → ".join(rng) if rng else "–"),
+                    rng[0] if rng else "",
+                ),
+                (
+                    f'<span title="{html.escape(", ".join(syms), quote=True)}">{len(syms)}</span>',
+                    str(len(syms)),
+                ),
+                ((f"{slip}×", repr(meta.get("slippage_mult"))) if slip is not None else ("–", "")),
+                num(st.get("trades")),
+                num(st.get("win_rate"), ".1%"),
+                num(st.get("profit_factor")),
+                num(st.get("expectancy_r")),
+                num(st.get("net_pnl")),
+                num(st.get("max_drawdown")),
+                num(st.get("sharpe_daily")),
+                num(st.get("end_equity")),
+            ]
         )
     parts.append("<h2>Backtests</h2>")
     parts.append(
-        _table(
+        _sortable_table(
             rows,
             [
-                ("_run", "Run"),
-                ("_kind", "Kind"),
-                ("_range", "Range"),
-                ("_syms", "Symbols"),
-                ("trades", "Trades"),
-                ("profit_factor", "PF"),
-                ("expectancy_r", "Exp. R"),
-                ("max_drawdown", "Max DD"),
-                ("sharpe_daily", "Sharpe"),
+                ("Run", False),
+                ("Kind", False),
+                ("Entry", False),
+                ("Range", False),
+                ("Symbols", True),
+                ("Slip", True),
+                ("Trades", True),
+                ("Win %", True),
+                ("PF", True),
+                ("Exp. R", True),
+                ("Net", True),
+                ("Max DD", True),
+                ("Sharpe", True),
+                ("End eq", True),
             ],
             "no runs yet",
         )
@@ -395,7 +483,7 @@ def create_app(db_url: str, runs_dir: Path) -> FastAPI:
 
     @app.get("/research", response_class=HTMLResponse)
     def research() -> HTMLResponse:
-        return _page("zone-trend research", _research(runs_dir))
+        return _page("zone-trend research", _research(runs_dir), extra=SORT_JS)
 
     @app.get("/api/state")
     def api_state() -> JSONResponse:

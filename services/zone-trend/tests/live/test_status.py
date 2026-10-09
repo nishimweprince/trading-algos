@@ -39,10 +39,12 @@ async def test_dashboard_health_metrics(tmp_path):
                 "kind": "zone",
                 "range": ["2021-01", "2026-09"],
                 "symbols": ["ETHUSDT"],
+                "slippage_mult": 1.0,
                 "summary": {"trades": 3, "profit_factor": 1.4},
             }
         )
     )
+    (runs / "abc123" / "config.yaml").write_text("timeframes:\n  entry: 1h\n")
     (runs / "wf-x").mkdir()
     (runs / "wf-x" / "acceptance.json").write_text(
         json.dumps(
@@ -75,7 +77,10 @@ async def test_dashboard_health_metrics(tmp_path):
 
     page = client.get("/").text
     assert "ETHUSDT" in page and "Open positions" in page and "accepted" in page
-    assert "Profit factor" in client.get("/research").text
+    research = client.get("/research").text
+    assert "Profit factor" in research
+    for label in ("Entry", "Slip", "Win %", "Net", "End eq", "1h", "1×", "data-c=", "data-v="):
+        assert label in research, label
     assert "report" in client.get("/runs/abc123/report.html").text
     metrics = client.get("/metrics").text
     assert "zt_equity 505.0" in metrics and "zt_open_positions 1.0" in metrics
