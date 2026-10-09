@@ -297,3 +297,17 @@ Result, BTC+ETH 2021-01..2026-10 (`/research`):
 - 15m (`runs/a513731dd6ee`): 92 trades, PF 0.80, −0.09R/trade, DD 5.1%. The loss is all BTC (−0.26R over 51 trades); ETH is flat to slightly better (+0.12R vs +0.10R). Costs rise to 14% of gross wins (from 9%) and min-notional rejections triple.
 
 Verdict: the 1H-tuned entry logic does not transfer to 15m by time-scaling alone. Retuning (or per-symbol entry TFs) would be its own research loop, re-gated by M4.
+
+### Majors backtest, 1H (2026-10-09; at the user's request)
+10 large-cap perps (BTC ETH BNB XRP DOGE ADA LINK LTC BCH TRX), 2021-01..2026-10, default config: `runs/713db5ab894f`, 181 trades, PF 0.90, −0.13R/trade, DD 6.9%. Winners: DOGE (+10.9), ADA (+9.8), ETH (+7.0), XRP (+3.0). Losers: LTC (−24.4), BCH (−9.9), LINK (−8.8), TRX, BNB; BTC flat. Portfolio contention costs BTC 6 fills vs the 2-symbol run (17 vs 23). Breadth alone does not fix the edge: per-symbol expectancy ranges from −0.60R (LTC) to +0.44R (DOGE), so symbol selection/weighting is the next question, still behind the M4 gate.
+
+### Majors backtest II, 1H, 18 symbols (2026-10-09; at the user's request)
+All 18 large-cap USDT perps listed before 2021 (the prior 10 plus SOL AVAX DOT NEAR XLM ETC FIL ATOM), 2021-01..2026-10, default config. New symbols synced from Vision (4,290 month files, 0 failures; snapshot `1e320f47c3b1f9c9`).
+- Zone (`runs/618ce3b2edd7`): 308 trades, PF 0.87, −0.12R/trade, net −48.2 (fees 24.7), DD 14.8%, Sharpe −0.44, end equity 451.8 from $500. Exits: 184 stop, 62 stop-after-TP1, 42 TP2, 16 TP1, 4 time. Top rejections: slope 361, vol_filter 208, no_room 175, stop_too_wide_pct 119, btc_gate 49. No same-minute conflicts; 8 breaker events, not halted.
+- Winners: DOT (+14.5, +0.27R, 26 trades), NEAR (+11.9, +0.36R), ADA (+9.1), ETH (+7.7), DOGE (+6.2), FIL (+1.1). Losers: LTC (−25.7, −0.80R), ATOM (−14.5), LINK (−13.9), XLM (−10.3), BCH (−8.0), BNB, AVAX (−0.55R on 9 trades), TRX, SOL, ETC; XRP and BTC flat.
+- Benchmark (`runs/351d4cb52ff3`, EMA 20/100): 42 trades, PF 1.03, +0.39R/trade, end 505.8. It beats the zone strategy on this universe, same caveat as before (its 2×ATR1D stops usually exceed `max_stop_pct`, so it trades rarely).
+- 2× slippage (`runs/352f5de9c890`): 307 trades, PF 0.81, −0.17R/trade, DD 18.5%, end 425.9. Costs bite: the edge degrades roughly linearly with slippage.
+- Verdict: same as Majors I, with more evidence. Breadth adds trades (181 → 308) but not edge (PF 0.90 → 0.87, DD 6.9% → 14.8%). Expectancy still spans −0.80R (LTC) to +0.36R (NEAR), so the strategy is symbol-sensitive; DOT/NEAR/ADA/ETH/DOGE carry the book while LTC/ATOM/LINK/XLM drag it. Symbol selection/weighting remains the open question, still behind the M4 gate.
+
+### Winners-only rerun, 1H (2026-10-09; at the user's request)
+The 6 net-positive coins from Majors II (DOT NEAR ADA ETH DOGE FIL), same window and config: `runs/24e2edbf7b0b`, 103 trades, PF 1.47, +0.21R/trade, win rate 50.5%, net +59.9 (fees 9.8), DD 4.2%, Sharpe 0.74, end equity 559.9. Per coin: DOT +19.3 (+0.30R, 26 trades), DOGE +13.0, NEAR +12.5, ADA +9.6, ETH +7.1; FIL flipped to −1.7 (−0.05R, same 13 trades — the equity path, hence sizing, differs without the other symbols). No breaker events. **Selection-bias warning:** these coins were picked for being profitable in this same window, so this run measures concentration, not an out-of-sample edge; the M4 walk-forward stays the gate.
