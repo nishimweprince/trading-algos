@@ -160,6 +160,15 @@ def _markouts(marks: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _halts(halts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Every halt by reason (what the ``skip:halted`` signals were waiting on)."""
+    return {
+        "total": len(halts),
+        "by_reason": _count(halts, lambda h: str(h.get("reason") or "unknown")),
+        "recent": halts[-20:],
+    }
+
+
 def _research(settings: Settings) -> dict[str, Any]:
     """The page's research view, plus every run's full selection grid and diagnostics."""
     out = builders.research(settings.research_dir, settings.model_dir)
@@ -225,6 +234,7 @@ def build_export(
     trades, trades_by_day, bad_trades = _stream(state_dir, "trades", wanted)
     signals, signals_by_day, bad_signals = _stream(state_dir, "signals", wanted)
     marks, _, bad_marks = _stream(state_dir, "markouts", wanted)
+    halts, _, bad_halts = _stream(state_dir, "halts", wanted)
 
     shadow: dict[str, Any] | None = None
     bad_shadow = 0
@@ -234,11 +244,13 @@ def build_export(
             s_trades, s_trades_by_day, bad_t = _stream(shadow_dir, "trades", wanted)
             s_signals, s_signals_by_day, bad_s = _stream(shadow_dir, "signals", wanted)
             s_marks, _, bad_sm = _stream(shadow_dir, "markouts", wanted)
-            bad_shadow = bad_t + bad_s + bad_sm
+            s_halts, _, bad_sh = _stream(shadow_dir, "halts", wanted)
+            bad_shadow = bad_t + bad_s + bad_sm + bad_sh
             shadow = {
                 "performance": _performance(s_trades, s_signals, s_trades_by_day, s_signals_by_day),
                 "signal_counts": _signal_counts(s_signals, s_signals_by_day),
                 "markouts_from_signal": _markouts(s_marks),
+                "halts": _halts(s_halts),
                 "trades": s_trades,
             }
             if include_signals:
@@ -271,13 +283,14 @@ def build_export(
             "book_mode": settings.binance_futures_book_mode,
             "order_notional_usd": settings.order_notional_usd,
             "days": sorted(set(trades_by_day) | set(signals_by_day) | set(daily)),
-            "unparsed_lines": bad_trades + bad_signals + bad_marks + bad_shadow,
+            "unparsed_lines": bad_trades + bad_signals + bad_marks + bad_halts + bad_shadow,
             "signals_included": include_signals,
             "recordings_included": False,
         },
         "performance": _performance(trades, signals, trades_by_day, signals_by_day),
         "signal_counts": _signal_counts(signals, signals_by_day),
         "markouts_from_signal": _markouts(marks),
+        "halts": _halts(halts),
         "trades": trades,
         "shadow": shadow,
         "daily": daily,

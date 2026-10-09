@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator, Callable
 from decimal import Decimal
 from pathlib import Path
@@ -374,6 +375,15 @@ async def test_consecutive_unknowns_halt_and_cancel_everything(testnet) -> None:
     assert risk.halt is not None and risk.halt.reason is HaltReason.EXECUTION
     await until(lambda: any(p.endswith("/cancel-all") for p in gateway.paths()))
     await until(lambda: any(p.endswith("/flatten") for p in gateway.paths()), seconds=3)
+    # Counted and logged by reason, so an export can say what the halted skips waited on.
+    assert bridge.counts["halt_execution_fault"] == 1
+    bridge.book.close()
+    (halt,) = [
+        json.loads(line)
+        for path in (bridge.state_path.parent / "halts").glob("*.jsonl")
+        for line in path.read_text().splitlines()
+    ]
+    assert halt["reason"] == "execution_fault" and "UNKNOWN" in halt["detail"]
 
 
 async def test_kill_cancels_closes_then_flattens(testnet) -> None:

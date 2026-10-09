@@ -79,6 +79,8 @@ TERMINAL = {"filled", "closed", "partially_filled_final", "cancelled", "rejected
 # A post-only order that would take expires on Binance too; it is not rejected.
 NOT_REFUSED = {"cancelled", "post_only_would_take", "not_submitted"}
 QUOTE_MAX_AGE_MS = 2_000
+# An order round trip this slow is logged and counted (the HTTP timeout is 2 s).
+SLOW_ORDER_MS = 500.0
 # A post-only entry priced from an older touch can cross in the fast moves signals
 # fire on, and Binance expires it at once. Exits and marks keep 2 s. Demo's
 # bookTicker only sends on a change and a quiet demo book changes about once a
@@ -343,10 +345,22 @@ class GatewayVenue:
     async def _submit(self, order: TrackedOrder) -> None:
         payload = self.bridge.payload(order)
         order.state = "sent"
-        order.sent_ns = self.bridge.clock_ns()
         self.bridge.persist()  # sent: from here on, reconcile, never resubmit
+        # Timed around the request alone: the state write above is not venue latency.
+        order.sent_ns = self.bridge.clock_ns()
         result = await self.client.submit(payload)
         order.acked_ns = self.bridge.clock_ns()
+        rtt = order.rtt_ms
+        if rtt is not None and rtt >= SLOW_ORDER_MS:
+            self.bridge.count("slow_orders")
+            log_event(
+                "ofi_slow_order",
+                level=logging.WARNING,
+                symbol=order.symbol,
+                leg=order.leg,
+                rtt_ms=rtt,
+                outcome=str(getattr(result, "state", "")),
+            )
         self.absorb(order, result)
 
     async def _cancel(self, order: TrackedOrder) -> None:
@@ -1048,6 +1062,17 @@ class ExecutionBridge:
         self._halt_handled = True
         t_ns = t_ns or self.clock_ns()
         log_event("ofi_bridge_halt", level=logging.CRITICAL, reason=reason, mode=self.mode.value)
+        self.count(f"halt_{reason}")
+        detail = self.risk.halt.detail if self.risk.halt is not None else None
+        self.book.halt(
+            t_ns,
+            {
+                "at": datetime.fromtimestamp(t_ns / 1e9, UTC).isoformat(),
+                "reason": reason,
+                "detail": detail,
+                "mode": self.mode.value,
+            },
+        )
         if self.gateway is not None:
             self.gateway.control("cancel_all")
         if self.position_mismatch is not None:

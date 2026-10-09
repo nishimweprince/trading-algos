@@ -352,6 +352,7 @@ class TradeBook:
         self.writer = writer
         self.trades = JsonlDaily(None if state_dir is None else state_dir / "trades", writer)
         self.signals = JsonlDaily(None if state_dir is None else state_dir / "signals", writer)
+        self.halts = JsonlDaily(None if state_dir is None else state_dir / "halts", writer)
         self.marks = SignalMarks(
             JsonlDaily(None if state_dir is None else state_dir / "markouts", writer), keep=keep
         )
@@ -361,6 +362,9 @@ class TradeBook:
     def signal(self, t_ns: int, record: dict[str, Any]) -> None:
         self.recent_signals.append(record)
         self.signals.write(t_ns, record)
+
+    def halt(self, t_ns: int, record: dict[str, Any]) -> None:
+        self.halts.write(t_ns, record)
 
     def trade(self, t_ns: int, record: dict[str, Any]) -> None:
         self.recent_trades.append(record)

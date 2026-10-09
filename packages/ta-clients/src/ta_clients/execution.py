@@ -363,9 +363,38 @@ class ExecutionClient:
                 body = response.json()
             except ValueError:
                 return False, f"HTTP {response.status_code}"
-            reason = body.get("reason") or body.get("error", {}).get("code")
+            reason = _not_ready_reason(body) if isinstance(body, dict) else None
             return False, safe_reason(reason, fallback=f"HTTP {response.status_code}")
         return True, "ready"
+
+
+def _not_ready_reason(body: dict[str, Any]) -> str | None:
+    """Why the gateway says not ready: its reason, else the first failing check.
+
+    The gateway answers ``{"status": "not_ready", "details": {...}}``, with the
+    switches at the top of ``details`` and one dict per broker adapter.
+    """
+    details = body.get("details") if isinstance(body.get("details"), dict) else {}
+    reason = body.get("reason") or details.get("reason")
+    if reason:
+        return str(reason)
+    if details.get("trading_enabled") is False:
+        return "TRADING_ENABLED is false"
+    if details.get("database_healthy") is False:
+        return "database unhealthy"
+    for name, adapter in details.items():
+        if not isinstance(adapter, dict):
+            continue
+        if adapter.get("preflight") not in (None, "ok"):
+            return f"{name}: preflight {adapter['preflight']}"
+        if adapter.get("last_error"):
+            return f"{name}: {adapter['last_error']}"
+        if adapter.get("user_stream") is False:
+            return f"{name}: user stream disconnected"
+        if adapter.get("reconciled") is False:
+            return f"{name}: not reconciled"
+    error = body.get("error")
+    return error.get("code") if isinstance(error, dict) else None
 
 
 def _as_items(result: ExecutionResult) -> list[dict[str, Any]]:

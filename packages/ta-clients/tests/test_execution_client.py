@@ -300,6 +300,29 @@ async def test_trading_ready_reports_the_reason_when_not_ready() -> None:
     assert reason == "broker_disconnected"
 
 
+async def test_trading_ready_explains_the_gateways_not_ready_details() -> None:
+    def details(**kw: Any) -> dict[str, Any]:
+        return {"status": "not_ready", "details": kw}
+
+    cases = [
+        (details(trading_enabled=False, database_healthy=True), "TRADING_ENABLED is false"),
+        (details(trading_enabled=True, database_healthy=False), "database unhealthy"),
+        (
+            details(trading_enabled=True, binance={"preflight": "ok", "user_stream": False}),
+            "binance: user stream disconnected",
+        ),
+        (
+            details(trading_enabled=True, binance={"preflight": "ok", "last_error": "timeout"}),
+            "binance: timeout",
+        ),
+        (details(reason="LIVE_TRADING_ENABLED is false"), "LIVE_TRADING_ENABLED is false"),
+        ({"status": "not_ready", "details": {}}, "HTTP 503"),
+    ]
+    for body, expected in cases:
+        client, _ = build(json_response(503, body))
+        assert await client.trading_ready() == (False, expected)
+
+
 async def test_trading_ready_survives_a_transport_error() -> None:
     def explode(_: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("refused")
