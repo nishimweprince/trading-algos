@@ -701,6 +701,7 @@ class ExecutionBridge:
             self.shadow.touch[symbol] = (bid, ask)
         self._check_halt(t_ns)
         self._mark(symbol, t_ns, sample)
+        self.book.marks.on_sample(symbol, t_ns, sample.get("mid"))
         policy = self.policies.get(symbol)
         if policy is None or self.model is None:
             return
@@ -736,6 +737,7 @@ class ExecutionBridge:
                 record["action"] = f"refused:{refused[step.signal.cycle_id]}"
             self.count(f"signal_{record['action'].split(':')[0]}")
             self.book.signal(t_ns, record)
+            self.book.marks.on_signal(t_ns, record, sample.get("mid"))
         self._collect(symbol, t_ns)
         if self.mode is ExecutionMode.SHADOW:
             self.risk.update_equity(

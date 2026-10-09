@@ -6,6 +6,8 @@ single JSON document for analysis:
 - every trade (cycle) record (``pandas.DataFrame(doc["trades"])``);
 - signal *counts* by action, symbol, side and day. Signals are events,
   thousands a day, so the raw records are left out unless ``--signals``;
+- markouts from signal time (mean signed mid move per horizon, 0.1-900 s),
+  overall, by action and by model version;
 - daily recording reports, bridge state, drills, latency, the pinned model's
   JSON files, and research results (runs, candidates' calibration, full
   selection grids with score diagnostics, gates, report).
@@ -32,7 +34,7 @@ from ta_core import base_parser, load_or_exit
 from . import status as builders
 from .config import Settings, load_settings
 from .latency import default_latency_path
-from .trades import summarise
+from .trades import summarise, summarise_markouts
 
 __all__ = ["build_export", "default_latency_path", "export_filename", "run", "scrub_paths"]
 
@@ -146,6 +148,18 @@ def _signal_counts(
     }
 
 
+def _markouts(marks: list[dict[str, Any]]) -> dict[str, Any]:
+    """Signal-time markouts, overall and per model version (versions differ in policy)."""
+    versions = sorted({str(m.get("model_version")) for m in marks})
+    return {
+        **summarise_markouts(marks),
+        "by_model_version": {
+            v: summarise_markouts([m for m in marks if str(m.get("model_version")) == v])
+            for v in versions
+        },
+    }
+
+
 def _research(settings: Settings) -> dict[str, Any]:
     """The page's research view, plus every run's full selection grid and diagnostics."""
     out = builders.research(settings.research_dir, settings.model_dir)
@@ -210,6 +224,7 @@ def build_export(
         wanted = set(_available_days(state_dir, include_shadow=include_shadow)[-days:])
     trades, trades_by_day, bad_trades = _stream(state_dir, "trades", wanted)
     signals, signals_by_day, bad_signals = _stream(state_dir, "signals", wanted)
+    marks, _, bad_marks = _stream(state_dir, "markouts", wanted)
 
     shadow: dict[str, Any] | None = None
     bad_shadow = 0
@@ -218,10 +233,12 @@ def build_export(
         if shadow_dir.is_dir():
             s_trades, s_trades_by_day, bad_t = _stream(shadow_dir, "trades", wanted)
             s_signals, s_signals_by_day, bad_s = _stream(shadow_dir, "signals", wanted)
-            bad_shadow = bad_t + bad_s
+            s_marks, _, bad_sm = _stream(shadow_dir, "markouts", wanted)
+            bad_shadow = bad_t + bad_s + bad_sm
             shadow = {
                 "performance": _performance(s_trades, s_signals, s_trades_by_day, s_signals_by_day),
                 "signal_counts": _signal_counts(s_signals, s_signals_by_day),
+                "markouts_from_signal": _markouts(s_marks),
                 "trades": s_trades,
             }
             if include_signals:
@@ -254,12 +271,13 @@ def build_export(
             "book_mode": settings.binance_futures_book_mode,
             "order_notional_usd": settings.order_notional_usd,
             "days": sorted(set(trades_by_day) | set(signals_by_day) | set(daily)),
-            "unparsed_lines": bad_trades + bad_signals + bad_shadow,
+            "unparsed_lines": bad_trades + bad_signals + bad_marks + bad_shadow,
             "signals_included": include_signals,
             "recordings_included": False,
         },
         "performance": _performance(trades, signals, trades_by_day, signals_by_day),
         "signal_counts": _signal_counts(signals, signals_by_day),
+        "markouts_from_signal": _markouts(marks),
         "trades": trades,
         "shadow": shadow,
         "daily": daily,

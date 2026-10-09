@@ -112,6 +112,7 @@ async function refresh() {
       ["win rate", s.win_rate === null ? "" : num(s.win_rate * 100, 1) + "%"],
       ["maker fill rate", s.maker_fill_rate === null ? "" : num(s.maker_fill_rate * 100, 1) + "%"],
       ["largest loss", num(s.largest_loss_usd, 4)],
+      ["gross / costs bp per trade", `${num(s.gross_bp_mean)} / ${num(s.cost_bp_mean)}`],
       ["adverse bp 1/5/30s", ["1s", "5s", "30s"].map((k) => num(s.adverse_bp_mean[k])).join(" / ")],
       ["Brier (own fills)", num(s.brier, 4)],
     ]);

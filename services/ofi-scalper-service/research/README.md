@@ -121,6 +121,7 @@ round trip stands in.
 | Train | `train.py` | Per horizon: CatBoost per expanding fold (purged + 5 min embargo), multi-level OFI PCA fit on each fold's training rows only, isotonic calibration (own PAV) on the out-of-fold predictions, Brier score and reliability per class, a final model on every walk-forward period, SHAP |
 | Scores | `scores.py` | Out-of-fold tables for validation days; final-model tables for held-out days only |
 | Select | `selection.py` | Horizon x threshold by **mean daily net P&L after costs**, on validation days, out-of-fold scores, pessimistic queue, 1x latency, >= 30 trades |
+| Markouts | `markouts.py` | Before any policy: the signed mid move from each signal episode at 0.1 s-900 s, from the bridge's signal log, a rule model replayed over feature rows, or a candidate's out-of-fold scores. The mean move at the trade's horizon must cover the round trip (maker + taker, or 2 x maker with maker exits). The live bridge writes the same per episode to `<state_dir>/markouts/` |
 | Gates | `gates.py` | The chosen policy on the **held-out** period: base (queue model), pessimistic queue, 2x latency, and the most volatile validation days; plus 0.5x latency, informational only (`latency_sensitivity` in `gates.json`: bp per trade a host nearer the venue would add). Writes `models/<version>/` with `gates.json` (every gate, value and threshold), plus `strategy.md` on a pass or `REPORT.md` on a fail |
 
 **The backtest is the live code.** `backtest.py` replays recordings through
