@@ -135,7 +135,8 @@ Three contracts in here are load-bearing and should not be "tidied":
    dependency, both exception handlers and `/health/live` + `/health/ready`.
    Register only your own routes.
 5. Entry point: `ta_core.base_parser`, `load_or_exit`, `serve`.
-6. Add an ~8-line CI caller (see `.github/workflows/execution-service-ci.yml`).
+6. Make sure `ruff check`, `ruff format --check` and `pytest -m "not integration"`
+   pass locally (there is no GitHub Actions CI; GitGuardian is the only PR check).
 7. Add a launchd plist from `infra/launchd/`, and record the port above.
 
 `uv sync --package <name> --group dev` picks it up; the workspace globs
@@ -159,7 +160,7 @@ Three contracts in here are load-bearing and should not be "tidied":
 4. Import the broker SDK lazily, behind an optional extra. The MT5 plugin does,
    which is why a macOS install never touches the Windows-only `MetaTrader5`.
 5. Ship a settings mixin for its environment names, a `testing` module with a
-   fake, and a caller in `.github/workflows/plugins-ci.yml`. Add the class
+   fake. Add the class
    names a service must not construct to `infra/check_plugin_boundary.py`.
 6. Run the conformance kit: in `tests/test_conformance.py`, subclass
    `ta_plugin_api.testing.MarketDataConformance` and/or `ExecutionConformance`
