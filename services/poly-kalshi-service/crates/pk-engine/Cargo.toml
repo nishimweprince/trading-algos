@@ -1,0 +1,22 @@
+[package]
+name = "pk-engine"
+description = "The engine: every tape line in, decisions, paper fills, settlements and statistics out"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+pk-core.workspace = true
+pk-stats.workspace = true
+
+[dev-dependencies]
+flate2 = "1"
+
+[lints]
+workspace = true

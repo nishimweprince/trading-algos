@@ -55,6 +55,8 @@ filterwarnings = [
 
 [tool.ruff]
 extend = "../../pyproject.toml"
+# The Rust workspace: its one Python file is the golden fixtures' provenance.
+extend-exclude = ["crates", "target"]
 
 [tool.ruff.lint]
 # status_page.py is one embedded HTML/JS document; its line length is the page's.
