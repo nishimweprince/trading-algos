@@ -46,6 +46,7 @@ ofi-status = "ofi_scalper_service.status_app:run"
 ofi-rules-model = "ofi_scalper_service.rules:main"
 ofi-go-live = "ofi_scalper_service.go_live:main"
 ofi-export = "ofi_scalper_service.export:run"
+ofi-drill = "ofi_scalper_service.drill:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ofi_scalper_service"]

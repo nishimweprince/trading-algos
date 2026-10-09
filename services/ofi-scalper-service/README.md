@@ -102,6 +102,15 @@ touch ~/trading-algos/services/ofi-scalper-service/data/KILL.dev   # cancel-all,
 sudo systemctl kill -s KILL ofi-scalper-service                    # dead-man: Binance cancels
 ```
 
+The feed drills run against the live service (shadow or testnet), break its own
+feed, check the pause, the entry cancels and the resync, and record the result
+in `drills.json`:
+
+```sh
+.venv/bin/ofi-drill --profile dev disconnect     # drops the public websocket mid-stream
+.venv/bin/ofi-drill --profile dev gap_handling   # one out-of-sequence depth diff
+```
+
 ## Go live on demo and shadow (rule model, ungated)
 
 Before a trained model passes its gates, a fixed rule (`rules.py`) can fill the

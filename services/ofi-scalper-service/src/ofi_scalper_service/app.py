@@ -10,6 +10,7 @@
 | ``GET /v1/trades?date=`` | yes | recent cycles, or one UTC day's with its summary |
 | ``POST /v1/kill`` | yes | halt: cancel all, flatten (logged only in mode off); until ack |
 | ``POST /v1/kill/ack`` | yes | clear a halt (refused while the kill file exists) |
+| ``POST /v1/drill/{name}`` | yes | ``disconnect`` or ``gap_handling`` drill (shadow, testnet) |
 | ``GET /dashboard`` | page; its calls use the key | signals, cycles, policy state, live |
 """
 
@@ -328,5 +329,13 @@ def create_app(settings: Settings | None = None, runtime: ScalperRuntime | None 
         if not ok:
             raise ServiceError(409, "ack_refused", message)
         return {"halted": current.risk.halted, "message": message}
+
+    @app.post("/v1/drill/{name}", dependencies=auth)
+    async def drill(name: str) -> dict[str, Any]:
+        current = current_runtime()
+        try:
+            return await current.run_drill(name)
+        except ValueError as exc:
+            raise ServiceError(409, "drill_refused", str(exc)) from None
 
     return app
