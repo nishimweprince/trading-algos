@@ -31,7 +31,7 @@ from ta_notify import SyncNotifier
 from .config import load_settings
 from .gapcheck import check_file
 from .recordings import find_session
-from .trades import JsonlDaily
+from .trades import JsonlDaily, summarise_markouts
 from .trades import summarise as summarise_trades
 
 __all__ = ["run", "summarise", "write_summary"]
@@ -125,7 +125,10 @@ def trading_summary(state_dir: Path, day: date) -> dict[str, Any] | None:
     signals = JsonlDaily(state_dir / "signals").read(day.isoformat())
     if not trades and not signals:
         return None
-    return summarise_trades(trades, signals)
+    report = summarise_trades(trades, signals)
+    marks = JsonlDaily(state_dir / "markouts").read(day.isoformat())
+    report["markouts_from_signal"] = summarise_markouts(marks)
+    return report
 
 
 def _fill_line(fill: dict[str, Any] | None) -> str:
@@ -152,8 +155,23 @@ def _trading_lines(report: dict[str, Any]) -> list[str]:
         f"{adverse.get('30s')}; Brier {report['brier']}; "
         f"entry RTT p50/p99 {report['entry_rtt_ms']['p50']}/{report['entry_rtt_ms']['p99']} ms",
         _fill_line(report.get("time_to_fill_ms")),
+        f"Per trade (bp): gross {report.get('gross_bp_mean')}, costs {report.get('cost_bp_mean')}, "
+        f"net {report.get('mean_net_bp')}; exit fills {report.get('exit_liquidity', {})}",
         f"Exits: {report['exit_reasons']}",
+        _markout_line(report.get("markouts_from_signal")),
     ]
+
+
+def _markout_line(marks: dict[str, Any] | None) -> str:
+    if not marks or not marks.get("episodes"):
+        return "Mid move after signal: no signals"
+    overall = marks["overall"]
+    shown = ", ".join(
+        f"{key} {overall[key].get('mean_bp')}"
+        for key in ("1s", "5s", "60s", "300s", "900s")
+        if key in overall
+    )
+    return f"Mid move after signal (bp, {marks['episodes']} episodes): {shown}"
 
 
 def _lines(summary: dict[str, Any]) -> list[str]:

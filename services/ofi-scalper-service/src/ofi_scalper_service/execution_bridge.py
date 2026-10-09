@@ -47,6 +47,7 @@ from ta_core.logging_config import log_event
 
 from .alerts import Alerts
 from .config import ExecutionMode
+from .flow_guard import FlowGuard
 from .model import LoadedModel
 from .policy import (
     Action,
@@ -78,6 +79,8 @@ TERMINAL = {"filled", "closed", "partially_filled_final", "cancelled", "rejected
 # A post-only order that would take expires on Binance too; it is not rejected.
 NOT_REFUSED = {"cancelled", "post_only_would_take", "not_submitted"}
 QUOTE_MAX_AGE_MS = 2_000
+# An order round trip this slow is logged and counted (the HTTP timeout is 2 s).
+SLOW_ORDER_MS = 500.0
 # A post-only entry priced from an older touch can cross in the fast moves signals
 # fire on, and Binance expires it at once. Exits and marks keep 2 s. Demo's
 # bookTicker only sends on a change and a quiet demo book changes about once a
@@ -342,10 +345,22 @@ class GatewayVenue:
     async def _submit(self, order: TrackedOrder) -> None:
         payload = self.bridge.payload(order)
         order.state = "sent"
-        order.sent_ns = self.bridge.clock_ns()
         self.bridge.persist()  # sent: from here on, reconcile, never resubmit
+        # Timed around the request alone: the state write above is not venue latency.
+        order.sent_ns = self.bridge.clock_ns()
         result = await self.client.submit(payload)
         order.acked_ns = self.bridge.clock_ns()
+        rtt = order.rtt_ms
+        if rtt is not None and rtt >= SLOW_ORDER_MS:
+            self.bridge.count("slow_orders")
+            log_event(
+                "ofi_slow_order",
+                level=logging.WARNING,
+                symbol=order.symbol,
+                leg=order.leg,
+                rtt_ms=rtt,
+                outcome=str(getattr(result, "state", "")),
+            )
         self.absorb(order, result)
 
     async def _cancel(self, order: TrackedOrder) -> None:
@@ -469,6 +484,7 @@ class ExecutionBridge:
         self.risk = risk
         self.alerts = alerts
         self.model = model
+        self.flow_guard = FlowGuard(model.policy) if model is not None else None
         self.client = client
         self.quotes = quotes
         self.clock_ns = clock_ns
@@ -701,10 +717,12 @@ class ExecutionBridge:
             self.shadow.touch[symbol] = (bid, ask)
         self._check_halt(t_ns)
         self._mark(symbol, t_ns, sample)
+        self.book.marks.on_sample(symbol, t_ns, sample.get("mid"))
         policy = self.policies.get(symbol)
         if policy is None or self.model is None:
             return
         scores = self.model.scorer.score(sample)
+        against = self.flow_guard.against(sample) if self.flow_guard is not None else frozenset()
         fees = self.fees(symbol)
         blocked = self._blocked(symbol, gate, bid, ask, fees, entering=policy.phase is Phase.FLAT)
         maker, taker = fees if fees is not None else (0.0, 0.0)
@@ -720,6 +738,7 @@ class ExecutionBridge:
                 blocked=blocked,
                 threshold_mult=float((gate or {}).get("threshold_mult", 1.0)),
                 size_mult=float((gate or {}).get("max_inventory_mult", 1.0)),
+                flow_against=against,
             )
         )
         refused = self.execute(step.actions, t_ns)
@@ -736,6 +755,7 @@ class ExecutionBridge:
                 record["action"] = f"refused:{refused[step.signal.cycle_id]}"
             self.count(f"signal_{record['action'].split(':')[0]}")
             self.book.signal(t_ns, record)
+            self.book.marks.on_signal(t_ns, record, sample.get("mid"))
         self._collect(symbol, t_ns)
         if self.mode is ExecutionMode.SHADOW:
             self.risk.update_equity(
@@ -1042,6 +1062,17 @@ class ExecutionBridge:
         self._halt_handled = True
         t_ns = t_ns or self.clock_ns()
         log_event("ofi_bridge_halt", level=logging.CRITICAL, reason=reason, mode=self.mode.value)
+        self.count(f"halt_{reason}")
+        detail = self.risk.halt.detail if self.risk.halt is not None else None
+        self.book.halt(
+            t_ns,
+            {
+                "at": datetime.fromtimestamp(t_ns / 1e9, UTC).isoformat(),
+                "reason": reason,
+                "detail": detail,
+                "mode": self.mode.value,
+            },
+        )
         if self.gateway is not None:
             self.gateway.control("cancel_all")
         if self.position_mismatch is not None:
@@ -1233,4 +1264,11 @@ class ExecutionBridge:
             out["controls"] = list(self.gateway.controls)[-10:]
         if self.quotes is not None:
             out["venue_quotes"] = self.quotes.status()
+        if self.flow_guard is not None and self.flow_guard.enabled:
+            out["flow_guard"] = dict(self.flow_guard.flagged)
+        if self.shadow is not None:
+            out["shadow_fills"] = {
+                "queue_model": self.shadow.queue_model,
+                "delay_ms": round(self.shadow.delay_ns / 1e6, 3),
+            }
         return out

@@ -201,6 +201,52 @@ async def test_server_shutdown_reconnects_and_resets_books(rest: FapiRest) -> No
     await streams.close()
 
 
+async def test_a_dropped_connection_reconnects_and_resets_books(rest: FapiRest) -> None:
+    stream = FakeFuturesStream(
+        {"public": [[depth_frame("BTCUSDT", 100, 105, 99)], [depth_frame("BTCUSDT", 100, 110, 99)]]}
+    )
+    streams = make(stream, rest)
+    streams.syncs.pop("ETHUSDT")
+    await streams.start()
+    await collect(streams, lambda _: streams.syncs["BTCUSDT"].verified)
+    streams.drop("public")  # the first connection is holding open: the drill breaks it
+
+    def reconnected(events: list) -> bool:
+        return (
+            any(isinstance(e, StreamStatus) and e.state == "connected" for e in events)
+            and streams.syncs["BTCUSDT"].verified
+        )
+
+    seen = await collect(streams, reconnected)
+    down = [e for e in seen if isinstance(e, StreamStatus) and e.state == "reconnecting"]
+    assert down and "operator drill" in (down[0].error or "")
+    assert any(isinstance(e, BookStatus) and e.reason == "reconnected" for e in seen)
+    assert streams.reconnects["public"] == 1
+    stream.release.set()
+    await streams.close()
+
+
+async def test_an_injected_gap_breaks_the_book_for_a_resync(rest: FapiRest) -> None:
+    stream = FakeFuturesStream({"public": [[depth_frame("BTCUSDT", 100, 105, 99)]]})
+    raw: list = []
+    streams = make(stream, rest, raw)
+    streams.syncs.pop("ETHUSDT")
+    await streams.start()
+    await collect(streams, lambda _: streams.syncs["BTCUSDT"].verified)
+    recorded = len(raw)
+    streams.inject_gap("BTCUSDT")
+    seen = await collect(
+        streams, lambda events: any(isinstance(e, BookStatus) and "gap" in e.reason for e in events)
+    )
+    (status,) = [e for e in seen if isinstance(e, BookStatus)]
+    assert status.state is SyncState.SYNCING and streams.syncs["BTCUSDT"].gaps == 1
+    assert not any("depthUpdate" in text for _, _, text in raw[recorded:])  # never recorded
+    with pytest.raises(ValueError):
+        streams.inject_gap("ETHUSDT")
+    stream.release.set()
+    await streams.close()
+
+
 async def test_readiness_needs_both_channels_and_verified_books(rest: FapiRest) -> None:
     streams = make(FakeFuturesStream({}), rest)
     ready, details = streams.readiness()

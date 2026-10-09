@@ -50,6 +50,9 @@ def _signal(**overrides: Any) -> dict[str, Any]:
     return record
 
 
+HALT = {"at": f"{DAY_B}T10:00:00+00:00", "reason": "kill_switch", "detail": "drill"}
+
+
 def _write_jsonl(path: Path, records: list[dict[str, Any]], extra: str = "") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     text = "".join(json.dumps(r) + "\n" for r in records) + extra
@@ -67,8 +70,17 @@ def state_dir(tmp_path: Path) -> Path:
     )
     _write_jsonl(state / "shadow" / "trades" / f"{DAY_B}.jsonl", [_trade(2.0)])
     _write_jsonl(state / "shadow" / "signals" / f"{DAY_B}.jsonl", [_signal()])
+    mark = {"symbol": "BTCUSDT", "side": "buy", "action": "enter", "model_version": "rules-v5"}
+    _write_jsonl(
+        state / "shadow" / "markouts" / f"{DAY_B}.jsonl",
+        [
+            {**mark, "moves": {"1s": 1.0, "300s": -4.0}},
+            {**mark, "moves": {"1s": 3.0, "300s": None}},
+        ],
+    )
     (state / "daily").mkdir(parents=True, exist_ok=True)
     (state / "daily" / f"{DAY_A}.json").write_text(json.dumps({"date": DAY_A, "ok": True}))
+    _write_jsonl(state / "halts" / f"{DAY_B}.jsonl", [HALT])
     (state / "bridge.json").write_text(json.dumps({"schema": 1, "policies": {}}))
     (state / "drills.json").write_text(json.dumps({"kill_switch": {"result": "passed"}}))
     return state
@@ -120,6 +132,16 @@ def test_full_document(tmp_path: Path, state_dir: Path, model_dir: Path) -> None
 
     assert document["shadow"]["performance"]["overall"]["net_usd"] == 2.0
     assert document["shadow"]["signal_counts"]["total"] == 1 and "signals" not in document["shadow"]
+    marks = document["shadow"]["markouts_from_signal"]
+    assert marks["episodes"] == 2 and marks["overall"]["1s"] == {
+        "n": 2,
+        "mean_bp": 2.0,
+        "t_stat": 2.0,
+    }
+    assert marks["overall"]["300s"] == {"n": 1, "mean_bp": -4.0}
+    assert marks["by_model_version"]["rules-v5"]["episodes"] == 2
+    assert document["markouts_from_signal"]["episodes"] == 0
+    assert document["halts"] == {"total": 1, "by_reason": {"kill_switch": 1}, "recent": [HALT]}
     assert document["daily"][DAY_A]["ok"] is True
     assert document["bridge"]["schema"] == 1
     assert document["drills"]["kill_switch"]["result"] == "passed"

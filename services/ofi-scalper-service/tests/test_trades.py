@@ -79,6 +79,14 @@ def test_summary_and_daily_lines(tmp_path) -> None:
     assert report["brier"] == pytest.approx(((0.7 - 1) ** 2 + 0.7**2) / 2, abs=1e-5)
     assert report["adverse_bp_mean"] == {"1s": 1.0, "5s": 2.0, "30s": None}
     assert report["exit_reasons"] == {"take_profit": 1, "stop": 1}
+    assert report["gross_bp_mean"] == pytest.approx(0.0, abs=1e-3)  # +8 bp and -8 bp
+    assert report["cost_bp_mean"] == pytest.approx(4.0, abs=0.01)  # two maker legs
+    assert report["exit_liquidity"] == {"maker": 2}
+    low, high = report["net_bp_ci95"]
+    assert low < report["mean_net_bp"] < high
+    # 10% of 4 bp of fees back with BNB.
+    assert report["net_bp_mean_with_bnb"] == pytest.approx(report["mean_net_bp"] + 0.4, abs=0.01)
+    assert any("gross 0.0, costs 4.0" in line for line in _trading_lines(report))
     assert any("maker fill 66.7%" in line for line in _trading_lines(report))
     assert trading_summary(tmp_path, date(2026, 9, 22)) is None
     assert summarise([])["trades"] == 0
@@ -116,3 +124,41 @@ def test_time_to_fill_and_the_fill_rate_each_timeout_would_keep() -> None:
     assert time_to_fill([])["fill_rate_within_ms"]["3000"] is None
     lines = _trading_lines(summarise(fills))
     assert any(line.startswith("time to fill p50/p90") and "3s 75%" in line for line in lines)
+
+
+def test_signal_marks_measure_each_episode_from_the_signal_sample(tmp_path) -> None:
+    from ofi_scalper_service.trades import JsonlDaily, SignalMarks, summarise_markouts
+
+    journal = JsonlDaily(tmp_path / "markouts")
+    marks = SignalMarks(journal, horizons_s=(1, 5), episode_s=5)
+    marks.on_sample("BTCUSDT", T0, 100.0)
+    marks.on_signal(T0, {"symbol": "BTCUSDT", "side": "buy", "action": "skip:halted"}, 100.0)
+    # The same side within the episode is not a new signal; the other side is.
+    marks.on_signal(T0 + S // 2, {"symbol": "BTCUSDT", "side": "buy", "action": "enter"}, 100.0)
+    marks.on_signal(T0 + S // 2, {"symbol": "BTCUSDT", "side": "sell", "action": "enter"}, 100.005)
+    for i in range(1, 61):  # 100 ms samples, +0.1 bp each
+        marks.on_sample("BTCUSDT", T0 + i * S // 10, 100.0 * (1 + i * 1e-5))
+    rows = journal.read("2026-09-21")
+    assert [(r["side"], r["action"]) for r in rows] == [("buy", "skip"), ("sell", "enter")]
+    assert rows[0]["moves"] == {
+        "1s": pytest.approx(1.0, abs=1e-3),
+        "5s": pytest.approx(5.0, abs=1e-3),
+    }
+    assert rows[1]["moves"]["1s"] == pytest.approx(-1.0, abs=1e-3)  # from 100.005 at +0.5 s
+    summary = summarise_markouts(rows)
+    assert summary["episodes"] == 2 and summary["by_action"]["skip"]["5s"]["n"] == 1
+
+
+def test_signal_marks_break_on_a_sample_gap_and_flush_on_close(tmp_path) -> None:
+    from ofi_scalper_service.trades import JsonlDaily
+
+    book = TradeBook(tmp_path)
+    book.marks.on_sample("ETHUSDT", T0, 10.0)
+    book.marks.on_signal(T0, {"symbol": "ETHUSDT", "side": "sell", "action": "enter"}, 10.0)
+    book.marks.on_sample("ETHUSDT", T0 + S // 10, 10.0)
+    book.marks.on_sample("ETHUSDT", T0 + 3 * S, 9.0)  # a 2.9 s pause: no move across it
+    book.marks.on_signal(T0 + 4 * S, {"symbol": "ETHUSDT", "side": "buy", "action": "enter"}, 9.0)
+    book.close()  # the open one is written with what it has
+    rows = JsonlDaily(tmp_path / "markouts").read("2026-09-21")
+    assert len(rows) == 2 and rows[0]["moves"]["0.1s"] == 0.0
+    assert rows[0]["moves"]["1s"] is None and rows[1]["moves"]["0.1s"] is None

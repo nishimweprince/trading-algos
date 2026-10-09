@@ -16,7 +16,15 @@ One cycle at a time per symbol::
   the maker round trip plus the buffer. A post-only limit at the touch.
 - **Take profit**: a reduce-only post-only limit at the barrier from the fill.
 - **Stop**: watched here, on the mid; a reduce-only market close at the
-  opposite barrier. **Time stop**: the same at ``horizon x k``.
+  opposite barrier. **Time stop**: the same at ``horizon x k``, or with
+  ``exit_mode="maker_chase"`` a reduce-only post-only limit at the near touch,
+  repriced as the touch moves, that falls back to the market close after
+  ``exit_chase_ms``, at the stop, on adverse flow or after repeated refusals.
+- **Flow guard** (``guard_z``, off by default): the bridge marks a side
+  ``against`` when short-window flow runs hard the other way. No entry on that
+  side, a resting entry on it is cancelled (the fills that come fast in such
+  flow are the adversely selected ones), and an exit chase gives up for the
+  market close.
 
 The policy only proposes. The bridge runs every order past ``RiskState`` first.
 """
@@ -49,6 +57,7 @@ __all__ = [
 Side = Literal["buy", "sell"]
 NS_PER_MS = 1_000_000
 NS_PER_S = 1_000_000_000
+EXIT_MODES = ("market", "maker_chase")
 
 
 class Phase(StrEnum):
@@ -72,6 +81,17 @@ class PolicyParams:
     # No new entry this long after a cycle ends. A signal that stays on (a held
     # rule) would otherwise re-enter on every grid step after each rejection.
     reentry_cooldown_ms: int = 0
+    # Time-stop exit: "market", or "maker_chase" (post-only at the near touch).
+    exit_mode: str = "market"
+    exit_chase_ms: int = 15_000
+    exit_reprice_ticks: int = 1
+    exit_max_rejects: int = 2
+    # Flow guard (flow_guard.FlowGuard). guard_z None: off.
+    guard_z: float | None = None
+    guard_tfi: float | None = None
+    guard_imb: float | None = None
+    guard_window_ms: int = 1_000
+    guard_halflife_s: float = 300.0
 
     def __post_init__(self) -> None:
         if not 0 < self.threshold < 1:
@@ -82,6 +102,20 @@ class PolicyParams:
             raise ValueError("policy reentry_cooldown_ms must be >= 0")
         if self.buffer_bp < 0 or self.time_stop_mult <= 0 or self.max_close_attempts < 1:
             raise ValueError("policy buffer_bp >= 0, time_stop_mult > 0, max_close_attempts >= 1")
+        if self.exit_mode not in EXIT_MODES:
+            raise ValueError(f"policy exit_mode must be one of {', '.join(EXIT_MODES)}")
+        if self.exit_chase_ms <= 0 or self.exit_reprice_ticks < 1 or self.exit_max_rejects < 1:
+            raise ValueError(
+                "policy exit_chase_ms > 0, exit_reprice_ticks >= 1, exit_max_rejects >= 1"
+            )
+        if self.guard_z is not None and self.guard_z <= 0:
+            raise ValueError("policy guard_z must be > 0")
+        if self.guard_tfi is not None and not 0 < self.guard_tfi <= 1:
+            raise ValueError("policy guard_tfi must be in (0, 1]")
+        if self.guard_imb is not None and not 0.5 <= self.guard_imb < 1:
+            raise ValueError("policy guard_imb must be in [0.5, 1)")
+        if self.guard_window_ms <= 0 or self.guard_halflife_s <= 0:
+            raise ValueError("policy guard_window_ms and guard_halflife_s must be > 0")
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> PolicyParams:
@@ -137,6 +171,9 @@ class Context:
     blocked: str | None = None  # gate off, paused, halted, venue not ready
     threshold_mult: float = 1.0
     size_mult: float = 1.0
+    # Sides the flow guard says flow runs against: "buy" = selling pressure,
+    # against a resting bid or an open long.
+    flow_against: frozenset[str] = frozenset()
 
     @property
     def mid(self) -> float | None:
@@ -152,7 +189,7 @@ class Context:
 class Place:
     symbol: str
     cycle_id: str
-    leg: Literal["entry", "tp"]
+    leg: str  # "entry", "tp" or "exit<n>" (a maker exit chase)
     side: Side
     qty: Decimal
     price: Decimal
@@ -239,6 +276,14 @@ class Cycle:
     exit_reason: str | None = None
     liquidating: bool = False
     exit_ns: int | None = None
+    # Maker exit chase: until when, the resting leg and its price, legs so far,
+    # refusals, and whether it gave up for the market close.
+    chase_until_ns: int | None = None
+    chase_leg: str | None = None
+    chase_price: Decimal | None = None
+    chase_legs: int = 0
+    chase_rejects: int = 0
+    chase_abandoned: bool = False
 
     @property
     def exit_side(self) -> Side:
@@ -274,6 +319,7 @@ class Cycle:
         out["entry_qty"] = str(self.entry_qty)
         out["entry_price"] = str(self.entry_price)
         out["tp_price"] = None if self.tp_price is None else str(self.tp_price)
+        out["chase_price"] = None if self.chase_price is None else str(self.chase_price)
         out["fills"] = {leg: [str(q), p] for leg, (q, p) in self.fills.items()}
         out["cancels"] = sorted(self.cancels)
         return out
@@ -285,6 +331,8 @@ class Cycle:
         values["entry_price"] = Decimal(values["entry_price"])
         if values.get("tp_price") is not None:
             values["tp_price"] = Decimal(values["tp_price"])
+        if values.get("chase_price") is not None:
+            values["chase_price"] = Decimal(values["chase_price"])
         values["fills"] = {leg: (Decimal(q), float(p)) for leg, (q, p) in values["fills"].items()}
         values["cancels"] = set(values.get("cancels") or ())
         return cls(**values)
@@ -310,16 +358,20 @@ class SymbolPolicy:
         self.cycle: Cycle | None = None
         self.finished: list[Cycle] = []
         self.cooldown_until_ns = 0
+        self.touch: tuple[float | None, float | None] = (None, None)  # last sample's
 
     # --- samples -------------------------------------------------------------------
 
     def on_sample(self, ctx: Context) -> Step:
+        self.touch = (ctx.bid, ctx.ask)
         if self.phase is Phase.FLAT:
             return self._maybe_enter(ctx)
         if self.phase is Phase.ENTRY_RESTING:
             return Step(self._watch_entry(ctx))
         if self.phase is Phase.OPEN:
             return Step(self._watch_open(ctx))
+        if self._chasing:
+            return Step(self._watch_chase(ctx))
         return Step()
 
     def _maybe_enter(self, ctx: Context) -> Step:
@@ -341,6 +393,8 @@ class SymbolPolicy:
 
         if ctx.blocked:
             return Step(signal=signal(f"skip:{ctx.blocked}"))
+        if side in ctx.flow_against:
+            return Step(signal=signal("skip:adverse_flow"))
         if edge < cost:
             return Step(signal=signal("skip:edge_below_cost"))
         touch = ctx.bid if side == "buy" else ctx.ask
@@ -376,6 +430,8 @@ class SymbolPolicy:
         reason: str | None = None
         if ctx.blocked:
             reason = "blocked"
+        elif cycle.side in ctx.flow_against:
+            reason = "adverse_flow"
         elif ctx.t_ns - cycle.signal_ns >= self.params.entry_timeout_ms * NS_PER_MS:
             reason = "timeout"
         else:
@@ -401,8 +457,110 @@ class SymbolPolicy:
         assert cycle.entry_fill_ns is not None
         limit_ns = self.params.horizon_s * self.params.time_stop_mult * NS_PER_S
         if ctx.t_ns - cycle.entry_fill_ns >= limit_ns:
+            if self.params.exit_mode == "maker_chase" and cycle.side not in ctx.flow_against:
+                return self._start_chase(ctx)
             return self._close("time_stop", ctx.t_ns)
         return []
+
+    # --- maker exit chase ----------------------------------------------------------
+
+    @property
+    def _chasing(self) -> bool:
+        cycle = self.cycle
+        return (
+            self.phase is Phase.CLOSING
+            and cycle is not None
+            and cycle.chase_until_ns is not None
+            and not cycle.chase_abandoned
+        )
+
+    def _exit_price(self) -> Decimal | None:
+        """The near touch on the exit side: the ask to sell out, the bid to buy back."""
+        cycle = self.cycle
+        assert cycle is not None
+        bid, ask = self.touch
+        touch = ask if cycle.exit_side == "sell" else bid
+        if touch is None or touch <= 0:
+            return None
+        price = Decimal(str(touch))
+        if cycle.exit_side == "sell":
+            return _ceil(price, self.filters.tick)
+        return _floor(price, self.filters.tick)
+
+    def _start_chase(self, ctx: Context) -> list[Action]:
+        cycle = self.cycle
+        assert cycle is not None
+        cycle.exit_reason = cycle.exit_reason or "time_stop"
+        self.phase = Phase.CLOSING
+        cycle.chase_until_ns = ctx.t_ns + self.params.exit_chase_ms * NS_PER_MS
+        actions: list[Action] = []
+        if cycle.tp_live and "tp" not in cycle.cancels:
+            cycle.cancels.add("tp")
+            actions.append(Cancel(self.symbol, cycle.cycle_id, "tp", "time_stop"))
+        place = self._chase_order()
+        if place is None:
+            return [*actions, *self._abandon_chase("no_quote")]
+        return [*actions, place]
+
+    def _chase_order(self) -> Place | None:
+        cycle = self.cycle
+        assert cycle is not None
+        price = self._exit_price()
+        if price is None or cycle.remaining <= 0:
+            return None
+        cycle.chase_legs += 1
+        cycle.chase_leg = f"exit{cycle.chase_legs}"
+        cycle.chase_price = price
+        return Place(
+            self.symbol,
+            cycle.cycle_id,
+            cycle.chase_leg,
+            cycle.exit_side,
+            cycle.remaining,
+            price,
+            reduce_only=True,
+        )
+
+    def _watch_chase(self, ctx: Context) -> list[Action]:
+        cycle = self.cycle
+        assert cycle is not None and cycle.chase_until_ns is not None
+        mid = ctx.mid
+        barrier = self.params.barrier_bp / 10_000
+        if mid is not None and cycle.entry_avg is not None:
+            long_stop = cycle.side == "buy" and mid <= cycle.entry_avg * (1 - barrier)
+            short_stop = cycle.side == "sell" and mid >= cycle.entry_avg * (1 + barrier)
+            if long_stop or short_stop:
+                return self._abandon_chase("stop")
+        if cycle.side in ctx.flow_against:
+            return self._abandon_chase("adverse_flow")
+        if ctx.t_ns >= cycle.chase_until_ns:
+            return self._abandon_chase("chase_timeout")
+        leg = cycle.chase_leg
+        if leg is None or leg in cycle.cancels or cycle.chase_price is None:
+            return []  # between legs: the next is placed when the cancel completes
+        price = self._exit_price()
+        if price is None:
+            return []
+        moved = (price - cycle.chase_price) / self.filters.tick
+        away = -moved if cycle.exit_side == "sell" else moved
+        if away >= self.params.exit_reprice_ticks:
+            cycle.cancels.add(leg)
+            return [Cancel(self.symbol, cycle.cycle_id, leg, "reprice")]
+        return []
+
+    def _abandon_chase(self, reason: str) -> list[Action]:
+        """Give up on the maker exit: cancel what rests, close at market."""
+        cycle = self.cycle
+        assert cycle is not None
+        cycle.chase_abandoned = True
+        actions: list[Action] = []
+        leg = cycle.chase_leg
+        if leg is not None and leg not in cycle.cancels:
+            cycle.cancels.add(leg)
+            actions.append(Cancel(self.symbol, cycle.cycle_id, leg, reason))
+        if cycle.remaining > 0:
+            actions.append(self._close_order(f"time_stop:{reason}"))
+        return actions
 
     def _close(self, reason: str, t_ns: int) -> list[Action]:
         cycle = self.cycle
@@ -488,6 +646,8 @@ class SymbolPolicy:
                 # Refused or cancelled outside our control (e.g. post-only would take).
                 return self._close("tp_lost", t_ns)
             return []
+        if leg.startswith("exit"):
+            return self._exit_leg_ended(leg)
         # A close leg ended with a position left.
         if self.phase is Phase.CLOSING and cycle.remaining > 0:
             if cycle.close_attempts >= self.params.max_close_attempts:
@@ -496,6 +656,22 @@ class SymbolPolicy:
                 ]
             return [self._close_order(cycle.exit_reason or "close_retry")]
         return []
+
+    def _exit_leg_ended(self, leg: str) -> list[Action]:
+        """A maker exit leg ended with a position left: reprice, or give up."""
+        cycle = self.cycle
+        assert cycle is not None
+        if not self._chasing or leg != cycle.chase_leg:
+            return []  # an old leg, or the market close has taken over
+        cycle.chase_leg = None  # ended: nothing left to cancel
+        if leg not in cycle.cancels:  # refused (post-only would take) or expired
+            cycle.chase_rejects += 1
+            if cycle.chase_rejects >= self.params.exit_max_rejects:
+                return self._abandon_chase("rejected")
+        place = self._chase_order()
+        if place is None:
+            return self._abandon_chase("no_quote")
+        return [place]
 
     def _take_profit(self) -> Place:
         cycle = self.cycle
@@ -544,6 +720,8 @@ class SymbolPolicy:
             return [Cancel(self.symbol, cycle.cycle_id, "entry", reason)]
         if self.phase is Phase.OPEN:
             return self._close(reason, t_ns)
+        if self._chasing:
+            return self._abandon_chase(reason)
         return []
 
     def take_finished(self) -> list[Cycle]:

@@ -6,6 +6,8 @@ single JSON document for analysis:
 - every trade (cycle) record (``pandas.DataFrame(doc["trades"])``);
 - signal *counts* by action, symbol, side and day. Signals are events,
   thousands a day, so the raw records are left out unless ``--signals``;
+- markouts from signal time (mean signed mid move per horizon, 0.1-900 s),
+  overall, by action and by model version;
 - daily recording reports, bridge state, drills, latency, the pinned model's
   JSON files, and research results (runs, candidates' calibration, full
   selection grids with score diagnostics, gates, report).
@@ -31,11 +33,10 @@ from ta_core import base_parser, load_or_exit
 
 from . import status as builders
 from .config import Settings, load_settings
-from .trades import summarise
+from .latency import default_latency_path
+from .trades import summarise, summarise_markouts
 
 __all__ = ["build_export", "default_latency_path", "export_filename", "run", "scrub_paths"]
-
-SERVICE_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _read_json(path: Path) -> Any | None:
@@ -147,6 +148,27 @@ def _signal_counts(
     }
 
 
+def _markouts(marks: list[dict[str, Any]]) -> dict[str, Any]:
+    """Signal-time markouts, overall and per model version (versions differ in policy)."""
+    versions = sorted({str(m.get("model_version")) for m in marks})
+    return {
+        **summarise_markouts(marks),
+        "by_model_version": {
+            v: summarise_markouts([m for m in marks if str(m.get("model_version")) == v])
+            for v in versions
+        },
+    }
+
+
+def _halts(halts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Every halt by reason (what the ``skip:halted`` signals were waiting on)."""
+    return {
+        "total": len(halts),
+        "by_reason": _count(halts, lambda h: str(h.get("reason") or "unknown")),
+        "recent": halts[-20:],
+    }
+
+
 def _research(settings: Settings) -> dict[str, Any]:
     """The page's research view, plus every run's full selection grid and diagnostics."""
     out = builders.research(settings.research_dir, settings.model_dir)
@@ -190,14 +212,6 @@ def _model(model_dir: Path, version: str | None) -> dict[str, Any] | None:
     return {"version": version, "found": directory.is_dir(), "files": files}
 
 
-def default_latency_path() -> Path | None:
-    """Where ``ofi-latency`` writes, if it has run from this checkout or here."""
-    for candidate in (SERVICE_ROOT / "research" / "latency.json", Path("research/latency.json")):
-        if candidate.is_file():
-            return candidate
-    return None
-
-
 def build_export(
     settings: Settings,
     profile: str | None,
@@ -219,6 +233,8 @@ def build_export(
         wanted = set(_available_days(state_dir, include_shadow=include_shadow)[-days:])
     trades, trades_by_day, bad_trades = _stream(state_dir, "trades", wanted)
     signals, signals_by_day, bad_signals = _stream(state_dir, "signals", wanted)
+    marks, _, bad_marks = _stream(state_dir, "markouts", wanted)
+    halts, _, bad_halts = _stream(state_dir, "halts", wanted)
 
     shadow: dict[str, Any] | None = None
     bad_shadow = 0
@@ -227,10 +243,14 @@ def build_export(
         if shadow_dir.is_dir():
             s_trades, s_trades_by_day, bad_t = _stream(shadow_dir, "trades", wanted)
             s_signals, s_signals_by_day, bad_s = _stream(shadow_dir, "signals", wanted)
-            bad_shadow = bad_t + bad_s
+            s_marks, _, bad_sm = _stream(shadow_dir, "markouts", wanted)
+            s_halts, _, bad_sh = _stream(shadow_dir, "halts", wanted)
+            bad_shadow = bad_t + bad_s + bad_sm + bad_sh
             shadow = {
                 "performance": _performance(s_trades, s_signals, s_trades_by_day, s_signals_by_day),
                 "signal_counts": _signal_counts(s_signals, s_signals_by_day),
+                "markouts_from_signal": _markouts(s_marks),
+                "halts": _halts(s_halts),
                 "trades": s_trades,
             }
             if include_signals:
@@ -263,12 +283,14 @@ def build_export(
             "book_mode": settings.binance_futures_book_mode,
             "order_notional_usd": settings.order_notional_usd,
             "days": sorted(set(trades_by_day) | set(signals_by_day) | set(daily)),
-            "unparsed_lines": bad_trades + bad_signals + bad_shadow,
+            "unparsed_lines": bad_trades + bad_signals + bad_marks + bad_halts + bad_shadow,
             "signals_included": include_signals,
             "recordings_included": False,
         },
         "performance": _performance(trades, signals, trades_by_day, signals_by_day),
         "signal_counts": _signal_counts(signals, signals_by_day),
+        "markouts_from_signal": _markouts(marks),
+        "halts": _halts(halts),
         "trades": trades,
         "shadow": shadow,
         "daily": daily,

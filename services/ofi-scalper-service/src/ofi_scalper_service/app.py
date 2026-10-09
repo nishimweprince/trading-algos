@@ -10,6 +10,7 @@
 | ``GET /v1/trades?date=`` | yes | recent cycles, or one UTC day's with its summary |
 | ``POST /v1/kill`` | yes | halt: cancel all, flatten (logged only in mode off); until ack |
 | ``POST /v1/kill/ack`` | yes | clear a halt (refused while the kill file exists) |
+| ``POST /v1/drill/{name}`` | yes | ``disconnect`` or ``gap_handling`` drill (shadow, testnet) |
 | ``GET /dashboard`` | page; its calls use the key | signals, cycles, policy state, live |
 """
 
@@ -36,6 +37,7 @@ from .alerts import Alerts
 from .config import PROVIDER, ExecutionMode, Settings, load_settings
 from .dashboard import DASHBOARD_HTML
 from .execution_bridge import ExecutionBridge
+from .latency import default_latency_path, order_delay_ms
 from .model import LoadedModel, load_model
 from .recorder import Recorder
 from .regime_gate import RegimeGate
@@ -80,6 +82,14 @@ def load_pinned_model(settings: Settings) -> LoadedModel | None:
     return load_model(settings.model_dir, settings.model_version, require_pass=require_pass)
 
 
+def shadow_fills(settings: Settings) -> dict[str, Any]:
+    """The fill model of shadow mode and the mirror: research's, at 1x latency."""
+    delay_ms = settings.shadow_delay_ms
+    if delay_ms is None:
+        delay_ms = order_delay_ms(default_latency_path())
+    return {"queue_model": settings.shadow_queue_model, "delay_ns": int(delay_ms * 1e6)}
+
+
 def build_bridge(
     settings: Settings,
     *,
@@ -118,6 +128,7 @@ def build_bridge(
         fees=fees,
         # Trade and signal records are written off the decision loop.
         book=TradeBook(settings.state_dir, writer=BackgroundAppender()),
+        **(shadow_fills(settings) if settings.execution_mode is ExecutionMode.SHADOW else {}),
     )
     return bridge, http
 
@@ -140,6 +151,7 @@ def build_mirror(
         model=model,
         state_dir=settings.state_dir / "shadow",
         fees=fees,
+        **shadow_fills(settings),
     )
 
 
@@ -317,5 +329,13 @@ def create_app(settings: Settings | None = None, runtime: ScalperRuntime | None 
         if not ok:
             raise ServiceError(409, "ack_refused", message)
         return {"halted": current.risk.halted, "message": message}
+
+    @app.post("/v1/drill/{name}", dependencies=auth)
+    async def drill(name: str) -> dict[str, Any]:
+        current = current_runtime()
+        try:
+            return await current.run_drill(name)
+        except ValueError as exc:
+            raise ServiceError(409, "drill_refused", str(exc)) from None
 
     return app

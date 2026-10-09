@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+
 import pytest
 from ta_plugin_binance_futures.testing import (
     FakeBinanceFutures,
@@ -318,6 +321,7 @@ async def test_the_shadow_mirror_gets_the_feed_pauses_and_the_kill_switch(build,
     assert mirror is not None and mirror.mode.value == "shadow"
     assert mirror.book.trades.directory == tmp_path / "state" / "shadow" / "trades"
     assert mirror.risk is not runtime.risk
+    assert mirror.status()["shadow_fills"]["queue_model"] == "queue"
     mirror.configure(dict(DEFAULT_FILTERS))
     runtime.mirror = mirror
 
@@ -341,3 +345,51 @@ def test_heartbeat_reports_our_processing_time() -> None:
     assert _tail(deque()) is None
     out = _tail(deque([1.0, 2.0, 3.0, 50.0]))
     assert out["p50"] == 3.0 and out["max"] == 50.0 and out["n"] == 4
+
+
+async def test_disconnect_drill_pauses_reconnects_and_records(build, tmp_path) -> None:
+    frames = healthy_frames()
+    frames["public"] = frames["public"] * 2  # the reconnection plays the same book
+    runtime = build(
+        FakeFuturesStream(frames),
+        OFI_EXECUTION_MODE="shadow",
+        OFI_MODEL_VERSION="v1",
+        OFI_STATE_DIR=str(tmp_path / "state"),
+    )
+    await runtime.start()
+    await until(lambda: books_live(runtime))
+    result = await runtime.run_drill("disconnect", recover_s=5.0)
+    assert result["result"] == "passed", result
+    assert runtime.streams.reconnects["public"] == 1
+    drills = json.loads((tmp_path / "state" / "drills.json").read_text())
+    assert drills["disconnect"]["result"] == "passed"
+
+
+async def test_gap_drill_resyncs_and_refuses_outside_shadow_and_testnet(
+    build, fake: FakeBinanceFutures, tmp_path
+) -> None:
+    from ta_plugin_binance_futures.streams import parse_frame
+
+    fake.snapshot_ids["BTCUSDT"] = [100, 200]
+    runtime = build(
+        FakeFuturesStream(healthy_frames()),
+        OFI_EXECUTION_MODE="shadow",
+        OFI_MODEL_VERSION="v1",
+        OFI_STATE_DIR=str(tmp_path / "state"),
+    )
+    await runtime.start()
+    await until(lambda: books_live(runtime))
+    drill = asyncio.create_task(runtime.run_drill("gap_handling", recover_s=5.0))
+    await until(lambda: "depth_resync" in runtime.risk.paused("BTCUSDT"))
+    # The next live diff bridges the resync snapshot (200).
+    now = runtime.streams._clock_ns()
+    runtime.streams._enqueue(parse_frame(depth_frame("BTCUSDT", 150, 210, 149), now))
+    result = await drill
+    assert result["result"] == "passed", result
+    assert runtime.streams.syncs["BTCUSDT"].gaps == 1
+
+    off = build(FakeFuturesStream({}))
+    with pytest.raises(ValueError, match="shadow or testnet"):
+        await off.run_drill("gap_handling")
+    with pytest.raises(ValueError, match="unknown drill"):
+        await runtime.run_drill("fire")

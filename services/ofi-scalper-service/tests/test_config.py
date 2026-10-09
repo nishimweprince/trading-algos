@@ -162,3 +162,28 @@ def test_micro_live_needs_the_ack_a_model_and_stays_under_the_caps(tmp_path) -> 
     with pytest.raises(ValueError, match="live is refused"):
         make_settings(tmp_path, OFI_EXECUTION_MODE="live")
     assert make_settings(tmp_path).trading_symbols == ("BTCUSDT", "ETHUSDT")
+
+
+def test_shadow_fills_default_to_the_research_queue_model_at_measured_latency(
+    tmp_path, monkeypatch
+) -> None:
+    import json
+
+    from ofi_scalper_service import app
+
+    latency = tmp_path / "latency.json"
+    latency.write_text(json.dumps({"rest_rtt_ms": {"signed": {"p50": 12.0}}}))
+    monkeypatch.setattr(app, "default_latency_path", lambda: latency)
+    settings = make_settings(tmp_path)
+    assert settings.shadow_queue_model == "queue" and settings.shadow_delay_ms is None
+    assert app.shadow_fills(settings) == {"queue_model": "queue", "delay_ns": 6_000_000}
+
+    monkeypatch.setattr(app, "default_latency_path", lambda: None)
+    assert app.shadow_fills(settings)["delay_ns"] == 0
+
+    pinned = make_settings(
+        tmp_path, OFI_SHADOW_QUEUE_MODEL="pessimistic", OFI_SHADOW_DELAY_MS="2.5"
+    )
+    assert app.shadow_fills(pinned) == {"queue_model": "pessimistic", "delay_ns": 2_500_000}
+    with pytest.raises(ValidationError):
+        make_settings(tmp_path, OFI_SHADOW_QUEUE_MODEL="optimistic")

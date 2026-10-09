@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import gc
+import json
 import logging
 import time
 from collections import Counter, deque
@@ -45,12 +46,14 @@ from .regime_gate import RegimeGate
 from .risk import RiskState
 from .sample_log import SampleLog
 from .state_engine import EngineConfig, GridClock, MarketState
+from .trades import BNB_DISCOUNT
 
 __all__ = ["ScalperRuntime"]
 
+# Operator drills runtime.run_drill can perform (status.py also lists kill_switch, dead_man).
+DRILLS = ("disconnect", "gap_handling")
 GATE_SECONDS = 5.0
 GATE_NS = int(GATE_SECONDS * 1e9)
-BNB_DISCOUNT = 0.9
 KILL_POLL_SECONDS = 1.0
 HEALTH_SECONDS = 10.0
 LATENCY_RESERVOIR = 2000
@@ -631,6 +634,82 @@ class ScalperRuntime:
             self.alerts.send("ack", "OFI halt acknowledged", [message, f"by {source}"], always=True)
         return ok, message
 
+    async def run_drill(
+        self, name: str, *, pause_s: float = 10.0, recover_s: float = 120.0
+    ) -> dict[str, Any]:
+        """The disconnect or gap drill, end to end, recorded in ``drills.json``.
+
+        Breaks the real feed path (``streams.drop`` / ``streams.inject_gap``) and
+        checks what must follow: the pause goes on, no entry stays resting
+        un-cancelled while paused, and the book comes back verified with the
+        pause cleared. Shadow and testnet only.
+        """
+        from .config import ExecutionMode
+
+        if name not in DRILLS:
+            raise ValueError(f"unknown drill {name!r}: one of {', '.join(DRILLS)}")
+        if self.settings.execution_mode not in (ExecutionMode.SHADOW, ExecutionMode.TESTNET):
+            raise ValueError("drills run in shadow or testnet mode only")
+        symbol = self.streams.symbols[0]
+        pause = "stream_public" if name == "disconnect" else "depth_resync"
+        started = time.time()
+        if name == "disconnect":
+            self.streams.drop("public")
+            how = "streams.drop('public'): the public connection broken mid-stream"
+        else:
+            self.streams.inject_gap(symbol)
+            how = f"streams.inject_gap({symbol!r}): one out-of-sequence depth diff"
+
+        async def wait(condition: Callable[[], bool], seconds: float) -> bool:
+            deadline = time.monotonic() + seconds
+            while time.monotonic() < deadline:
+                if condition():
+                    return True
+                await asyncio.sleep(0.05)
+            return condition()
+
+        before = self.counts[f"paused_{pause}"]
+        paused = await wait(
+            lambda: self.counts[f"paused_{pause}"] > before or pause in self.risk.paused(symbol),
+            pause_s,
+        )
+
+        def resting() -> list[str]:
+            return [
+                f"{o.symbol} {o.cycle_id}"
+                for bridge in self._bridges()
+                for o in bridge.orders.values()
+                if o.leg == "entry" and not o.terminal and not o.cancel_requested
+            ]
+
+        entries_cancelled = await wait(lambda: not resting(), 5.0) if paused else False
+        recovered = await wait(
+            lambda: pause not in self.risk.paused(symbol) and self.streams.syncs[symbol].verified,
+            recover_s,
+        )
+        passed = paused and entries_cancelled and recovered
+        detail = (
+            f"pause {pause} on: {paused}; entries cancelled: {entries_cancelled}"
+            f"{'' if entries_cancelled else ' (' + ', '.join(resting()) + ')'}; "
+            f"recovered in {time.time() - started:.1f} s: {recovered}"
+        )
+        result = {
+            "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(started)),
+            "how": how,
+            "result": "passed" if passed else "failed",
+            "detail": detail,
+        }
+        path = self.settings.state_dir / "drills.json"
+        try:
+            drills = json.loads(path.read_text()) if path.is_file() else {}
+        except ValueError:
+            drills = {}
+        drills[name] = result
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(drills, indent=2))
+        log_event("ofi_drill", level=logging.WARNING, drill=name, **result)
+        return result
+
     def fee_bp(self, symbol: str) -> tuple[float, float] | None:
         """(maker, taker) in bp for this symbol, or None until fees are known.
 
@@ -670,7 +749,10 @@ class ScalperRuntime:
         """Feed pauses hold for the mirror's risk state too: same feed, same book."""
         if self.mirror is not None:
             self.mirror.risk.set_pause(symbol, reason, active)
-        return self.risk.set_pause(symbol, reason, active)
+        changed = self.risk.set_pause(symbol, reason, active)
+        if changed and active:
+            self.counts[f"paused_{reason}"] += 1  # a pause too short to see still counts
+        return changed
 
     def _bridges(self) -> list[ExecutionBridge]:
         return [b for b in (self.bridge, self.mirror) if b is not None]

@@ -290,3 +290,136 @@ def test_kelly_is_quarter_and_capped_and_zero_below_cutoff() -> None:
     assert kelly_size(0.6, 1.0, cap=1.0) == pytest.approx(0.05)
     assert kelly_size(0.9, 1.0, cap=0.1) == 0.1
     assert kelly_size(0.4, 1.0, cap=1.0) == 0.0
+
+
+# --- flow guard and maker exit chase --------------------------------------------------
+
+CHASE = PolicyParams(
+    horizon_s=5,
+    threshold=0.6,
+    barrier_bp=8,
+    buffer_bp=1,
+    entry_timeout_ms=1000,
+    time_stop_mult=2,
+    exit_mode="maker_chase",
+    exit_chase_ms=3000,
+    exit_max_rejects=2,
+)
+TIME_STOP = T0 + 200 * MS + 10 * S  # horizon 5 s x 2 after the fill
+
+
+def chasing(params: PolicyParams = CHASE) -> tuple[SymbolPolicy, list]:
+    """Long 0.003 BTC from 60000.0; the time stop has fired."""
+    policy = SymbolPolicy("BTCUSDT", params, BTC)
+    (place,) = policy.on_sample(ctx()).actions
+    policy.on_update(place.cycle_id, "entry", place.qty, 60000.0, True, T0 + 200 * MS)
+    actions = policy.on_sample(ctx(TIME_STOP, bid=60001.0, ask=60001.1)).actions
+    return policy, actions
+
+
+def test_guard_blocks_an_entry_and_cancels_a_resting_one() -> None:
+    policy = SymbolPolicy("BTCUSDT", PARAMS, BTC)
+    step = policy.on_sample(ctx(flow_against=frozenset({"buy"})))
+    assert step.actions == [] and step.signal is not None
+    assert step.signal.action == "skip:adverse_flow" and policy.phase is Phase.FLAT
+    # Flow against the other side does not matter.
+    policy, place = entered()
+    assert policy.on_sample(ctx(T0 + 100 * MS, flow_against=frozenset({"sell"}))).actions == []
+    (cancel,) = policy.on_sample(ctx(T0 + 200 * MS, flow_against=frozenset({"buy"}))).actions
+    assert cancel == Cancel("BTCUSDT", place.cycle_id, "entry", "adverse_flow")
+
+
+def test_time_stop_rests_a_maker_exit_at_the_near_touch() -> None:
+    policy, actions = chasing()
+    cancel_tp, exit1 = actions
+    assert cancel_tp == Cancel("BTCUSDT", f"BTCUSDT-{T0}", "tp", "time_stop")
+    assert isinstance(exit1, Place) and exit1.leg == "exit1"
+    assert exit1.side == "sell" and exit1.price == Decimal("60001.1")
+    assert exit1.reduce_only and exit1.post_only and exit1.qty == Decimal("0.003")
+    assert policy.phase is Phase.CLOSING and policy.cycle.exit_reason == "time_stop"
+    # Filled: the cycle ends once the TP's cancel is confirmed, as a maker exit.
+    cid = exit1.cycle_id
+    assert policy.on_update(cid, "exit1", Decimal("0.003"), 60001.1, True, TIME_STOP + S) == []
+    assert policy.on_update(cid, "tp", Decimal(0), None, True, TIME_STOP + S) == []
+    (done,) = policy.take_finished()
+    assert done.exit_reason == "time_stop" and done.exit_avg == 60001.1
+    assert policy.phase is Phase.FLAT
+
+
+def test_chase_reprices_when_the_touch_moves_away() -> None:
+    policy, (_, exit1) = chasing()
+    cid = exit1.cycle_id
+    # The ask did not move: nothing. It dropped a tick: cancel, then a new leg there.
+    assert policy.on_sample(ctx(TIME_STOP + 100 * MS, bid=60001.0, ask=60001.1)).actions == []
+    (cancel,) = policy.on_sample(ctx(TIME_STOP + 200 * MS, bid=60000.9, ask=60001.0)).actions
+    assert cancel == Cancel("BTCUSDT", cid, "exit1", "reprice")
+    assert policy.on_sample(ctx(TIME_STOP + 300 * MS, bid=60000.9, ask=60001.0)).actions == []
+    (exit2,) = policy.on_update(cid, "exit1", Decimal("0.001"), 60001.1, True, TIME_STOP + 300 * MS)
+    assert exit2.leg == "exit2" and exit2.price == Decimal("60001.0")
+    assert exit2.qty == Decimal("0.002")  # what the first leg left
+
+
+def test_chase_gives_up_for_the_market_on_timeout_stop_flow_or_rejections() -> None:
+    policy, (_, exit1) = chasing()
+    cid = exit1.cycle_id
+    cancel, close = policy.on_sample(ctx(TIME_STOP + 3 * S, bid=60001.0, ask=60001.1)).actions
+    assert cancel == Cancel("BTCUSDT", cid, "exit1", "chase_timeout")
+    assert isinstance(close, Close) and close.reason == "time_stop:chase_timeout"
+    assert close.qty == Decimal("0.003")
+    # The cancelled leg ending changes nothing: the market close has taken over.
+    assert policy.on_update(cid, "exit1", Decimal(0), None, True, TIME_STOP + 3 * S) == []
+
+    policy, _ = chasing()
+    stop_mid = 60000.0 * (1 - 8 / 10_000)
+    _, close = policy.on_sample(ctx(TIME_STOP + S, bid=stop_mid - 1, ask=stop_mid)).actions
+    assert isinstance(close, Close) and close.reason == "time_stop:stop"
+
+    policy, _ = chasing()
+    _, close = policy.on_sample(ctx(TIME_STOP + S, flow_against=frozenset({"buy"}))).actions
+    assert isinstance(close, Close) and close.reason == "time_stop:adverse_flow"
+
+    policy, (_, exit1) = chasing()
+    # Refused (post-only would take): a fresh leg, then the second refusal gives up.
+    (exit2,) = policy.on_update(cid, "exit1", Decimal(0), None, True, TIME_STOP + 100 * MS)
+    assert exit2.leg == "exit2"
+    (close,) = policy.on_update(cid, "exit2", Decimal(0), None, True, TIME_STOP + 200 * MS)
+    assert isinstance(close, Close) and close.reason == "time_stop:rejected"
+
+
+def test_no_chase_when_flow_already_runs_against_the_position_or_on_a_stop() -> None:
+    policy = SymbolPolicy("BTCUSDT", CHASE, BTC)
+    (place,) = policy.on_sample(ctx()).actions
+    policy.on_update(place.cycle_id, "entry", place.qty, 60000.0, True, T0 + 200 * MS)
+    _, close = policy.on_sample(ctx(TIME_STOP, flow_against=frozenset({"buy"}))).actions
+    assert isinstance(close, Close) and close.reason == "time_stop"
+
+    policy = SymbolPolicy("BTCUSDT", CHASE, BTC)
+    (place,) = policy.on_sample(ctx()).actions
+    policy.on_update(place.cycle_id, "entry", place.qty, 60000.0, True, T0 + 200 * MS)
+    _, close = policy.on_sample(ctx(T0 + S, bid=59900.0, ask=59900.1)).actions
+    assert isinstance(close, Close) and close.reason == "stop"
+
+
+def test_liquidate_during_a_chase_closes_at_market_and_the_chase_survives_a_restore() -> None:
+    policy, (_, exit1) = chasing()
+    restored = SymbolPolicy("BTCUSDT", CHASE, BTC)
+    restored.restore(policy.snapshot())
+    assert restored.cycle.chase_leg == "exit1"
+    assert restored.cycle.chase_price == Decimal("60001.1")
+    cancel, close = restored.liquidate("kill_switch", TIME_STOP + S)
+    assert cancel == Cancel("BTCUSDT", exit1.cycle_id, "exit1", "kill_switch")
+    assert isinstance(close, Close)
+
+
+def test_new_policy_fields_are_validated() -> None:
+    base = {"horizon_s": 5, "threshold": 0.6, "barrier_bp": 8}
+    for bad in (
+        {"exit_mode": "limit"},
+        {"exit_chase_ms": 0},
+        {"guard_z": 0},
+        {"guard_tfi": 1.5},
+        {"guard_imb": 0.4},
+    ):
+        with pytest.raises(ValueError):
+            PolicyParams(**base, **bad)
+    assert PolicyParams.from_dict({**base, "guard_z": 3.0}).guard_z == 3.0

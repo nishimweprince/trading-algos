@@ -25,7 +25,8 @@ MIN_TRADES = 30
 
 
 def _name(candidate: Candidate, threshold: float) -> str:
-    return f"h{candidate.horizon_s:g}-t{threshold:.2f}"
+    """``h300-t0.50``, or ``h300-b20-t0.50`` for a horizon trained at several barriers."""
+    return f"{candidate.version}-t{threshold:.2f}"
 
 
 def score_diagnostics(

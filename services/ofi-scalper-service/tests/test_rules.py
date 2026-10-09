@@ -147,12 +147,19 @@ def test_manifest_features_must_be_the_rules_inputs(tmp_path: Path) -> None:
 def test_rules_cli_writes_a_loadable_model(tmp_path: Path, capsys) -> None:
     args = ["--model-dir", str(tmp_path), "--z-entry", "4", "--barrier-bp", "15"]
     assert rules_main(args) == 0
-    model = load_model(tmp_path, "rules-v4", require_pass=False)
+    model = load_model(tmp_path, "rules-v5", require_pass=False)
     assert (
         model.policy.barrier_bp == 15
-        and model.policy.reentry_cooldown_ms == 5000
+        and model.policy.horizon_s == 300
+        and model.policy.reentry_cooldown_ms == 60000
         and model.scorer.params.z_entry == 4
     )  # type: ignore[union-attr]
+    assert model.policy.exit_mode == "market" and model.policy.guard_z is None
+    guarded = ["--model-dir", str(tmp_path), "--version", "rules-g1", "--guard-z", "3"]
+    assert rules_main([*guarded, "--exit-mode", "maker_chase", "--exit-chase-ms", "20000"]) == 0
+    policy = load_model(tmp_path, "rules-g1", require_pass=False).policy
+    assert policy.guard_z == 3 and policy.exit_mode == "maker_chase"
+    assert policy.exit_chase_ms == 20000
     assert rules_main(args) == 1  # never overwrites
     assert "exists" in capsys.readouterr().err
 

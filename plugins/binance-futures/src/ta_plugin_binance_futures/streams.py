@@ -374,6 +374,11 @@ class FuturesStreams:
         self._tasks: list[asyncio.Task[None]] = []
         self._fetching: dict[str, asyncio.Task[None]] = {}
         self.connected: dict[str, bool] = {"public": False, "market": False}
+        # Set by ``drop`` (operator drills): the channel's connection breaks.
+        self._drop: dict[str, asyncio.Event] = {
+            "public": asyncio.Event(),
+            "market": asyncio.Event(),
+        }
         self.reconnects: dict[str, int] = {"public": 0, "market": 0}
         self.last_error: str | None = None
         self.overflows = 0
@@ -420,6 +425,39 @@ class FuturesStreams:
         self._fetching.clear()
         if self._owns_rest:
             await self._rest.aclose()
+
+    # --- drills -----------------------------------------------------------------
+
+    def drop(self, channel: Channel) -> None:
+        """Break one channel's live connection, as a network drop would (operator drill).
+
+        The channel goes through its normal reconnect; the public one resets
+        and resyncs every book on the way back.
+        """
+        self._drop[channel].set()
+
+    def inject_gap(self, symbol: str) -> None:
+        """Offer one out-of-sequence diff to a diff-mode book, as a missed message
+        would (operator drill): the book breaks and resyncs from a REST snapshot.
+        Nothing is recorded: recordings only take what Binance sent."""
+        sync = self.syncs.get(symbol)
+        if not isinstance(sync, DepthSync) or sync.last_final_id is None:
+            raise ValueError(f"{symbol}: no live diff-mode book to break")
+        now = self._clock_ns()
+        last = sync.last_final_id
+        self._enqueue(
+            DepthUpdate(
+                symbol,
+                now // 1_000_000,
+                now // 1_000_000,
+                last + 2,
+                last + 2,
+                last + 1,
+                (),
+                (),
+                now,
+            )
+        )
 
     @property
     def backlog(self) -> int:
@@ -730,17 +768,23 @@ class FuturesStreams:
                         self._control("reset", now, {"reason": "reconnected"})
                         self._enqueue(_ResetBooks("reconnected", now))
                     self._enqueue(StreamStatus(channel, "connected", now))
-                    async for message in socket:
-                        recv_ns = self._clock_ns()
-                        text = message.decode() if isinstance(message, bytes) else message
-                        if self.on_raw is not None:
-                            self.on_raw(channel, recv_ns, text)
-                        event = parse_frame(text, recv_ns)
-                        if event == "shutdown":
-                            self._enqueue(StreamStatus(channel, "server_shutdown", recv_ns))
-                            raise ConnectionError("Binance sent serverShutdown")
-                        if event is not None:
-                            self._enqueue(event)
+                    self._drop[channel].clear()
+                    reader = asyncio.ensure_future(self._read(channel, socket))
+                    dropped = asyncio.ensure_future(self._drop[channel].wait())
+                    try:
+                        await asyncio.wait({reader, dropped}, return_when=asyncio.FIRST_COMPLETED)
+                    finally:
+                        dropped.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await dropped
+                        if not reader.done():
+                            reader.cancel()
+                            with contextlib.suppress(asyncio.CancelledError):
+                                await reader
+                    if not reader.cancelled():
+                        reader.result()  # the stream's own error, if it raised one
+                    if dropped.done() and not dropped.cancelled():
+                        raise ConnectionError("connection dropped (operator drill)")
                 raise ConnectionError("Binance closed the stream")
             except asyncio.CancelledError:
                 self.connected[channel] = False
@@ -761,6 +805,19 @@ class FuturesStreams:
                 )
                 await self._sleep(backoff)
                 backoff = min(backoff * 2, ceiling)
+
+    async def _read(self, channel: Channel, socket: AsyncIterator[str | bytes]) -> None:
+        async for message in socket:
+            recv_ns = self._clock_ns()
+            text = message.decode() if isinstance(message, bytes) else message
+            if self.on_raw is not None:
+                self.on_raw(channel, recv_ns, text)
+            event = parse_frame(text, recv_ns)
+            if event == "shutdown":
+                self._enqueue(StreamStatus(channel, "server_shutdown", recv_ns))
+                raise ConnectionError("Binance sent serverShutdown")
+            if event is not None:
+                self._enqueue(event)
 
 
 def _with_outcome(update: DepthUpdate, outcome: SyncOutcome) -> DepthUpdate:
