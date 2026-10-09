@@ -102,18 +102,14 @@ def sync(
         for interval in (intervals or (None,))
         for symbol in symbols
     ]
-    factory = client_factory or (
-        lambda: httpx.Client(timeout=120, follow_redirects=True)
-    )
+    factory = client_factory or (lambda: httpx.Client(timeout=120, follow_redirects=True))
 
     with factory() as client:
 
         def run(job: tuple[str, str, str | None]) -> SyncResult:
             dataset, symbol, interval = job
             try:
-                return sync_series(
-                    client, paths, dataset, symbol, interval, start, end, keep_raw
-                )
+                return sync_series(client, paths, dataset, symbol, interval, start, end, keep_raw)
             except (httpx.HTTPError, vision.ChecksumError, ValueError, OSError) as exc:
                 log.warning("sync failed: %s %s %s: %s", dataset, symbol, interval, exc)
                 return SyncResult(dataset, symbol, interval or EVENT_TF, [], 0, str(exc))

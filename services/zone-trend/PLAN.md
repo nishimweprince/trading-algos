@@ -178,3 +178,33 @@ Decisions and findings from real data (BTC/ETH, 2019-09 to 2026-10):
   - Pool = the top 3 × size by 30-day median quote volume. The range filter is applied against that pool's median.
   - tickSize comes from the current exchangeInfo snapshot, so a delisted symbol skips the tick check and is listed in `no_tick`.
 - **Leverage brackets** need a signed request, so they are deferred to M5. The backtester uses conservative defaults.
+
+### M2 pure core (2026-10-09)
+Built: `core/indicators.py`, `series.py`, `swings.py`, `structure.py`, `zones.py`, `fib.py`, `retest_fsm.py`, `signals.py`, `exits.py`, `symbol.py` (`SymbolCore.on_close` in the spec's 7-step order) and `replay.py`.
+
+Tests:
+- Unit tests for each rule.
+- The incremental ATR and EMA match the vectorised reference within 1e-9.
+- Look-ahead (`tests/lookahead`):
+  - truncation invariance under hypothesis;
+  - future 4H/1D bars perturbed with no effect on the past;
+  - real BTC truncated at 2023-01-01 (marker `data`, skipped without data).
+  - The harness was checked against an injected leak, feeding 4H bars 3h early; the leak was detected.
+
+Interpretations, beyond those decided with the user:
+- **Swing leg:** measured from the last kept swing's pivot (or the start of the L window) to the pivot. A swing replaced by a more extreme one takes the later `t_conf`.
+- **CHoCH:** it forces Range until a newer swing is confirmed, and only blocks the side it broke. BOS is recorded as an event only.
+- **Slopes:** they use 4H legs. Momentum decay compares the latest impulse with the median of the three impulses *before* it.
+- **Zone strength scales** are documented in `zones.py`. Zone state (role, flips, breaks, deep retests, later touches) carries across rebuilds via the ancestor that shares the most seed swings. Deleted zones' seeds never reseed.
+- **New zone role** comes from its position against the close.
+- **Breakouts** must cross the zone edge (the previous close was inside or below it). Longs break resistance and shorts break support.
+- **Stop anchor:** `exits.stop_anchor` (`retest` by default, or `zone` / `further`).
+- **TP2 equal to or below TP1** is dropped, and the runner is left to the trail.
+- **Volatility filter** needs at least 180 daily values (the spec says a 1-year window).
+- **Entry types A and C** are refused at config load; only B is built.
+- Funding, correlation and the BTC gate are portfolio-level checks and move to M3 (risk).
+
+BTCUSDT smoke run over the full history (59k 1H bars, 12 s):
+- 4H trend: Range 63% of hours, Up 21%, Down 16%.
+- 29 signals (19 long, 10 short) and 67 rejections. By reason: slope 23, no_room 17, vol_filter 11, vol_history 8, stop_too_wide 5, momentum_decay 2, trend 1.
+- About 4 signals a year on BTC is thin against the M4 requirement of ≥15 out-of-sample trades per symbol. Watch trade counts once the full universe is in.

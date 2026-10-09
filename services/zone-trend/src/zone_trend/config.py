@@ -118,12 +118,16 @@ class Entries(_Section):
 
     @model_validator(mode="after")
     def _bands(self) -> Self:
+        if set(self.enabled) - {"B"}:
+            # Types A and C are off in the spec's defaults and not built yet.
+            raise ValueError("entries.enabled: only B is implemented")
         _ordered_pair("entries.fib_band", self.fib_band)
         _ordered_pair("entries.fib_quality_band", self.fib_quality_band)
         return self
 
 
 class Exits(_Section):
+    stop_anchor: Literal["retest", "zone", "further"]
     stop_buffer_atr: float = Field(ge=0, le=3)
     min_stop_atr_h1: float = Field(ge=0, le=5)
     max_stop_atr_h4: float = Field(gt=0, le=10)

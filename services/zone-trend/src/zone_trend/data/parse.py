@@ -63,7 +63,9 @@ def _to_ms(series: pd.Series) -> pd.Series:
 
 def read_klines(raw: bytes) -> pd.DataFrame:
     header = 0 if _has_header(raw) else None
-    df = pd.read_csv(io.BytesIO(raw), header=header, names=KLINE_COLUMNS if header is None else None)
+    df = pd.read_csv(
+        io.BytesIO(raw), header=header, names=KLINE_COLUMNS if header is None else None
+    )
     if header is not None:
         df.columns = KLINE_COLUMNS
     df = df.drop(columns="ignore")

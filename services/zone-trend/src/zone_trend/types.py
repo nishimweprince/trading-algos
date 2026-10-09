@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-__all__ = ["TF", "Bar", "Side", "Signal", "Swing", "Trend", "Zone"]
+__all__ = ["TF", "Bar", "Position", "Rejected", "Side", "Signal", "Swing", "Trend", "Zone"]
 
 
 class TF(StrEnum):
@@ -56,6 +56,7 @@ class Swing:
     price: float
     t_conf: int  # close time of the confirming bar; invisible before this
     atr: float
+    body: float = 0.0  # |close - open| of the pivot candle, for zone width
 
 
 @dataclass(slots=True)
@@ -71,7 +72,15 @@ class Zone:
     broken_at: int | None = None
     flips: int = 0
     deep_retests: int = 0
-    break_times: list[int] = field(default_factory=list)
+    breaks: list[tuple[int, str]] = field(default_factory=list)  # (4H close time, "up"|"down")
+    seeds: frozenset[str] = frozenset()  # "{tf}:{kind}:{pivot_time}" of the swings it came from
+    extra_touches: int = 0  # visits that ended back on the role side, after creation
+    in_visit: bool = False
+    visit_deep: bool = False
+
+    @property
+    def mid(self) -> float:
+        return (self.lo + self.hi) / 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,3 +96,54 @@ class Signal:
     tp2: float | None
     quality: int
     zone_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class Rejected:
+    """A candidate the core or risk layer turned down, kept for signals.parquet."""
+
+    symbol: str
+    side: Side
+    entry_type: str
+    zone_id: str
+    bar_time: int
+    reason: str
+    detail: str = ""
+
+
+@dataclass(slots=True)
+class Position:
+    symbol: str
+    side: Side
+    signal_id: str
+    entry: float
+    stop: float
+    stop_initial: float
+    tp1: float
+    tp2: float | None
+    qty: float
+    qty_open: float
+    opened_at: int  # fill time, ms
+    tp1_done: bool = False
+    bars_open: int = 0
+    best: float = 0.0  # most favourable price since entry (high for longs)
+    worst: float = 0.0
+    zone_id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.best:
+            self.best = self.entry
+        if not self.worst:
+            self.worst = self.entry
+
+    @property
+    def r(self) -> float:
+        return abs(self.entry - self.stop_initial)
+
+    @property
+    def mfe_r(self) -> float:
+        return self.side.sign * (self.best - self.entry) / self.r if self.r else 0.0
+
+    @property
+    def mae_r(self) -> float:
+        return self.side.sign * (self.entry - self.worst) / self.r if self.r else 0.0

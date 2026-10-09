@@ -106,7 +106,9 @@ def universe_at(
         if _quarantined(quarantine.get(symbol), window_start, t):
             continue
         recent = past[past["open_time"] >= window_start]
-        eligible.append((symbol, float(recent["quote_volume"].median()), float(past["close"].iloc[-1])))
+        eligible.append(
+            (symbol, float(recent["quote_volume"].median()), float(past["close"].iloc[-1]))
+        )
 
     eligible.sort(key=lambda row: row[1], reverse=True)
     pool = eligible[: size * POOL_MULT]
@@ -114,7 +116,15 @@ def universe_at(
 
     ranges: dict[str, float] = {}
     for symbol, _, _ in pool:
-        h1 = load(paths, "klines", symbol, "1h", window_start, t, columns=["open_time", "high", "low", "close"])
+        h1 = load(
+            paths,
+            "klines",
+            symbol,
+            "1h",
+            window_start,
+            t,
+            columns=["open_time", "high", "low", "close"],
+        )
         if h1.empty:
             result.missing_1h.append(symbol)
             continue

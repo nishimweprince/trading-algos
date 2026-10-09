@@ -130,9 +130,7 @@ def check_resample(
         .agg(close=("close", "last"), volume=("volume", "sum"), n=("close", "size"))
     )
     agg = agg[agg["n"] == 60]
-    joined = h1.set_index("open_time")[["close", "volume"]].join(
-        agg, how="inner", rsuffix="_m1"
-    )
+    joined = h1.set_index("open_time")[["close", "volume"]].join(agg, how="inner", rsuffix="_m1")
     if joined.empty:
         return
     tol = tick if tick else joined["close"].abs() * 1e-6

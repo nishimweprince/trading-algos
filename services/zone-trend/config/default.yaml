@@ -47,6 +47,7 @@ entries:
   rejection_min_wick: 0.4
   rejection_close_frac: 0.333
 exits:
+  stop_anchor: retest       # retest | zone | further (spec: "the retest swing or zone edge")
   stop_buffer_atr: 0.3
   min_stop_atr_h1: 0.4
   max_stop_atr_h4: 3.0

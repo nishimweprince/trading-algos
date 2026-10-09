@@ -52,7 +52,10 @@ addopts = "-q"
 testpaths = ["tests"]
 pythonpath = ["src", "tests"]
 asyncio_mode = "auto"
-markers = ["integration: needs the network"]
+markers = [
+  "integration: needs the network",
+  "data: needs synced Binance Vision data (skipped when absent)",
+]
 filterwarnings = ["error"]
 
 [tool.ruff]
