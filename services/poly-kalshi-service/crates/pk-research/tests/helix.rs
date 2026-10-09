@@ -95,6 +95,65 @@ fn scratch(name: &str) -> PathBuf {
     p
 }
 
+/// The Rust replay of both days, with the resolutions and the day roles the
+/// studies read, as `make_helix_golden.py` laid them out.
+fn study_data() -> &'static PathBuf {
+    static DATA: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    DATA.get_or_init(|| {
+        let data = scratch("studies").join("data");
+        let helix_dir = data.join("helix");
+        std::fs::create_dir_all(&helix_dir).unwrap();
+        let rows: Vec<pk_research::frame::Row> = json("resolutions.json")["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r.as_object().unwrap().iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+            .collect();
+        Frame::from_records(&rows).write_parquet(&data.join("resolutions.parquet")).unwrap();
+        let res = resolutions();
+        for day in DAYS {
+            helix::replay::run_day(day, &helix_dir, &tape(), &res, &BTreeMap::new()).unwrap();
+        }
+        let roles: serde_json::Map<String, Value> = DAYS
+            .iter()
+            .map(|d| {
+                (d.to_string(), serde_json::json!({"role": "discovery", "usable": true, "chainlink": true}))
+            })
+            .collect();
+        std::fs::write(data.join("helix_inventory.json"), serde_json::json!({"days": roles}).to_string())
+            .unwrap();
+        data
+    })
+}
+
+#[test]
+fn sweeps_match_python() {
+    let data = study_data();
+    let ours = helix::sweeps::run(&helix::sweeps::Args {
+        split: "discovery".into(),
+        data: data.join("helix"),
+        inventory: data.join("helix_inventory.json"),
+        resolutions: data.join("resolutions.parquet"),
+        skip_slices: false,
+        prereg: PathBuf::from("/nonexistent"),
+    })
+    .unwrap();
+    let mut py = json("sweeps.json");
+    let mut ours = ours;
+    // The random null arms draw from another generator than numpy's.
+    for v in [&mut ours, &mut py] {
+        let n = v["nulls"].as_object_mut().unwrap();
+        n.remove("signal_minus_random_same_rule_pp");
+        let arms = n["arms"].as_object_mut().unwrap();
+        for a in ["random_same_rule", "random_cheap"] {
+            let keep = arms[a]["n"].clone();
+            arms[a] = serde_json::json!({"n": keep});
+        }
+        n.remove("bands_signal_vs_random_same_rule");
+    }
+    same("sweeps", &ours, &py);
+}
+
 #[test]
 fn replay_matches_python() {
     let out = scratch("replay");
@@ -113,4 +172,75 @@ fn replay_matches_python() {
         }
     }
     std::fs::remove_dir_all(out).ok();
+}
+
+#[test]
+fn fairvalue_matches_python() {
+    let data = study_data();
+    let ours = helix::fairvalue::run(&helix::fairvalue::Args {
+        split: "discovery".into(),
+        data: data.join("helix"),
+        inventory: data.join("helix_inventory.json"),
+        resolutions: data.join("resolutions.parquet"),
+    })
+    .unwrap();
+    same("fairvalue", &ours, &json("fairvalue.json"));
+}
+
+#[test]
+fn leadlag_matches_python() {
+    let out = scratch("leadlag").join("leadlag.json");
+    let ours = helix::leadlag::run(&helix::leadlag::Args {
+        days: DAYS.iter().map(|d| d.to_string()).collect(),
+        root: tape(),
+        bin_ms: 50,
+        out,
+    })
+    .unwrap();
+    // FFT and least squares differ from numpy's in the last bits: compare at
+    // the outputs' own rounding.
+    same_tol("leadlag", &ours, &json("leadlag.json"), 1e-9);
+}
+
+#[test]
+fn validate_matches_python() {
+    let tmp = scratch("validate");
+    for day in DAYS {
+        let mut ours = serde_json::Map::new();
+        ours.insert("identity".into(), helix::validate::check_identity(day, &tape(), 500_000).unwrap());
+        ours.extend(helix::validate::check_day(day, &tape(), 0, &tmp).unwrap());
+        ours.remove("seconds");
+        same(&format!("validate {day}"), &Value::Object(ours), &json(&format!("validate_{day}.json")));
+    }
+}
+
+#[test]
+fn resolutions_match_python() {
+    let days: Vec<String> = DAYS.iter().map(|d| d.to_string()).collect();
+    let rows = helix::resolutions::build(&days, &golden("venue_cache"), &tape()).unwrap();
+    let g = json("resolutions.json");
+    let ours: Vec<Value> =
+        rows.iter().map(|r| Value::Object(r.iter().map(|(k, v)| (k.clone(), v.clone())).collect())).collect();
+    same("resolution rows", &Value::Array(ours), &g["rows"]);
+    same("resolution summary", &helix::resolutions::summarise(&rows), &g["summary"]);
+}
+
+#[test]
+fn inventory_matches_python() {
+    let data = study_data();
+    let manifest: BTreeSet<String> = DAYS
+        .iter()
+        .map(|d| format!("Polymarket_Window/{d}.hlxz"))
+        .chain(["Kalshi_Yes_Trade/20261001.hlxz".to_owned()])
+        .collect();
+    let failures: BTreeSet<String> = ["Kalshi_Yes_Trade/20261001.hlxz".to_owned()].into();
+    let ours = helix::inventory::build(
+        &tape(),
+        &data.join("helix"),
+        &data.join("resolutions.parquet"),
+        Some(&failures),
+        &manifest,
+    )
+    .unwrap();
+    same("inventory", &ours, &json("inventory.json"));
 }

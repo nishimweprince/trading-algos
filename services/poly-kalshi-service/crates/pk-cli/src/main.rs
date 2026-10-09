@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 mod env;
+mod helix_cmd;
 mod netprobe;
 mod probe_cmd;
 mod research_cmd;
@@ -68,6 +69,9 @@ enum Cmd {
         #[arg(long, default_value = "research/data/inventory.json")]
         out: PathBuf,
     },
+    /// Research on the Helix kpc tape.
+    #[command(subcommand)]
+    Helix(helix_cmd::Helix),
     /// Phase-2 acceptance: poll the live service's metrics for a day.
     Acceptance {
         #[arg(long, default_value_t = 24.0)]
@@ -89,9 +93,15 @@ fn main() -> anyhow::Result<()> {
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
+    // The Helix commands are synchronous (blocking HTTP for Gamma and Kalshi):
+    // they run outside the async runtime.
+    let cmd = match cli.cmd {
+        Cmd::Helix(c) => return helix_cmd::run(c),
+        other => other,
+    };
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     rt.block_on(async {
-        match cli.cmd {
+        match cmd {
             Cmd::ProbeOrders(a) => probe_cmd::run(a).await,
             Cmd::Netprobe(a) => netprobe::run(a).await,
             Cmd::Replay(c) => research_cmd::replay(c),
@@ -104,6 +114,7 @@ fn main() -> anyhow::Result<()> {
             Cmd::Acceptance { hours, every, url, out } => {
                 research_cmd::acceptance(hours, every, url, out).await
             }
+            Cmd::Helix(_) => unreachable!("run above"),
         }
     })
 }

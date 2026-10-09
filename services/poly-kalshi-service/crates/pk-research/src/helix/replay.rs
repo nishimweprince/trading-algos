@@ -537,10 +537,12 @@ pub struct RunArgs {
     pub jobs: usize,
     pub shift_ms: BTreeMap<char, f64>,
     pub force: bool,
+    /// Stop before the disk falls under this (default [`MIN_FREE_GB`]).
+    pub min_free_gb: f64,
 }
 
 /// Days in parallel (`--jobs`, about 3 GB each on a real day), stopping
-/// before the disk falls under [`MIN_FREE_GB`]. One bad day does not stop the batch.
+/// before the disk falls under `min_free_gb`. One bad day does not stop the batch.
 pub fn run(args: &RunArgs) -> anyhow::Result<()> {
     std::fs::create_dir_all(&args.out)?;
     let resolutions = load_resolutions(&args.resolutions)?;
@@ -560,8 +562,8 @@ pub fn run(args: &RunArgs) -> anyhow::Result<()> {
                     }
                     let free =
                         fs2::available_space(&args.out).map(|b| b as f64 / 1e9).unwrap_or(f64::INFINITY);
-                    if free < MIN_FREE_GB {
-                        eprintln!("under {MIN_FREE_GB} GB free: stopping (PLAN 3.3)");
+                    if free < args.min_free_gb {
+                        eprintln!("under {} GB free: stopping (PLAN 3.3)", args.min_free_gb);
                         stop.store(true, std::sync::atomic::Ordering::Relaxed);
                         return;
                     }
@@ -582,7 +584,7 @@ pub fn run(args: &RunArgs) -> anyhow::Result<()> {
         }
     });
     if stop.load(std::sync::atomic::Ordering::Relaxed) {
-        anyhow::bail!("under {MIN_FREE_GB} GB free");
+        anyhow::bail!("under {} GB free", args.min_free_gb);
     }
     Ok(())
 }

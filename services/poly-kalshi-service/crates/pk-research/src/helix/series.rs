@@ -13,6 +13,9 @@ use super::records::{TAG_POLY_BBO_NS, TAG_QUOTE_NS};
 use super::{NS, path};
 
 pub const PX: i64 = 10_000;
+
+/// Times (wall ns) and values, in time order.
+pub type Timeline = (Vec<i64>, Vec<f64>);
 const GRID_NS: i64 = 900 * NS;
 
 /// Which optional columns to keep.
@@ -280,11 +283,7 @@ pub fn kalshi_quote_series(
 
 /// `reader.chainlink_prices`: the Chainlink price per *Spot asset id, `(t, price)`
 /// in time order. Empty when the day has no Chainlink stream.
-pub fn chainlink_prices(
-    root: &Path,
-    day: &str,
-    asset_ids: &[u8],
-) -> anyhow::Result<HashMap<u8, (Vec<i64>, Vec<f64>)>> {
+pub fn chainlink_prices(root: &Path, day: &str, asset_ids: &[u8]) -> anyhow::Result<HashMap<u8, Timeline>> {
     let p = path(root, "PolymarketChainlink_BBO", day);
     let mut out: HashMap<u8, Vec<(i64, f64)>> = HashMap::new();
     if !p.exists() {
@@ -322,7 +321,7 @@ pub fn kalshi_contract_start(t: &[i64], seq: &[u64], open_ns: i64) -> usize {
     let mut best: Option<(i64, usize)> = None;
     for j in lo + 1..hi {
         let d = seq[j] as i64 - seq[j - 1] as i64;
-        if d < 0 || d > 50_000 {
+        if !(0..=50_000).contains(&d) {
             let dist = (t[j] - open_ns).abs();
             if best.is_none_or(|(b, _)| dist < b) {
                 best = Some((dist, j));

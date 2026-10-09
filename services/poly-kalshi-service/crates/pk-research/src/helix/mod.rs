@@ -18,6 +18,7 @@ pub mod fairvalue;
 pub mod gamma;
 pub mod inventory;
 pub mod leadlag;
+pub mod pd;
 pub mod records;
 pub mod replay;
 pub mod resolutions;
