@@ -50,7 +50,7 @@ packages = ["src/zone_trend"]
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
-pythonpath = ["src", "tests", "tests/lookahead"]
+pythonpath = ["src", "tests", "tests/lookahead", "tests/live"]
 asyncio_mode = "auto"
 markers = [
   "integration: needs the network",

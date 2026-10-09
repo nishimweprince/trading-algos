@@ -35,19 +35,16 @@ from zone_trend.core import exits
 from zone_trend.core.indicators import pearson
 from zone_trend.data.exchange import latest_filters
 from zone_trend.data.store import DataPaths, load, read_snapshot
+from zone_trend.risk.decide import DecisionContext, decide
 from zone_trend.risk.displacement import DisplacementTable
-from zone_trend.risk.liquidation import stop_within_liq
 from zone_trend.risk.portfolio import OpenExposure, PortfolioGuard
-from zone_trend.risk.sizing import DEFAULT_FILTERS, Filters, size_order
+from zone_trend.risk.sizing import DEFAULT_FILTERS, Filters
 from zone_trend.types import Signal
 
 __all__ = ["RunResult", "RunSpec", "month_bounds", "run"]
 
 HOUR = 3_600_000
 DAY = 24 * HOUR
-TOP_SLIPPAGE = 0.0002
-OTHER_SLIPPAGE = 0.0005
-TOP_N = 5
 BTC = "BTCUSDT"
 
 APPROXIMATIONS = [
@@ -273,65 +270,44 @@ def run(paths: DataPaths, cfg: Config, spec: RunSpec) -> RunResult:
         candidates.sort(key=lambda s: (-s.quality, s.symbol, s.id))
         for sig in candidates:
             sym = sig.symbol
-            if sym not in rank:
-                record(sig, "universe", "rejected", "not_in_universe")
-                continue
-            if _day(t) in quarantine.get(sym, {}):
-                record(sig, "data", "rejected", "quarantine")
-                continue
-            if "mark_last" in flags.get(sym, {}).get(_day(t), []):
-                record(sig, "data", "rejected", "data_sanity")
-                continue
-            if not stop_within_liq(sig.entry_ref, sig.stop, sig.side.sign, cfg.exchange.leverage):
-                record(sig, "risk", "rejected", "liquidation_rule")
-                continue
-            available = equity - broker.margin()
             k_sym = 1.0
             if spec.displacement is not None and cfg.sizing.displacement.enabled:
                 k_sym = spec.displacement.get(sym, sig.entry_type)
-            mult = guard.size_mult()
-            tp1_frac = cfg.exits.tp1_fraction if tapes[sym].managed else 1.0
-            size = size_order(
-                sig.entry_ref,
-                sig.stop,
-                equity,
-                available,
-                cfg.sizing,
-                cfg.exchange,
-                filters.get(sym, DEFAULT_FILTERS),
-                tp1_frac,
-                k_sym,
-                mult,
-            )
-            if size is None:
-                record(sig, "risk", "rejected", "min_notional")
-                continue
             exposure = [
                 OpenExposure(s, sp.pos.side, sp.notional_open) for s, sp in broker.positions.items()
             ] + [
                 OpenExposure(s, pe.signal.side, pe.size.notional)
                 for s, pe in broker.pending.items()
             ]
-            corrs = {e.symbol: corr(sym, e.symbol, t) for e in exposure}
-            reason = guard.check(
-                sig,
-                t,
-                equity,
-                size.notional,
-                exposure,
-                corrs,
-                funding.last_8h(sym, t),
-                btc.trend_at(t) if btc is not None else None,
+            ctx = DecisionContext(
+                t=t,
+                equity=equity,
+                available=equity - broker.margin(),
+                rank=rank.get(sym),
+                quarantined=_day(t) in quarantine.get(sym, {}),
+                data_flagged="mark_last" in flags.get(sym, {}).get(_day(t), []),
+                exposure=exposure,
+                corr=lambda other, sym=sym, t=t: corr(sym, other, t),
+                funding_8h=funding.last_8h(sym, t),
+                btc_trend=btc.trend_at(t) if btc is not None else None,
+                filters=filters.get(sym, DEFAULT_FILTERS),
+                k_sym=k_sym,
+                tp1_fraction=cfg.exits.tp1_fraction if tapes[sym].managed else 1.0,
+                slippage_mult=spec.slippage_mult,
             )
-            if reason:
-                record(sig, "risk", "rejected", reason)
+            d = decide(sig, ctx, cfg, guard)
+            if not d.accepted:
+                record(sig, d.stage, "rejected", d.reason)
                 continue
-            tick = filters.get(sym, DEFAULT_FILTERS).tick
-            base = TOP_SLIPPAGE if rank[sym] < TOP_N else OTHER_SLIPPAGE
-            slip = (base + tick / sig.entry_ref) * spec.slippage_mult
             broker.submit(
                 PendingEntry(
-                    sig, size, slip, k_sym, mult, tapes[sym].managed, spec.entry_delay_hours
+                    sig,
+                    d.size,
+                    d.slip,
+                    k_sym,
+                    d.size_mult,
+                    tapes[sym].managed,
+                    spec.entry_delay_hours,
                 )
             )
             guard.trade_opened()
@@ -339,10 +315,10 @@ def run(paths: DataPaths, cfg: Config, spec: RunSpec) -> RunResult:
                 sig,
                 "risk",
                 "accepted",
-                notional=size.notional,
-                single_tp=size.single_tp,
+                notional=d.size.notional,
+                single_tp=d.size.single_tp,
                 k_sym=k_sym,
-                size_mult=mult,
+                size_mult=d.size_mult,
             )
 
         # 4. manage open positions

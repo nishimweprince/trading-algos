@@ -321,6 +321,45 @@ def _episodes(args: argparse.Namespace) -> int:
     return 0
 
 
+def _shadow(args: argparse.Namespace) -> int:
+    import asyncio
+
+    from zone_trend.live.main import run_service
+
+    asyncio.run(run_service("shadow"))
+    return 0
+
+
+def _live(args: argparse.Namespace) -> int:
+    import asyncio
+
+    from zone_trend.live.main import run_service
+
+    asyncio.run(run_service("live", resume=args.resume))
+    return 0
+
+
+def _kill(args: argparse.Namespace) -> int:
+    import asyncio
+
+    from zone_trend.live.main import run_kill
+
+    for line in asyncio.run(run_kill()):
+        print(line)
+    return 0
+
+
+def _parity(args: argparse.Namespace) -> int:
+    from zone_trend.live.main import parity
+
+    res = parity(args.db, args.data_dir, args.start, args.end, args.config)
+    print(json.dumps({k: v for k, v in res.items() if not k.startswith("only_")}, indent=1))
+    for k in ("only_live", "only_backtest"):
+        if res[k]:
+            print(f"{k}: {', '.join(x[:12] for x in res[k][:20])}")
+    return 0 if res["match_rate"] >= 0.95 else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="zt", description="Zone-trend strategy tooling")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -416,6 +455,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=50)
     p.add_argument("--out", type=Path, default=None)
     p.set_defaults(func=_episodes)
+
+    p = sub.add_parser("shadow", help="run the strategy on live data, paper fills, no orders")
+    p.set_defaults(func=_shadow)
+
+    p = sub.add_parser("live", help="trade real money (needs ZT_LIVE_ACK and mainnet keys)")
+    p.add_argument("--resume", action="store_true", help="clear a halt after manual review")
+    p.set_defaults(func=_live)
+
+    p = sub.add_parser("kill", help="close every zone-trend position, cancel orders, halt")
+    p.set_defaults(func=_kill)
+
+    p = sub.add_parser("parity", parents=[common], help="shadow signals vs backtest replay")
+    p.add_argument("--db", default="sqlite:///state/zt.db")
+    p.add_argument("--from", dest="start", required=True, help="YYYY-MM-DD")
+    p.add_argument("--to", dest="end", required=True, help="YYYY-MM-DD (exclusive)")
+    p.add_argument("--config", type=Path, default=DEFAULT_PATH)
+    p.set_defaults(func=_parity)
     return parser
 
 

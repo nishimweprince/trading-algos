@@ -238,3 +238,51 @@ Smoke run, BTC+ETH 2021-01..2026-09, $500:
 - 43 trades, PF 1.23, +0.03R per trade, max DD 1.5%, Sharpe 0.26. At 2x slippage, PF is 1.18.
 - Every BTC trade is single-TP, because of the 0.001 step and $100 minimum.
 - The EMA benchmark made only 9 trades: its 2×ATR1D stops usually exceed `max_stop_pct` (6%). Decide at M4 whether the benchmark should get its own stop cap; the spec says "identical sizing".
+
+### M5 live adapters and shadow (2026-10-09; built ahead of the M4 verdict at the user's request)
+Plugin (`plugins/binance-futures`):
+- `trading.py` (`FuturesTrading`):
+  - algo orders through `/fapi/v1/algoOrder`: place, query, cancel, list;
+  - account setup: position mode, marginType, leverage, leverage brackets;
+  - market orders that ask for `newOrderRespType=RESULT`;
+  - reads: positions, userTrades, income;
+  - public data: klines (`startTime`/`endTime`), mark klines, funding history, premiumIndex.
+- Every reply's outcome is `ok`, `rejected`, `unknown` or `not_sent`.
+- `user_stream` subscribes to `ALGO_UPDATE` as well.
+- Reached via `EXECUTION_FACTORY.trading()` and `.user_stream()`. `FuturesTrading` and `UserStream` are added to the boundary checker's forbidden-constructor list.
+
+zone-trend:
+- `persistence/` (the spec's SQLite WAL schema).
+- `live/oms.py`, `reconciler.py`, `venues.py` (paper for shadow, OMS for live), `runner.py`, `notify.py`, `settings.py`, `main.py`.
+- `risk/decide.py`: the one accept/reject function the engine and the runner share. The engine refactor reproduced the BTC+ETH run exactly.
+- CLI: `zt shadow`, `zt live [--resume]`, `zt kill`, `zt parity`.
+
+Decisions and findings:
+- **Replacement stops alternate** between closePosition and a reduce-only quantity stop. Binance allows one closePosition stop per direction (-4130), and place-then-cancel needs two stops briefly.
+- **Open quantity comes from fills only**, deduplicated by trade id across the stream, REST responses and reconciler backfill.
+- **Closing order:** exits close at market first and cancel protection only once flat. The kill switch keeps a symbol's stop while Binance still shows a position on it.
+- **The reconciler touches only `zt-` orders** and the configured symbols. A foreign position gets a warning, once, and nothing else.
+- **Shadow** runs the backtest `Broker` on live 1m last/mark klines and funding from public mainnet REST, so shadow fills follow the backtest's fill model. Paper positions are not persisted across restarts; signals are.
+- **Live equity** = `ZT_CAPITAL` + realized + open PnL of zone-trend positions only, so it works on a sub-account or a shared account.
+- **Live mode** needs `ZT_LIVE_ACK=real-money-zone-trend`, `BINANCE_FUTURES_ENV=mainnet` and the trading key. It refuses to start while halted unless given `--resume`.
+- **Stages:** micro (BTC/ETH, 1 position, minimum size, single TP), half (top 5, 2 positions, ×0.5), full.
+- **Warm-up must replay from listing.** The core's state is path-dependent with long memory. Fixed warm-ups disagree with a from-listing replay and don't converge: ETH zone agreement was 61% at 420d, 100% at 800d and 66% at 1100d. Warm-up now pages REST history from each symbol's first bar (~30 s per symbol). It matches the Vision replay's zones exactly for BTC and ETH.
+- **Data sanity** = mark vs the hour's close. Bars come from REST at each close, so the spec's stale-stream rule does not apply.
+
+Tests:
+- OMS scenarios against an in-memory exchange (`tests/live/fake_exchange.py`):
+  - entry, stop, targets;
+  - stop-out cleanup;
+  - TP1 → breakeven with place-then-cancel;
+  - alternating trailing stops;
+  - ambiguous entry, placed or absent;
+  - rejected entry;
+  - stop failing twice → flatten;
+  - -2021 → close;
+  - a failed close keeps the stop;
+  - time exit.
+- Reconciler: missing stop, missed fills, unknown entry, unknown and foreign positions, orphan orders. Also the kill switch.
+- Runner/backtest parity: the shadow runner's hourly `step` records exactly the replay's signal ids.
+- Shadow startup smoke-tested read-only against public mainnet.
+
+Not built (M6): the metrics/health endpoint, heartbeat, daily and weekly reports, systemd units, deploy notes, stage-gate automation, and the weekly displacement refresh (live uses k_sym = 1).
