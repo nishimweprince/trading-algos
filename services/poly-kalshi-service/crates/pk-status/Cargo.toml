@@ -1,0 +1,36 @@
+[package]
+name = "pk-status"
+description = "pk-status: the read-only status page (and pk-unit-alert, the systemd OnFailure hook)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "pk-status"
+path = "src/main.rs"
+
+[[bin]]
+name = "pk-unit-alert"
+path = "src/unit_alert.rs"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+reqwest = { workspace = true, features = ["blocking"] }
+tracing.workspace = true
+clap.workspace = true
+axum.workspace = true
+parking_lot.workspace = true
+chrono.workspace = true
+zip.workspace = true
+tower-http.workspace = true
+pk-core.workspace = true
+pk-svc.workspace = true
+pk-results.workspace = true
+
+[lints]
+workspace = true

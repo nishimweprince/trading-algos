@@ -175,14 +175,14 @@ async fn trader_and_observer_end_to_end() {
     let key = rsa::RsaPrivateKey::new(&mut rand::thread_rng(), 2048).unwrap();
     std::fs::write(dir.join("kalshi.pem"), key.to_pkcs8_pem(rsa::pkcs8::LineEnding::LF).unwrap().as_bytes())
         .unwrap();
-    let (port, obs_port) = (free_port(), free_port());
+    let (port, obs_port, status_port) = (free_port(), free_port(), free_port());
     let env = format!(
         "API_KEY={API_KEY}\nPORT={port}\nPK_OBSERVER_PORT={obs_port}\nPK_STATUS_PORT={}\nPK_ASSETS=BTC\n\
          PK_GAP_THRESHOLD=0.15\nPK_ENTRY_EARLY_S=0\nPK_MAX_OPEN_NOTIONAL_USD=500\nPK_DAILY_LOSS_LIMIT_USD=250\n\
          PK_RESULTS_EPOCH=7\nPK_HOST_TAG=e2e\nPK_MIN_FREE_DISK_GB=0\nKALSHI_API_KEY_ID=kid\n\
          KALSHI_PRIVATE_KEY_PATH={}\nKALSHI_REST_URL=http://{venues}/trade-api/v2\nKALSHI_WS_URL=ws://{venues}/kalshi\n\
          POLY_GAMMA_URL=http://{venues}\nPOLY_WS_URL=ws://{venues}/poly\nPK_HEARTBEAT_SECONDS=5\nLOG_LEVEL=INFO\n",
-        free_port(),
+        status_port,
         dir.join("kalshi.pem").display()
     );
     std::fs::write(dir.join(".env.e2e"), env).unwrap();
@@ -228,6 +228,42 @@ async fn trader_and_observer_end_to_end() {
     let (_, obs) = get_json(&format!("http://127.0.0.1:{obs_port}/v1/obs/status")).await.unwrap();
     assert!(obs["lines"].as_u64().unwrap() > 0, "{obs:#}");
     assert!(obs["journal_records"].as_u64().unwrap() >= 2, "{obs:#}");
+
+    // The status page, against the live trader and observer.
+    let status_bin = Path::new(env!("CARGO_BIN_EXE_poly-kalshi-service")).with_file_name("pk-status");
+    if status_bin.exists() {
+        let status_child = Kill(
+            Command::new(&status_bin)
+                .args(["--profile", "e2e"])
+                .current_dir(&dir)
+                .env("NO_PROXY", "127.0.0.1,localhost")
+                .spawn()
+                .unwrap(),
+        );
+        let page = format!("http://127.0.0.1:{status_port}");
+        let t0 = Instant::now();
+        let summary = loop {
+            assert!(t0.elapsed() < Duration::from_secs(20), "pk-status did not answer");
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            if let Some((200, s)) = get_json(&format!("{page}/api/summary")).await
+                && s["service_up"] == true
+            {
+                break s;
+            }
+        };
+        assert_eq!(summary["live"]["mode"], "paper");
+        assert!(summary["live"].get("api_key").is_none());
+        assert_eq!(summary["results"]["funnel"]["crossings"], 1, "{:#}", summary["results"]["funnel"]);
+        assert_eq!(summary["epoch"], "7");
+        let html = reqwest::get(&page).await.unwrap();
+        assert!(html.headers()["content-security-policy"].to_str().unwrap().contains("default-src 'none'"));
+        assert!(html.text().await.unwrap().contains("<html"));
+        let zip = reqwest::get(format!("{page}/api/export")).await.unwrap().bytes().await.unwrap();
+        assert_eq!(&zip[..2], b"PK");
+        drop(status_child);
+    } else {
+        eprintln!("pk-status not built; run `cargo build --workspace` first to cover it");
+    }
 
     // Shut down: the observer drains the pipe and closes the tape.
     let pid = child.0.id();
