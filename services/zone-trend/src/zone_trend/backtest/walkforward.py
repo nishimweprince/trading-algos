@@ -17,7 +17,7 @@ window; its score is the median over folds of::
 The best candidate is frozen and run out-of-sample, compounding from the
 previous window's ending equity, with a displacement table built from its
 in-sample trades. The same out-of-sample windows are also run with that
-candidate at 2x slippage and with a one-hour entry delay, and with the EMA
+candidate at 2x slippage and with a one-bar entry delay, and with the EMA
 benchmark, so every comparison covers identical months.
 
 Robustness: the default config and each of its ±20% neighbours run once over
@@ -276,7 +276,7 @@ def walk_forward(
     variants = {
         "oos": {},
         "oos_slip2": {"slippage_mult": 2.0},
-        "oos_delay1": {"entry_delay_hours": 1},
+        "oos_delay1": {"entry_delay_bars": 1},
         "benchmark": {"kind": "ema"},
     }
     for name, extra in variants.items():

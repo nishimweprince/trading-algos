@@ -82,7 +82,7 @@ SIGNAL_KW = dict(
     trend=Trend.UP,
     choch_side=None,
     legs_h4=[Leg(True, 2.0), Leg(False, -1.0)],
-    atr_h1=1.0,
+    atr_entry=1.0,
     atr_h4=3.0,
     vol_history=[0.03] * 200,
     zone_strength=50.0,
@@ -94,7 +94,7 @@ SIGNAL_KW = dict(
 def test_signal_stop_and_targets():
     sig = build_signal("BTCUSDT", armed(), **SIGNAL_KW)
     assert isinstance(sig, Signal)
-    assert sig.stop == pytest.approx(99.8 - 0.3)  # retest low minus 0.3 ATR1h
+    assert sig.stop == pytest.approx(99.8 - 0.3)  # retest low minus 0.3 ATR entry
     r = 101.5 - sig.stop
     assert sig.tp1 == pytest.approx(101.5 + 1.5 * r) and sig.tp2 == pytest.approx(101.5 + 3 * r)
     again = build_signal("BTCUSDT", armed(), **SIGNAL_KW)
@@ -114,7 +114,7 @@ def test_tp2_is_the_nearer_opposing_zone_and_no_room_rejects():
 @pytest.mark.parametrize(
     "override, reason",
     [
-        ({"atr_h1": 20.0, "atr_h4": 10.0}, "stop_too_tight"),  # 7.7 < 0.4 x 20
+        ({"atr_entry": 20.0, "atr_h4": 10.0}, "stop_too_tight"),  # 7.7 < 0.4 x 20
         ({"atr_h4": 0.5}, "stop_too_wide_atr"),
         ({"trend": Trend.RANGE, "choch_side": Trend.UP}, "choch"),
         ({"trend": Trend.DOWN}, "trend"),

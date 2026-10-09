@@ -286,3 +286,14 @@ Tests:
 - Shadow startup smoke-tested read-only against public mainnet.
 
 Not built (M6): the metrics/health endpoint, heartbeat, daily and weekly reports, systemd units, deploy notes, stage-gate automation, and the weekly displacement refresh (live uses k_sym = 1).
+
+### Prototype: 15m entries (2026-10-09; at the user's request, backtest only)
+`timeframes.entry` now accepts `1h` or `15m` (`TF.M15`, `swings.m15`). The core, tape, engine and broker step on entry bars; bar-count windows scale x4 in `config/proto-15m.yaml` (retest 192, limit 12, time stop 288; the FSM cooldown scales in code to 96). ATR-relative parameters transfer as-is. Live/shadow stay on 1H; the funding blackout is still not enforced for market entries (a spec question for 15m, where fills can land inside the window).
+
+Data: `zt data resample-15m` derives 15m months from synced 1m months. Cross-checked against native Vision 15m for 2021-05: OHLC bit-exact on all 2976 quarters; volume differs on exactly one quarter (2021-05-15, the known 1m volume-loss day, quarantined).
+
+Result, BTC+ETH 2021-01..2026-10 (`/research`):
+- 1H (`runs/6fccf633e44f`): 43 trades, PF 1.23, +0.03R/trade. Bit-identical to the pre-refactor run (trades/fills/equity/signals all equal), so the refactor changed nothing.
+- 15m (`runs/a513731dd6ee`): 92 trades, PF 0.80, −0.09R/trade, DD 5.1%. The loss is all BTC (−0.26R over 51 trades); ETH is flat to slightly better (+0.12R vs +0.10R). Costs rise to 14% of gross wins (from 9%) and min-notional rejections triple.
+
+Verdict: the 1H-tuned entry logic does not transfer to 15m by time-scaling alone. Retuning (or per-symbol entry TFs) would be its own research loop, re-gated by M4.

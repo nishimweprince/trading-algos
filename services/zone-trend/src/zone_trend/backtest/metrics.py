@@ -21,7 +21,7 @@ def profit_factor(net: pd.Series) -> float:
 
 
 def daily_equity(equity: pd.DataFrame) -> pd.Series:
-    """Last equity of each UTC day, from the hourly curve."""
+    """Last equity of each UTC day, from the per-bar equity curve."""
     day = (equity["time"] + 1) // DAY_MS
     return equity.groupby(day)["equity"].last()
 

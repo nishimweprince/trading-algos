@@ -1,11 +1,11 @@
-"""Simulated Binance USDⓈ-M broker, stepped one hour at a time on 1m data.
+"""Simulated Binance USDⓈ-M broker, stepped one entry bar at a time on 1m data.
 
 Within each minute, in this order:
 
 1. Funding settlements at that minute: ``cash -= side * notional * rate``
    (longs pay positive rates). Settlement precedes an entry at the same
    instant, as a live order placed seconds after the hour would.
-2. On the hour's first minute, pending next-open exits and entries fill at the
+2. On the span's first minute, pending next-open exits and entries fill at the
    open, plus or minus the symbol's slippage. Entries that open beyond their
    stop or TP1 are skipped.
 3. Stop: triggered when the mark minute (last-price minute where mark data is
@@ -53,7 +53,7 @@ class PendingEntry:
     k_sym: float
     size_mult: float
     managed: bool
-    delay_hours: int = 0  # hours to wait past the next open (Monte Carlo delay variant)
+    delay_bars: int = 0  # entry bars to wait past the next open (Monte Carlo delay variant)
 
 
 @dataclass
@@ -82,10 +82,11 @@ class SimPosition:
 
 
 class Broker:
-    def __init__(self, cash: float, fee_taker: float, leverage: float):
+    def __init__(self, cash: float, fee_taker: float, leverage: float, step_ms: int = HOUR):
         self.cash = cash
         self.fee = fee_taker
         self.leverage = leverage
+        self.step_ms = step_ms  # entry-bar span, for the bars_to_mfe column
         self.pending: dict[str, PendingEntry] = {}
         self.positions: dict[str, SimPosition] = {}
         self.fills: list[dict] = []
@@ -175,27 +176,29 @@ class Broker:
                 "mfe_pct": p.side.sign * (p.best - p.entry) / p.entry,
                 "mae_pct": p.side.sign * (p.entry - p.worst) / p.entry,
                 "bars_open": p.bars_open,
-                "bars_to_mfe": (sp.mfe_time - p.opened_at) / HOUR if sp.mfe_time else 0.0,
+                "bars_to_mfe": (sp.mfe_time - p.opened_at) / self.step_ms if sp.mfe_time else 0.0,
             }
         )
         del self.positions[p.symbol]
 
-    # -- the hour ------------------------------------------------------------------
-    def process_hour(self, hour_start: int, minutes: MinuteSource, funding: Funding) -> None:
+    # -- one entry-bar span ---------------------------------------------------------
+    def process_window(
+        self, start: int, minutes: MinuteSource, funding: Funding, span_ms: int
+    ) -> None:
         symbols = sorted(set(self.pending) | set(self.positions))
         for sym in symbols:
-            m = minutes.hour(sym, hour_start)
+            m = minutes.window(sym, start, span_ms)
             if len(m) == 0:
                 if sym in self.pending:
                     self.skipped.append((self.pending.pop(sym).signal, "no_minute_data"))
                 continue
-            settles = funding.settlements(sym, hour_start, hour_start + HOUR)
-            self._symbol_hour(sym, m, settles)
+            settles = funding.settlements(sym, start, start + span_ms)
+            self._symbol_window(sym, m, settles)
 
-    def _symbol_hour(self, sym: str, m: MinuteBars, settles: list[tuple[int, float]]) -> None:
+    def _symbol_window(self, sym: str, m: MinuteBars, settles: list[tuple[int, float]]) -> None:
         sp = self.positions.get(sym)
         if not settles and sym not in self.pending and sp is not None and sp.pending_exit is None:
-            if self._quiet_hour(sp, m):
+            if self._quiet_window(sp, m):
                 return
         si = 0
         for k in range(len(m)):
@@ -214,8 +217,8 @@ class Broker:
             if sp is not None:
                 self._minute(sp, ts, m, k)
 
-    def _quiet_hour(self, sp: SimPosition, m: MinuteBars) -> bool:
-        """Fast path: nothing can trigger this hour; just update excursions."""
+    def _quiet_window(self, sp: SimPosition, m: MinuteBars) -> bool:
+        """Fast path: nothing can trigger in this span; just update excursions."""
         p = sp.pos
         tps = [x for x in (p.tp1 if not p.tp1_done else None, p.tp2) if x and not math.isnan(x)]
         if p.side is Side.LONG:
@@ -243,8 +246,8 @@ class Broker:
             price = open_ * (1 - sp.pos.side.sign * sp.slip)
             self._fill(sp, ts, sp.pos.qty_open, price, sp.pending_exit)
         pe = self.pending.get(sym)
-        if pe is not None and pe.delay_hours > 0:
-            pe.delay_hours -= 1
+        if pe is not None and pe.delay_bars > 0:
+            pe.delay_bars -= 1
             return
         pe = self.pending.pop(sym, None)
         if pe is None or sym in self.positions:

@@ -20,13 +20,12 @@ from zone_trend.data.store import EVENT_TF, DataPaths, load
 
 __all__ = ["Funding", "MinuteBars", "MinuteSource"]
 
-MINUTE = 60_000
 CACHE_MONTHS = 12
 
 
 @dataclass(frozen=True)
 class MinuteBars:
-    """One hour (or less) of minutes for one symbol."""
+    """One entry-bar span (or less) of minutes for one symbol."""
 
     open_time: np.ndarray
     open: np.ndarray
@@ -79,10 +78,10 @@ class MinuteSource:
             self._cache.popitem(last=False)
         return value
 
-    def hour(self, symbol: str, hour_start: int) -> MinuteBars:
-        arr = self._month_arrays(symbol, _month(hour_start))
+    def window(self, symbol: str, start: int, span_ms: int) -> MinuteBars:
+        arr = self._month_arrays(symbol, _month(start))
         t = arr[0]
-        i, j = np.searchsorted(t, [hour_start, hour_start + 60 * MINUTE])
+        i, j = np.searchsorted(t, [start, start + span_ms])
         missing = int(arr[8][i:j].sum())
         self.mark_missing += missing
         return MinuteBars(*(a[i:j] for a in arr[:8]), missing)

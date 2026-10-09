@@ -1,14 +1,15 @@
-"""Phase two of a backtest: the portfolio loop over 1H closes.
+"""Phase two of a backtest: the portfolio loop over entry-bar closes.
 
-For each 1H close ``t`` (across every symbol, in time order):
+For each entry-bar close ``t`` (across every symbol, in time order):
 
-1. ``broker.process_hour``: the hour that just ended, minute by minute (fills
-   of orders submitted at the previous close, stops, take-profits, funding).
+1. ``broker.process_window``: the span that just ended, minute by minute
+   (fills of orders submitted at the previous close, stops, take-profits,
+   funding).
 2. Mark to market at ``t``; update the breakers.
 3. Signals whose bar closed at ``t``: universe membership, quarantine and
    data-sanity checks, sizing, the liquidation rule and the portfolio checks;
    accepted ones fill at the next open.
-4. Open positions: the exit rules (``core.exits.evaluate``) with this hour's
+4. Open positions: the exit rules (``core.exits.evaluate``) with this bar's
    ATR, momentum decay and CHoCH from the tape; stop moves apply now, exits
    fill at the next open.
 
@@ -39,7 +40,7 @@ from zone_trend.risk.decide import DecisionContext, decide
 from zone_trend.risk.displacement import DisplacementTable
 from zone_trend.risk.portfolio import OpenExposure, PortfolioGuard
 from zone_trend.risk.sizing import DEFAULT_FILTERS, Filters
-from zone_trend.types import Signal
+from zone_trend.types import TF, Signal
 
 __all__ = ["RunResult", "RunSpec", "month_bounds", "run"]
 
@@ -73,7 +74,7 @@ class RunSpec:
     # a walk-forward shares one cached tape per config. Safe: a tape's content up
     # to t never depends on data after t (tests/lookahead).
     tape_end: str | None = None
-    entry_delay_hours: int = 0  # Monte Carlo variant: fill N hours after the next open
+    entry_delay_bars: int = 0  # Monte Carlo variant: fill N entry bars after the next open
 
     def bounds(self) -> tuple[int, int]:
         return month_bounds(self.start, self.end)
@@ -150,7 +151,7 @@ def _run_id(cfg: Config, spec: RunSpec, snapshot: str) -> str:
             spec.kind,
             spec.equity,
             spec.slippage_mult,
-            spec.entry_delay_hours,
+            spec.entry_delay_bars,
             sorted(
                 (f"{k[0]}|{k[1]}", v)
                 for k, v in (spec.displacement or DisplacementTable()).k.items()
@@ -170,8 +171,9 @@ def run(paths: DataPaths, cfg: Config, spec: RunSpec) -> RunResult:
 
     months = pd.period_range(spec.start, spec.end, freq="M").strftime("%Y-%m")
     union = sorted({s for m in months for s in spec.members(m)})
+    step_ms = TF(cfg.timeframes.entry).ms
     # The BTC gate needs BTC's 1D trend even when BTC is not traded.
-    gate = spec.kind == "zone" and bool(paths.months("klines", BTC, "1h"))
+    gate = spec.kind == "zone" and bool(paths.months("klines", BTC, cfg.timeframes.entry))
     tape_symbols = sorted(set(union) | ({BTC} if gate else set()))
     tape_end_ms = month_bounds(spec.tape_end, spec.tape_end)[1] if spec.tape_end else end_ms
     tapes = build_tapes(
@@ -189,9 +191,9 @@ def run(paths: DataPaths, cfg: Config, spec: RunSpec) -> RunResult:
     minutes = MinuteSource(paths)
     funding = Funding(paths, union)
     guard = PortfolioGuard(cfg.portfolio, cfg.filters)
-    broker = Broker(spec.equity, cfg.exchange.fee_taker, cfg.exchange.leverage)
+    broker = Broker(spec.equity, cfg.exchange.fee_taker, cfg.exchange.leverage, step_ms)
 
-    hours = np.unique(
+    steps = np.unique(
         np.concatenate(
             [
                 tp.close_time[(tp.close_time >= start_ms) & (tp.close_time < end_ms)]
@@ -224,14 +226,14 @@ def run(paths: DataPaths, cfg: Config, spec: RunSpec) -> RunResult:
             }
         )
 
-    for t in hours:
+    for t in steps:
         t = int(t)
         month = _month(t)
         members = spec.members(month)
         rank = {s: i for i, s in enumerate(members)}
 
-        # 1. the hour that just ended
-        broker.process_hour(t + 1 - HOUR, minutes, funding)
+        # 1. the span that just ended
+        broker.process_window(t + 1 - step_ms, minutes, funding, step_ms)
         for sig, why in broker.skipped:
             record(sig, "fill", "skipped", why)
         broker.skipped.clear()
@@ -307,7 +309,7 @@ def run(paths: DataPaths, cfg: Config, spec: RunSpec) -> RunResult:
                     k_sym,
                     d.size_mult,
                     tapes[sym].managed,
-                    spec.entry_delay_hours,
+                    spec.entry_delay_bars,
                 )
             )
             guard.trade_opened()
@@ -329,12 +331,12 @@ def run(paths: DataPaths, cfg: Config, spec: RunSpec) -> RunResult:
             p.bars_open += 1
             tp = tapes[sym]
             i = tp.index(t)
-            if i is None or math.isnan(tp.atr_h1[i]):
+            if i is None or math.isnan(tp.atr_entry[i]):
                 continue
             decay = bool(tp.decay_long[i] if p.side.sign > 0 else tp.decay_short[i])
             for act in exits.evaluate(
                 p,
-                float(tp.atr_h1[i]),
+                float(tp.atr_entry[i]),
                 decay=decay,
                 choch_against=tp.choch_against(p.side, p.opened_at, t),
                 fee_taker=cfg.exchange.fee_taker,

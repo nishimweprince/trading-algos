@@ -59,7 +59,7 @@ class _Prefetched:
         self.settles: dict[str, list[tuple[int, float]]] = {}
         self.mark_missing = 0
 
-    def hour(self, symbol: str, hour_start: int) -> MinuteBars:
+    def window(self, symbol: str, start: int, span_ms: int) -> MinuteBars:
         return self.bars.get(symbol) or _empty()
 
     def settlements(self, symbol: str, start: int, end: int) -> list[tuple[int, float]]:
@@ -107,7 +107,7 @@ class PaperVenue:
                     (int(r["fundingTime"]) // 1000 * 1000, float(r["fundingRate"]))
                     for r in fh.body or []
                 ]
-        self.broker.process_hour(hour_start, data, data)
+        self.broker.process_window(hour_start, data, data, HOUR)
 
     def positions(self) -> dict[str, Position]:
         return {s: sp.pos for s, sp in self.broker.positions.items()}

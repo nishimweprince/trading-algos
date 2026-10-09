@@ -28,6 +28,7 @@ import pyarrow.parquet as pq
 from zone_trend.config import DEFAULT_PATH, load_config
 from zone_trend.data import vision
 from zone_trend.data.exchange import fetch_exchange_info, latest_filters
+from zone_trend.data.resample import resample_main
 from zone_trend.data.store import DataPaths, read_snapshot, write_snapshot
 from zone_trend.data.sync import DEFAULT_INTERVALS, sync
 from zone_trend.data.universe import DailyCache, is_usdt_perp, month_starts, universe_at
@@ -86,6 +87,13 @@ def _data_sync(args: argparse.Namespace) -> int:
             print(f"{r.dataset:17s} {r.symbol:14s} {r.tf:5s} {status} (kept {r.skipped})")
     print(f"# {built} month files built, {len(errors)} series failed, root {paths.root}")
     return 1 if errors else 0
+
+
+def _data_resample_15m(args: argparse.Namespace) -> int:
+    symbols = [s.upper() for s in _csv(args.symbols)]
+    for sym, (built, skipped) in resample_main(args.data_dir, symbols, args.force).items():
+        print(f"{sym:14s} built {built} month files (kept {skipped})")
+    return 0
 
 
 def _data_exchange_info(args: argparse.Namespace) -> int:
@@ -399,6 +407,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--workers", type=int, default=16)
     p.add_argument("--drop-raw", action="store_true", help="delete zips after conversion")
     p.set_defaults(func=_data_sync)
+
+    p = data.add_parser(
+        "resample-15m", parents=[common], help="derive 15m months from synced 1m months"
+    )
+    p.add_argument("--symbols", required=True, help="comma list")
+    p.add_argument("--force", action="store_true", help="rebuild months that exist")
+    p.set_defaults(func=_data_resample_15m)
 
     p = data.add_parser("exchange-info", parents=[common], help="snapshot exchangeInfo")
     p.set_defaults(func=_data_exchange_info)

@@ -11,14 +11,14 @@ limits, breakers) belong to the risk layer.
 - Volatility: ATR14(1D)/close between the 10th and 95th percentiles of its
   trailing year (at least ``MIN_VOL_HISTORY`` daily values).
 - Stop: the retest extreme (``exits.stop_anchor``: or the zone edge, or the
-  further of the two) plus 0.3 * ATR14(1H). Skipped when under 0.4 * ATR14(1H),
-  over 3 * ATR14(4H), or over ``max_stop_pct``.
+  further of the two) plus 0.3 * ATR14(entry). Skipped when under
+  0.4 * ATR14(entry), over 3 * ATR14(4H), or over ``max_stop_pct``.
 - Targets: TP1 at 1.5R; skipped when the next opposing zone is closer than
   1.0R. TP2 is the nearer of that zone's edge and 3R; None when that is not
   beyond TP1 (the runner is then left to the trail).
 
-``entry_ref`` is the arming close; the real entry is the next 1H open, and
-sizing re-derives R from the fill.
+``entry_ref`` is the arming close; the real entry is the next entry-bar open,
+and sizing re-derives R from the fill.
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ def build_signal(
     trend: Trend,
     choch_side: Trend | None,
     legs_h4: list[Leg],
-    atr_h1: float,
+    atr_entry: float,
     atr_h4: float,
     vol_history: list[float],
     zone_strength: float,
@@ -91,7 +91,7 @@ def build_signal(
 
     ex = cfg.exits
     entry = armed.close
-    buf = ex.stop_buffer_atr * atr_h1
+    buf = ex.stop_buffer_atr * atr_entry
     edge = armed.lo if long else armed.hi
     anchors = {"retest": armed.p, "zone": edge}
     if ex.stop_anchor == "further":
@@ -100,8 +100,8 @@ def build_signal(
         anchor = anchors[ex.stop_anchor]
     stop = anchor - buf if long else anchor + buf
     dist = (entry - stop) if long else (stop - entry)
-    if dist < ex.min_stop_atr_h1 * atr_h1:
-        return reject("stop_too_tight", f"{dist / atr_h1:.2f} ATR1h")
+    if dist < ex.min_stop_atr_entry * atr_entry:
+        return reject("stop_too_tight", f"{dist / atr_entry:.2f} ATR{cfg.timeframes.entry}")
     if dist > ex.max_stop_atr_h4 * atr_h4:
         return reject("stop_too_wide_atr", f"{dist / atr_h4:.2f} ATR4h")
     if dist / entry > ex.max_stop_pct:

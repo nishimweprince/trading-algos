@@ -57,7 +57,7 @@ class Universe(_Section):
 class Timeframes(_Section):
     zones: list[Literal["1d", "4h"]]
     trend: Literal["4h"]
-    entry: Literal["1h"]
+    entry: Literal["1h", "15m"]
 
 
 class SwingLR(_Section):
@@ -69,6 +69,7 @@ class Swings(_Section):
     d1: SwingLR
     h4: SwingLR
     h1: SwingLR
+    m15: SwingLR
     k_atr: float = Field(ge=0, le=5)
 
 
@@ -132,7 +133,7 @@ class Entries(_Section):
 class Exits(_Section):
     stop_anchor: Literal["retest", "zone", "further"]
     stop_buffer_atr: float = Field(ge=0, le=3)
-    min_stop_atr_h1: float = Field(ge=0, le=5)
+    min_stop_atr_entry: float = Field(ge=0, le=5)
     max_stop_atr_h4: float = Field(gt=0, le=10)
     max_stop_pct: float = Field(gt=0, le=0.2)
     tp1_r: float = Field(gt=0, le=10)

@@ -20,20 +20,20 @@ SLIP = 0.001
 
 
 class FakeMinutes:
-    """Hour -> list of (open, high, low, close[, mark_low, mark_high]) minutes."""
+    """Span start -> list of (open, high, low, close[, mark_low, mark_high]) minutes."""
 
     def __init__(self, hours: dict[int, list[tuple]]):
         self.hours = hours
         self.mark_missing = 0
 
-    def hour(self, symbol: str, hour_start: int) -> MinuteBars:
-        rows = self.hours.get(hour_start, [])
+    def window(self, symbol: str, start: int, span_ms: int) -> MinuteBars:
+        rows = self.hours.get(start, [])
         n = len(rows)
         cols = list(zip(*rows, strict=True)) if rows else [()] * 4
         o, h, lo, c = (np.array(cols[i], float) for i in range(4))
         ml = np.array(cols[4], float) if rows and len(rows[0]) > 4 else lo
         mh = np.array(cols[5], float) if rows and len(rows[0]) > 5 else h
-        t = hour_start + np.arange(n, dtype=np.int64) * MIN
+        t = start + np.arange(n, dtype=np.int64) * MIN
         return MinuteBars(t, o, h, lo, c, mh, ml, c, 0)
 
 
@@ -60,7 +60,7 @@ def run(hours, pending, funding=()):
     b.submit(pending)
     mins = FakeMinutes(hours)
     for h in sorted(hours):
-        b.process_hour(h, mins, FakeFunding(funding))
+        b.process_window(h, mins, FakeFunding(funding), HOUR)
     return b
 
 

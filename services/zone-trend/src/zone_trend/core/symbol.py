@@ -1,23 +1,23 @@
-"""Per-symbol core state and the processing order for each closed 1H bar.
+"""Per-symbol core state and the processing order for each closed entry bar.
 
 ``SymbolCore.on_close`` follows the spec:
 
-1. Append the 1H bar; a 4H or 1D bar that closed at the same instant is
-   appended first.
+1. Append the entry bar (1H, or 15m in the prototype config); a 4H or 1D bar
+   that closed at the same instant is appended first.
 2. Update swings for every timeframe that received a bar.
 3. If 4H or 1D changed: update trend states, slopes, and rebuild the zones.
 4. On a 4H close: apply breaks, flips, touches and deletions.
-5. Step the retest FSM of every zone within 2 x ATR14(1H) of price, and of every
-   FSM mid-retest.
+5. Step the retest FSM of every zone within 2 x ATR14(entry) of price, and of
+   every FSM mid-retest.
 6. Build signals (or rejections) from what armed.
 
 Position management (step 7) is ``manage``, called by the engine for each open
 position after ``on_close``.
 
 The caller hands over only closed bars, in time order, and a higher-timeframe
-bar only at the 1H close where it closes. Nothing here reads a clock, does I/O
-or draws random numbers, so the backtester and the live runner get identical
-output from identical bars.
+bar only at the entry close where it closes. Nothing here reads a clock, does
+I/O or draws random numbers, so the backtester and the live runner get
+identical output from identical bars.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from zone_trend.config import Config
 from zone_trend.core import exits
 from zone_trend.core.indicators import volume_profile_hvn
-from zone_trend.core.retest_fsm import FsmCtx, RetestFSM
+from zone_trend.core.retest_fsm import RESET_BARS, FsmCtx, RetestFSM
 from zone_trend.core.series import BarSeries
 from zone_trend.core.signals import build_signal
 from zone_trend.core.structure import Leg, StructureState, legs, momentum_decay
@@ -53,11 +53,14 @@ class SymbolCore:
     def __init__(self, symbol: str, cfg: Config):
         self.symbol = symbol
         self.cfg = cfg
+        self.entry_tf = TF(cfg.timeframes.entry)
         ema = cfg.structure.ema_period
         self.series = {tf: BarSeries(tf, ema_period=ema) for tf in TF}
         sw = cfg.swings
-        lr = {TF.D1: sw.d1, TF.H4: sw.h4, TF.H1: sw.h1}
+        lr = {TF.D1: sw.d1, TF.H4: sw.h4, TF.H1: sw.h1, TF.M15: sw.m15}
         self.swings = {tf: SwingTracker(lr[tf].left, lr[tf].right, sw.k_atr) for tf in TF}
+        # ENTERED/FAILED cooldown, kept at 24h of entry bars whatever the entry TF.
+        self.reset_bars = RESET_BARS * TF.H1.ms // self.entry_tf.ms
         self.structure = {TF.D1: StructureState(TF.D1), TF.H4: StructureState(TF.H4)}
         self.zones = ZoneBook(cfg.zones)
         self.fsm: dict[str, RetestFSM] = {}
@@ -78,18 +81,19 @@ class SymbolCore:
         return momentum_decay(self.legs_h4, side, self.cfg.structure.decay_ratio)
 
     def _last_swing(self, kind: str) -> float | None:
-        for sw in reversed(self.swings[TF.H1].swings):
+        for sw in reversed(self.swings[self.entry_tf].swings):
             if sw.kind == kind and sw.t_conf <= self.now:
                 return sw.price
         return None
 
-    # -- the hourly step ---------------------------------------------------------
-    def on_close(self, h1: Bar, h4: Bar | None = None, d1: Bar | None = None) -> CloseResult:
+    # -- the entry-bar step ------------------------------------------------------
+    def on_close(self, entry: Bar, h4: Bar | None = None, d1: Bar | None = None) -> CloseResult:
         for bar in (d1, h4):
-            if bar is not None and bar.close_time != h1.close_time:
-                raise ValueError("higher-timeframe bars must close with the 1H bar they ride on")
-        self.now = h1.close_time
+            if bar is not None and bar.close_time != entry.close_time:
+                raise ValueError("higher-timeframe bars must close with the entry bar they ride on")
+        self.now = entry.close_time
         res = CloseResult()
+        etf = self.entry_tf
 
         # 1-2: bars and swings
         if d1 is not None:
@@ -99,8 +103,8 @@ class SymbolCore:
                 self.vol_history.append(atr_d1 / d1.close)
         if h4 is not None:
             self._append(TF.H4, h4)
-        prev_close = self.series[TF.H1].last.close if len(self.series[TF.H1]) else h1.open
-        self._append(TF.H1, h1)
+        prev_close = self.series[etf].last.close if len(self.series[etf]) else entry.open
+        self._append(etf, entry)
 
         # 3: structure and zones
         if d1 is not None:
@@ -116,7 +120,7 @@ class SymbolCore:
             )
             self.legs_h4 = legs(sw_h4, TF.H4.ms, self.atr(TF.D1), h4.close)
         if h4 is not None or d1 is not None:
-            self._rebuild_zones(h1.close)
+            self._rebuild_zones(entry.close)
 
         # 4: breaks on the 4H close
         if h4 is not None:
@@ -125,7 +129,7 @@ class SymbolCore:
             )
 
         # 5-6: retest FSMs and signals
-        self._step_fsms(h1, prev_close, res)
+        self._step_fsms(entry, prev_close, res)
         return res
 
     def _append(self, tf: TF, bar: Bar) -> None:
@@ -151,8 +155,8 @@ class SymbolCore:
             hvn,
         )
 
-    def _step_fsms(self, h1: Bar, prev_close: float, res: CloseResult) -> None:
-        s = self.series[TF.H1]
+    def _step_fsms(self, entry: Bar, prev_close: float, res: CloseResult) -> None:
+        s = self.series[self.entry_tf]
         atr = s.last_atr
         if not math.isfinite(atr):
             return
@@ -168,17 +172,18 @@ class SymbolCore:
         near = {
             z.id: z
             for z in self.zones.zones
-            if z.lo - PROXIMITY_ATR * atr <= h1.close <= z.hi + PROXIMITY_ATR * atr
+            if z.lo - PROXIMITY_ATR * atr <= entry.close <= z.hi + PROXIMITY_ATR * atr
         }
         for zid in near:
-            self.fsm.setdefault(zid, RetestFSM(zid))
+            if zid not in self.fsm:
+                self.fsm[zid] = RetestFSM(zid, self.reset_bars)
         for zid in sorted(self.fsm):
             fsm = self.fsm[zid]
             zone = self.zones.get(zid)
             if zid not in near and fsm.state == "IDLE":
                 del self.fsm[zid]
                 continue
-            armed = fsm.step(h1, zone, ctx, self.cfg.entries)
+            armed = fsm.step(entry, zone, ctx, self.cfg.entries)
             if armed is None:
                 continue
             out = build_signal(
@@ -188,7 +193,7 @@ class SymbolCore:
                 trend=self.trend,
                 choch_side=self.structure[TF.H4].choch_side,
                 legs_h4=self.legs_h4,
-                atr_h1=atr,
+                atr_entry=atr,
                 atr_h4=self.atr(TF.H4),
                 vol_history=self.vol_history,
                 zone_strength=zone.strength if zone else fsm.strength,
@@ -199,11 +204,11 @@ class SymbolCore:
 
     # -- step 7 ------------------------------------------------------------------
     def manage(self, pos: Position) -> list[exits.MoveStop | exits.ExitNextOpen]:
-        """Exit decisions for an open position at the current 1H close."""
-        exits.observe(pos, self.series[TF.H1].last)
+        """Exit decisions for an open position at the current entry close."""
+        exits.observe(pos, self.series[self.entry_tf].last)
         return exits.evaluate(
             pos,
-            self.atr(TF.H1),
+            self.atr(self.entry_tf),
             decay=self.decay(pos.side),
             choch_against=self.structure[TF.H4].choch_against(pos.side, pos.opened_at),
             fee_taker=self.cfg.exchange.fee_taker,

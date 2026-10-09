@@ -4,7 +4,7 @@ Long (shorts mirror throughout):
 
 IDLE -> BROKEN
     The zone is resistance; the previous close was at or below ``hi + buf`` and
-    this bar closes above it, where ``buf = 0.10 * ATR14(1H)``. The bar is
+    this bar closes above it, where ``buf = 0.10 * ATR14(entry)``. The bar is
     bullish with body >= 50% of its range and volume >= 1.3 x the median of
     the 20 bars before it. The 4H trend is Up, or Range with zone strength
     >= 70. A confirmed 1H swing low below the zone exists (it is A).
@@ -17,10 +17,10 @@ RETESTING -> ENTERED (emits an ``Armed``)
     since it.
 -> FAILED
     A close below ``lo - 0.25 * ATR`` (back through the zone), a retracement
-    over 1.0 (CHoCH), or 48 bars without an entry.
+    over 1.0 (CHoCH), or ``retest_window_bars`` without an entry.
 ENTERED / FAILED -> IDLE
-    After the zone's next role flip, or 24 bars. So there is one signal per
-    zone per break.
+    After the zone's next role flip, or ``reset_bars``. So there is one signal
+    per zone per break.
 
 The zone's edges are frozen at the breakout, so a zone rebuild during a
 retest does not move the goalposts.
@@ -44,8 +44,8 @@ RANGE_MIN_STRENGTH_DEFAULT = 70.0
 
 @dataclass(frozen=True)
 class FsmCtx:
-    atr: float  # ATR14(1H) at this bar
-    vol_med: float  # median volume of the previous 20 1H bars
+    atr: float  # ATR14(entry) at this bar
+    vol_med: float  # median volume of the previous 20 entry bars
     prev_close: float
     trend: Trend  # 4H trend state
     swing_low: float | None  # last confirmed 1H swing low price
@@ -82,6 +82,7 @@ def rejection(bar: Bar, side: Side, min_wick: float, close_frac: float) -> bool:
 class RetestFSM:
     __slots__ = (
         "zone_id",
+        "reset_bars",
         "state",
         "side",
         "lo",
@@ -96,8 +97,9 @@ class RetestFSM:
         "strength",
     )
 
-    def __init__(self, zone_id: str):
+    def __init__(self, zone_id: str, reset_bars: int = RESET_BARS):
         self.zone_id = zone_id
+        self.reset_bars = reset_bars
         self.state = IDLE
         self.side: Side | None = None
         self.lo = self.hi = self.a = self.b = math.nan
@@ -120,7 +122,7 @@ class RetestFSM:
         if self.state in (ENTERED, FAILED):
             self.idle_bars += 1
             flipped = zone is not None and zone.flips > self.flips_at_end
-            if flipped or self.idle_bars >= RESET_BARS:
+            if flipped or self.idle_bars >= self.reset_bars:
                 self.state = IDLE
                 self.side = None
             return None
