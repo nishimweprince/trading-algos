@@ -54,7 +54,7 @@ The spec's layout is kept, with these adaptations:
 - Secrets and notification settings come from env via `ta_core.BaseServiceSettings + ta_notify.NotificationSettings + BinanceFuturesSettingsMixin`. This is the same mixin set as `ofi_scalper_service/config.py`.
 - Package directories follow the spec: `src/zone_trend/{types,config}.py`, `data/`, `core/`, `risk/`, `backtest/`, `live/`, `persistence/`, `cli.py`. The CLI is `zt`, a `[project.scripts]` entry.
 - `tests/{unit,property,lookahead,golden,integration}`, with a pytest config mirroring ofi: `asyncio_mode=auto`, `filterwarnings=error`, and an `integration` marker.
-- `.github/workflows/zone-trend-ci.yml` is an ~8-line caller of `_python-service.yml`.
+- No GitHub Actions CI (main removed every workflow on 2026-10-09; GitGuardian is the only PR check). Before pushing: `ruff check`, `ruff format --check`, `pytest -m "not integration"`, and `python3 infra/check_plugin_boundary.py`.
 
 ## Reuse (port or import, don't rewrite)
 | Need | Source |
@@ -144,7 +144,7 @@ The spec's layout is kept, with these adaptations:
    - `pyproject.toml`, `README.md`;
    - `config/default.yaml` from the spec;
    - `config.py` with a validation test;
-   - `types.py`, empty module tree, CI caller.
+   - `types.py` and an empty module tree.
 3. Copy this plan into `services/zone-trend/PLAN.md`, with the spec-review issues as tracked items.
 4. Run `uv sync --package zone-trend --group dev`, `ruff`, `pytest`. Commit.
 5. Begin M1.
