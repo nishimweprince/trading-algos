@@ -1,0 +1,159 @@
+# Zone-Trend implementation plan (spec v1.1)
+
+## Context
+Spec: `~/Documents/Markets/Docs/Zone Trend/Zone-Trend Strategy Spec v1.1.md`. The goal is a new autonomous Binance USDⓈ-M perps swing bot:
+- 1D/4H zones and trend, with 1H break-and-retest entries.
+- Sizing by % price movement.
+- Its own Binance Vision backtester.
+- Shadow, then staged live.
+
+Deploy is gated: M5/M6 (live) are built only if the M4 walk-forward passes the acceptance criteria and beats the EMA 20/100 benchmark.
+
+Decisions taken with the user:
+- **Location:** `services/zone-trend/`, package `zone_trend`. It joins the uv workspace via the `services/*` glob and follows the ofi-scalper-service conventions.
+- **Branch:** `feat/zone-trend`, cut from `main`.
+- **Exec path:** extend `plugins/binance-futures` with algo orders, account setup and leverage brackets. zone-trend obtains the plugin through `ta_plugin_api.load_providers` and runs the spec's own OMS, reconciler and SQLite. execution-service is not changed.
+- **Rejection candle:** the zone-side wick is at least 40% of the range and the close is in the outer third of the bar, outside the zone. Both thresholds are configurable.
+- **TP2:** the nearer of the next opposing 1D/4H zone and 3R. The trail runs alongside it.
+- **Golden set:** the user labels it later. We ship a `zt episodes` CLI that renders candidates for labelling.
+- **Host:** a new small Tokyo/SG VPS (deploy kit at M6).
+- **Account:** sub-account or main is undecided. Equity and drawdown are computed from zone-trend's own positions so either works.
+
+## Spec review: issues to resolve in code (no spec change needed unless noted)
+1. **BTCUSDT minNotional is about $100** (ETH about $20, most alts $5; verify from exchangeInfo).
+   - At $500 equity, the 40% TP1 partial on BTC is almost always below 1.1 × minNotional, so the spec's single-TP fallback triggers.
+   - BTC trades with stops ≥ ~2.4% fall under minNotional and are skipped.
+   - The backtest must report these skips explicitly by reason.
+2. **Historical exchangeInfo and leverage brackets aren't on Binance Vision.**
+   - Use the current snapshot for listed symbols and conservative defaults for delisted ones.
+   - Record the approximation in every run's metadata.
+3. **Warm-up eats history.** It is 365d for 1D zones plus a 1-year volatility percentile. With data from 2020-01, the first tradable bar is around 2021-01, and the first walk-forward in-sample window shifts accordingly.
+   - Sync from the earliest listing, which is 2019-09 for BTC.
+4. **The k_sym displacement stats must come only from data before each walk-forward in-sample window ends,** or the backtest leaks future information. Before 30 trades, k_sym = 1.0.
+5. **Retracement at retest time.** The spec says retr uses impulse A→B, but B (the 1H swing high after the break) is often not confirmed yet at the retest.
+   - Interpretation: A = the last confirmed 1H opposite swing before the breakout; B = the running extreme since the breakout. Both are known at bar close, so there's no look-ahead.
+   - Documented in `fib.py`.
+6. **Funding blackout.** Entries fill at 1H opens and settlements fall on the hour, so "15 min before settlement" never binds on market entries.
+   - It is kept for limit-entry validity windows.
+   - Funding is normalised to its 8h equivalent for 4h-interval symbols.
+7. **Same-minute stop/TP conflicts.** v1 assumes the stop is hit first and counts conflicts per run. An aggTrades replay is added only if conflicts exceed 1% of exits, which saves pulling tick data up front.
+8. **Zone strength components** (touch scaling, departure size, recency decay) are not fully defined.
+   - Each one gets an explicit formula in `zones.py` with a docstring and unit tests, exposed in config.
+   - Strength stays a ranking signal. Only the ≥70 Range rule depends on its absolute value.
+9. **Algo Order API** is confirmed in current docs as `POST /fapi/v1/algoOrder` with `algoType=CONDITIONAL`, `STOP_MARKET`/`TAKE_PROFIT_MARKET`, `workingType`, `priceProtect`, `closePosition` and `clientAlgoId` (≤36 chars).
+   - The spec's `zt-{hash12}-{leg}` id fits.
+   - Re-check the user-stream event type for algo orders at M5.
+10. **The roadmap diagram is missing from the spec text.** The milestones below are inferred from it.
+
+## Package layout (`services/zone-trend/`)
+The spec's layout is kept, with these adaptations:
+- `pyproject.toml` uses hatchling with `packages = ["src/zone_trend"]` and ruff `extend = "../../pyproject.toml"`.
+- Workspace deps: `ta-core`, `ta-notify`, `ta-plugin-api`, `ta-plugin-binance-futures`.
+- Other deps: numpy, pandas, pyarrow, pydantic v2, pydantic-settings, SQLAlchemy 2, httpx, structlog (or ta-core logging), hypothesis (dev).
+- `config/default.yaml` holds the spec's config verbatim, loaded by `config.py` (pydantic, range-checked).
+- Secrets and notification settings come from env via `ta_core.BaseServiceSettings + ta_notify.NotificationSettings + BinanceFuturesSettingsMixin`. This is the same mixin set as `ofi_scalper_service/config.py`.
+- Package directories follow the spec: `src/zone_trend/{types,config}.py`, `data/`, `core/`, `risk/`, `backtest/`, `live/`, `persistence/`, `cli.py`. The CLI is `zt`, a `[project.scripts]` entry.
+- `tests/{unit,property,lookahead,golden,integration}`, with a pytest config mirroring ofi: `asyncio_mode=auto`, `filterwarnings=error`, and an `integration` marker.
+- `.github/workflows/zone-trend-ci.yml` is an ~8-line caller of `_python-service.yml`.
+
+## Reuse (port or import, don't rewrite)
+| Need | Source |
+|---|---|
+| Vision listing, download, SHA-256 checksum | `services/ofi-scalper-service/research/collect/vision.py` (copy into `zone_trend/data/vision.py`; add `klines`, `markPriceKlines` and `indexPriceKlines` with the interval path segment, plus unzip → Parquet) |
+| Volume profile HVN | `vrvp-strategy/indicators/volume_profile.py::_calculate_profile` (port vectorised into `core/indicators.py`, past window only, HVN as clustered peaks) |
+| PF, percentiles, Wilson | `services/backtesting-service/src/backtesting_service/harness/metrics.py`, `cell_stats.py` |
+| Data fingerprint | `.../harness/fingerprint.py` pattern for `snapshot_id` |
+| Block bootstrap MC, DSR/PBO | `.../research/s7_prop_monte_carlo.py`, `research/s6_walk_forward.py` (generic parts) |
+| Report tables | `.../research/markdown.py` |
+| Signed REST, weight limiter, filters, user stream, cancel-all/flatten | `plugins/binance-futures`: `FapiRest` (`rest.py`), `OrderFilters`/`load_filters` (`instruments.py`), `UserStream`, `AccountReader`, `OrderRateGovernor`, `FuturesStreams` (markPrice@1s) |
+| Alerts | `ta_notify.Notifier.send` (never raises) |
+| Test fakes | `ta_plugin_binance_futures.testing` (`FakeBinanceFutures`, `FakeFuturesStream`), ofi `conftest.py` patterns |
+
+## Milestones (each ends with tests green and a commit)
+
+**M1: Data pipeline**
+- `data/vision.py`: monthly archives for closed months, daily for the current one, with checksum verification. Header detection by whether the first field is numeric; int64 ms timestamps.
+- `data/validate.py`: the six checks plus a quarantine list.
+- `data/store.py`: zstd Parquet, a manifest, `snapshot_id`.
+- `data/universe.py`: monthly top 10, survivorship-safe (the symbol list comes from the S3 listing, so delisted symbols are included).
+- CLI: `zt data sync|validate|universe`.
+- Datasets: klines (1m/1h/4h/1d) and markPriceKlines (1m/1h) for the top ~20 candidates; fundingRate; exchangeInfo and leverageBracket snapshots via the public/plugin REST.
+
+**M2: Pure core**
+- `core/indicators.py`: Wilder ATR, EMA, volume median, correlation, HVN. Incremental functions must equal the vectorised reference within 1e-9.
+- `swings.py`: L/R confirmation, k×ATR leg, alternation collapse, `t_conf`.
+- `structure.py`: trend state, BOS, CHoCH, normalised slopes, momentum decay.
+- `zones.py`: build, merge, score, break/flip, delete, keep 6 per side.
+- `fib.py`, `retest_fsm.py` (states IDLE→BROKEN→RETESTING→ARMED→ENTERED/FAILED), `signals.py` (content-hash ids), `exits.py`.
+- `on_close(state, new_bars, cfg)` follows the spec's 7-step order.
+- Tests:
+  - Unit tests per rule.
+  - Hypothesis property tests (truncating the future never changes the past).
+  - **Look-ahead harness:** run cut at T vs the full run, and HTF shift tests.
+
+**M3: Risk and backtester**
+- `risk/sizing.py`: both modes; the worked-example table as a test.
+- `risk/liquidation.py`: bracket MMR, and the stop must be ≤ 0.5 × liquidation distance.
+- `risk/portfolio.py`: limits, correlation caps, daily/weekly/DD/consecutive-loss breakers.
+- `risk/displacement.py`: k_sym.
+- `backtest/broker_sim.py`:
+  - next-open fills ± slippage;
+  - limit through-by-one-tick;
+  - mark-1m stops at 2× slippage;
+  - last-1m TPs;
+  - maker/taker fees;
+  - funding at actual settlement timestamps;
+  - step/tick/minNotional;
+  - liquidation raises.
+- `backtest/engine.py` follows the spec loop.
+- Outputs go to `runs/{id}/` as config, snapshot, and trades/equity/signals Parquet (rejected signals with reasons), plus `report.html`.
+- An EMA 20/100 benchmark through the same engine.
+
+**M4: Validation (GATE)**
+- `walkforward.py`: 18m in-sample / 6m out-of-sample / 6m step, a ±20/40% grid, an objective of median-of-3-folds PF·√n with a DD penalty, stitched out-of-sample results.
+- Holdout: the last 9 months, run once.
+- `montecarlo.py`: 10k block bootstrap and a one-bar delay variant.
+- `zt ablate` covering the volume filter, fib band (0.382–0.786 vs 0.3–0.8), slope, funding and HTF zones.
+- 1×/2×/3× slippage runs.
+- `zt episodes` renders candidates for the user's golden labels.
+- **Stop here and report.** If the criteria fail, rework the rules or retire the strategy; M5/M6 are not built.
+
+**M5: Live adapters and shadow** (only after M4 passes)
+- `plugins/binance-futures` additions, with fakes extended in `testing.py` and plugin tests:
+  - `algo.py`: place/cancel/list `algoOrder`;
+  - `account_setup.py`: `positionSide/dual` check, marginType ISOLATED, leverage, `leverageBracket`;
+  - kline 1h/4h/1d streams (or a REST poll 5s after close, confirming the kline is final);
+  - algo events on `UserStream`.
+- Boundary rule: zone-trend gets these through the factory, never by direct construction (`infra/check_plugin_boundary.py`).
+- `live/oms.py`: intent persisted before the call, deterministic client ids, query-before-resend on ambiguous responses, place-then-cancel stop moves, and close-if-stop-fails-twice.
+- Also `reconciler.py`, `runner.py` (startup sequence, hourly scheduler) and `notify.py`.
+- `persistence/`: the spec's SQLite WAL schema.
+- `zt shadow`, `zt live [--resume]`, `zt kill`.
+- Integration tests with mocked REST/WS: ambiguous send, -2021, partial fills, reconnect, reconciler repairs.
+- Parity: replaying a shadow week through the backtester must give ≥95% identical signals.
+
+**M6: Ops and rollout**
+- Prometheus `/metrics`, `/health` for an external uptime monitor, heartbeat, daily summary, weekly live-vs-backtest report.
+- systemd units following `infra/systemd/ofi-*` (OnFailure alert unit).
+- Deploy notes for the new Tokyo/SG VPS (IP-whitelisted futures-only key, off-site DB backup, lock file).
+- Stage-gate automation for Shadow → Micro → Half → Full.
+
+## Immediate first step (on approval)
+1. `git checkout -b feat/zone-trend` from `main`.
+2. Scaffold `services/zone-trend/`:
+   - `pyproject.toml`, `README.md`;
+   - `config/default.yaml` from the spec;
+   - `config.py` with a validation test;
+   - `types.py`, empty module tree, CI caller.
+3. Copy this plan into `services/zone-trend/PLAN.md`, with the spec-review issues as tracked items.
+4. Run `uv sync --package zone-trend --group dev`, `ruff`, `pytest`. Commit.
+5. Begin M1.
+
+## Verification
+- Every milestone: run `uv run --package zone-trend pytest -m "not integration"` and `ruff check` + `ruff format --check` (same as CI).
+- M1: `zt data sync --symbols BTCUSDT,ETHUSDT --from 2020-01 ...`, then `zt data validate` gives a clean manifest and quarantine report.
+- M2: the look-ahead suite passes (cut-at-T equality on BTC/ETH); a visual spot check via `zt episodes`.
+- M3: the sizing table test passes; a short `zt backtest` run produces `runs/<id>/report.html` with costs, funding and skip reasons.
+- M4: `zt wf`, `zt mc`, `zt ablate` produce an acceptance-criteria table (pass/fail per row) and the benchmark comparison. **Go/no-go is decided with the user.**
+- M5: plugin and zone-trend integration tests against the fakes; a 2-week shadow run with the parity replay at ≥95%.
+- Pre-flight before any live stage: Futures API is enabled on the Rwanda account; the key is futures-only with withdrawals disabled and IP-whitelisted.

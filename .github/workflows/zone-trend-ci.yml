@@ -1,0 +1,12 @@
+name: zone-trend
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    uses: ./.github/workflows/_python-service.yml
+    with:
+      package: zone-trend
+      working-directory: services/zone-trend
