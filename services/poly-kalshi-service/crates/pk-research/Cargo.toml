@@ -1,0 +1,33 @@
+[package]
+name = "pk-research"
+description = "Research on the tapes: replay, the null battery, the read-out, fills, inventories, and the Helix tape"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+indexmap.workspace = true
+tracing.workspace = true
+reqwest = { workspace = true, features = ["blocking"] }
+rand.workspace = true
+zstd.workspace = true
+parquet.workspace = true
+arrow-array.workspace = true
+arrow-schema.workspace = true
+pk-core.workspace = true
+pk-engine.workspace = true
+pk-tape.workspace = true
+pk-results.workspace = true
+pk-stats.workspace = true
+
+[dev-dependencies]
+flate2.workspace = true
+
+[lints]
+workspace = true

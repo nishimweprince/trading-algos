@@ -151,7 +151,7 @@ fn run_full(name: &str, lines: &[(i64, char, String)]) -> Vec<Value> {
 
 fn check(name: &str) {
     let lines = tape();
-    let ours = run_full(name, &lines);
+    let ours = if name == "reverse" { run_reverse(&lines) } else { run_full(name, &lines) };
     let theirs: Vec<Value> = std::fs::read_to_string(golden(&format!("{name}.jsonl")))
         .unwrap()
         .lines()
@@ -177,6 +177,34 @@ fn check(name: &str) {
         m
     });
     eprintln!("{name}: {} records match {kinds:?}", theirs.len());
+}
+
+fn run_reverse(lines: &[(i64, char, String)]) -> Vec<Value> {
+    let params =
+        StrategyParams { gap_threshold: 0.10, max_entry_px: 0.60, notional_usd: 50.0, ..Default::default() };
+    let mut ec = EngineConfig::new(params, ["BTC", "ETH", "SOL", "XRP"].map(String::from).to_vec());
+    ec.venue = Some(PaperVenue::new(47));
+    ec.limit_offset = 0.02;
+    ec.direction = pk_engine::Direction::Reverse;
+    let risk = RiskState::new(RiskLimits {
+        max_open_notional_usd: 1e12,
+        daily_loss_limit_usd: 1e12,
+        kill_file: None,
+    });
+    let sink = Shared::default();
+    let mut e = Engine::new(ec, Ledger::new(1e9), risk, Box::new(sink.clone()));
+    for (t, v, x) in lines {
+        e.handle_line(*t, *v, x);
+    }
+    e.handle_line(lines.last().unwrap().0 + 200 * NS, 'c', r#"{"type":"noop"}"#);
+    let mut records = sink.0.lock().unwrap().clone();
+    records.push(final_record(&e));
+    records
+}
+
+#[test]
+fn matches_python_reverse() {
+    check("reverse");
 }
 
 #[test]

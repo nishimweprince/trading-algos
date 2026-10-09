@@ -218,6 +218,45 @@ pub fn quantile_sorted(sorted: &[f64], q: f64) -> Option<f64> {
     Some(sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo as f64))
 }
 
+/// numpy's `pairwise_sum` for float64 (what `ndarray.sum` and pandas'
+/// `Series.mean` use): 8 interleaved accumulators per 128-element block,
+/// blocks split in halves. Bit-for-bit with numpy, so results that round on
+/// a tie land where pandas' do.
+pub fn np_sum(a: &[f64]) -> f64 {
+    let n = a.len();
+    if n < 8 {
+        let mut res = 0.0;
+        for x in a {
+            res += x;
+        }
+        res
+    } else if n <= 128 {
+        let mut r = [a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]];
+        let mut i = 8;
+        while i < n - (n % 8) {
+            for j in 0..8 {
+                r[j] += a[i + j];
+            }
+            i += 8;
+        }
+        let mut res = ((r[0] + r[1]) + (r[2] + r[3])) + ((r[4] + r[5]) + (r[6] + r[7]));
+        while i < n {
+            res += a[i];
+            i += 1;
+        }
+        res
+    } else {
+        let mut n2 = n / 2;
+        n2 -= n2 % 8;
+        np_sum(&a[..n2]) + np_sum(&a[n2..])
+    }
+}
+
+/// `numpy.mean` / pandas `Series.mean` on float64.
+pub fn np_mean(a: &[f64]) -> Option<f64> {
+    (!a.is_empty()).then(|| np_sum(a) / a.len() as f64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

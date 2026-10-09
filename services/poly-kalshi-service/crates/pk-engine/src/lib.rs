@@ -41,6 +41,7 @@ use serde_json::{Map, Value, json};
 
 pub mod paper;
 pub mod parse;
+pub mod reverse;
 
 pub use paper::{FillResult, PaperVenue};
 
@@ -102,13 +103,13 @@ impl AssetState {
 }
 
 #[derive(Debug, Clone)]
-struct Pending {
-    due_ns: i64,
-    window: Window,
-    token: String,
-    side: &'static str,
-    decision: Decision,
-    decision_ns: i64,
+pub(crate) struct Pending {
+    pub(crate) due_ns: i64,
+    pub(crate) window: Window,
+    pub(crate) token: String,
+    pub(crate) side: &'static str,
+    pub(crate) decision: Decision,
+    pub(crate) decision_ns: i64,
 }
 
 #[derive(Debug)]
@@ -169,6 +170,17 @@ pub struct EngineConfig {
     pub age_outlier_ms: Option<f64>,
     /// Queue an [`OrderIntent`] for every entry the paper venue takes.
     pub emit_intents: bool,
+    /// Which venue is the signal and which the execution (research).
+    pub direction: Direction,
+}
+
+/// `Forward` is the trade: Kalshi signals, Polymarket executes. `Reverse`
+/// (research only) flips them: Polymarket signals, Kalshi executes and settles.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Direction {
+    #[default]
+    Forward,
+    Reverse,
 }
 
 impl EngineConfig {
@@ -184,6 +196,7 @@ impl EngineConfig {
             stamp: Map::new(),
             age_outlier_ms: None,
             emit_intents: false,
+            direction: Direction::Forward,
         }
     }
 }
@@ -192,9 +205,9 @@ pub struct Engine {
     pub params: StrategyParams,
     pub assets: Vec<String>,
     pub role: Role,
-    trade: bool,
-    observe: bool,
-    size_to_depth: bool,
+    pub(crate) trade: bool,
+    pub(crate) observe: bool,
+    pub(crate) size_to_depth: bool,
     pub stamp: Map<String, Value>,
     pub ledger: Ledger,
     pub risk: RiskState,
@@ -207,13 +220,13 @@ pub struct Engine {
     /// book id -> (asset index, open_unix)
     ids: HashMap<String, (usize, i64)>,
     pub state: Vec<AssetState>,
-    pending: Vec<Pending>,
+    pub(crate) pending: Vec<Pending>,
     markouts: Vec<Markout>,
     bbo_seen: u64,
     pub bbo_check_every: u64,
     pub shadow: Shadow,
     pub limit_offset: f64,
-    resolutions: HashMap<(String, i64), Vec<(String, String)>>,
+    pub(crate) resolutions: HashMap<(String, i64), Vec<(String, String)>>,
     pub recent: VecDeque<Value>,
     pub counters: HashMap<String, u64>,
     pub last_ns: i64,
@@ -224,6 +237,7 @@ pub struct Engine {
     grid_open: Option<i64>,
     age_outlier_ms: Option<f64>,
     emit_intents: bool,
+    pub(crate) reverse: bool,
     pub intents: Vec<OrderIntent>,
     pub hints: Vec<PresignHint>,
     prev_p_ns: Option<i64>,
@@ -275,6 +289,7 @@ impl Engine {
             grid_open: None,
             age_outlier_ms: cfg.age_outlier_ms,
             emit_intents: cfg.emit_intents,
+            reverse: cfg.direction == Direction::Reverse,
             intents: Vec::new(),
             hints: Vec::new(),
             prev_p_ns: None,
@@ -291,7 +306,7 @@ impl Engine {
         self.journal = journal;
     }
 
-    fn count(&mut self, key: &str) {
+    pub(crate) fn count(&mut self, key: &str) {
         match self.counters.get_mut(key) {
             Some(n) => *n += 1,
             None => {
@@ -731,7 +746,7 @@ impl Engine {
     }
 
     /// The uncensored gap: every update inside the entry window, consumed or not.
-    fn track_gap(&mut self, idx: usize, k: &Quote, y: &Quote, sec_into: f64) {
+    pub(crate) fn track_gap(&mut self, idx: usize, k: &Quote, y: &Quote, sec_into: f64) {
         let p = &self.params;
         if !((p.entry_early_s as f64) <= sec_into && sec_into <= (WINDOW_S - p.entry_late_s) as f64) {
             return;
@@ -751,6 +766,9 @@ impl Engine {
     }
 
     fn evaluate(&mut self, idx: usize, recv_ns: i64) {
+        if self.reverse {
+            return self.evaluate_reverse(idx, recv_ns);
+        }
         let Some(window) = self.state[idx].window.clone() else { return };
         let Some((k, y, n)) = self.quotes(idx) else { return };
         let sec_into = secs_f64(recv_ns) - window.open_unix as f64;
@@ -937,7 +955,7 @@ impl Engine {
         self.markouts.len()
     }
 
-    fn count_invalid_legs(&mut self, w: &Window) {
+    pub(crate) fn count_invalid_legs(&mut self, w: &Window) {
         let since = Some(w.open_unix * NS);
         let keys: Vec<String> = w
             .ids()
@@ -1024,6 +1042,9 @@ impl Engine {
     }
 
     fn fill(&mut self, order: Pending, recv_ns: i64) {
+        if self.reverse {
+            return self.fill_reverse(order, recv_ns);
+        }
         let venue = self.venue.expect("orders exist only with a venue");
         let (d, w) = (&order.decision, &order.window);
         let entry = d.entry_px.expect("an entry has a price");
@@ -1088,6 +1109,9 @@ impl Engine {
     }
 
     fn add_markout(&mut self, fill_ns: i64, w: &Window, side: &str, filled: bool, ref_px: f64) {
+        if self.reverse {
+            return; // markouts would read the Polymarket leg
+        }
         let token = if side == "yes" { w.yes_token.clone() } else { w.no_token.clone() };
         let mut record = Map::new();
         record.insert("type".into(), "markout".into());
@@ -1226,18 +1250,19 @@ impl Engine {
                 "delay_s": delay_s,
             });
             self.write(recv_ns, record, false);
-            if venue == "poly" {
+            if venue == "poly" && !self.reverse {
                 for record in self.shadow.settle(&(asset.to_owned(), open_unix), outcome) {
                     self.write(recv_ns, record, false);
                 }
             }
         }
-        if venue == "poly" && self.trade {
+        let settles_on = if self.reverse { "kalshi" } else { "poly" };
+        if venue == settles_on && self.trade {
             self.settle(asset, open_unix, outcome, recv_ns);
         }
     }
 
-    fn settle(&mut self, asset: &str, open_unix: i64, outcome: &str, recv_ns: i64) {
+    pub(crate) fn settle(&mut self, asset: &str, open_unix: i64, outcome: &str, recv_ns: i64) {
         let Some(p) = self.ledger.settle(asset, open_unix, outcome, recv_ns) else { return };
         self.count("settled");
         let record = json!({
@@ -1258,7 +1283,7 @@ impl Engine {
 
     // --- output -----------------------------------------------------------------
 
-    fn write(&mut self, recv_ns: i64, mut record: Value, keep: bool) {
+    pub(crate) fn write(&mut self, recv_ns: i64, mut record: Value, keep: bool) {
         if !self.stamp.is_empty()
             && let Some(obj) = record.as_object_mut()
         {
