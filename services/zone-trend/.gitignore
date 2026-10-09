@@ -1,6 +1,8 @@
 /data/
 /runs/
 /state/
+# Runtime secrets (DEPLOY.md); never committed.
+/.env.zt
 # The root .gitignore drops services/**/data/; this one is source code.
 !/src/zone_trend/data/
 /episodes/
