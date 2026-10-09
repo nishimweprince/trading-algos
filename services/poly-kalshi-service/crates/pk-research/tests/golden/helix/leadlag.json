@@ -1,0 +1,120 @@
+{
+ "days": [
+  "20261001",
+  "20261002"
+ ],
+ "bin_ms": 50,
+ "assets": {
+  "XRP": {
+   "kalshi->poly": {
+    "peak_lag_ms": 2950,
+    "peak_corr": 0.0229,
+    "corr_at_0": 0.0025,
+    "corr_at_150ms": 0.0015,
+    "share_of_mass_after_150ms": 0.717
+   },
+   "chainlink->poly": {
+    "peak_lag_ms": -900,
+    "peak_corr": 0.0059,
+    "corr_at_0": -0.0013,
+    "corr_at_150ms": 0.0006,
+    "share_of_mass_after_150ms": 0.51
+   },
+   "incremental": null
+  },
+  "BTC": {
+   "spot->poly": {
+    "peak_lag_ms": 3000,
+    "peak_corr": 0.0211,
+    "corr_at_0": -0.0003,
+    "corr_at_150ms": 0.0007,
+    "share_of_mass_after_150ms": 0.809
+   },
+   "spot->kalshi": {
+    "peak_lag_ms": 350,
+    "peak_corr": 0.0278,
+    "corr_at_0": 0.0056,
+    "corr_at_150ms": 0.0037,
+    "share_of_mass_after_150ms": 0.5
+   },
+   "kalshi->poly": {
+    "peak_lag_ms": 3000,
+    "peak_corr": 0.0315,
+    "corr_at_0": -0.0049,
+    "corr_at_150ms": -0.0014,
+    "share_of_mass_after_150ms": 0.752
+   },
+   "chainlink->poly": {
+    "peak_lag_ms": -1500,
+    "peak_corr": 0.0041,
+    "corr_at_0": -0.0,
+    "corr_at_150ms": 0.0,
+    "share_of_mass_after_150ms": 0.431
+   },
+   "spot->chainlink": {
+    "peak_lag_ms": 2350,
+    "peak_corr": 0.0045,
+    "corr_at_0": -0.0031,
+    "corr_at_150ms": -0.0004,
+    "share_of_mass_after_150ms": 0.476
+   },
+   "incremental": [
+    {
+     "rows": 16300,
+     "r2_spot": 0.0011,
+     "r2_kalshi": 0.0014,
+     "r2_spot_kalshi": 0.002,
+     "kalshi_t_given_spot": 3.74,
+     "day": "20261001"
+    }
+   ]
+  },
+  "ETH": {
+   "spot->poly": {
+    "peak_lag_ms": 2800,
+    "peak_corr": 0.0148,
+    "corr_at_0": -0.0023,
+    "corr_at_150ms": 0.0008,
+    "share_of_mass_after_150ms": 0.616
+   },
+   "spot->kalshi": {
+    "peak_lag_ms": -50,
+    "peak_corr": 0.0278,
+    "corr_at_0": 0.0075,
+    "corr_at_150ms": 0.0076,
+    "share_of_mass_after_150ms": 0.371
+   },
+   "kalshi->poly": {
+    "peak_lag_ms": 2300,
+    "peak_corr": 0.0287,
+    "corr_at_0": 0.0006,
+    "corr_at_150ms": 0.0032,
+    "share_of_mass_after_150ms": 0.77
+   },
+   "chainlink->poly": {
+    "peak_lag_ms": 650,
+    "peak_corr": 0.007,
+    "corr_at_0": 0.001,
+    "corr_at_150ms": 0.0009,
+    "share_of_mass_after_150ms": 0.396
+   },
+   "spot->chainlink": {
+    "peak_lag_ms": -1300,
+    "peak_corr": 0.0047,
+    "corr_at_0": 0.0005,
+    "corr_at_150ms": 0.0026,
+    "share_of_mass_after_150ms": 0.522
+   },
+   "incremental": [
+    {
+     "rows": 16374,
+     "r2_spot": 0.0003,
+     "r2_kalshi": 0.0005,
+     "r2_spot_kalshi": 0.0006,
+     "kalshi_t_given_spot": 2.23,
+     "day": "20261001"
+    }
+   ]
+  }
+ }
+}

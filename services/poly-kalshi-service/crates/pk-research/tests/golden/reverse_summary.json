@@ -1,0 +1,45 @@
+{
+ "by_asset": {
+  "BTC": {
+   "fills": 8,
+   "net_cents_per_share": 42.25,
+   "pnl_usd": 534.45,
+   "settled": 8,
+   "wins": 6
+  },
+  "ETH": {
+   "fills": 8,
+   "net_cents_per_share": 52.67,
+   "pnl_usd": 677.26,
+   "settled": 8,
+   "wins": 7
+  },
+  "SOL": {
+   "fills": 6,
+   "net_cents_per_share": 45.94,
+   "pnl_usd": 249.86,
+   "settled": 6,
+   "wins": 5
+  },
+  "XRP": {
+   "fills": 8,
+   "net_cents_per_share": 13.39,
+   "pnl_usd": 241.53,
+   "settled": 8,
+   "wins": 4
+  }
+ },
+ "decisions": 32,
+ "enters": 30,
+ "fees_usd": 57.2,
+ "fill_rate": 1.0,
+ "fills": 30,
+ "no_fills": 0,
+ "open_unsettled": 0,
+ "pnl_usd": 1703.1,
+ "settled": 30,
+ "skips": 2,
+ "venue_disagreement_on_settled": 3,
+ "win_rate": 0.7333,
+ "wins": 22
+}

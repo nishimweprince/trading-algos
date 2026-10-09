@@ -5,15 +5,23 @@ recorded by Helix's recorder, 2026-07-21 to 2026-10-01 (Kalshi from 07-13, with 
 gap on 07-21 to 07-25). About 368 GB, zstd-compressed. **It is read in a stream and
 never copied:** everything here writes derived outputs only.
 
+The code is Rust, in `crates/pk-research/src/helix/` (ported from the Python
+`recv3.py` and `reader.py`, which were Helix's own decoder and our wrapper of it):
+
 | Module | |
 |---|---|
-| `recv3.py` | Helix's own decoder, vendored unchanged (header lines only). Never imported directly. |
-| `reader.py` | The one entry point: typed records through `recv3`, and the fast array path. |
-| `validate.py` | PLAN 0.1a's checks on a day: `python -m research.helix.validate --day 20260920` |
-| `resolutions.py` | Each window's settlement from the venues (Gamma, Kalshi), cached. |
-| `gamma.py` | One window's Polymarket outcome from Gamma, cached. |
+| `container.rs` | The `.hlxz` block container and the older HLXF frame stream. |
+| `records.rs` | Typed records (windows, resolutions, BBO, quotes, trades, books). |
+| `series.rs` | The array path: top of book per key, deduplicated, and the Kalshi contract switch. |
+| `validate.rs` | PLAN 0.1a's checks on a day: `pk helix validate --day 20260920` |
+| `resolutions.rs`, `gamma.rs` | Each window's settlement from the venues (Gamma, Kalshi), cached. |
+| `replay.rs`, `sweeps.rs`, `leadlag.rs`, `fairvalue.rs`, `inventory.rs` | The studies (`pk helix …`). |
 
-`research/helix_replay.py` runs the live `decide()` over every window.
+The tests run every module on a small synthetic tape that carries the real
+tape's quirks (restarts, legacy and wide tags, stale-width and damaged blocks, a
+partial tail, an HLXF file), against the Python modules' outputs
+(`crates/pk-research/tests/golden/helix/`). Below, `recv3` and `reader` name the
+Python decoder the measurements were taken with.
 
 ## Container
 

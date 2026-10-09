@@ -1,4 +1,5 @@
 # poly-kalshi: Kalshi-signal / Polymarket-leg recorder, engine and paper venue.
+# Rust release binaries (cargo build --release in services/poly-kalshi-service).
 # Install: see infra/systemd/README.md (poly-kalshi section). Edit User= and the
 # paths if the checkout or the profile differ. Secrets stay in the service's
 # .env.<profile> (chmod 600) and the Kalshi PEM, never in this file.
@@ -16,16 +17,17 @@ Type=simple
 User=pk
 Group=pk
 WorkingDirectory=/home/pk/trading-algos/services/poly-kalshi-service
-ExecStart=/home/pk/trading-algos/.venv/bin/poly-kalshi-service --profile dev
+ExecStart=/home/pk/trading-algos/services/poly-kalshi-service/target/release/poly-kalshi-service --profile dev
 Restart=always
 RestartSec=5
 # Time for the trader to close the observer's pipe and for the observer (the
-# pk-observer child: tape, journal, statistics) to drain it, close the hour file
-# and write its manifest. The trader waits up to 25 s for it.
+# pk-observer child, next to the trader's binary: tape, journal, statistics) to
+# drain it, close the hour file and write its manifest. The trader waits up to
+# 25 s for it.
 TimeoutStopSec=45
-# SIGTERM to the trader only: its observer child and the observer's gzip child
-# must outlive it long enough to be fed the last lines and closed (control-group
-# would kill them first and truncate the hour file). The trader exits only after
+# SIGTERM to the trader only: its observer child must outlive it long enough to
+# be fed the last lines and close the zstd hour file (control-group would kill
+# it first and truncate the file). The trader exits only after
 # the observer has. Anything left after TimeoutStopSec is SIGKILLed.
 KillMode=mixed
 LimitNOFILE=65536

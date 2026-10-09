@@ -1,0 +1,1802 @@
+{
+ "entries": 25,
+ "engine_check": {
+  "latency_ms": 150,
+  "mismatches": [],
+  "agreement": 1.0
+ },
+ "cells": {
+  "0ms+0c": {
+   "all": {
+    "entries": 25,
+    "fill_rate": 1.0,
+    "fill_ratio": 0.4986966555903097,
+    "usd_filled_per_entry": 24.847396,
+    "vwap": 0.43397016906525077,
+    "settled": 25,
+    "win_rate": 0.36,
+    "net_cents": -7.870607999999991,
+    "net_se": 10.326255152493442,
+    "pnl_usd": -178.73
+   },
+   "by_asset": {
+    "BTC": {
+     "entries": 5,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.6866277374557754,
+     "usd_filled_per_entry": 34.159380000000006,
+     "vwap": 0.4477217678515256,
+     "settled": 5,
+     "win_rate": 0.0,
+     "net_cents": -46.669500000000006,
+     "net_se": 4.776656550663863,
+     "pnl_usd": -177.19
+    },
+    "ETH": {
+     "entries": 6,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.3084855979139257,
+     "usd_filled_per_entry": 15.382750000000001,
+     "vwap": 0.4013938418717926,
+     "settled": 6,
+     "win_rate": 0.0,
+     "net_cents": -42.494783333333324,
+     "net_se": 2.957137021897662,
+     "pnl_usd": -96.08
+    },
+    "SOL": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.48857788549166176,
+     "usd_filled_per_entry": 24.369357142857144,
+     "vwap": 0.4339272995522995,
+     "settled": 7,
+     "win_rate": 0.5714285714285714,
+     "net_cents": 17.0292285714286,
+     "net_se": 23.444908922516685,
+     "pnl_usd": -18.92
+    },
+    "XRP": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.5376169880790969,
+     "usd_filled_per_entry": 26.786571428571428,
+     "vwap": 0.43926814412219467,
+     "settled": 7,
+     "win_rate": 0.7142857142857143,
+     "net_cents": 24.620914285714285,
+     "net_se": 18.07702006370346,
+     "pnl_usd": 113.46
+    }
+   }
+  },
+  "0ms+1c": {
+   "all": {
+    "entries": 25,
+    "fill_rate": 1.0,
+    "fill_ratio": 0.7712925134604103,
+    "usd_filled_per_entry": 38.778376,
+    "vwap": 0.4230565204489518,
+    "settled": 25,
+    "win_rate": 0.36,
+    "net_cents": -8.229250065542722,
+    "net_se": 10.316925862095403,
+    "pnl_usd": -193.1
+   },
+   "by_asset": {
+    "BTC": {
+     "entries": 5,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.7374832037623572,
+     "usd_filled_per_entry": 36.75094,
+     "vwap": 0.4439591688813723,
+     "settled": 5,
+     "win_rate": 0.0,
+     "net_cents": -46.74213130086132,
+     "net_se": 4.752514694535426,
+     "pnl_usd": -190.67
+    },
+    "ETH": {
+     "entries": 6,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.8104243158850033,
+     "usd_filled_per_entry": 41.01315,
+     "vwap": 0.4103845704851325,
+     "settled": 6,
+     "win_rate": 0.0,
+     "net_cents": -43.137580061344806,
+     "net_se": 2.965348088430997,
+     "pnl_usd": -256.05
+    },
+    "SOL": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.7163085214036621,
+     "usd_filled_per_entry": 36.06907142857143,
+     "vwap": 0.4000625881383593,
+     "settled": 7,
+     "win_rate": 0.5714285714285714,
+     "net_cents": 16.663987363732808,
+     "net_se": 23.384853618990718,
+     "pnl_usd": 76.91
+    },
+    "XRP": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.816884467508974,
+     "usd_filled_per_entry": 41.02032857142857,
+     "vwap": 0.44386060100166946,
+     "settled": 7,
+     "win_rate": 0.7142857142857143,
+     "net_cents": 24.308139098239675,
+     "net_se": 18.063279756515257,
+     "pnl_usd": 176.71
+    }
+   }
+  },
+  "0ms+2c": {
+   "all": {
+    "entries": 25,
+    "fill_rate": 1.0,
+    "fill_ratio": 0.8374483979431343,
+    "usd_filled_per_entry": 42.262608,
+    "vwap": 0.41859583925960847,
+    "settled": 25,
+    "win_rate": 0.36,
+    "net_cents": -8.329069706382304,
+    "net_se": 10.315629023557692,
+    "pnl_usd": -193.35
+   },
+   "by_asset": {
+    "BTC": {
+     "entries": 5,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.7758020443420673,
+     "usd_filled_per_entry": 38.76038,
+     "vwap": 0.4401187718581097,
+     "settled": 5,
+     "win_rate": 0.0,
+     "net_cents": -46.81318531211567,
+     "net_se": 4.719489043059028,
+     "pnl_usd": -201.16
+    },
+    "ETH": {
+     "entries": 6,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.9154313639951805,
+     "usd_filled_per_entry": 46.53716666666667,
+     "vwap": 0.4057884028484232,
+     "settled": 6,
+     "win_rate": 0.0,
+     "net_cents": -43.295189909143915,
+     "net_se": 2.9234569782792845,
+     "pnl_usd": -290.61
+    },
+    "SOL": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.8197320211607078,
+     "usd_filled_per_entry": 41.533728571428576,
+     "vwap": 0.3953011638657747,
+     "settled": 7,
+     "win_rate": 0.5714285714285714,
+     "net_cents": 16.52552138939939,
+     "net_se": 23.375754371508158,
+     "pnl_usd": 114.36
+    },
+    "XRP": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.8323553421102835,
+     "usd_filled_per_entry": 41.82917142857143,
+     "vwap": 0.44354192229038863,
+     "settled": 7,
+     "win_rate": 0.7142857142857143,
+     "net_cents": 24.275953375726925,
+     "net_se": 18.05334918666038,
+     "pnl_usd": 184.05
+    }
+   }
+  },
+  "0ms+3c": {
+   "all": {
+    "entries": 25,
+    "fill_rate": 1.0,
+    "fill_ratio": 0.8730063286182088,
+    "usd_filled_per_entry": 44.196203999999994,
+    "vwap": 0.4155215713705492,
+    "settled": 25,
+    "win_rate": 0.36,
+    "net_cents": -8.41981727506137,
+    "net_se": 10.316144023298651,
+    "pnl_usd": -185.16
+   },
+   "by_asset": {
+    "BTC": {
+     "entries": 5,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.7758020443420673,
+     "usd_filled_per_entry": 38.76038,
+     "vwap": 0.4401187718581097,
+     "settled": 5,
+     "win_rate": 0.0,
+     "net_cents": -46.81318531211567,
+     "net_se": 4.719489043059028,
+     "pnl_usd": -201.16
+    },
+    "ETH": {
+     "entries": 6,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.956537558685446,
+     "usd_filled_per_entry": 48.72031666666667,
+     "vwap": 0.4082879170914982,
+     "settled": 6,
+     "win_rate": 0.0,
+     "net_cents": -43.37022236356447,
+     "net_se": 2.9429531001523475,
+     "pnl_usd": -304.2
+    },
+    "SOL": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.8821144920061889,
+     "usd_filled_per_entry": 44.98301428571428,
+     "vwap": 0.3871076442674141,
+     "settled": 7,
+     "win_rate": 0.5714285714285714,
+     "net_cents": 16.393885263340387,
+     "net_se": 23.358332991409238,
+     "pnl_usd": 147.72
+    },
+    "XRP": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.8617315996555551,
+     "usd_filled_per_entry": 43.41431428571428,
+     "vwap": 0.4408503662870821,
+     "settled": 7,
+     "win_rate": 0.7142857142857143,
+     "net_cents": 24.147804574578327,
+     "net_se": 18.125669976031688,
+     "pnl_usd": 172.48
+    }
+   }
+  },
+  "25ms+0c": {
+   "all": {
+    "entries": 25,
+    "fill_rate": 1.0,
+    "fill_ratio": 0.4986966555903097,
+    "usd_filled_per_entry": 24.847396,
+    "vwap": 0.43397016906525077,
+    "settled": 25,
+    "win_rate": 0.36,
+    "net_cents": -7.870607999999991,
+    "net_se": 10.326255152493442,
+    "pnl_usd": -178.73
+   },
+   "by_asset": {
+    "BTC": {
+     "entries": 5,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.6866277374557754,
+     "usd_filled_per_entry": 34.159380000000006,
+     "vwap": 0.4477217678515256,
+     "settled": 5,
+     "win_rate": 0.0,
+     "net_cents": -46.669500000000006,
+     "net_se": 4.776656550663863,
+     "pnl_usd": -177.19
+    },
+    "ETH": {
+     "entries": 6,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.3084855979139257,
+     "usd_filled_per_entry": 15.382750000000001,
+     "vwap": 0.4013938418717926,
+     "settled": 6,
+     "win_rate": 0.0,
+     "net_cents": -42.494783333333324,
+     "net_se": 2.957137021897662,
+     "pnl_usd": -96.08
+    },
+    "SOL": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.48857788549166176,
+     "usd_filled_per_entry": 24.369357142857144,
+     "vwap": 0.4339272995522995,
+     "settled": 7,
+     "win_rate": 0.5714285714285714,
+     "net_cents": 17.0292285714286,
+     "net_se": 23.444908922516685,
+     "pnl_usd": -18.92
+    },
+    "XRP": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.5376169880790969,
+     "usd_filled_per_entry": 26.786571428571428,
+     "vwap": 0.43926814412219467,
+     "settled": 7,
+     "win_rate": 0.7142857142857143,
+     "net_cents": 24.620914285714285,
+     "net_se": 18.07702006370346,
+     "pnl_usd": 113.46
+    }
+   }
+  },
+  "25ms+1c": {
+   "all": {
+    "entries": 25,
+    "fill_rate": 1.0,
+    "fill_ratio": 0.7712925134604103,
+    "usd_filled_per_entry": 38.778376,
+    "vwap": 0.4230565204489518,
+    "settled": 25,
+    "win_rate": 0.36,
+    "net_cents": -8.229250065542722,
+    "net_se": 10.316925862095403,
+    "pnl_usd": -193.1
+   },
+   "by_asset": {
+    "BTC": {
+     "entries": 5,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.7374832037623572,
+     "usd_filled_per_entry": 36.75094,
+     "vwap": 0.4439591688813723,
+     "settled": 5,
+     "win_rate": 0.0,
+     "net_cents": -46.74213130086132,
+     "net_se": 4.752514694535426,
+     "pnl_usd": -190.67
+    },
+    "ETH": {
+     "entries": 6,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.8104243158850033,
+     "usd_filled_per_entry": 41.01315,
+     "vwap": 0.4103845704851325,
+     "settled": 6,
+     "win_rate": 0.0,
+     "net_cents": -43.137580061344806,
+     "net_se": 2.965348088430997,
+     "pnl_usd": -256.05
+    },
+    "SOL": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.7163085214036621,
+     "usd_filled_per_entry": 36.06907142857143,
+     "vwap": 0.4000625881383593,
+     "settled": 7,
+     "win_rate": 0.5714285714285714,
+     "net_cents": 16.663987363732808,
+     "net_se": 23.384853618990718,
+     "pnl_usd": 76.91
+    },
+    "XRP": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.816884467508974,
+     "usd_filled_per_entry": 41.02032857142857,
+     "vwap": 0.44386060100166946,
+     "settled": 7,
+     "win_rate": 0.7142857142857143,
+     "net_cents": 24.308139098239675,
+     "net_se": 18.063279756515257,
+     "pnl_usd": 176.71
+    }
+   }
+  },
+  "25ms+2c": {
+   "all": {
+    "entries": 25,
+    "fill_rate": 1.0,
+    "fill_ratio": 0.8374483979431343,
+    "usd_filled_per_entry": 42.262608,
+    "vwap": 0.41859583925960847,
+    "settled": 25,
+    "win_rate": 0.36,
+    "net_cents": -8.329069706382304,
+    "net_se": 10.315629023557692,
+    "pnl_usd": -193.35
+   },
+   "by_asset": {
+    "BTC": {
+     "entries": 5,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.7758020443420673,
+     "usd_filled_per_entry": 38.76038,
+     "vwap": 0.4401187718581097,
+     "settled": 5,
+     "win_rate": 0.0,
+     "net_cents": -46.81318531211567,
+     "net_se": 4.719489043059028,
+     "pnl_usd": -201.16
+    },
+    "ETH": {
+     "entries": 6,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.9154313639951805,
+     "usd_filled_per_entry": 46.53716666666667,
+     "vwap": 0.4057884028484232,
+     "settled": 6,
+     "win_rate": 0.0,
+     "net_cents": -43.295189909143915,
+     "net_se": 2.9234569782792845,
+     "pnl_usd": -290.61
+    },
+    "SOL": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.8197320211607078,
+     "usd_filled_per_entry": 41.533728571428576,
+     "vwap": 0.3953011638657747,
+     "settled": 7,
+     "win_rate": 0.5714285714285714,
+     "net_cents": 16.52552138939939,
+     "net_se": 23.375754371508158,
+     "pnl_usd": 114.36
+    },
+    "XRP": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.8323553421102835,
+     "usd_filled_per_entry": 41.82917142857143,
+     "vwap": 0.44354192229038863,
+     "settled": 7,
+     "win_rate": 0.7142857142857143,
+     "net_cents": 24.275953375726925,
+     "net_se": 18.05334918666038,
+     "pnl_usd": 184.05
+    }
+   }
+  },
+  "25ms+3c": {
+   "all": {
+    "entries": 25,
+    "fill_rate": 1.0,
+    "fill_ratio": 0.8730063286182088,
+    "usd_filled_per_entry": 44.196203999999994,
+    "vwap": 0.4155215713705492,
+    "settled": 25,
+    "win_rate": 0.36,
+    "net_cents": -8.41981727506137,
+    "net_se": 10.316144023298651,
+    "pnl_usd": -185.16
+   },
+   "by_asset": {
+    "BTC": {
+     "entries": 5,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.7758020443420673,
+     "usd_filled_per_entry": 38.76038,
+     "vwap": 0.4401187718581097,
+     "settled": 5,
+     "win_rate": 0.0,
+     "net_cents": -46.81318531211567,
+     "net_se": 4.719489043059028,
+     "pnl_usd": -201.16
+    },
+    "ETH": {
+     "entries": 6,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.956537558685446,
+     "usd_filled_per_entry": 48.72031666666667,
+     "vwap": 0.4082879170914982,
+     "settled": 6,
+     "win_rate": 0.0,
+     "net_cents": -43.37022236356447,
+     "net_se": 2.9429531001523475,
+     "pnl_usd": -304.2
+    },
+    "SOL": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.8821144920061889,
+     "usd_filled_per_entry": 44.98301428571428,
+     "vwap": 0.3871076442674141,
+     "settled": 7,
+     "win_rate": 0.5714285714285714,
+     "net_cents": 16.393885263340387,
+     "net_se": 23.358332991409238,
+     "pnl_usd": 147.72
+    },
+    "XRP": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.8617315996555551,
+     "usd_filled_per_entry": 43.41431428571428,
+     "vwap": 0.4408503662870821,
+     "settled": 7,
+     "win_rate": 0.7142857142857143,
+     "net_cents": 24.147804574578327,
+     "net_se": 18.125669976031688,
+     "pnl_usd": 172.48
+    }
+   }
+  },
+  "50ms+0c": {
+   "all": {
+    "entries": 25,
+    "fill_rate": 1.0,
+    "fill_ratio": 0.4986966555903097,
+    "usd_filled_per_entry": 24.847396,
+    "vwap": 0.43397016906525077,
+    "settled": 25,
+    "win_rate": 0.36,
+    "net_cents": -7.870607999999991,
+    "net_se": 10.326255152493442,
+    "pnl_usd": -178.73
+   },
+   "by_asset": {
+    "BTC": {
+     "entries": 5,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.6866277374557754,
+     "usd_filled_per_entry": 34.159380000000006,
+     "vwap": 0.4477217678515256,
+     "settled": 5,
+     "win_rate": 0.0,
+     "net_cents": -46.669500000000006,
+     "net_se": 4.776656550663863,
+     "pnl_usd": -177.19
+    },
+    "ETH": {
+     "entries": 6,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.3084855979139257,
+     "usd_filled_per_entry": 15.382750000000001,
+     "vwap": 0.4013938418717926,
+     "settled": 6,
+     "win_rate": 0.0,
+     "net_cents": -42.494783333333324,
+     "net_se": 2.957137021897662,
+     "pnl_usd": -96.08
+    },
+    "SOL": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.48857788549166176,
+     "usd_filled_per_entry": 24.369357142857144,
+     "vwap": 0.4339272995522995,
+     "settled": 7,
+     "win_rate": 0.5714285714285714,
+     "net_cents": 17.0292285714286,
+     "net_se": 23.444908922516685,
+     "pnl_usd": -18.92
+    },
+    "XRP": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.5376169880790969,
+     "usd_filled_per_entry": 26.786571428571428,
+     "vwap": 0.43926814412219467,
+     "settled": 7,
+     "win_rate": 0.7142857142857143,
+     "net_cents": 24.620914285714285,
+     "net_se": 18.07702006370346,
+     "pnl_usd": 113.46
+    }
+   }
+  },
+  "50ms+1c": {
+   "all": {
+    "entries": 25,
+    "fill_rate": 1.0,
+    "fill_ratio": 0.7712925134604103,
+    "usd_filled_per_entry": 38.778376,
+    "vwap": 0.4230565204489518,
+    "settled": 25,
+    "win_rate": 0.36,
+    "net_cents": -8.229250065542722,
+    "net_se": 10.316925862095403,
+    "pnl_usd": -193.1
+   },
+   "by_asset": {
+    "BTC": {
+     "entries": 5,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.7374832037623572,
+     "usd_filled_per_entry": 36.75094,
+     "vwap": 0.4439591688813723,
+     "settled": 5,
+     "win_rate": 0.0,
+     "net_cents": -46.74213130086132,
+     "net_se": 4.752514694535426,
+     "pnl_usd": -190.67
+    },
+    "ETH": {
+     "entries": 6,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.8104243158850033,
+     "usd_filled_per_entry": 41.01315,
+     "vwap": 0.4103845704851325,
+     "settled": 6,
+     "win_rate": 0.0,
+     "net_cents": -43.137580061344806,
+     "net_se": 2.965348088430997,
+     "pnl_usd": -256.05
+    },
+    "SOL": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.7163085214036621,
+     "usd_filled_per_entry": 36.06907142857143,
+     "vwap": 0.4000625881383593,
+     "settled": 7,
+     "win_rate": 0.5714285714285714,
+     "net_cents": 16.663987363732808,
+     "net_se": 23.384853618990718,
+     "pnl_usd": 76.91
+    },
+    "XRP": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.816884467508974,
+     "usd_filled_per_entry": 41.02032857142857,
+     "vwap": 0.44386060100166946,
+     "settled": 7,
+     "win_rate": 0.7142857142857143,
+     "net_cents": 24.308139098239675,
+     "net_se": 18.063279756515257,
+     "pnl_usd": 176.71
+    }
+   }
+  },
+  "50ms+2c": {
+   "all": {
+    "entries": 25,
+    "fill_rate": 1.0,
+    "fill_ratio": 0.8374483979431343,
+    "usd_filled_per_entry": 42.262608,
+    "vwap": 0.41859583925960847,
+    "settled": 25,
+    "win_rate": 0.36,
+    "net_cents": -8.329069706382304,
+    "net_se": 10.315629023557692,
+    "pnl_usd": -193.35
+   },
+   "by_asset": {
+    "BTC": {
+     "entries": 5,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.7758020443420673,
+     "usd_filled_per_entry": 38.76038,
+     "vwap": 0.4401187718581097,
+     "settled": 5,
+     "win_rate": 0.0,
+     "net_cents": -46.81318531211567,
+     "net_se": 4.719489043059028,
+     "pnl_usd": -201.16
+    },
+    "ETH": {
+     "entries": 6,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.9154313639951805,
+     "usd_filled_per_entry": 46.53716666666667,
+     "vwap": 0.4057884028484232,
+     "settled": 6,
+     "win_rate": 0.0,
+     "net_cents": -43.295189909143915,
+     "net_se": 2.9234569782792845,
+     "pnl_usd": -290.61
+    },
+    "SOL": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.8197320211607078,
+     "usd_filled_per_entry": 41.533728571428576,
+     "vwap": 0.3953011638657747,
+     "settled": 7,
+     "win_rate": 0.5714285714285714,
+     "net_cents": 16.52552138939939,
+     "net_se": 23.375754371508158,
+     "pnl_usd": 114.36
+    },
+    "XRP": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.8323553421102835,
+     "usd_filled_per_entry": 41.82917142857143,
+     "vwap": 0.44354192229038863,
+     "settled": 7,
+     "win_rate": 0.7142857142857143,
+     "net_cents": 24.275953375726925,
+     "net_se": 18.05334918666038,
+     "pnl_usd": 184.05
+    }
+   }
+  },
+  "50ms+3c": {
+   "all": {
+    "entries": 25,
+    "fill_rate": 1.0,
+    "fill_ratio": 0.8730063286182088,
+    "usd_filled_per_entry": 44.196203999999994,
+    "vwap": 0.4155215713705492,
+    "settled": 25,
+    "win_rate": 0.36,
+    "net_cents": -8.41981727506137,
+    "net_se": 10.316144023298651,
+    "pnl_usd": -185.16
+   },
+   "by_asset": {
+    "BTC": {
+     "entries": 5,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.7758020443420673,
+     "usd_filled_per_entry": 38.76038,
+     "vwap": 0.4401187718581097,
+     "settled": 5,
+     "win_rate": 0.0,
+     "net_cents": -46.81318531211567,
+     "net_se": 4.719489043059028,
+     "pnl_usd": -201.16
+    },
+    "ETH": {
+     "entries": 6,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.956537558685446,
+     "usd_filled_per_entry": 48.72031666666667,
+     "vwap": 0.4082879170914982,
+     "settled": 6,
+     "win_rate": 0.0,
+     "net_cents": -43.37022236356447,
+     "net_se": 2.9429531001523475,
+     "pnl_usd": -304.2
+    },
+    "SOL": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.8821144920061889,
+     "usd_filled_per_entry": 44.98301428571428,
+     "vwap": 0.3871076442674141,
+     "settled": 7,
+     "win_rate": 0.5714285714285714,
+     "net_cents": 16.393885263340387,
+     "net_se": 23.358332991409238,
+     "pnl_usd": 147.72
+    },
+    "XRP": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.8617315996555551,
+     "usd_filled_per_entry": 43.41431428571428,
+     "vwap": 0.4408503662870821,
+     "settled": 7,
+     "win_rate": 0.7142857142857143,
+     "net_cents": 24.147804574578327,
+     "net_se": 18.125669976031688,
+     "pnl_usd": 172.48
+    }
+   }
+  },
+  "100ms+0c": {
+   "all": {
+    "entries": 25,
+    "fill_rate": 1.0,
+    "fill_ratio": 0.4986966555903097,
+    "usd_filled_per_entry": 24.847396,
+    "vwap": 0.43397016906525077,
+    "settled": 25,
+    "win_rate": 0.36,
+    "net_cents": -7.870607999999991,
+    "net_se": 10.326255152493442,
+    "pnl_usd": -178.73
+   },
+   "by_asset": {
+    "BTC": {
+     "entries": 5,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.6866277374557754,
+     "usd_filled_per_entry": 34.159380000000006,
+     "vwap": 0.4477217678515256,
+     "settled": 5,
+     "win_rate": 0.0,
+     "net_cents": -46.669500000000006,
+     "net_se": 4.776656550663863,
+     "pnl_usd": -177.19
+    },
+    "ETH": {
+     "entries": 6,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.3084855979139257,
+     "usd_filled_per_entry": 15.382750000000001,
+     "vwap": 0.4013938418717926,
+     "settled": 6,
+     "win_rate": 0.0,
+     "net_cents": -42.494783333333324,
+     "net_se": 2.957137021897662,
+     "pnl_usd": -96.08
+    },
+    "SOL": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.48857788549166176,
+     "usd_filled_per_entry": 24.369357142857144,
+     "vwap": 0.4339272995522995,
+     "settled": 7,
+     "win_rate": 0.5714285714285714,
+     "net_cents": 17.0292285714286,
+     "net_se": 23.444908922516685,
+     "pnl_usd": -18.92
+    },
+    "XRP": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.5376169880790969,
+     "usd_filled_per_entry": 26.786571428571428,
+     "vwap": 0.43926814412219467,
+     "settled": 7,
+     "win_rate": 0.7142857142857143,
+     "net_cents": 24.620914285714285,
+     "net_se": 18.07702006370346,
+     "pnl_usd": 113.46
+    }
+   }
+  },
+  "100ms+1c": {
+   "all": {
+    "entries": 25,
+    "fill_rate": 1.0,
+    "fill_ratio": 0.7712925134604103,
+    "usd_filled_per_entry": 38.778376,
+    "vwap": 0.4230565204489518,
+    "settled": 25,
+    "win_rate": 0.36,
+    "net_cents": -8.229250065542722,
+    "net_se": 10.316925862095403,
+    "pnl_usd": -193.1
+   },
+   "by_asset": {
+    "BTC": {
+     "entries": 5,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.7374832037623572,
+     "usd_filled_per_entry": 36.75094,
+     "vwap": 0.4439591688813723,
+     "settled": 5,
+     "win_rate": 0.0,
+     "net_cents": -46.74213130086132,
+     "net_se": 4.752514694535426,
+     "pnl_usd": -190.67
+    },
+    "ETH": {
+     "entries": 6,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.8104243158850033,
+     "usd_filled_per_entry": 41.01315,
+     "vwap": 0.4103845704851325,
+     "settled": 6,
+     "win_rate": 0.0,
+     "net_cents": -43.137580061344806,
+     "net_se": 2.965348088430997,
+     "pnl_usd": -256.05
+    },
+    "SOL": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.7163085214036621,
+     "usd_filled_per_entry": 36.06907142857143,
+     "vwap": 0.4000625881383593,
+     "settled": 7,
+     "win_rate": 0.5714285714285714,
+     "net_cents": 16.663987363732808,
+     "net_se": 23.384853618990718,
+     "pnl_usd": 76.91
+    },
+    "XRP": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.816884467508974,
+     "usd_filled_per_entry": 41.02032857142857,
+     "vwap": 0.44386060100166946,
+     "settled": 7,
+     "win_rate": 0.7142857142857143,
+     "net_cents": 24.308139098239675,
+     "net_se": 18.063279756515257,
+     "pnl_usd": 176.71
+    }
+   }
+  },
+  "100ms+2c": {
+   "all": {
+    "entries": 25,
+    "fill_rate": 1.0,
+    "fill_ratio": 0.8374483979431343,
+    "usd_filled_per_entry": 42.262608,
+    "vwap": 0.41859583925960847,
+    "settled": 25,
+    "win_rate": 0.36,
+    "net_cents": -8.329069706382304,
+    "net_se": 10.315629023557692,
+    "pnl_usd": -193.35
+   },
+   "by_asset": {
+    "BTC": {
+     "entries": 5,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.7758020443420673,
+     "usd_filled_per_entry": 38.76038,
+     "vwap": 0.4401187718581097,
+     "settled": 5,
+     "win_rate": 0.0,
+     "net_cents": -46.81318531211567,
+     "net_se": 4.719489043059028,
+     "pnl_usd": -201.16
+    },
+    "ETH": {
+     "entries": 6,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.9154313639951805,
+     "usd_filled_per_entry": 46.53716666666667,
+     "vwap": 0.4057884028484232,
+     "settled": 6,
+     "win_rate": 0.0,
+     "net_cents": -43.295189909143915,
+     "net_se": 2.9234569782792845,
+     "pnl_usd": -290.61
+    },
+    "SOL": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.8197320211607078,
+     "usd_filled_per_entry": 41.533728571428576,
+     "vwap": 0.3953011638657747,
+     "settled": 7,
+     "win_rate": 0.5714285714285714,
+     "net_cents": 16.52552138939939,
+     "net_se": 23.375754371508158,
+     "pnl_usd": 114.36
+    },
+    "XRP": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.8323553421102835,
+     "usd_filled_per_entry": 41.82917142857143,
+     "vwap": 0.44354192229038863,
+     "settled": 7,
+     "win_rate": 0.7142857142857143,
+     "net_cents": 24.275953375726925,
+     "net_se": 18.05334918666038,
+     "pnl_usd": 184.05
+    }
+   }
+  },
+  "100ms+3c": {
+   "all": {
+    "entries": 25,
+    "fill_rate": 1.0,
+    "fill_ratio": 0.8730063286182088,
+    "usd_filled_per_entry": 44.196203999999994,
+    "vwap": 0.4155215713705492,
+    "settled": 25,
+    "win_rate": 0.36,
+    "net_cents": -8.41981727506137,
+    "net_se": 10.316144023298651,
+    "pnl_usd": -185.16
+   },
+   "by_asset": {
+    "BTC": {
+     "entries": 5,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.7758020443420673,
+     "usd_filled_per_entry": 38.76038,
+     "vwap": 0.4401187718581097,
+     "settled": 5,
+     "win_rate": 0.0,
+     "net_cents": -46.81318531211567,
+     "net_se": 4.719489043059028,
+     "pnl_usd": -201.16
+    },
+    "ETH": {
+     "entries": 6,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.956537558685446,
+     "usd_filled_per_entry": 48.72031666666667,
+     "vwap": 0.4082879170914982,
+     "settled": 6,
+     "win_rate": 0.0,
+     "net_cents": -43.37022236356447,
+     "net_se": 2.9429531001523475,
+     "pnl_usd": -304.2
+    },
+    "SOL": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.8821144920061889,
+     "usd_filled_per_entry": 44.98301428571428,
+     "vwap": 0.3871076442674141,
+     "settled": 7,
+     "win_rate": 0.5714285714285714,
+     "net_cents": 16.393885263340387,
+     "net_se": 23.358332991409238,
+     "pnl_usd": 147.72
+    },
+    "XRP": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.8617315996555551,
+     "usd_filled_per_entry": 43.41431428571428,
+     "vwap": 0.4408503662870821,
+     "settled": 7,
+     "win_rate": 0.7142857142857143,
+     "net_cents": 24.147804574578327,
+     "net_se": 18.125669976031688,
+     "pnl_usd": 172.48
+    }
+   }
+  },
+  "150ms+0c": {
+   "all": {
+    "entries": 25,
+    "fill_rate": 1.0,
+    "fill_ratio": 0.4986966555903097,
+    "usd_filled_per_entry": 24.847396,
+    "vwap": 0.43397016906525077,
+    "settled": 25,
+    "win_rate": 0.36,
+    "net_cents": -7.870607999999991,
+    "net_se": 10.326255152493442,
+    "pnl_usd": -178.73
+   },
+   "by_asset": {
+    "BTC": {
+     "entries": 5,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.6866277374557754,
+     "usd_filled_per_entry": 34.159380000000006,
+     "vwap": 0.4477217678515256,
+     "settled": 5,
+     "win_rate": 0.0,
+     "net_cents": -46.669500000000006,
+     "net_se": 4.776656550663863,
+     "pnl_usd": -177.19
+    },
+    "ETH": {
+     "entries": 6,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.3084855979139257,
+     "usd_filled_per_entry": 15.382750000000001,
+     "vwap": 0.4013938418717926,
+     "settled": 6,
+     "win_rate": 0.0,
+     "net_cents": -42.494783333333324,
+     "net_se": 2.957137021897662,
+     "pnl_usd": -96.08
+    },
+    "SOL": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.48857788549166176,
+     "usd_filled_per_entry": 24.369357142857144,
+     "vwap": 0.4339272995522995,
+     "settled": 7,
+     "win_rate": 0.5714285714285714,
+     "net_cents": 17.0292285714286,
+     "net_se": 23.444908922516685,
+     "pnl_usd": -18.92
+    },
+    "XRP": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.5376169880790969,
+     "usd_filled_per_entry": 26.786571428571428,
+     "vwap": 0.43926814412219467,
+     "settled": 7,
+     "win_rate": 0.7142857142857143,
+     "net_cents": 24.620914285714285,
+     "net_se": 18.07702006370346,
+     "pnl_usd": 113.46
+    }
+   }
+  },
+  "150ms+1c": {
+   "all": {
+    "entries": 25,
+    "fill_rate": 1.0,
+    "fill_ratio": 0.7712925134604103,
+    "usd_filled_per_entry": 38.778376,
+    "vwap": 0.4230565204489518,
+    "settled": 25,
+    "win_rate": 0.36,
+    "net_cents": -8.229250065542722,
+    "net_se": 10.316925862095403,
+    "pnl_usd": -193.1
+   },
+   "by_asset": {
+    "BTC": {
+     "entries": 5,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.7374832037623572,
+     "usd_filled_per_entry": 36.75094,
+     "vwap": 0.4439591688813723,
+     "settled": 5,
+     "win_rate": 0.0,
+     "net_cents": -46.74213130086132,
+     "net_se": 4.752514694535426,
+     "pnl_usd": -190.67
+    },
+    "ETH": {
+     "entries": 6,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.8104243158850033,
+     "usd_filled_per_entry": 41.01315,
+     "vwap": 0.4103845704851325,
+     "settled": 6,
+     "win_rate": 0.0,
+     "net_cents": -43.137580061344806,
+     "net_se": 2.965348088430997,
+     "pnl_usd": -256.05
+    },
+    "SOL": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.7163085214036621,
+     "usd_filled_per_entry": 36.06907142857143,
+     "vwap": 0.4000625881383593,
+     "settled": 7,
+     "win_rate": 0.5714285714285714,
+     "net_cents": 16.663987363732808,
+     "net_se": 23.384853618990718,
+     "pnl_usd": 76.91
+    },
+    "XRP": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.816884467508974,
+     "usd_filled_per_entry": 41.02032857142857,
+     "vwap": 0.44386060100166946,
+     "settled": 7,
+     "win_rate": 0.7142857142857143,
+     "net_cents": 24.308139098239675,
+     "net_se": 18.063279756515257,
+     "pnl_usd": 176.71
+    }
+   }
+  },
+  "150ms+2c": {
+   "all": {
+    "entries": 25,
+    "fill_rate": 1.0,
+    "fill_ratio": 0.8374483979431343,
+    "usd_filled_per_entry": 42.262608,
+    "vwap": 0.41859583925960847,
+    "settled": 25,
+    "win_rate": 0.36,
+    "net_cents": -8.329069706382304,
+    "net_se": 10.315629023557692,
+    "pnl_usd": -193.35
+   },
+   "by_asset": {
+    "BTC": {
+     "entries": 5,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.7758020443420673,
+     "usd_filled_per_entry": 38.76038,
+     "vwap": 0.4401187718581097,
+     "settled": 5,
+     "win_rate": 0.0,
+     "net_cents": -46.81318531211567,
+     "net_se": 4.719489043059028,
+     "pnl_usd": -201.16
+    },
+    "ETH": {
+     "entries": 6,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.9154313639951805,
+     "usd_filled_per_entry": 46.53716666666667,
+     "vwap": 0.4057884028484232,
+     "settled": 6,
+     "win_rate": 0.0,
+     "net_cents": -43.295189909143915,
+     "net_se": 2.9234569782792845,
+     "pnl_usd": -290.61
+    },
+    "SOL": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.8197320211607078,
+     "usd_filled_per_entry": 41.533728571428576,
+     "vwap": 0.3953011638657747,
+     "settled": 7,
+     "win_rate": 0.5714285714285714,
+     "net_cents": 16.52552138939939,
+     "net_se": 23.375754371508158,
+     "pnl_usd": 114.36
+    },
+    "XRP": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.8323553421102835,
+     "usd_filled_per_entry": 41.82917142857143,
+     "vwap": 0.44354192229038863,
+     "settled": 7,
+     "win_rate": 0.7142857142857143,
+     "net_cents": 24.275953375726925,
+     "net_se": 18.05334918666038,
+     "pnl_usd": 184.05
+    }
+   }
+  },
+  "150ms+3c": {
+   "all": {
+    "entries": 25,
+    "fill_rate": 1.0,
+    "fill_ratio": 0.8730063286182088,
+    "usd_filled_per_entry": 44.196203999999994,
+    "vwap": 0.4155215713705492,
+    "settled": 25,
+    "win_rate": 0.36,
+    "net_cents": -8.41981727506137,
+    "net_se": 10.316144023298651,
+    "pnl_usd": -185.16
+   },
+   "by_asset": {
+    "BTC": {
+     "entries": 5,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.7758020443420673,
+     "usd_filled_per_entry": 38.76038,
+     "vwap": 0.4401187718581097,
+     "settled": 5,
+     "win_rate": 0.0,
+     "net_cents": -46.81318531211567,
+     "net_se": 4.719489043059028,
+     "pnl_usd": -201.16
+    },
+    "ETH": {
+     "entries": 6,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.956537558685446,
+     "usd_filled_per_entry": 48.72031666666667,
+     "vwap": 0.4082879170914982,
+     "settled": 6,
+     "win_rate": 0.0,
+     "net_cents": -43.37022236356447,
+     "net_se": 2.9429531001523475,
+     "pnl_usd": -304.2
+    },
+    "SOL": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.8821144920061889,
+     "usd_filled_per_entry": 44.98301428571428,
+     "vwap": 0.3871076442674141,
+     "settled": 7,
+     "win_rate": 0.5714285714285714,
+     "net_cents": 16.393885263340387,
+     "net_se": 23.358332991409238,
+     "pnl_usd": 147.72
+    },
+    "XRP": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.8617315996555551,
+     "usd_filled_per_entry": 43.41431428571428,
+     "vwap": 0.4408503662870821,
+     "settled": 7,
+     "win_rate": 0.7142857142857143,
+     "net_cents": 24.147804574578327,
+     "net_se": 18.125669976031688,
+     "pnl_usd": 172.48
+    }
+   }
+  },
+  "250ms+0c": {
+   "all": {
+    "entries": 25,
+    "fill_rate": 0.96,
+    "fill_ratio": 0.47780901623990596,
+    "usd_filled_per_entry": 22.847396,
+    "vwap": 0.429010740573832,
+    "settled": 24,
+    "win_rate": 0.3333333333333333,
+    "net_cents": -10.208966666666656,
+    "net_se": 10.486203369625951,
+    "pnl_usd": -226.98
+   },
+   "by_asset": {
+    "BTC": {
+     "entries": 5,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.6866277374557754,
+     "usd_filled_per_entry": 34.159380000000006,
+     "vwap": 0.4477217678515256,
+     "settled": 5,
+     "win_rate": 0.0,
+     "net_cents": -46.669500000000006,
+     "net_se": 4.776656550663863,
+     "pnl_usd": -177.19
+    },
+    "ETH": {
+     "entries": 6,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.3084855979139257,
+     "usd_filled_per_entry": 15.382750000000001,
+     "vwap": 0.4013938418717926,
+     "settled": 6,
+     "win_rate": 0.0,
+     "net_cents": -42.494783333333324,
+     "net_se": 2.957137021897662,
+     "pnl_usd": -96.08
+    },
+    "SOL": {
+     "entries": 7,
+     "fill_rate": 0.8571428571428571,
+     "fill_ratio": 0.4033408664069387,
+     "usd_filled_per_entry": 17.226499999999998,
+     "vwap": 0.41138612172489075,
+     "settled": 6,
+     "win_rate": 0.5,
+     "net_cents": 11.8257666666667,
+     "net_se": 27.048527391100464,
+     "pnl_usd": -67.17
+    },
+    "XRP": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.5376169880790969,
+     "usd_filled_per_entry": 26.786571428571428,
+     "vwap": 0.43926814412219467,
+     "settled": 7,
+     "win_rate": 0.7142857142857143,
+     "net_cents": 24.620914285714285,
+     "net_se": 18.07702006370346,
+     "pnl_usd": 113.46
+    }
+   }
+  },
+  "250ms+1c": {
+   "all": {
+    "entries": 25,
+    "fill_rate": 0.96,
+    "fill_ratio": 0.7617630348545941,
+    "usd_filled_per_entry": 36.778376,
+    "vwap": 0.41954562047126237,
+    "settled": 24,
+    "win_rate": 0.3333333333333333,
+    "net_cents": -10.582552151607002,
+    "net_se": 10.472579544764098,
+    "pnl_usd": -241.35
+   },
+   "by_asset": {
+    "BTC": {
+     "entries": 5,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.7374832037623572,
+     "usd_filled_per_entry": 36.75094,
+     "vwap": 0.4439591688813723,
+     "settled": 5,
+     "win_rate": 0.0,
+     "net_cents": -46.74213130086132,
+     "net_se": 4.752514694535426,
+     "pnl_usd": -190.67
+    },
+    "ETH": {
+     "entries": 6,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.8104243158850033,
+     "usd_filled_per_entry": 41.01315,
+     "vwap": 0.4103845704851325,
+     "settled": 6,
+     "win_rate": 0.0,
+     "net_cents": -43.137580061344806,
+     "net_se": 2.965348088430997,
+     "pnl_usd": -256.05
+    },
+    "SOL": {
+     "entries": 7,
+     "fill_rate": 0.8571428571428571,
+     "fill_ratio": 0.6690266083042724,
+     "usd_filled_per_entry": 28.926214285714284,
+     "vwap": 0.38124588126753395,
+     "settled": 6,
+     "win_rate": 0.5,
+     "net_cents": 11.399651924354941,
+     "net_se": 26.959106283938034,
+     "pnl_usd": 28.66
+    },
+    "XRP": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.816884467508974,
+     "usd_filled_per_entry": 41.02032857142857,
+     "vwap": 0.44386060100166946,
+     "settled": 7,
+     "win_rate": 0.7142857142857143,
+     "net_cents": 24.308139098239675,
+     "net_se": 18.063279756515257,
+     "pnl_usd": 176.71
+    }
+   }
+  },
+  "250ms+2c": {
+   "all": {
+    "entries": 25,
+    "fill_rate": 1.0,
+    "fill_ratio": 0.8108963979431343,
+    "usd_filled_per_entry": 40.961904000000004,
+    "vwap": 0.4166707762166913,
+    "settled": 25,
+    "win_rate": 0.36,
+    "net_cents": -8.408957706382305,
+    "net_se": 10.297665682934387,
+    "pnl_usd": -226.05
+   },
+   "by_asset": {
+    "BTC": {
+     "entries": 5,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.7758020443420673,
+     "usd_filled_per_entry": 38.76038,
+     "vwap": 0.4401187718581097,
+     "settled": 5,
+     "win_rate": 0.0,
+     "net_cents": -46.81318531211567,
+     "net_se": 4.719489043059028,
+     "pnl_usd": -201.16
+    },
+    "ETH": {
+     "entries": 6,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.9154313639951805,
+     "usd_filled_per_entry": 46.53716666666667,
+     "vwap": 0.4057884028484232,
+     "settled": 6,
+     "win_rate": 0.0,
+     "net_cents": -43.295189909143915,
+     "net_se": 2.9234569782792845,
+     "pnl_usd": -290.61
+    },
+    "SOL": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.7249034497321363,
+     "usd_filled_per_entry": 36.888357142857146,
+     "vwap": 0.38591914512031084,
+     "settled": 7,
+     "win_rate": 0.5714285714285714,
+     "net_cents": 16.240207103685105,
+     "net_se": 23.312875148593353,
+     "pnl_usd": 81.66
+    },
+    "XRP": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.8323553421102835,
+     "usd_filled_per_entry": 41.82917142857143,
+     "vwap": 0.44354192229038863,
+     "settled": 7,
+     "win_rate": 0.7142857142857143,
+     "net_cents": 24.275953375726925,
+     "net_se": 18.05334918666038,
+     "pnl_usd": 184.05
+    }
+   }
+  },
+  "250ms+3c": {
+   "all": {
+    "entries": 25,
+    "fill_rate": 1.0,
+    "fill_ratio": 0.8464543286182088,
+    "usd_filled_per_entry": 42.8955,
+    "vwap": 0.41361804296679144,
+    "settled": 25,
+    "win_rate": 0.36,
+    "net_cents": -8.49970527506137,
+    "net_se": 10.298152248750515,
+    "pnl_usd": -217.86
+   },
+   "by_asset": {
+    "BTC": {
+     "entries": 5,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.7758020443420673,
+     "usd_filled_per_entry": 38.76038,
+     "vwap": 0.4401187718581097,
+     "settled": 5,
+     "win_rate": 0.0,
+     "net_cents": -46.81318531211567,
+     "net_se": 4.719489043059028,
+     "pnl_usd": -201.16
+    },
+    "ETH": {
+     "entries": 6,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.956537558685446,
+     "usd_filled_per_entry": 48.72031666666667,
+     "vwap": 0.4082879170914982,
+     "settled": 6,
+     "win_rate": 0.0,
+     "net_cents": -43.37022236356447,
+     "net_se": 2.9429531001523475,
+     "pnl_usd": -304.2
+    },
+    "SOL": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.7872859205776174,
+     "usd_filled_per_entry": 40.33764285714285,
+     "vwap": 0.37797641357892475,
+     "settled": 7,
+     "win_rate": 0.5714285714285714,
+     "net_cents": 16.108570977626105,
+     "net_se": 23.295138037194565,
+     "pnl_usd": 115.02
+    },
+    "XRP": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.8617315996555551,
+     "usd_filled_per_entry": 43.41431428571428,
+     "vwap": 0.4408503662870821,
+     "settled": 7,
+     "win_rate": 0.7142857142857143,
+     "net_cents": 24.147804574578327,
+     "net_se": 18.125669976031688,
+     "pnl_usd": 172.48
+    }
+   }
+  },
+  "400ms+0c": {
+   "all": {
+    "entries": 25,
+    "fill_rate": 0.96,
+    "fill_ratio": 0.48941086809175777,
+    "usd_filled_per_entry": 23.403728,
+    "vwap": 0.42739041190950994,
+    "settled": 24,
+    "win_rate": 0.3333333333333333,
+    "net_cents": -10.208966666666663,
+    "net_se": 10.48620336962595,
+    "pnl_usd": -203.91
+   },
+   "by_asset": {
+    "BTC": {
+     "entries": 5,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.6866277374557754,
+     "usd_filled_per_entry": 34.159380000000006,
+     "vwap": 0.4477217678515256,
+     "settled": 5,
+     "win_rate": 0.0,
+     "net_cents": -46.669500000000006,
+     "net_se": 4.776656550663863,
+     "pnl_usd": -177.19
+    },
+    "ETH": {
+     "entries": 6,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.3084855979139257,
+     "usd_filled_per_entry": 15.382750000000001,
+     "vwap": 0.4013938418717926,
+     "settled": 6,
+     "win_rate": 0.0,
+     "net_cents": -42.494783333333324,
+     "net_se": 2.957137021897662,
+     "pnl_usd": -96.08
+    },
+    "SOL": {
+     "entries": 7,
+     "fill_rate": 0.8571428571428571,
+     "fill_ratio": 0.4497482738143461,
+     "usd_filled_per_entry": 19.2134,
+     "vwap": 0.4066819872395754,
+     "settled": 6,
+     "win_rate": 0.5,
+     "net_cents": 11.825766666666672,
+     "net_se": 27.04852739110045,
+     "pnl_usd": -44.1
+    },
+    "XRP": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.5376169880790969,
+     "usd_filled_per_entry": 26.786571428571428,
+     "vwap": 0.43926814412219467,
+     "settled": 7,
+     "win_rate": 0.7142857142857143,
+     "net_cents": 24.620914285714285,
+     "net_se": 18.07702006370346,
+     "pnl_usd": 113.46
+    }
+   }
+  },
+  "400ms+1c": {
+   "all": {
+    "entries": 25,
+    "fill_rate": 0.96,
+    "fill_ratio": 0.773364886706446,
+    "usd_filled_per_entry": 37.334708,
+    "vwap": 0.41871013615055064,
+    "settled": 24,
+    "win_rate": 0.3333333333333333,
+    "net_cents": -10.568584145447915,
+    "net_se": 10.476703520869732,
+    "pnl_usd": -218.29
+   },
+   "by_asset": {
+    "BTC": {
+     "entries": 5,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.7374832037623572,
+     "usd_filled_per_entry": 36.75094,
+     "vwap": 0.4439591688813723,
+     "settled": 5,
+     "win_rate": 0.0,
+     "net_cents": -46.74213130086132,
+     "net_se": 4.752514694535426,
+     "pnl_usd": -190.67
+    },
+    "ETH": {
+     "entries": 6,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.8104243158850033,
+     "usd_filled_per_entry": 41.01315,
+     "vwap": 0.4103845704851325,
+     "settled": 6,
+     "win_rate": 0.0,
+     "net_cents": -43.137580061344806,
+     "net_se": 2.965348088430997,
+     "pnl_usd": -256.05
+    },
+    "SOL": {
+     "entries": 7,
+     "fill_rate": 0.8571428571428571,
+     "fill_ratio": 0.7154340157116797,
+     "usd_filled_per_entry": 30.913114285714283,
+     "vwap": 0.3805025496746966,
+     "settled": 6,
+     "win_rate": 0.5,
+     "net_cents": 11.45552394899129,
+     "net_se": 26.979461135917962,
+     "pnl_usd": 51.73
+    },
+    "XRP": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.816884467508974,
+     "usd_filled_per_entry": 41.02032857142857,
+     "vwap": 0.44386060100166946,
+     "settled": 7,
+     "win_rate": 0.7142857142857143,
+     "net_cents": 24.308139098239675,
+     "net_se": 18.063279756515257,
+     "pnl_usd": 176.71
+    }
+   }
+  },
+  "400ms+2c": {
+   "all": {
+    "entries": 25,
+    "fill_rate": 1.0,
+    "fill_ratio": 0.8108963979431343,
+    "usd_filled_per_entry": 40.931832,
+    "vwap": 0.4163648792158491,
+    "settled": 25,
+    "win_rate": 0.36,
+    "net_cents": -8.386307921493415,
+    "net_se": 10.303948896182325,
+    "pnl_usd": -225.29
+   },
+   "by_asset": {
+    "BTC": {
+     "entries": 5,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.7758020443420673,
+     "usd_filled_per_entry": 38.76038,
+     "vwap": 0.4401187718581097,
+     "settled": 5,
+     "win_rate": 0.0,
+     "net_cents": -46.81318531211567,
+     "net_se": 4.719489043059028,
+     "pnl_usd": -201.16
+    },
+    "ETH": {
+     "entries": 6,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.9154313639951805,
+     "usd_filled_per_entry": 46.53716666666667,
+     "vwap": 0.4057884028484232,
+     "settled": 6,
+     "win_rate": 0.0,
+     "net_cents": -43.295189909143915,
+     "net_se": 2.9234569782792845,
+     "pnl_usd": -290.61
+    },
+    "SOL": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.7249034497321363,
+     "usd_filled_per_entry": 36.78095714285714,
+     "vwap": 0.38479554625616497,
+     "settled": 7,
+     "win_rate": 0.5714285714285714,
+     "net_cents": 16.321099192573996,
+     "net_se": 23.3382502875348,
+     "pnl_usd": 82.43
+    },
+    "XRP": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.8323553421102835,
+     "usd_filled_per_entry": 41.82917142857143,
+     "vwap": 0.44354192229038863,
+     "settled": 7,
+     "win_rate": 0.7142857142857143,
+     "net_cents": 24.275953375726925,
+     "net_se": 18.05334918666038,
+     "pnl_usd": 184.05
+    }
+   }
+  },
+  "400ms+3c": {
+   "all": {
+    "entries": 25,
+    "fill_rate": 1.0,
+    "fill_ratio": 0.8464543286182088,
+    "usd_filled_per_entry": 42.865428,
+    "vwap": 0.4133280749797509,
+    "settled": 25,
+    "win_rate": 0.36,
+    "net_cents": -8.47705549017248,
+    "net_se": 10.304443476505991,
+    "pnl_usd": -217.1
+   },
+   "by_asset": {
+    "BTC": {
+     "entries": 5,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.7758020443420673,
+     "usd_filled_per_entry": 38.76038,
+     "vwap": 0.4401187718581097,
+     "settled": 5,
+     "win_rate": 0.0,
+     "net_cents": -46.81318531211567,
+     "net_se": 4.719489043059028,
+     "pnl_usd": -201.16
+    },
+    "ETH": {
+     "entries": 6,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.956537558685446,
+     "usd_filled_per_entry": 48.72031666666667,
+     "vwap": 0.4082879170914982,
+     "settled": 6,
+     "win_rate": 0.0,
+     "net_cents": -43.37022236356447,
+     "net_se": 2.9429531001523475,
+     "pnl_usd": -304.2
+    },
+    "SOL": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.7872859205776174,
+     "usd_filled_per_entry": 40.230242857142855,
+     "vwap": 0.3769700417648318,
+     "settled": 7,
+     "win_rate": 0.5714285714285714,
+     "net_cents": 16.189463066514993,
+     "net_se": 23.32060857700907,
+     "pnl_usd": 115.78
+    },
+    "XRP": {
+     "entries": 7,
+     "fill_rate": 1.0,
+     "fill_ratio": 0.8617315996555551,
+     "usd_filled_per_entry": 43.41431428571428,
+     "vwap": 0.4408503662870821,
+     "settled": 7,
+     "win_rate": 0.7142857142857143,
+     "net_cents": 24.147804574578327,
+     "net_se": 18.125669976031688,
+     "pnl_usd": 172.48
+    }
+   }
+  }
+ }
+}

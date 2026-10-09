@@ -176,11 +176,13 @@ The host setup is the same as above, with these differences.
 
 - **Region:** London (Polymarket's CLOB is in AWS eu-west-2). The UK is close-only on Polymarket. This host records and paper-trades, but it can never place a real order.
 - **User and data:** user `pk`. Run `sudo mkdir -p /data/pk && sudo chown pk:pk /data/pk`, and set `PK_RECORD_DIR=/data/pk/raw/dev`. Size the disk for several GB/day of compressed tape.
+- **Build:** the service is Rust (a Cargo workspace). Install a stable toolchain with rustup as `pk`; the units run `services/poly-kalshi-service/target/release/*`.
 - **Kalshi key:** put the PEM where `KALSHI_PRIVATE_KEY_PATH` points, owned by `pk`, `chmod 600`.
 - **Ports:** no inbound rule for 8050 or 8051. Use `ssh -L 8050:127.0.0.1:8050 -L 8051:127.0.0.1:8051 pk@<vm>`.
 
 ```sh
-cd ~/trading-algos && uv sync --python 3.12 --package poly-kalshi-service --group dev --extra research
+cd ~/trading-algos/services/poly-kalshi-service && cargo build --release --workspace
+cd ~/trading-algos
 sudo cp infra/systemd/poly-kalshi-service.service infra/systemd/pk-status.service \
         'infra/systemd/pk-unit-alert@.service' /etc/systemd/system/
 sudo systemctl daemon-reload
@@ -189,8 +191,10 @@ curl -s 127.0.0.1:8050/health/ready                      # both feeds up, all wi
 ```
 
 - **Kill switch:** `touch services/poly-kalshi-service/data/KILL.dev`, `POST /v1/kill`, or `/kill` to the bot. These halt new paper entries only; recording continues.
-- **Read the gates:** `python -m research.readout --journal data/state/dev/journal`.
-- **Restarts:** each restart starts a new hour file (`pk_<day>_<hour>_<session>.gz`). It never appends to one a crash may have left truncated.
+- **Read the gates:** `target/release/pk readout --journal data/state/dev/journal`.
+- **Restarts:** each restart starts a new hour file (`pk_<day>_<hour>_<session>.zst`). It never appends to one a crash may have left truncated. The research commands still read the older `.gz` hours.
+- **Upgrades:** `git pull && cargo build --release --workspace && sudo systemctl restart poly-kalshi-service pk-status`. The running binaries are replaced on disk; the restart picks them up.
+- **Order-path probe:** `target/release/pk probe-orders` with `PK_ORDER_PROBE=on` and a funded `POLY_PRIVATE_KEY` (README, "Order path"). It posts post-only orders below the bid and cancels them at once; it never fills.
 
 ## poly-kalshi on the Dublin host (`polymarket`, Azure North Europe)
 
@@ -232,7 +236,7 @@ North Europe host is also in Dublin, so the question is measured, not assumed:
      token steal each other's updates.
    - Same `PK_RESULTS_EPOCH` for now.
 3. **24 h side by side.** Both hosts run. On each:
-   `python -m research.netprobe --minutes 1440` (REST round trip to the CLOB and Kalshi),
+   `pk netprobe --minutes 1440` (warm HTTP/2 round trip to the CLOB and Kalshi),
    and the live feed lags on the status page or `/v1/obs/status` → `engine.latency`:
    `feed_ms_p` and `feed_ms_k` (receive time minus the venue's stamp; both hosts run
    chrony against nearby sources, so the skew is small and similar), plus

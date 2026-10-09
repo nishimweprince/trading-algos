@@ -1,0 +1,122 @@
+[
+ {
+  "file": "20261009/pk_20261006_14_00000000000000000001.gz",
+  "hour": "20261006_14",
+  "host": "unknown",
+  "session_start": "1970-01-01T00:00:00+00:00",
+  "manifest": false,
+  "sessions": null,
+  "lines": 16724,
+  "lines_per_venue": {
+   "c": 29,
+   "k": 9316,
+   "p": 7345,
+   "b": 34
+  },
+  "first_recv": "2026-10-06T14:44:00+00:00",
+  "last_recv": "2026-10-06T14:59:59+00:00",
+  "out_of_order": 0,
+  "truncated": 0,
+  "bad_lines": 0,
+  "journal_builds": [],
+  "feed_ms_k": {
+   "n": 429,
+   "p10": 41.8,
+   "p50": 49.24
+  },
+  "feed_ms_p": {
+   "n": 367,
+   "p10": 3.62,
+   "p50": 12.43
+  },
+  "host_by_geometry": "dublin",
+  "ghost_levels": true,
+  "pre_seq_fix": true,
+  "usable_for_signal": false,
+  "usable_for_fills": false,
+  "reasons": [
+   "ghost Kalshi levels (before 3bfa696): excluded",
+   "tagged unknown, but its latencies are dublin's"
+  ]
+ },
+ {
+  "file": "20261009/pk_20261006_15_00000000000000000001.gz",
+  "hour": "20261006_15",
+  "host": "unknown",
+  "session_start": "1970-01-01T00:00:00+00:00",
+  "manifest": false,
+  "sessions": null,
+  "lines": 66055,
+  "lines_per_venue": {
+   "p": 29310,
+   "k": 36535,
+   "b": 88,
+   "c": 122
+  },
+  "first_recv": "2026-10-06T15:00:00+00:00",
+  "last_recv": "2026-10-06T15:59:59+00:00",
+  "out_of_order": 0,
+  "truncated": 0,
+  "bad_lines": 0,
+  "journal_builds": [],
+  "feed_ms_k": {
+   "n": 1686,
+   "p10": 41.94,
+   "p50": 50.05
+  },
+  "feed_ms_p": {
+   "n": 1465,
+   "p10": 3.43,
+   "p50": 12.08
+  },
+  "host_by_geometry": "dublin",
+  "ghost_levels": true,
+  "pre_seq_fix": true,
+  "usable_for_signal": false,
+  "usable_for_fills": false,
+  "reasons": [
+   "ghost Kalshi levels (before 3bfa696): excluded",
+   "tagged unknown, but its latencies are dublin's"
+  ]
+ },
+ {
+  "file": "20261009/pk_20261006_16_00000000000000000001.gz",
+  "hour": "20261006_16",
+  "host": "unknown",
+  "session_start": "1970-01-01T00:00:00+00:00",
+  "manifest": false,
+  "sessions": null,
+  "lines": 49932,
+  "lines_per_venue": {
+   "k": 27394,
+   "p": 22393,
+   "c": 92,
+   "b": 53
+  },
+  "first_recv": "2026-10-06T16:00:00+00:00",
+  "last_recv": "2026-10-06T16:45:41+00:00",
+  "out_of_order": 0,
+  "truncated": 0,
+  "bad_lines": 0,
+  "journal_builds": [],
+  "feed_ms_k": {
+   "n": 1243,
+   "p10": 42.03,
+   "p50": 49.93
+  },
+  "feed_ms_p": {
+   "n": 1118,
+   "p10": 3.49,
+   "p50": 12.24
+  },
+  "host_by_geometry": "dublin",
+  "ghost_levels": true,
+  "pre_seq_fix": true,
+  "usable_for_signal": false,
+  "usable_for_fills": false,
+  "reasons": [
+   "ghost Kalshi levels (before 3bfa696): excluded",
+   "tagged unknown, but its latencies are dublin's"
+  ]
+ }
+]

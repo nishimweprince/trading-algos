@@ -1,0 +1,33 @@
+[package]
+name = "pk-exec"
+description = "Where an entry goes: the Polymarket CLOB V2 order path (warm HTTP/2, pre-signing, timing, probe) and the paper venue"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+tracing.workspace = true
+base64.workspace = true
+hmac.workspace = true
+sha2.workspace = true
+rust_decimal.workspace = true
+polymarket_client_sdk_v2.workspace = true
+alloy.workspace = true
+parking_lot.workspace = true
+secrecy.workspace = true
+url.workspace = true
+pk-stats.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+
+[lints]
+workspace = true

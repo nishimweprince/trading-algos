@@ -1,0 +1,129 @@
+{
+  "arms": {
+    "signal": {
+      "n": 32,
+      "avg_px": 0.4741,
+      "win_rate": 0.3438,
+      "edge_pp": -13.03,
+      "net_cents": -14.65,
+      "days_positive": "0/1",
+      "day_t_net": null
+    },
+    "signal_capped": {
+      "n": 25,
+      "avg_px": 0.4224,
+      "win_rate": 0.36,
+      "edge_pp": -6.24,
+      "net_cents": -7.87,
+      "days_positive": "0/1",
+      "day_t_net": null
+    },
+    "random_same_rule": {
+      "n": 32,
+      "avg_px": 0.5084,
+      "win_rate": 0.4688,
+      "edge_pp": -3.97,
+      "net_cents": -5.29,
+      "days_positive": "0/1",
+      "day_t_net": null
+    },
+    "random_cheap": {
+      "n": 32,
+      "avg_px": 0.2762,
+      "win_rate": 0.5938,
+      "edge_pp": 31.75,
+      "net_cents": 30.48,
+      "days_positive": "1/1",
+      "day_t_net": null
+    },
+    "fixed_cheap": {
+      "n": 27,
+      "avg_px": 0.2044,
+      "win_rate": 0.6296,
+      "edge_pp": 42.52,
+      "net_cents": 41.47,
+      "days_positive": "1/1",
+      "day_t_net": null
+    }
+  },
+  "bands_signal_vs_random_same_rule": {
+    "[0.0,0.3)": {
+      "n_signal": 2,
+      "n_null": 6,
+      "excess_cents": 58.83
+    },
+    "[0.3,0.4)": {
+      "n_signal": 9,
+      "n_null": 4,
+      "excess_cents": -41.61
+    },
+    "[0.4,0.5)": {
+      "n_signal": 7,
+      "n_null": 6,
+      "excess_cents": -36.83
+    },
+    "[0.5,0.6)": {
+      "n_signal": 6,
+      "n_null": 4,
+      "excess_cents": 32.67
+    },
+    "[0.6,0.7)": {
+      "n_signal": 7,
+      "n_null": 5,
+      "excess_cents": -30.26
+    },
+    "[0.7,0.8)": {
+      "n_signal": 1,
+      "n_null": 2,
+      "excess_cents": 5.5
+    },
+    "[0.8,0.9)": {
+      "n_signal": 0,
+      "n_null": 2,
+      "excess_cents": null
+    },
+    "[0.9,1.0)": {
+      "n_signal": 0,
+      "n_null": 3,
+      "excess_cents": null
+    }
+  },
+  "signal_by_asset": {
+    "BTC": {
+      "n": 8,
+      "avg_px": 0.5262,
+      "win_rate": 0.125,
+      "edge_pp": -40.12,
+      "net_cents": -41.76,
+      "days_positive": "0/1",
+      "day_t_net": null
+    },
+    "ETH": {
+      "n": 8,
+      "avg_px": 0.4775,
+      "win_rate": 0.125,
+      "edge_pp": -35.25,
+      "net_cents": -36.87,
+      "days_positive": "0/1",
+      "day_t_net": null
+    },
+    "SOL": {
+      "n": 8,
+      "avg_px": 0.4137,
+      "win_rate": 0.5,
+      "edge_pp": 8.63,
+      "net_cents": 7.07,
+      "days_positive": "1/1",
+      "day_t_net": null
+    },
+    "XRP": {
+      "n": 8,
+      "avg_px": 0.4788,
+      "win_rate": 0.625,
+      "edge_pp": 14.62,
+      "net_cents": 12.97,
+      "days_positive": "1/1",
+      "day_t_net": null
+    }
+  }
+}

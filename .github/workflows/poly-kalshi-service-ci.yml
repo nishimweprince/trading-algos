@@ -2,13 +2,36 @@ name: poly-kalshi-service
 
 on:
   push:
+    paths:
+      - services/poly-kalshi-service/**
+      - .github/workflows/poly-kalshi-service-ci.yml
   pull_request:
+    paths:
+      - services/poly-kalshi-service/**
+      - .github/workflows/poly-kalshi-service-ci.yml
+
+defaults:
+  run:
+    working-directory: services/poly-kalshi-service
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
 
 jobs:
   test:
-    uses: ./.github/workflows/_python-service.yml
-    with:
-      package: poly-kalshi-service
-      working-directory: services/poly-kalshi-service
-      # Replay, null battery and read-out tests need pandas and pyarrow.
-      extras: research
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: services/poly-kalshi-service
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # Parity with the Python service is in the tests: the engine, results,
+      # tape research and Helix goldens under crates/*/tests/golden.
+      - run: cargo test --workspace --locked
+      - run: cargo build --release --workspace --locked

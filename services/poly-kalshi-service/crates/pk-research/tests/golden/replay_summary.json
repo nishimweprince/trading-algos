@@ -1,0 +1,43 @@
+{
+ "counters": {
+  "bad_json": 24,
+  "bbo_checks_event": 2382,
+  "bbo_checks_pc": 1889,
+  "bbo_mismatch_event": 1,
+  "bbo_mismatch_pc": 23,
+  "fills": 25,
+  "invalid_kalshi_crossed": 460,
+  "invalid_kalshi_one_sided": 72,
+  "invalid_poly_no_no_snapshot": 16,
+  "invalid_poly_yes_no_snapshot": 11,
+  "reconnect_p": 166,
+  "settled": 25,
+  "unknown_venue": 175,
+  "windows_unidentified": 31
+ },
+ "feed_ms_k": {
+  "max": 60.0,
+  "n": 67409,
+  "p50": 50.003,
+  "p90": 58.003,
+  "p99": 59.795,
+  "window": 67409
+ },
+ "feed_ms_p": {
+  "max": 1201.001,
+  "n": 59024,
+  "p50": 12.197,
+  "p90": 300.108,
+  "p99": 300.988,
+  "window": 59024
+ },
+ "files": 3,
+ "grid_rows": 22931,
+ "reader": {
+  "bad": 0,
+  "lines": 132711,
+  "out_of_order": 0,
+  "truncated": 0
+ },
+ "shift_ms": {}
+}

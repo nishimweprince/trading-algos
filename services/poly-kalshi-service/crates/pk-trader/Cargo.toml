@@ -1,0 +1,47 @@
+[package]
+name = "pk-trader"
+description = "poly-kalshi-service (the trader) and pk-observer (tape, journal, statistics)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "poly-kalshi-service"
+path = "src/bin/trader.rs"
+
+[[bin]]
+name = "pk-observer"
+path = "src/bin/observer.rs"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+tracing.workspace = true
+clap.workspace = true
+axum.workspace = true
+parking_lot.workspace = true
+crossbeam-channel.workspace = true
+cpu-time.workspace = true
+chrono.workspace = true
+rust_decimal.workspace = true
+pk-core.workspace = true
+pk-engine.workspace = true
+pk-tape.workspace = true
+pk-svc.workspace = true
+pk-feeds.workspace = true
+pk-exec.workspace = true
+pk-stats.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+axum = { workspace = true, features = ["ws"] }
+futures-util.workspace = true
+rsa.workspace = true
+rand.workspace = true
