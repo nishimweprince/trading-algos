@@ -41,7 +41,7 @@ from zone_trend.risk.portfolio import OpenExposure, PortfolioGuard
 from zone_trend.risk.sizing import DEFAULT_FILTERS, Filters, size_order
 from zone_trend.types import Signal
 
-__all__ = ["RunResult", "RunSpec", "run"]
+__all__ = ["RunResult", "RunSpec", "month_bounds", "run"]
 
 HOUR = 3_600_000
 DAY = 24 * HOUR
@@ -72,11 +72,14 @@ class RunSpec:
     displacement: DisplacementTable | None = None
     workers: int = 4
     use_cache: bool = True
+    # Tapes are built through this month (inclusive) when set, so every window of
+    # a walk-forward shares one cached tape per config. Safe: a tape's content up
+    # to t never depends on data after t (tests/lookahead).
+    tape_end: str | None = None
+    entry_delay_hours: int = 0  # Monte Carlo variant: fill N hours after the next open
 
     def bounds(self) -> tuple[int, int]:
-        start = pd.Timestamp(self.start + "-01", tz="UTC")
-        end = pd.Timestamp(self.end + "-01", tz="UTC") + pd.offsets.MonthBegin()
-        return int(start.value // 1_000_000), int(end.value // 1_000_000)
+        return month_bounds(self.start, self.end)
 
     def members(self, month: str) -> list[str]:
         if self.symbols is not None:
@@ -92,6 +95,13 @@ class RunResult:
     equity: pd.DataFrame
     signals: pd.DataFrame
     meta: dict = field(default_factory=dict)
+
+
+def month_bounds(start: str, end: str) -> tuple[int, int]:
+    """[first ms of ``start``, first ms after ``end``) for YYYY-MM months."""
+    lo = pd.Timestamp(start + "-01", tz="UTC")
+    hi = pd.Timestamp(end + "-01", tz="UTC") + pd.offsets.MonthBegin()
+    return int(lo.value // 1_000_000), int(hi.value // 1_000_000)
 
 
 def _month(t: int) -> str:
@@ -143,6 +153,7 @@ def _run_id(cfg: Config, spec: RunSpec, snapshot: str) -> str:
             spec.kind,
             spec.equity,
             spec.slippage_mult,
+            spec.entry_delay_hours,
             sorted(
                 (f"{k[0]}|{k[1]}", v)
                 for k, v in (spec.displacement or DisplacementTable()).k.items()
@@ -165,8 +176,9 @@ def run(paths: DataPaths, cfg: Config, spec: RunSpec) -> RunResult:
     # The BTC gate needs BTC's 1D trend even when BTC is not traded.
     gate = spec.kind == "zone" and bool(paths.months("klines", BTC, "1h"))
     tape_symbols = sorted(set(union) | ({BTC} if gate else set()))
+    tape_end_ms = month_bounds(spec.tape_end, spec.tape_end)[1] if spec.tape_end else end_ms
     tapes = build_tapes(
-        paths, tape_symbols, cfg, snapshot_id, end_ms, spec.kind, spec.workers, spec.use_cache
+        paths, tape_symbols, cfg, snapshot_id, tape_end_ms, spec.kind, spec.workers, spec.use_cache
     )
     btc = tapes.get(BTC) if gate else None
 
@@ -317,7 +329,11 @@ def run(paths: DataPaths, cfg: Config, spec: RunSpec) -> RunResult:
             tick = filters.get(sym, DEFAULT_FILTERS).tick
             base = TOP_SLIPPAGE if rank[sym] < TOP_N else OTHER_SLIPPAGE
             slip = (base + tick / sig.entry_ref) * spec.slippage_mult
-            broker.submit(PendingEntry(sig, size, slip, k_sym, mult, tapes[sym].managed))
+            broker.submit(
+                PendingEntry(
+                    sig, size, slip, k_sym, mult, tapes[sym].managed, spec.entry_delay_hours
+                )
+            )
             guard.trade_opened()
             record(
                 sig,

@@ -74,6 +74,7 @@ class Swings(_Section):
 class Structure(_Section):
     ema_period: int = Field(ge=5, le=400)
     decay_ratio: float = Field(gt=0, le=1)
+    slope_gate: bool = True
 
 
 class LookbackDays(_Section):
@@ -98,6 +99,7 @@ class Zones(_Section):
     max_width_atr_d1: float = Field(gt=0, le=5)
     break_atr_h4: float = Field(ge=0, le=3)
     keep_per_side: int = Field(ge=1, le=20)
+    use_d1: bool = True
     hvn_lookback_days: int = Field(ge=7, le=730)
     range_min_strength: float = Field(ge=0, le=100)
 

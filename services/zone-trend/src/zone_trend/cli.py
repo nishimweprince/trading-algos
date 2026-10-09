@@ -190,15 +190,7 @@ def _backtest(args: argparse.Namespace) -> int:
 
     paths = DataPaths.from_env(args.data_dir)
     cfg = load_config(args.config)
-    universe = None
-    symbols = [s.upper() for s in _csv(args.symbols)] if args.symbols else None
-    if symbols is None:
-        hist = paths.root / "universe" / "history.json"
-        if not hist.exists():
-            raise SystemExit(
-                "no universe history: run `zt data universe --from ...` or pass --symbols"
-            )
-        universe = json.loads(hist.read_text())["months"]
+    universe, symbols = _universe_or_symbols(paths, args.symbols)
     end = args.end or f"{datetime.now(UTC):%Y-%m}"
     spec = RunSpec(
         start=args.start,
@@ -231,6 +223,101 @@ def _backtest(args: argparse.Namespace) -> int:
         )
     )
     print(f"# {out}/report.html")
+    return 0
+
+
+def _universe_or_symbols(paths: DataPaths, symbols_arg: str | None):
+    symbols = [s.upper() for s in _csv(symbols_arg)] if symbols_arg else None
+    if symbols is not None:
+        return None, symbols
+    hist = paths.root / "universe" / "history.json"
+    if not hist.exists():
+        raise SystemExit("no universe history: run `zt data universe --from ...` or pass --symbols")
+    return json.loads(hist.read_text())["months"], None
+
+
+def _last_full_month() -> str:
+    import pandas as pd
+
+    return str(pd.Period(datetime.now(UTC).strftime("%Y-%m"), freq="M") - 1)
+
+
+def _wf(args: argparse.Namespace) -> int:
+    from zone_trend.backtest.validation import acceptance
+    from zone_trend.backtest.walkforward import walk_forward
+
+    paths = DataPaths.from_env(args.data_dir)
+    cfg = load_config(args.config)
+    universe, symbols = _universe_or_symbols(paths, args.symbols)
+    end = args.end or _last_full_month()
+    out = args.out or Path("runs") / f"wf-{args.start}-{end}"
+    walk_forward(paths, cfg, universe, symbols, args.start, end, out, args.equity, args.workers)
+    _print_acceptance(acceptance(out))
+    print(f"# {out}")
+    return 0
+
+
+def _print_acceptance(report: dict) -> None:
+    for row in report["criteria"]:
+        print(f"{row['status']:8s} {row['criterion']:48s} {row['value']}  ({row['threshold']})")
+    print(f"verdict: {report['verdict']}")
+
+
+def _accept(args: argparse.Namespace) -> int:
+    from zone_trend.backtest.validation import acceptance
+
+    report = acceptance(args.wf)
+    _print_acceptance(report)
+    return 0 if report["verdict"] == "pass" else 1
+
+
+def _holdout(args: argparse.Namespace) -> int:
+    from zone_trend.backtest.validation import run_holdout
+
+    stats = run_holdout(DataPaths.from_env(args.data_dir), args.wf, force=args.force)
+    print({k: stats[k] for k in ("trades", "profit_factor", "expectancy_r", "max_drawdown")})
+    return 0
+
+
+def _ablate(args: argparse.Namespace) -> int:
+    from zone_trend.backtest.validation import ABLATIONS, run_ablation
+
+    comps = list(ABLATIONS) if args.component == "all" else _csv(args.component)
+    for comp in comps:
+        if comp not in ABLATIONS:
+            raise SystemExit(f"unknown component {comp!r}; choose from {', '.join(ABLATIONS)}")
+        e = run_ablation(DataPaths.from_env(args.data_dir), args.wf, comp, args.workers)
+        print(
+            f"{comp:14s} default {e['default']}  ablated {e['ablated']}  "
+            f"adds={e['adds_expectancy']}"
+        )
+    return 0
+
+
+def _mc(args: argparse.Namespace) -> int:
+    import pandas as pd
+
+    from zone_trend.backtest.montecarlo import monte_carlo
+
+    d: Path = args.run
+    if (d / "oos_trades.parquet").exists():
+        trades, equity = d / "oos_trades.parquet", d / "oos_equity.parquet"
+    else:
+        trades, equity = d / "trades.parquet", d / "equity.parquet"
+    res = monte_carlo(pd.read_parquet(trades), pd.read_parquet(equity), n_paths=args.paths)
+    print(json.dumps(res, indent=1))
+    return 0
+
+
+def _episodes(args: argparse.Namespace) -> int:
+    from zone_trend.backtest.episodes import collect, write_episodes
+
+    paths = DataPaths.from_env(args.data_dir)
+    eps = collect(
+        paths, args.symbol.upper(), load_config(args.config), args.start, args.end, args.limit
+    )
+    out = args.out or Path("episodes") / args.symbol.upper()
+    print(f"{len(eps)} episodes -> {write_episodes(eps, out)}")
     return 0
 
 
@@ -290,6 +377,45 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-cache", action="store_true", help="rebuild symbol tapes")
     p.add_argument("--runs-dir", type=Path, default=Path("runs"))
     p.set_defaults(func=_backtest)
+
+    p = sub.add_parser("wf", parents=[common], help="walk-forward + acceptance table")
+    p.add_argument("--config", type=Path, default=DEFAULT_PATH)
+    p.add_argument("--from", dest="start", default="2021-01")
+    p.add_argument("--to", dest="end", default=None, help="last month incl. holdout")
+    p.add_argument("--symbols", default=None)
+    p.add_argument("--equity", type=float, default=500.0)
+    p.add_argument("--workers", type=int, default=4)
+    p.add_argument("--out", type=Path, default=None)
+    p.set_defaults(func=_wf)
+
+    p = sub.add_parser("accept", help="recompute the acceptance table for a wf dir")
+    p.add_argument("--wf", type=Path, required=True)
+    p.set_defaults(func=_accept)
+
+    p = sub.add_parser("holdout", parents=[common], help="run the 9-month holdout, once")
+    p.add_argument("--wf", type=Path, required=True)
+    p.add_argument("--force", action="store_true")
+    p.set_defaults(func=_holdout)
+
+    p = sub.add_parser("ablate", parents=[common], help="switch one component off")
+    p.add_argument("--wf", type=Path, required=True)
+    p.add_argument("--component", default="all", help="comma list or 'all'")
+    p.add_argument("--workers", type=int, default=4)
+    p.set_defaults(func=_ablate)
+
+    p = sub.add_parser("mc", help="Monte Carlo on a run or wf dir")
+    p.add_argument("--run", type=Path, required=True)
+    p.add_argument("--paths", type=int, default=10_000)
+    p.set_defaults(func=_mc)
+
+    p = sub.add_parser("episodes", parents=[common], help="render episodes for golden labels")
+    p.add_argument("--config", type=Path, default=DEFAULT_PATH)
+    p.add_argument("--symbol", required=True)
+    p.add_argument("--from", dest="start", required=True)
+    p.add_argument("--to", dest="end", required=True)
+    p.add_argument("--limit", type=int, default=50)
+    p.add_argument("--out", type=Path, default=None)
+    p.set_defaults(func=_episodes)
     return parser
 
 

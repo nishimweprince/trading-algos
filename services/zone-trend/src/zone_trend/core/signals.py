@@ -80,7 +80,7 @@ def build_signal(
         trend == Trend.RANGE and zone_strength >= cfg.zones.range_min_strength
     ):
         return reject("trend", trend.value)
-    if with_trend:
+    if with_trend and cfg.structure.slope_gate:
         if not slope_ok(legs_h4, side):
             return reject("slope")
         if momentum_decay(legs_h4, side, cfg.structure.decay_ratio):

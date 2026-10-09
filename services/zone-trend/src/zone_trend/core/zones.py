@@ -117,7 +117,11 @@ class ZoneBook:
             self.zones = []
             return self.zones
         cfg = self.cfg
-        seeds = _seeds(sw_d1, cfg.lookback_days.d1 * DAY_MS, now, close, atr_d1, cfg)
+        seeds = (
+            _seeds(sw_d1, cfg.lookback_days.d1 * DAY_MS, now, close, atr_d1, cfg)
+            if cfg.use_d1
+            else []
+        )
         seeds += _seeds(sw_h4, cfg.lookback_days.h4 * DAY_MS, now, close, atr_d1, cfg)
         seeds = [s for s in seeds if s.key not in self.deleted_seeds]
         hvn = list(hvn)

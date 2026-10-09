@@ -21,6 +21,7 @@ swings:
 structure:
   ema_period: 50
   decay_ratio: 0.6
+  slope_gate: true         # ablation switch: impulse-vs-correction slope and momentum decay
 zones:
   lookback_days: {d1: 365, h4: 90}
   width_atr: {min: 0.25, max: 0.6}
@@ -28,6 +29,7 @@ zones:
   max_width_atr_d1: 1.0
   break_atr_h4: 0.25
   keep_per_side: 6
+  use_d1: true             # ablation switch: seed zones from 1D swings as well as 4H
   hvn_lookback_days: 90
   range_min_strength: 70
 entries:

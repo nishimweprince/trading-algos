@@ -53,6 +53,7 @@ class PendingEntry:
     k_sym: float
     size_mult: float
     managed: bool
+    delay_hours: int = 0  # hours to wait past the next open (Monte Carlo delay variant)
 
 
 @dataclass
@@ -241,6 +242,10 @@ class Broker:
         if sp is not None and sp.pending_exit is not None:
             price = open_ * (1 - sp.pos.side.sign * sp.slip)
             self._fill(sp, ts, sp.pos.qty_open, price, sp.pending_exit)
+        pe = self.pending.get(sym)
+        if pe is not None and pe.delay_hours > 0:
+            pe.delay_hours -= 1
+            return
         pe = self.pending.pop(sym, None)
         if pe is None or sym in self.positions:
             if pe is not None:
