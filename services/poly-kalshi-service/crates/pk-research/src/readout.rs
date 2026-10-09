@@ -51,7 +51,8 @@ pub fn exit_table(records: &[Value]) -> Value {
         .chain(["exit_gap".to_owned()])
         .collect();
     let groups = ["fills", "no_fills", "all"];
-    let mut acc: BTreeMap<&str, BTreeMap<String, Vec<(f64, bool)>>> =
+    type ByRule = BTreeMap<String, Vec<(f64, bool)>>;
+    let mut acc: BTreeMap<&str, ByRule> =
         groups.iter().map(|g| (*g, rules.iter().map(|r| (r.clone(), Vec::new())).collect())).collect();
     for r in records.iter().filter(|r| r["type"] == "markout") {
         let (Some(asset), Some(open)) = (r["asset"].as_str(), r["open_unix"].as_i64()) else { continue };

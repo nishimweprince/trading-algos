@@ -202,7 +202,8 @@ pub fn grid(rows: &[Value], journal: &[Value], own_latency: i64, cap: f64) -> Va
         .filter_map(|r| Some(((r["asset"].as_str()?.to_owned(), r["open_unix"].as_i64()?), r)))
         .collect();
     // Grouped as pandas would: by (asset, open_unix, decision_ns), sorted.
-    let mut groups: BTreeMap<(String, i64, i64), (Option<&Value>, Vec<&Value>)> = BTreeMap::new();
+    type Group<'a> = (Option<&'a Value>, Vec<&'a Value>);
+    let mut groups: BTreeMap<(String, i64, i64), Group> = BTreeMap::new();
     for r in rows {
         let key = (
             r["asset"].as_str().unwrap_or_default().to_owned(),
