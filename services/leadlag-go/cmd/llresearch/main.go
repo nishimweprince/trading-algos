@@ -4,6 +4,7 @@
 //	llresearch screen     --from 2025-10-01 --to 2026-01-31 --followers @screen-candidates.txt --out reports/screen
 //	llresearch freeze     --screen reports/screen/screen.json --out research/prereg.json
 //	llresearch eventstudy --prereg research/prereg.json --probe probe.json --out reports/g1
+//	llresearch shadow     --journal /data/leadlag/shadow --run explore-3a   (PREREG Part 4 kill criteria)
 package main
 
 import (
@@ -54,6 +55,8 @@ func main() {
 		err = runFreeze(os.Args[2:])
 	case "eventstudy":
 		err = runEventStudy(os.Args[2:])
+	case "shadow":
+		err = runShadow(os.Args[2:])
 	default:
 		usage()
 	}
@@ -64,7 +67,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: llresearch delays|screen|freeze|eventstudy [flags]  (-h for flags)")
+	fmt.Fprintln(os.Stderr, "usage: llresearch delays|screen|freeze|eventstudy|shadow [flags]  (-h for flags)")
 	os.Exit(2)
 }
 

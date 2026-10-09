@@ -262,3 +262,152 @@ it must reproduce the journal (`deploy/jobs/shadow-verify.sh`).
 Even in-sample, explore-2 doesn't clear its fees. It is a measurement run.
 
 With the new binary, explore-1's journal replays exactly: 21,456 trades, none extra or missing.
+
+---
+
+## Part 4: exploratory runs `explore-3a`–`explore-3d` (written 2026-10-09, before any explore-3 trade)
+
+### 4.1 Why
+
+explore-1 and explore-2 put the follower response at +0.6 to +4 bp, while a taker round trip on USDT-M at
+VIP 0 costs ~9–10 bp (Part 3 §3.2–3.3). The external review of 2026-10-09 (comparable studies, Binance fee
+schedule) concludes that this edge can only be a **maker** edge:
+- quote passively;
+- use the leader signal to choose which side rests and when to pull it;
+- trade the **USDC-margined** follower contracts, where secondary sources (2026) report 0 bp maker /
+  4 bp taker for regular users. That is a promotion that no primary Binance page confirms.
+
+Published last-in-queue maker tests on Binance USD-M lose 0.4–0.8 bp per fill to adverse selection
+before fees. So these runs test one thing: whether the signal keeps adverse selection on our fills
+below the spread we earn. That question needs fill-level markouts, not signal-level ones.
+
+Like Parts 2 and 3, these runs:
+- are **exploratory**: their parameters come from looking at explore-1/2 and the review;
+- count toward no gate;
+- are never pooled with explore-1, explore-2 or each other;
+- do not replace M3/M4.
+
+explore-2 keeps running unchanged next to them, in the same trader. Each run has its own params file and
+run label, and its own aggregates.
+
+### 4.2 Fees (checked before the start)
+
+`llprobe fees --symbols <the USDC followers>,SOLUSDT` returns the account's `commissionRate`. Its output
+is appended to this section as 4.2a **before** the first explore-3 trade. The params files below assume
+0 bp maker and 4 bp taker on USDC-M:
+- If the account's rates differ, `maker_fee_bp` and `taker_fee_bp` are set to the returned values
+  before the start. That is the only change allowed, and it is recorded in 4.2a.
+- Every record keeps `gross_bp`, so net results can also be recomputed offline at USDT-M rates
+  (2 bp / 5 bp). The run is then judged at the account's actual rates.
+
+### 4.3 Shared definitions
+
+- **Leaders.** BTCUSDT and ETHUSDT, the bookTicker mid. **Price trigger:** as in Part 3 §3.3 (≥ 4 bp
+  move against the mid 1000 ms earlier, an upward crossing, 5 s cooldown per leader).
+- **Liquidations.** The trader now subscribes `<leader>@forceOrder`. Binance pushes at most one
+  liquidation per symbol per 1000 ms, so this is a coarse flag, not a timing signal. A liquidation
+  counts when its average price × filled quantity is ≥ `liq_min_usd` (50,000 USD). Its direction is
+  the order's side (a SELL liquidation closed a long). With `liq_window_ms` set, a qualifying
+  liquidation **against** the move within the window skips the signal (`liq_opposite`).
+- **β-adjusted gap** (`"beta": "rolling"`):
+  - β is an EWMA regression through the origin of the follower's 1 s mid log returns on the leader's,
+    on a 1 s grid sampled from the receive-time mid histories;
+  - half-life 30 min; warm-up 30 min, during which followers are skipped (`beta_warmup`); the estimate
+    starts over after 10 min without events;
+  - **gap** = dir × (β · leader move − follower move) over the trigger window;
+  - **residual:** the same quantity, measured from the window start to now.
+
+  `"beta": "one"` (the default) is explore-2's β = 1. explore-2's trades replay unchanged.
+- **USDC followers.** The USDC-M versions of the explore-2 followers that are listed: SOLUSDC,
+  XRPUSDC, DOGEUSDC, SUIUSDC, BNBUSDC, ZECUSDC, NEARUSDC (`llfetch candidates --quote USDC`). They are
+  recorded from the start of explore-3.
+- **Tick sizes.** They sit in each params file (`llfetch ticks`). The trader refuses to start if they
+  differ from exchangeInfo.
+- **Size.** $25 notional. **Latency:** 5 ms (Part 3 §3.1) for every order, cancel and reprice.
+
+### 4.4 Queue model (quoter runs)
+
+Each simulated post-only (GTX) order is handled as follows:
+1. It reaches the book `latency_ms` after the decision.
+2. If it would cross, it is **rejected**.
+3. Otherwise it joins **behind the whole displayed quantity** at its price (bookTicker).
+4. If its price is inside the spread, nobody is ahead of it.
+5. If its price is behind the touch, its queue is unknown until the touch comes to it. It then joins
+   behind the quantity displayed at that moment.
+
+Fills:
+- **Only trades** move the order up the queue: aggressor trades at our price use up the quantity ahead
+  of it. Cancellations ahead are ignored.
+- It fills when the traded quantity exceeds what is ahead of it, or at once on a trade strictly
+  through its price.
+- If the touch moves behind our price with no trade, the order is alone at the best price: nothing is
+  ahead of it, but it still needs a trade to fill.
+
+Cancels and reprices:
+- Both take effect `latency_ms` later. Until then the order can still fill, which models a stale quote
+  being picked off.
+- A reprice loses the queue.
+
+This is the conservative (risk-averse) model. It cannot be validated without real orders, so fill
+rates and markouts are lower bounds on toxicity at best. Live $25 orders are a later, separate step.
+
+### 4.5 The runs
+
+| | explore-3a (quoter, arm A) | explore-3b (quoter, arm B) | explore-3c (Secondary 1) | explore-3d (Secondary 2) |
+|---|---|---|---|---|
+| Followers | USDC (4.3) | USDC (4.3) | USDC (4.3) | explore-2's 9 USDT followers |
+| Signal | price trigger + β-gap ≥ 2 bp; opposite liquidation skips | none (quotes always) | leader ≥ 8 bp, or ≥ 4 bp with a same-direction liquidation; β-gap ≥ 4 bp; opposite liquidation skips | explore-2 unchanged (β = 1, gap ≥ 2 bp) |
+| Selection | top 3 by gap ÷ spread; spread ≤ 4 bp; 5 s cooldown per follower after flat | every follower, spread ≤ 4 bp | top 3 by gap; spread ≤ 4 bp | top 3 by gap; spread ≤ 1.5 bp |
+| Entry | post-only at our touch on the signal side (bid on an up move) | post-only bid and ask at the touch, following the touch when it moves away | taker (4 bp) | taker (5 bp) |
+| Entry cancel | touch moves away > 1 tick: reprice once, then cancel (`chased`); leader gives back 2 bp from its signal mid (`reversal`); residual ≤ 0.5 bp (`gap_closed`); 30 s (`timeout`) | a leader move ≥ 2 bp over 1 s pulls the side it would run over (asks on an up move); it comes back when every leader's move is < 2 bp and 1 s has passed | n/a | n/a |
+| Exit | post-only target at entry ± max(1 tick, 0.6 × gap); moved to our touch if that is more aggressive once the residual is ≤ 0.5 bp | the opposite quote (inventory ≤ 1 unit) | maker at our touch once the residual is ≤ 0.5 bp, or at 30 s; taker 2 s later if unfilled | same as 3c (no stop) |
+| Stop / timeout | follower 1.5 × gap against the fill, or 30 s after the fill: cancel the exit, then taker | 10 bp against, or 30 s: same | follower 1.5 × gap against the entry mid: taker | none / 30 s |
+| Fees (assumed, 4.2) | 0 maker / 4 taker | 0 / 4 | 0 / 4 | 2 / 5 (USDT-M) |
+
+The params files are `deploy/env/shadow-explore-3{a,b,c,d}.example.json`.
+
+### 4.6 Recorded and reported (descriptive)
+
+**Every trade** records:
+- `exit_reason`: timeout, gap_closed, target or stop;
+- `exit_kind`;
+- for quoter runs: `arm`, `entry_kind`, `queue_ahead` at the fill, `fill_wait_ms`, the markouts
+  from the **entry fill price**, and `exit_markouts_bp` from the exit price. Those two are the per-leg
+  adverse selection.
+
+**Every arm-A entry attempt**, filled or not, is a `kind: "attempt"` record with:
+- its end reason;
+- the queue ahead when it joined;
+- markouts from the **post** (1/5/10/30 s).
+
+Filled versus unfilled attempts measure adverse selection by construction (fill probability against
+post-fill return).
+
+**The status page reports, per run:**
+- the fill rate;
+- the taker-exit fraction **f**;
+- net per round trip;
+- results by exit kind, by exit reason and by leader move;
+- the markouts of filled versus unfilled attempts;
+- skips.
+
+**Control:** `leadlag --replay <tape> --shadow-params <file> --shadow-all --leader-shift 1h` re-runs any
+of these with the leaders' events delayed 1 h. It is reported next to each run.
+
+### 4.7 Kill criteria (each run separately; no pass rule)
+
+A run is **stopped** when any of these holds:
+- after ≥ 500 completed round trips (quoter runs: filled round trips), the mean net is < 0 and the
+  upper end of its 95% day-block bootstrap CI is < +0.5 bp;
+- quoter runs only: f > 0.4 over the same trades;
+- after 2 weeks, fewer than 100 round trips (the run cannot answer its question; it is reported and
+  stopped).
+
+Otherwise each run continues to ≥ 2 weeks and ≥ 500 round trips and is then written up. The verdict is
+descriptive: no explore-3 result unlocks a gate.
+
+A run that survives is a reason to:
+- design a pre-registered maker study on the archive plus the USDC tape;
+- then test with real $25 post-only orders.
+
+It is not a reason to trade.
