@@ -7,6 +7,8 @@ happened.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from sqlalchemy import (
     Column,
     Float,
@@ -182,6 +184,9 @@ events = Table(
 
 
 def connect(url: str) -> Engine:
+    if url.startswith("sqlite:///") and url != "sqlite:///:memory:":
+        # A fresh host has no state/ directory yet; SQLite will not create it.
+        Path(url.removeprefix("sqlite:///")).parent.mkdir(parents=True, exist_ok=True)
     engine = create_engine(url, future=True)
     if url.startswith("sqlite"):
 

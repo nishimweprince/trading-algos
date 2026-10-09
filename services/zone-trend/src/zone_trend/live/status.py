@@ -53,6 +53,8 @@ def _ts(ms: Any) -> str:
 def _num(v: Any, fmt: str = ",.2f") -> str:
     if v is None or (isinstance(v, float) and math.isnan(v)):
         return "–"
+    if isinstance(v, int) and not isinstance(v, bool) and fmt == ",.2f":
+        return f"{v:,}"  # counts, not money
     return format(v, fmt) if isinstance(v, (int, float)) else html.escape(str(v))
 
 
