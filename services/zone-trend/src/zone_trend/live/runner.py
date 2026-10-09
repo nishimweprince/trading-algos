@@ -483,7 +483,7 @@ class Runner:
                     open_positions=len(positions),
                     last_hour=self.last_t,
                     halted=int(self.guard.halted),
-                    api_weight_used=limiter.used() if limiter else 0,
+                    api_weight_used=limiter.used if limiter else 0,
                     stage=self.stage_name,
                     mode=self.mode,
                 )
