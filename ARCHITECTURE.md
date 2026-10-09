@@ -31,8 +31,8 @@ project was deleted.)
 | `services/backtesting-service` | Python / FastAPI | 8012 | Backtests, research studies, paper trading |
 | `services/ofi-scalper-service` | Python / FastAPI | 8030 | Binance USDⓈ-M OFI scalper: raw-feed recorder, features, regime gate, hard risk, model-gated execution bridge (shadow / testnet via execution-service) |
 | `ofi-status` (in `services/ofi-scalper-service`) | Python / FastAPI | 8040 | Read-only status page for colleagues (collection, health, research, trading); published only via Cloudflare Tunnel + Access |
-| `services/poly-kalshi-service` | Python / FastAPI | 8050 | Kalshi-signal / Polymarket-leg convergence on 15-min crypto binaries: two-venue recorder, window identity, decision, paper venue, settlement ledger (no real orders) |
-| `pk-status` (in `services/poly-kalshi-service`) | Python / FastAPI | 8051 | Read-only poly-kalshi status page and gate progress |
+| `services/poly-kalshi-service` | Rust / axum (Cargo workspace) | 8050 (trader) · 8052 (observer, loopback) | Kalshi-signal / Polymarket-leg convergence on 15-min crypto binaries: two-venue recorder, window identity, decision, paper venue, settlement ledger; an order-path probe that posts post-only orders it cancels at once (no fills, no live trading); the `pk` research CLI |
+| `pk-status` (in `services/poly-kalshi-service`) | Rust / axum | 8051 | Read-only poly-kalshi status page and gate progress |
 
 `execution-service` runs three instances from one codebase:
 

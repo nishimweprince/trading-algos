@@ -319,7 +319,8 @@ impl Settings {
             host_tag: e.or("PK_HOST_TAG", "mac"),
             min_free_disk_gb: e.num("PK_MIN_FREE_DISK_GB", 5.0)?,
             state_dir: scoped("PK_STATE_DIR", "data/state/{profile}", "data/state"),
-            results_epoch: e.or("PK_RESULTS_EPOCH", "1"),
+            // Epoch 7 began with the Rust cutover (new journal and tape formats).
+            results_epoch: e.or("PK_RESULTS_EPOCH", "7"),
             poly_sockets: e.num("PK_POLY_SOCKETS", 0)?,
             heartbeat_seconds: e.num("PK_HEARTBEAT_SECONDS", 60.0)?,
             stale_feed_seconds: e.num("PK_STALE_FEED_SECONDS", 30.0)?,

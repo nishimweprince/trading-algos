@@ -12,7 +12,7 @@ Type=simple
 User=pk
 Group=pk
 WorkingDirectory=/home/pk/trading-algos/services/poly-kalshi-service
-ExecStart=/home/pk/trading-algos/.venv/bin/pk-status --profile dev
+ExecStart=/home/pk/trading-algos/services/poly-kalshi-service/target/release/pk-status --profile dev
 Restart=always
 RestartSec=5
 # Never compete with the trader for CPU or memory: it reads the trader once per

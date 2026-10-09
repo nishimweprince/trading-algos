@@ -8,15 +8,8 @@ logs/
 venv/
 __pycache__/
 *.py[cod]
-.pytest_cache/
-.ruff_cache/
-.coverage
-htmlcov/
-dist/
-build/
-*.egg-info/
 
-# Research outputs and downloaded history; the code under research/ is tracked.
+# Research outputs and downloaded history; research/ holds the docs.
 research/data/
 
 # Rust

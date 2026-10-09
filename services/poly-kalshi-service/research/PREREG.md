@@ -1,5 +1,11 @@
 # Pre-registration: Helix holdout (PLAN 0.3, 3.3)
 
+> **Commands (2026-10-09).** The service is Rust now. This record keeps the
+> Python module names it was written with: `research.<x>` is `pk <x>`, and
+> `research.helix_<x>` / `research.helix.<x>` is `pk helix <x>`. The
+> numbers below were computed by the Python modules; the Rust ports match
+> them on the parity tapes (`crates/pk-research/tests`).
+
 Written 2026-10-07, after the discovery sweeps and **before any holdout number
 was computed**. `research.helix_sweeps --split holdout` refuses to run until this
 file exists, and this file is committed first.

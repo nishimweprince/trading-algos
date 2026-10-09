@@ -522,7 +522,7 @@ Our notes put Kalshi's API in AWS us-east-1 (N. Virginia); Ohio is us-east-2.
 - **Revisit only if** the phase 3 sweep shows that a few milliseconds move fill rate
   materially. Phase 4 is the bigger lever.
 
-### 5.3 Rewrite in Go or C++: not now, and only part of it if ever
+### 5.3 Rewrite in Go or C++: not now, and only part of it if ever (superseded: see the decision below)
 
 - **The decision path costs 0.03 ms,** against about 50 ms of network and an assumed
   150 ms to the order. A rewrite of the engine saves under 1 ms.
@@ -542,6 +542,31 @@ Our notes put Kalshi's API in AWS us-east-1 (N. Virginia); Ohio is us-east-2.
    and Phase 3 (live) measures order signing in Python as a material part of the
    order path.** Move signing and order submission into the gateway.
 3. **Neither happens.** Stay in Python.
+
+**Decision, 2026-10-09: rewritten in Rust anyway, all of it.** The latency review
+(build 07edbd4, epoch 6) agreed with the reasoning above: the engine is 0.044 ms and
+the rest is network. It ranked the work as an AWS side-by-side test, then
+instrumenting the real order path, then guarding stale and wide books, then (if
+measured worth it) a gateway, and deferred a full rewrite. We rewrote the whole
+service anyway, on the order the review set:
+
+- **The order path first** (`pk-exec`, `pk probe-orders`). This is a real CLOB V2
+  client: warm HTTP/2, L2 auth, EIP-712 signing, pre-signing as a gap nears the
+  threshold, and per-order timing. It posts post-only orders below the bid and
+  cancels them at once, so it measures decision → acknowledgement without a fill.
+  Paper stays the venue of record, and `live` stays refused.
+- **Stale and wide books** are live parameters (`PK_MAX_POLY_LAG_MS`,
+  `PK_MAX_POLY_SPREAD`) and shadow variants, and `age_outlier` records trace each
+  late book to its cause.
+- **Everything else**: the trader, observer, status page, alerts, Telegram, and
+  all of `research/` including Helix (`pk`, `pk helix`). Golden outputs from the
+  Python service on fixed tapes are matched field by field in tests.
+- The tape is now hourly zstd text files; the research commands still read the old
+  `.gz` hours. Results restart at **epoch 7**.
+
+What the rewrite does *not* change is the edge: n is still far short of the
+300-fill gate, and faster code measures it better without making it larger. The
+AWS comparison (`pk netprobe`, `infra/systemd/README.md`) is still to run on Dublin.
 
 ---
 
