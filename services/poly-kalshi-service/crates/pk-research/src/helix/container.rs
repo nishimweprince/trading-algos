@@ -10,8 +10,16 @@
 //! - a block running past the end (a partial tail): stop.
 //!
 //! The footer index is never needed: on a single sub-file it lists the same
-//! blocks the walk finds. Blocks whose record size is not the reader's (a
-//! schema change mid-file) and blocks that do not decompress are skipped.
+//! blocks the walk finds, and a day rolled off at midnight gets its footer
+//! written a second or two late. Blocks that do not decompress are skipped.
+//!
+//! Record sizes come from each block header, never from a table: payloads are
+//! frozen-append, so a tag's record can grow (`OrderEvent` went 56 → 64 B).
+//! A reader names the smallest size it can decode (`min_rsz`, its last field's
+//! end), takes every block at least that wide, and splits each block by its
+//! own size. A block narrower than that (an older layout) is skipped; when
+//! every block of a wanted tag is narrower, the read fails rather than return
+//! zero rows from a populated tag.
 //!
 //! The 2026-06 recorder wrote a different format: the whole file zstd
 //! compressed, holding `HLXF` frames (24 B header, then the records). The
@@ -46,6 +54,12 @@ pub fn legacy_of(canonical: u8) -> Option<(u8, i64)> {
         34 => (18, 1000),
         _ => return None,
     })
+}
+
+/// The V4 "wide" tags (from 2026-08-14): same payload as their canonical
+/// twin, and the u16 `asset_wide` is the authoritative asset id.
+pub fn is_wide(tag: u8) -> bool {
+    (43..=48).contains(&tag)
 }
 
 /// Canonical tag → its V4 wide twin (same payload, ns): `recv3._WIDE_TAG`.
@@ -198,10 +212,56 @@ pub fn decompress(d: &[u8], b: &Block) -> Option<Vec<u8>> {
     Some(raw)
 }
 
+/// The blocks of `wanted` tags at least `min_rsz` wide. Fails when blocks of
+/// a wanted tag exist and every one of them is narrower (a reader bug or a
+/// layout this reader does not know, never an empty stream).
+fn select(path: &Path, list: Vec<Block>, wanted: &[u8], min_rsz: usize) -> anyhow::Result<Vec<Block>> {
+    let mut keep = Vec::new();
+    let mut narrow: Option<(u8, usize)> = None;
+    let mut ok_tags = Vec::new();
+    for b in list {
+        if !wanted.contains(&b.tag) {
+            continue;
+        }
+        if b.rsz >= min_rsz && b.rsz > 0 {
+            ok_tags.push(b.tag);
+            keep.push(b);
+        } else {
+            narrow.get_or_insert((b.tag, b.rsz));
+        }
+    }
+    if keep.is_empty()
+        && let Some((tag, rsz)) = narrow
+    {
+        anyhow::bail!(
+            "{}: every block of tag {tag} is {rsz} B, narrower than the {min_rsz} B this reader decodes",
+            path.display()
+        );
+    }
+    Ok(keep)
+}
+
+/// One decompressed block: its records (`count × rsz` bytes), the time scale
+/// of its tag, the tag, and the record size from its header.
+#[derive(Clone, Debug)]
+pub struct Raw {
+    pub data: Vec<u8>,
+    pub scale: i64,
+    pub tag: u8,
+    pub rsz: usize,
+}
+
+impl Raw {
+    /// The records, each `rsz` bytes (at least the reader's `min_rsz`).
+    pub fn records(&self) -> std::slice::ChunksExact<'_, u8> {
+        self.data.chunks_exact(self.rsz)
+    }
+}
+
 /// `reader.iter_blocks`: each decompressed block whose tag is in `tags` and
-/// whose record size is `rsz`, with the tag's time scale, in file order.
-/// Errors on a file that is not a v1 container.
-pub fn blocks(path: &Path, tags: &[(u8, i64)], rsz: usize) -> anyhow::Result<BlockIter> {
+/// whose record size is at least `min_rsz`, with the tag's time scale, in
+/// file order. Errors on a file that is not a v1 container.
+pub fn blocks(path: &Path, tags: &[(u8, i64)], min_rsz: usize) -> anyhow::Result<BlockIter> {
     let data = open(path)?;
     if data.len() >= 32 {
         let h = file_header(&data).expect("32 bytes");
@@ -210,7 +270,8 @@ pub fn blocks(path: &Path, tags: &[(u8, i64)], rsz: usize) -> anyhow::Result<Blo
         }
     }
     let list = if data.len() < 32 { Vec::new() } else { walk(&data).0 };
-    let list = list.into_iter().filter(|b| b.rsz == rsz && tags.iter().any(|(t, _)| *t == b.tag)).collect();
+    let wanted: Vec<u8> = tags.iter().map(|(t, _)| *t).collect();
+    let list = select(path, list, &wanted, min_rsz)?;
     Ok(BlockIter { data, blocks: list, i: 0, tags: tags.to_vec() })
 }
 
@@ -222,23 +283,24 @@ pub struct BlockIter {
 }
 
 impl Iterator for BlockIter {
-    type Item = (Vec<u8>, i64);
+    type Item = Raw;
     fn next(&mut self) -> Option<Self::Item> {
         while self.i < self.blocks.len() {
             let b = &self.blocks[self.i];
             self.i += 1;
-            if let Some(raw) = decompress(&self.data, b) {
+            if let Some(data) = decompress(&self.data, b) {
                 let scale = self.tags.iter().find(|(t, _)| *t == b.tag).map(|(_, s)| *s).unwrap_or(1);
-                return Some((raw, scale));
+                return Some(Raw { data, scale, tag: b.tag, rsz: b.rsz });
             }
         }
         None
     }
 }
 
-/// `recv3.iter_records(path, tag, rsz)`: one tag's records, whole, in file order.
-/// Reads the HLXF frame-stream format too.
-pub fn records(path: &Path, tag: u8, rsz: usize) -> anyhow::Result<Vec<Vec<u8>>> {
+/// `recv3.iter_records(path, tag, rsz)`: one tag's records, whole (each as
+/// wide as its block says, at least `min_rsz`), in file order. Reads the HLXF
+/// frame-stream format too.
+pub fn records(path: &Path, tag: u8, min_rsz: usize) -> anyhow::Result<Vec<Vec<u8>>> {
     let data = open(path)?;
     let mut out = Vec::new();
     if data.len() < 8 {
@@ -247,7 +309,7 @@ pub fn records(path: &Path, tag: u8, rsz: usize) -> anyhow::Result<Vec<Vec<u8>>>
     if data[..4] == ZSTD_MAGIC {
         let body = decompress_all(&data);
         if body.len() >= 4 && u32_at(&body, 0) == FRAME_MAGIC {
-            hlxf_records(&body, tag, &mut out);
+            hlxf_records(&body, tag, min_rsz, &mut out);
         }
         return Ok(out);
     }
@@ -255,27 +317,25 @@ pub fn records(path: &Path, tag: u8, rsz: usize) -> anyhow::Result<Vec<Vec<u8>>>
     if h.magic != FILE_MAGIC || h.version != 1 {
         return Ok(out);
     }
-    for b in walk(&data).0 {
-        if b.tag != tag || b.rsz != rsz {
-            continue;
-        }
+    for b in select(path, walk(&data).0, &[tag], min_rsz)? {
         if let Some(raw) = decompress(&data, &b) {
-            out.extend(raw.chunks_exact(rsz).map(<[u8]>::to_vec));
+            out.extend(raw.chunks_exact(b.rsz).map(<[u8]>::to_vec));
         }
     }
     Ok(out)
 }
 
 /// `recv3._iter_dual_tag`: the W twin's records, then the canonical tag's, then
-/// the legacy tag's (three passes, as Python reads them), each with its scale.
-pub fn dual(path: &Path, canonical: u8, rsz: usize) -> anyhow::Result<Vec<(Vec<u8>, i64)>> {
+/// the legacy tag's (three passes, as Python reads them), each with its scale
+/// and the tag it was written under (which decides the asset field).
+pub fn dual(path: &Path, canonical: u8, min_rsz: usize) -> anyhow::Result<Vec<(Vec<u8>, i64, u8)>> {
     let mut out = Vec::new();
     if let Some(w) = wide_of(canonical) {
-        out.extend(records(path, w, rsz)?.into_iter().map(|r| (r, 1)));
+        out.extend(records(path, w, min_rsz)?.into_iter().map(|r| (r, 1, w)));
     }
-    out.extend(records(path, canonical, rsz)?.into_iter().map(|r| (r, 1)));
+    out.extend(records(path, canonical, min_rsz)?.into_iter().map(|r| (r, 1, canonical)));
     if let Some((legacy, scale)) = legacy_of(canonical) {
-        out.extend(records(path, legacy, rsz)?.into_iter().map(|r| (r, scale)));
+        out.extend(records(path, legacy, min_rsz)?.into_iter().map(|r| (r, scale, legacy)));
     }
     Ok(out)
 }
@@ -296,7 +356,7 @@ fn decompress_all(data: &[u8]) -> Vec<u8> {
     out
 }
 
-fn hlxf_records(d: &[u8], tag: u8, out: &mut Vec<Vec<u8>>) {
+fn hlxf_records(d: &[u8], tag: u8, min_rsz: usize, out: &mut Vec<Vec<u8>>) {
     let (mut off, n) = (0usize, d.len());
     while off + 24 <= n {
         let (magic, ftag) = (u32_at(d, off), d[off + 6]);
@@ -309,20 +369,33 @@ fn hlxf_records(d: &[u8], tag: u8, out: &mut Vec<Vec<u8>>) {
         if end > n {
             break;
         }
-        if ftag == tag {
+        if ftag == tag && rsz >= min_rsz {
             out.extend(d[body..end].chunks_exact(rsz).map(<[u8]>::to_vec));
         }
         off = end;
     }
 }
 
-/// The footer trailer, if the file has one: (index entries, index length).
-pub fn trailer(d: &[u8]) -> Option<(u32, u32)> {
+/// The 24 B `FooterTrailer`: `u64 magic, u32 entries, u32 index_len, u64 total_records`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Trailer {
+    pub entries: u32,
+    pub index_len: u32,
+    pub total_records: u64,
+}
+
+/// The footer trailer, if the file has one. A day file read just after its
+/// midnight roll may not have one yet: the footer is for seeking only.
+pub fn trailer(d: &[u8]) -> Option<Trailer> {
     if d.len() < 32 + 24 {
         return None;
     }
     let t = d.len() - 24;
-    (u64_at(d, t) == FOOT_MAGIC).then(|| (u32_at(d, t + 8), u32_at(d, t + 12)))
+    (u64_at(d, t) == FOOT_MAGIC).then(|| Trailer {
+        entries: u32_at(d, t + 8),
+        index_len: u32_at(d, t + 12),
+        total_records: u64_at(d, t + 16),
+    })
 }
 
 /// One footer index entry: (offset, comp, count, tag, first, last).

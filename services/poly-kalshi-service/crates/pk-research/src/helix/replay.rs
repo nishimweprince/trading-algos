@@ -396,12 +396,12 @@ pub fn run_day(
     let no = poly_bbo_series(root, "Polymarket_CLOB_No_BBO", day, &no_tokens, Extra::default())?;
     timings.insert("poly".into(), round_dp(t0.elapsed().as_secs_f64(), 1).into());
     let t0 = std::time::Instant::now();
-    let aids: Vec<u8> = HELIX_15M.iter().map(|(a, _)| *a).collect();
+    let aids: Vec<u16> = HELIX_15M.iter().map(|(a, _)| *a).collect();
     let ky =
         kalshi_quote_series(root, "Kalshi_Yes_BBO", day, &aids, Extra { seq: true, ..Default::default() })?;
     timings.insert("kalshi".into(), round_dp(t0.elapsed().as_secs_f64(), 1).into());
     let t0 = std::time::Instant::now();
-    let spot: Vec<u8> = CHAINLINK_SPOT.iter().map(|(_, a)| *a).collect();
+    let spot: Vec<u16> = CHAINLINK_SPOT.iter().map(|(_, a)| *a).collect();
     let cl_by_id = chainlink_prices(root, day, &spot)?;
     let chainlink: HashMap<&str, &(Vec<i64>, Vec<f64>)> =
         CHAINLINK_SPOT.iter().filter_map(|(name, aid)| cl_by_id.get(aid).map(|v| (*name, v))).collect();

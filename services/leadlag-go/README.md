@@ -129,5 +129,6 @@ go vet ./... && go test -race ./...
 go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...
 ```
 
-CI: `.github/workflows/leadlag-go-ci.yml` runs vet, staticcheck, race tests, a one-pass benchmark
-run and a linux/amd64 build.
+Checks (no GitHub Actions CI; run them locally): `go vet ./...`,
+`go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...`, `go test -race ./...`, a one-pass
+benchmark run (`go test -run '^$' -bench . -benchtime 1x ./...`) and a linux/amd64 build.

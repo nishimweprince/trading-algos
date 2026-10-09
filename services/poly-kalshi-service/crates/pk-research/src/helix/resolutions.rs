@@ -246,7 +246,7 @@ pub fn build(days: &[String], cache: &Path, root: &Path) -> anyhow::Result<Vec<R
         let windows = iter_windows(day, root)?;
         let mut tape_res = HashMap::new();
         for r in iter_resolutions(day, root)? {
-            if let Some(name) = u8::try_from(r.asset).ok().and_then(asset_name) {
+            if let Some(name) = asset_name(r.asset) {
                 tape_res.insert((name, r.open_unix), r);
             }
         }

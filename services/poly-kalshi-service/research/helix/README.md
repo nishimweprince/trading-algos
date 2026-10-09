@@ -31,8 +31,16 @@ size, count, compressed and raw length, first and last ts), each followed by one
 frame of same-tag, same-size records. A recorder restart appends a new FileHeader
 to the same file (07-21: 8 sub-files), so the reader walks blocks inline and
 resyncs at each header. A footer index is used only for single-sub-file days,
-as in `recv3`. Records sit in **block order, not time order**: the arrays are
-sorted on read.
+as in `recv3`, and only by the inventory: a day rolled off at midnight gets its
+footer a second or two late, so decoding never needs it. Records sit in **block
+order, not time order**: the arrays are sorted on read.
+
+**Record sizes come from the block header.** Payloads are frozen-append, so a
+tag's record can grow (`OrderEvent` went 56 → 64 B on 2026-08-03). Each reader
+names the smallest size it decodes (the table below), takes every block at least
+that wide, and splits it by the block's own size. A narrower block (an older
+layout) is skipped; when *every* block of a wanted tag is narrower, the read
+fails. An empty result from a populated tag is a reader bug, never a dead stream.
 
 ## Records
 
@@ -47,15 +55,46 @@ Timestamps are int64 ns. Tags 22+ are ns at write time. Legacy tags (≤ 21) are
 | `Polymarket_CLOB_Trade`, `…_No_Trade` | 25 (208 B) `PolyClobTrade` | condition id, token, side, price, size, venue ts, recv | ~200k/day |
 | `Kalshi_{Yes,No}_BBO` | 43 (64 B) `QuoteV3` | bid/ask, **sizes**, recv, wall, seq, asset, changed | keyed by **asset**, not ticker (below) |
 | `Kalshi_{Yes,No}_Trade` | 45 (72 B) `TradeV3` | side, price, size, recv (wall), venue ts | |
-| `Kalshi_Window` | 48 (80 B) `KalshiWindow` | ticker, asset | `open_unix` is wrong: the ticker's **ET close time read as UTC**, 4 h off and 15 min late; strike is 0. Not used. |
+| `Kalshi_Window` | 34/48 (80 B) `KalshiWindow` | recorded ts, ticker, strike, asset | `open_unix` is wrong: the ticker's **ET close time read as UTC**, 4 h off and 15 min late; strike is 0. `records::iter_kalshi_windows` decodes it and `kalshi_ticker_at(asset, t)` gives the ticker in force from the recorded time, not `open_unix`. The studies do not use it. |
 | `PolymarketChainlink_BBO` | 43 (64 B) `QuoteV3` | bid = ask = the Chainlink price, keyed by the *Spot* asset id (BTC 15 … HYPE 21) | from 2026-08-11 |
 
 Asset ids, 15-minute windows: BTC 1, ETH 3, SOL 5, XRP 7, BNB 9, DOGE 11, HYPE 13.
+The even ids are the 5-minute slots, and `Polymarket_Window` carries both, so
+`iter_windows` keeps a window only if its asset is a 15m slot **and**
+`open_unix % 900 == 0`.
+
+Decoding rules, in `records.rs`:
+
+- **Asset id by tag.** Under a wide tag (43–48) the u16 `asset_wide` is
+  authoritative, and under the older tags the u8 (`asset_of`). For ids 1–21 both
+  agree on the tape. A wide record whose `asset_wide` is still zero while the u8
+  is set falls back to the u8. Asset ids are u16 throughout.
+- **Condition ids are normalized** (`norm_condition_id`: no `0x`, lowercase).
+  `PolyWindow`/resolution carry bare hex and BBO/trades `0x` hex, so a raw join
+  returns nothing.
+- **Polymarket BBO and trades carry no asset.** Their only identity is the
+  token. `token_index(windows)` maps `token_id → (asset, open_unix, outcome)`.
+  The trade record's field is *named* `asset_id` but holds the token id
+  (`PolyTrade::token_id`).
+- **Kalshi trade `side` is the YES/NO leg, not the aggressor.** Classify the
+  aggressor against the prevailing BBO with `records::aggressor` (the quote
+  rule).
+- **Resolution `outcome_ws`** is decoded as `Option` (255 → `None`, which is
+  frequent). Never settle on it (below).
+- **Venues** (`records::venue`): Kalshi YES/NO 31/32, Polymarket YES/NO 25/26.
+  Venue 8 (`PolymarketClob`) is order routing only, and no feed ever writes it.
+  `records::SOURCE_IDS` lists each stream's `FileHeader.source_id`.
 
 **Sizes are present.** Each BBO record carries the shares at the best bid and best ask,
 on both venues. So the tape gives *depth at the touch*, though not beyond it.
 
 ## Clocks (`validate.py`, 07-26 and 09-20)
+
+The format write-up (2026-10-06) names Polymarket BBO offset 0 a wall clock and
+Kalshi trade offsets 48/56 receive-monotonic/wall. The measurements below show
+offset 0 moving with the Kalshi monotonic `recv` (same wall − recv offset at the
+same instant) and Kalshi trade 56 sitting ~50 ms before 48 (a venue time). The
+decoder keeps the measured meanings, which every golden depends on.
 
 - `recv`: CLOCK_MONOTONIC-like on the recorder host, the same for every stream.
   It drifts about 2.4 s a day against wall time, so it orders records but is not

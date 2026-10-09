@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use super::container::{blocks, tags};
-use super::records::{TAG_POLY_BBO_NS, TAG_QUOTE_NS};
+use super::records::{TAG_POLY_BBO_NS, TAG_QUOTE_NS, asset_of};
 use super::{NS, path};
 
 pub const PX: i64 = 10_000;
@@ -209,9 +209,10 @@ pub fn poly_bbo_series(
     if tokens.is_empty() {
         return Ok(finish(parts, 0, 0));
     }
-    for (raw, scale) in blocks(&path(root, stream, day), &tags(TAG_POLY_BBO_NS), 224)? {
+    for raw in blocks(&path(root, stream, day), &tags(TAG_POLY_BBO_NS), 224)? {
+        let scale = raw.scale;
         let mut part = Part::default();
-        for r in raw.chunks_exact(224) {
+        for r in raw.records() {
             let Some(&key) = lut.get(&<[u8; 24]>::try_from(&r[136..160]).expect("24 bytes")) else {
                 continue;
             };
@@ -237,28 +238,31 @@ pub fn poly_bbo_series(
     Ok(finish(parts, tokens.len(), raw_rows))
 }
 
+/// A quote record's asset under its block's tag ([`asset_of`]).
+fn quote_asset(tag: u8, r: &[u8]) -> u16 {
+    asset_of(tag, r[58], u16::from_le_bytes([r[60], r[61]]))
+}
+
 /// `reader.kalshi_quote_series`: Kalshi BBO for `asset_ids` (key `k` is
 /// `asset_ids[k]`), `changed` records only.
 pub fn kalshi_quote_series(
     root: &Path,
     stream: &str,
     day: &str,
-    asset_ids: &[u8],
+    asset_ids: &[u16],
     extra: Extra,
 ) -> anyhow::Result<Series> {
-    let mut lut = [-1i16; 256];
-    for (k, &aid) in asset_ids.iter().enumerate() {
-        lut[aid as usize] = k as i16;
-    }
+    let lut: HashMap<u16, i16> = asset_ids.iter().enumerate().map(|(k, &aid)| (aid, k as i16)).collect();
     let mut parts = Vec::new();
     let mut raw_rows = 0;
-    for (raw, scale) in blocks(&path(root, stream, day), &tags(TAG_QUOTE_NS), 64)? {
+    for raw in blocks(&path(root, stream, day), &tags(TAG_QUOTE_NS), 64)? {
+        let scale = raw.scale;
         let mut part = Part::default();
-        for r in raw.chunks_exact(64) {
-            let key = lut[r[58] as usize];
-            if key < 0 || r[59] != 1 {
+        for r in raw.records() {
+            if r[59] != 1 {
                 continue;
             }
+            let Some(&key) = lut.get(&quote_asset(raw.tag, r)) else { continue };
             part.key.push(key);
             part.t.push(i64_at(r, 40) * scale);
             part.bid.push(px(f64_at(r, 0), 1.0));
@@ -283,16 +287,17 @@ pub fn kalshi_quote_series(
 
 /// `reader.chainlink_prices`: the Chainlink price per *Spot asset id, `(t, price)`
 /// in time order. Empty when the day has no Chainlink stream.
-pub fn chainlink_prices(root: &Path, day: &str, asset_ids: &[u8]) -> anyhow::Result<HashMap<u8, Timeline>> {
+pub fn chainlink_prices(root: &Path, day: &str, asset_ids: &[u16]) -> anyhow::Result<HashMap<u16, Timeline>> {
     let p = path(root, "PolymarketChainlink_BBO", day);
-    let mut out: HashMap<u8, Vec<(i64, f64)>> = HashMap::new();
+    let mut out: HashMap<u16, Vec<(i64, f64)>> = HashMap::new();
     if !p.exists() {
         return Ok(HashMap::new());
     }
-    for (raw, scale) in blocks(&p, &tags(TAG_QUOTE_NS), 64)? {
-        for r in raw.chunks_exact(64) {
-            if asset_ids.contains(&r[58]) {
-                out.entry(r[58]).or_default().push((i64_at(r, 40) * scale, f64_at(r, 0)));
+    for raw in blocks(&p, &tags(TAG_QUOTE_NS), 64)? {
+        for r in raw.records() {
+            let aid = quote_asset(raw.tag, r);
+            if asset_ids.contains(&aid) {
+                out.entry(aid).or_default().push((i64_at(r, 40) * raw.scale, f64_at(r, 0)));
             }
         }
     }
