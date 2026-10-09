@@ -485,4 +485,14 @@ def summarise(trades: list[dict[str, Any]], signals: list[dict[str, Any]] | None
         out["t_stat"] = round(mean / (sd / math.sqrt(len(net))), 3) if sd > 0 else None
     else:
         out["t_stat"] = None
+    # 95% interval of the mean net bp: whether a symbol (or a day) differs from the
+    # rest needs this, not its point estimate on a few dozen trades.
+    bps = [t["net_bp"] for t in done]
+    if len(bps) >= 2:
+        mean_bp = sum(bps) / len(bps)
+        sd_bp = math.sqrt(sum((x - mean_bp) ** 2 for x in bps) / (len(bps) - 1))
+        half = 1.96 * sd_bp / math.sqrt(len(bps))
+        out["net_bp_ci95"] = [round(mean_bp - half, 3), round(mean_bp + half, 3)]
+    else:
+        out["net_bp_ci95"] = None
     return out
