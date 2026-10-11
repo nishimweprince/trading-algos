@@ -314,7 +314,9 @@ class ScalperRuntime:
                 )
                 self.last_book_ns[event.symbol] = event.recv_ns
                 for bridge in self._bridges():
-                    bridge.on_book(event.symbol, self.streams.syncs[event.symbol].book)
+                    bridge.on_book(
+                        event.symbol, self.streams.syncs[event.symbol].book, txn_ms=event.txn_ms
+                    )
         elif isinstance(event, AggTrade):
             self._latency("aggTrade", event.recv_ns, event.event_ms)
             if event.symbol in self.engine.symbols:
@@ -323,7 +325,12 @@ class ScalperRuntime:
                 )
                 for bridge in self._bridges():
                     bridge.on_trade(
-                        event.symbol, event.recv_ns, event.price, event.qty, event.buyer_is_maker
+                        event.symbol,
+                        event.recv_ns,
+                        event.price,
+                        event.qty,
+                        event.buyer_is_maker,
+                        trade_ms=event.trade_ms,
                     )
                 self._burst[event.symbol] += 1
                 if self._burst[event.symbol] == self.settings.burst_trades:

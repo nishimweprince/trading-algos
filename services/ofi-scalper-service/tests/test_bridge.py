@@ -50,8 +50,9 @@ class Clock:
 
 
 def shadow_bridge(
-    tmp_path: Path, dial: Dial, **overrides: Any
+    tmp_path: Path, dial: Dial, *, queue_model: str = "pessimistic", **overrides: Any
 ) -> tuple[ExecutionBridge, RiskState]:
+    """Most tests here fill on a print through the price: the pessimistic model."""
     settings = make_settings(
         tmp_path,
         OFI_EXECUTION_MODE="shadow",
@@ -68,6 +69,7 @@ def shadow_bridge(
         filters=dict(DEFAULT_FILTERS),
         state_dir=tmp_path / "state",
         fees=lambda _s: FEES,
+        queue_model=queue_model,
     )
     return bridge, risk
 
@@ -162,6 +164,7 @@ def test_shadow_time_stop_exits_as_a_maker_and_the_guard_cancels_entries(tmp_pat
         model=dial_model(tmp_path / "models", dial, policy=policy),
         filters=dict(DEFAULT_FILTERS),
         fees=lambda _s: FEES,
+        queue_model="pessimistic",
     )
     assert bridge.flow_guard is not None and bridge.flow_guard.enabled
     dial.set(up=0.8, down=0.05)

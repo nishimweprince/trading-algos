@@ -47,7 +47,7 @@ def entry(bridge):
 def test_queue_model_waits_behind_the_displayed_quantity(tmp_path: Path) -> None:
     bridge, book = entered(tmp_path, queue_model="queue")
     order = entry(bridge)
-    assert bridge.shadow.queue_ahead[order.key] == Decimal("2.0")
+    assert bridge.shadow.queue[order.key].ahead == Decimal("2.0")
     bridge.on_trade("BTCUSDT", T0 + 1, 60000.0, 1.5, True)  # sellers hit the bid
     assert order.executed == "0"
     bridge.on_trade("BTCUSDT", T0 + 2, 60000.0, 0.5, False)  # buyer aggressor: not us
@@ -64,7 +64,7 @@ def test_a_shrinking_level_moves_us_up(tmp_path: Path) -> None:
     order = entry(bridge)
     book.bids[60000.0] = 0.2  # cancels ahead of us
     bridge.on_book("BTCUSDT", book)
-    assert bridge.shadow.queue_ahead[order.key] == Decimal("0.2")
+    assert bridge.shadow.queue[order.key].ahead == Decimal("0.2")
     bridge.on_trade("BTCUSDT", T0 + 1, 60000.0, 0.203, True)
     assert order.executed == "0.003"
 
@@ -129,3 +129,70 @@ def test_unknown_queue_model_is_refused(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="queue model"):
         ShadowVenue(None, queue_model="optimistic")  # type: ignore[arg-type]
+
+
+# --- the proportional queue ----------------------------------------------------------------
+
+
+def test_the_default_model_is_the_queue(tmp_path: Path) -> None:
+    from ofi_scalper_service.execution_bridge import ShadowVenue
+
+    assert ShadowVenue(None).queue_model == "queue"  # type: ignore[arg-type]
+    bridge, _ = shadow_bridge(tmp_path, Dial(), queue_model="queue")
+    assert bridge.shadow.queue_model == "queue"
+
+
+def queued(tmp_path: Path):
+    bridge, book = entered(tmp_path, queue_model="queue")
+    bridge.on_book("BTCUSDT", book, txn_ms=50)
+    order = entry(bridge)
+    return bridge, book, order, bridge.shadow.queue[order.key]
+
+
+def test_cancels_split_between_the_front_and_the_back(tmp_path: Path) -> None:
+    bridge, book, order, pos = queued(tmp_path)
+    book.bids[60000.0] = 5.0  # 3 joined behind us
+    bridge.on_book("BTCUSDT", book, txn_ms=60)
+    assert pos.ahead == Decimal("2.0")  # growth never moves us forward
+    book.bids[60000.0] = 1.0  # 4 cancelled: 2/5 of them in front
+    bridge.on_book("BTCUSDT", book, txn_ms=70)
+    assert pos.ahead == Decimal("0.4")
+
+
+def test_a_cancel_in_front_lets_a_smaller_trade_reach_us(tmp_path: Path) -> None:
+    bridge, book, order, pos = queued(tmp_path)
+    book.bids[60000.0] = 2.5
+    bridge.on_book("BTCUSDT", book, txn_ms=60)
+    book.bids[60000.0] = 0.5  # 2 cancelled, 4/5 of them in front
+    bridge.on_book("BTCUSDT", book, txn_ms=70)
+    assert pos.ahead == Decimal("0.4")
+    bridge.on_trade("BTCUSDT", T0 + 1, 60000.0, 0.402, True, trade_ms=80)
+    assert order.executed == "0.002"
+
+
+def test_a_trade_then_its_depth_update_counts_once(tmp_path: Path) -> None:
+    bridge, book, order, pos = queued(tmp_path)
+    bridge.on_trade("BTCUSDT", T0 + 1, 60000.0, 0.5, True, trade_ms=100)
+    assert pos.ahead == Decimal("1.5")
+    book.bids[60000.0] = 1.5  # the same 0.5, now in the depth
+    bridge.on_book("BTCUSDT", book, txn_ms=110)
+    assert pos.ahead == Decimal("1.5") and pos.unmatched == []
+
+
+def test_a_depth_update_then_its_late_trade_counts_once(tmp_path: Path) -> None:
+    bridge, book, order, pos = queued(tmp_path)
+    book.bids[60000.0] = 5.0
+    bridge.on_book("BTCUSDT", book, txn_ms=60)
+    book.bids[60000.0] = 4.5  # looks like a cancel: 0.4 of it in front
+    bridge.on_book("BTCUSDT", book, txn_ms=110)
+    assert pos.ahead == Decimal("1.8")
+    bridge.on_trade("BTCUSDT", T0 + 1, 60000.0, 0.5, True, trade_ms=100)  # it was a trade
+    assert pos.ahead == Decimal("1.5")  # all 0.5 off the front, once
+    assert order.executed == "0"
+
+
+def test_a_level_beyond_a_partial_snapshot_is_ignored(tmp_path: Path) -> None:
+    bridge, book, order, pos = queued(tmp_path)
+    book.bids = {60000.5: 1.0, 60000.2: 1.0}  # top-2 snapshot above our bid
+    bridge.on_book("BTCUSDT", book, txn_ms=60)
+    assert pos.ahead == Decimal("2.0") and pos.level == Decimal("2.0")

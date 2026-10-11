@@ -139,7 +139,7 @@ class Variant:
 
     name: str
     model: Any
-    queue_model: str = "pessimistic"
+    queue_model: str = "queue"
     delay_ns: int = 0
     book: TradeBook = field(default_factory=lambda: TradeBook(None, keep=10_000_000))
     halts: list[dict[str, Any]] = field(default_factory=list)
@@ -173,13 +173,13 @@ class FanOutBridge:
         for bridge in self.bridges:
             bridge.on_sample(sample, gate)
 
-    def on_trade(self, *args: Any) -> None:
+    def on_trade(self, *args: Any, **kwargs: Any) -> None:
         for bridge in self.bridges:
-            bridge.on_trade(*args)
+            bridge.on_trade(*args, **kwargs)
 
-    def on_book(self, symbol: str, book: Any) -> None:
+    def on_book(self, symbol: str, book: Any, **kwargs: Any) -> None:
         for bridge in self.bridges:
-            bridge.on_book(symbol, book)
+            bridge.on_book(symbol, book, **kwargs)
 
     def advance(self, t_ns: int) -> None:
         for bridge in self.bridges:

@@ -106,18 +106,47 @@ class TrackedOrder:
 # --- shadow ----------------------------------------------------------------------------
 
 
+class QueuePos:
+    """Where a resting order stands in its level's queue (``queue`` model).
+
+    ``ahead`` is the displayed quantity in front of us, ``level`` the whole
+    displayed level at our price when last seen, ``book_txn`` the engine time
+    (ms) of that depth state. Trades the depth has not shown yet are kept in
+    ``unmatched``; cancels inferred from a shrinking level in ``cancels`` as
+    ``[txn_ms, quantity not yet matched to a late trade, front share]``.
+    """
+
+    __slots__ = ("ahead", "book_txn", "cancels", "level", "unmatched")
+
+    def __init__(self, level: Decimal, book_txn: int | None) -> None:
+        self.ahead = level  # joins at the back
+        self.level = level
+        self.book_txn = book_txn
+        self.unmatched: list[tuple[int | None, Decimal]] = []
+        self.cancels: list[list[Any]] = []
+
+
+CANCEL_MEMORY_MS = 1_000
+
+
 class ShadowVenue:
     """Would-have fills: the shadow mode's venue, and the backtest's.
 
     Two fill models for a resting maker order (``queue_model``):
 
-    - ``pessimistic`` (default): only a trade printed *through* its price fills it.
-    - ``queue``: risk-averse queue position. On arrival the order joins behind the
-      quantity displayed at its level; trades at its price (by the other side)
-      eat that queue first, and if the level shrinks below it the queue ahead
-      shrinks with it (cancels are assumed to be ahead of us only as far as they
-      must be). Trade volume beyond the queue fills us, partly if need be. A
-      print through the price fills whatever is left.
+    - ``queue`` (default): proportional queue position, close to hftbacktest's
+      ``ProbQueueModel``. On arrival the order joins behind the quantity displayed
+      at its level. Trades at its price (by the other side) eat the queue in
+      front first; volume beyond it fills us, partly if need be. When the level
+      shrinks by more than the trades explain, the rest are cancels, split
+      between the front and the back of the queue in proportion to their sizes
+      (the back absorbs at most what it holds). Size that joins goes behind us.
+      Exchange times (depth ``txn_ms``, trade ``trade_ms``) keep a trade from
+      counting twice whether its depth update comes before or after it.
+    - ``pessimistic``: only a trade printed *through* its price fills it (a
+      lower bound; research's selection uses it).
+
+    In both, a print through the price fills whatever is left.
 
     ``delay_ns`` is the time from decision to the order (or cancel) reaching the
     venue. Meanwhile the market moves on: the post-only check and a market
@@ -125,7 +154,7 @@ class ShadowVenue:
     """
 
     def __init__(
-        self, bridge: ExecutionBridge, *, queue_model: str = "pessimistic", delay_ns: int = 0
+        self, bridge: ExecutionBridge, *, queue_model: str = "queue", delay_ns: int = 0
     ) -> None:
         if queue_model not in {"pessimistic", "queue"}:
             raise ValueError(f"unknown queue model {queue_model!r}")
@@ -134,10 +163,11 @@ class ShadowVenue:
         self.delay_ns = delay_ns
         self.touch: dict[str, tuple[float, float]] = {}
         self.books: dict[str, Any] = {}  # symbol -> live local book (bids/asks dicts)
+        self.book_txn: dict[str, int] = {}  # symbol -> engine time of the last depth (ms)
         self.resting: dict[str, TrackedOrder] = {}
         # Market orders that arrived with no touch: they fill at the next one.
         self.waiting: dict[str, TrackedOrder] = {}
-        self.queue_ahead: dict[str, Decimal] = {}  # exact: quantities come as decimal text
+        self.queue: dict[str, QueuePos] = {}  # exact: quantities come as decimal text
         self._pending: list[tuple[int, int, str, TrackedOrder]] = []
         self._seq = 0
 
@@ -174,20 +204,57 @@ class ShadowVenue:
                 return bids[0][0], asks[0][0]
         return self.touch.get(symbol)
 
-    def _level(self, order: TrackedOrder) -> Decimal:
+    def _level(self, order: TrackedOrder) -> Decimal | None:
+        """Displayed quantity at the order's price; None if the book does not reach it
+        (a partial top-N snapshot says nothing about deeper levels)."""
         book = self.books.get(order.symbol)
         if book is None or order.price is None:
             return Decimal(0)
         side = book.bids if order.side == "buy" else book.asks
-        return Decimal(str(side.get(float(order.price), 0.0)))
+        price = float(order.price)
+        qty = side.get(price)
+        if qty is not None:
+            return Decimal(str(qty))
+        if side and (price < min(side) if order.side == "buy" else price > max(side)):
+            return None
+        return Decimal(0)
 
-    def on_book(self, symbol: str, book: Any) -> None:
+    def on_book(self, symbol: str, book: Any, txn_ms: int | None = None) -> None:
         self.books[symbol] = book
+        if txn_ms is not None:
+            self.book_txn[symbol] = txn_ms
         if self.queue_model != "queue":
             return
         for key, order in self.resting.items():
-            if order.symbol == symbol and key in self.queue_ahead:
-                self.queue_ahead[key] = min(self.queue_ahead[key], self._level(order))
+            pos = self.queue.get(key)
+            if order.symbol == symbol and pos is not None:
+                self._on_level(pos, self._level(order), txn_ms)
+
+    @staticmethod
+    def _on_level(pos: QueuePos, level: Decimal | None, txn_ms: int | None) -> None:
+        if level is None:
+            return  # beyond a partial snapshot: nothing known
+        if txn_ms is None:  # no exchange time: the book is taken as current
+            explained = sum((q for _, q in pos.unmatched), Decimal(0))
+            pos.unmatched = []
+        else:
+            explained = sum((q for t, q in pos.unmatched if t is None or t <= txn_ms), Decimal(0))
+            pos.unmatched = [(t, q) for t, q in pos.unmatched if t is not None and t > txn_ms]
+        change = (pos.level - level) - explained
+        if change > 0:  # cancels: split between the front and the back
+            total = pos.level - explained
+            back = max(total - pos.ahead, Decimal(0))
+            share = pos.ahead / total if total > 0 else Decimal(0)
+            front = share * change
+            front += max(change - front - back, Decimal(0))  # the back cannot absorb it
+            pos.ahead -= front
+            if txn_ms is not None:
+                pos.cancels.append([txn_ms, change, share])
+                pos.cancels = [c for c in pos.cancels if c[0] >= txn_ms - CANCEL_MEMORY_MS]
+        pos.ahead = min(max(pos.ahead, Decimal(0)), level)  # size that joined is behind us
+        pos.level = level
+        if txn_ms is not None:
+            pos.book_txn = txn_ms
 
     # --- orders -----------------------------------------------------------------------
 
@@ -223,11 +290,13 @@ class ShadowVenue:
                 return
         self.resting[order.key] = order
         if self.queue_model == "queue":
-            self.queue_ahead[order.key] = self._level(order)
+            self.queue[order.key] = QueuePos(
+                self._level(order) or Decimal(0), self.book_txn.get(order.symbol)
+            )
 
     def _cancel_now(self, order: TrackedOrder, t_ns: int) -> None:
         if self.resting.pop(order.key, None) is not None:
-            self.queue_ahead.pop(order.key, None)
+            self.queue.pop(order.key, None)
             self.bridge.update(
                 order, Decimal(order.executed), order.avg_price, True, t_ns, "cancelled"
             )
@@ -239,6 +308,7 @@ class ShadowVenue:
         t_ns: int,
         qty: float = 0.0,
         buyer_is_maker: bool | None = None,
+        trade_ms: int | None = None,
     ) -> None:
         for key, order in list(self.resting.items()):
             if order.symbol != symbol or key not in self.resting:
@@ -255,18 +325,45 @@ class ShadowVenue:
             # a resting buy is hit by sellers (the buyer was the maker).
             if buyer_is_maker is not None and buyer_is_maker != (order.side == "buy"):
                 continue
-            ahead = self.queue_ahead.get(key, Decimal(0)) - Decimal(str(qty))
-            self.queue_ahead[key] = max(ahead, Decimal(0))
+            pos = self.queue.get(key)
+            if pos is None:
+                continue
+            ahead = self._on_trade(pos, Decimal(str(qty)), trade_ms)
             if ahead < 0:
                 remaining = Decimal(order.qty) - Decimal(order.executed)
                 take = min(remaining, -ahead)
                 self._fill(order, Decimal(order.executed) + take, limit, t_ns)
 
+    @staticmethod
+    def _on_trade(pos: QueuePos, qty: Decimal, trade_ms: int | None) -> Decimal:
+        """Take a trade off the front; returns what is left ahead (negative: it reached us)."""
+        cut = qty
+        if trade_ms is not None and pos.book_txn is not None and trade_ms <= pos.book_txn:
+            # The depth already showed this trade, as cancels split front/back.
+            # It came off the front: move the back's part of those cancels forward.
+            cut = Decimal(0)
+            rest = qty
+            for cancel in pos.cancels:
+                if rest <= 0:
+                    break
+                if cancel[0] < trade_ms or cancel[1] <= 0:
+                    continue
+                matched = min(rest, cancel[1])
+                cancel[1] -= matched
+                rest -= matched
+                cut += matched * (1 - cancel[2])
+            cut += rest  # not seen as a cancel: take it now
+        else:
+            pos.unmatched.append((trade_ms, qty))
+        ahead = pos.ahead - cut
+        pos.ahead = max(ahead, Decimal(0))
+        return ahead
+
     def _fill(self, order: TrackedOrder, executed: Decimal, price: float, t_ns: int) -> None:
         done = executed >= Decimal(order.qty)
         if done:
             self.resting.pop(order.key, None)
-            self.queue_ahead.pop(order.key, None)
+            self.queue.pop(order.key, None)
         self.bridge.update(order, min(executed, Decimal(order.qty)), price, done, t_ns)
 
 
@@ -286,7 +383,7 @@ class ExecutionBridge:
         clock_ns: Callable[[], int] = time.time_ns,
         fees: Callable[[str], tuple[float, float] | None] = lambda _symbol: None,
         book: TradeBook | None = None,
-        queue_model: str = "pessimistic",
+        queue_model: str = "queue",
         delay_ns: int = 0,
     ) -> None:
         self.settings = settings
@@ -399,13 +496,14 @@ class ExecutionBridge:
         price: float,
         qty: float = 0.0,
         buyer_is_maker: bool | None = None,
+        trade_ms: int | None = None,
     ) -> None:
         self.shadow.advance(t_ns)
-        self.shadow.on_trade(symbol, price, t_ns, qty, buyer_is_maker)
+        self.shadow.on_trade(symbol, price, t_ns, qty, buyer_is_maker, trade_ms)
 
-    def on_book(self, symbol: str, book: Any) -> None:
+    def on_book(self, symbol: str, book: Any, txn_ms: int | None = None) -> None:
         """Every applied depth update: the shadow venue's touch and queue."""
-        self.shadow.on_book(symbol, book)
+        self.shadow.on_book(symbol, book, txn_ms)
 
     def advance(self, t_ns: int) -> None:
         """Event time moved on: deliver delayed orders and cancels."""

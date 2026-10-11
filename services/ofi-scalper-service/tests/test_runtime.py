@@ -260,11 +260,15 @@ class StubBridge:
     def on_sample(self, sample: dict, gate: dict | None) -> None:
         self.samples.append((sample["symbol"], gate))
 
-    def on_trade(self, symbol: str, t_ns: int, price: float, qty=0.0, buyer_is_maker=None) -> None:
+    def on_trade(
+        self, symbol: str, t_ns: int, price: float, qty=0.0, buyer_is_maker=None, trade_ms=None
+    ) -> None:
         self.trades.append((symbol, price))
+        self.trade_ms = trade_ms
 
-    def on_book(self, symbol: str, book) -> None:
+    def on_book(self, symbol: str, book, txn_ms=None) -> None:
         self.books = getattr(self, "books", 0) + 1
+        self.txn_ms = txn_ms
 
     def advance(self, t_ns: int) -> None:
         pass
@@ -284,6 +288,7 @@ async def test_bridge_gets_filters_samples_with_gate_trades_and_kills(build) -> 
     await until(lambda: bridge.started and books_live(runtime) and len(bridge.trades) == 2)
     assert set(bridge.filters) == {"BTCUSDT", "ETHUSDT"}
     assert bridge.trades[0] == ("BTCUSDT", 60000.10)
+    assert isinstance(bridge.trade_ms, int)  # the exchange's trade time reaches the bridge
     runtime._clock_ns.now += 3 * GRID
     await until(lambda: any(symbol == "BTCUSDT" for symbol, _ in bridge.samples))
     # The gate decides on event time, before the sample reaches the bridge.
