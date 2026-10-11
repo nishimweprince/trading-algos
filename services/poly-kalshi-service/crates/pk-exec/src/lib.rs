@@ -7,7 +7,8 @@
 //!   decision → acknowledgement; [`latency`] turns those round trips into the
 //!   paper venue's latency.
 //! - [`live`]: real entries (FAK buys at the limit) and flatten sells, with
-//!   fill polling; [`redeem`]: settled positions back into pUSD.
+//!   fill polling; [`redeem`]: settled positions back into pUSD, from the EOA
+//!   or ([`relayer`]) from a deposit wallet.
 //!
 //! The live path is reachable only from `PK_EXECUTION_MODE=live`, which the
 //! settings refuse without `PK_LIVE_CONFIRM=yes`. The probe still only sends
@@ -21,6 +22,7 @@ pub mod live;
 pub mod presign;
 pub mod probe;
 pub mod redeem;
+pub mod relayer;
 pub mod signing;
 pub mod transport;
 
@@ -29,5 +31,6 @@ pub use latency::{LatencyEstimator, LatencyNow};
 pub use live::{Executed, LiveExec, LiveLimits};
 pub use probe::{Probe, ProbeLimits};
 pub use redeem::{CtfRedeemer, Redeem, RedeemReceipt};
+pub use relayer::{RelayerConfig, WalletRedeemer};
 pub use signing::{OrderSigner, OrderSpec, SdkSigner, Side, SignedBody, Tif, WalletConfig};
 pub use transport::{WarmConfig, WarmHttp};

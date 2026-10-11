@@ -4,8 +4,9 @@
 //! Conditional Tokens contract's `redeemPositions` once the market resolves.
 //! Without that the wallet's balance never recovers, and percentage sizing
 //! would shrink after every win. [`CtfRedeemer`] sends that transaction from
-//! the EOA (`POLY_SIGNATURE_TYPE=0`; proxy and Safe wallets redeem through
-//! Polymarket's relayer, which this service does not use). It pays gas in POL.
+//! the EOA (`POLY_SIGNATURE_TYPE=0`) and pays gas in POL. A deposit wallet
+//! (`POLY_SIGNATURE_TYPE=3`) redeems through Polymarket's relayer instead:
+//! [`crate::relayer::WalletRedeemer`]. Proxy and Safe wallets are not supported.
 //!
 //! Both index sets are redeemed, so the call is the same for a win or a loss
 //! (a loss burns worthless tokens). The trader checks the token balance

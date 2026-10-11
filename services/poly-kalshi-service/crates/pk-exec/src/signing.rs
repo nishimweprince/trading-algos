@@ -71,9 +71,10 @@ pub struct SdkSigner {
 pub struct WalletConfig {
     pub clob_url: String,
     pub private_key: String,
-    /// The proxy or Safe wallet that holds the funds; None for a plain EOA.
+    /// The proxy, Safe or deposit wallet that holds the funds; None for a plain EOA.
     pub funder: Option<String>,
-    /// 0 EOA, 1 Polymarket proxy, 2 Gnosis Safe.
+    /// 0 EOA, 1 Polymarket proxy, 2 Gnosis Safe, 3 deposit wallet (EIP-1271,
+    /// the wallet polymarket.com creates for new accounts; needs `funder`).
     pub signature_type: u8,
 }
 
@@ -89,7 +90,14 @@ impl SdkSigner {
             0 => SignatureType::Eoa,
             1 => SignatureType::Proxy,
             2 => SignatureType::GnosisSafe,
-            other => anyhow::bail!("POLY_SIGNATURE_TYPE {other} is not 0, 1 or 2"),
+            3 => {
+                anyhow::ensure!(
+                    cfg.funder.is_some(),
+                    "POLY_SIGNATURE_TYPE=3 (deposit wallet) needs POLY_FUNDER, the wallet's address"
+                );
+                SignatureType::Poly1271
+            }
+            other => anyhow::bail!("POLY_SIGNATURE_TYPE {other} is not 0, 1, 2 or 3"),
         });
         let client = auth.authenticate().await?;
         let c = client.credentials();
