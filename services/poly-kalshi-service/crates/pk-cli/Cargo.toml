@@ -30,6 +30,7 @@ pk-core.workspace = true
 pk-engine.workspace = true
 pk-tape.workspace = true
 pk-research.workspace = true
+rustls.workspace = true
 
 [lints]
 workspace = true

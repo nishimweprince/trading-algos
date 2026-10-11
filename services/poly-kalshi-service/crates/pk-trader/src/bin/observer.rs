@@ -35,6 +35,7 @@ struct Since {
 }
 
 fn main() -> anyhow::Result<()> {
+    pk_svc::tls::install_default_provider();
     let args = Args::parse();
     let settings = Settings::load(args.profile.as_deref())?;
     let _guard = pk_svc::logging::init(&settings.log_level, Some(&settings.events_log_path));

@@ -86,6 +86,10 @@ enum Cmd {
 }
 
 fn main() -> anyhow::Result<()> {
+    // Same as pk_svc::tls::install_default_provider (pk-cli does not depend on pk-svc).
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("install the ring CryptoProvider exactly once");
     let cli = Cli::parse();
     env::load_profile(cli.profile.as_deref(), &cli.dir)?;
     tracing_subscriber::fmt()

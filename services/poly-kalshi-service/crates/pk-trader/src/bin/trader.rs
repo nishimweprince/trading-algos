@@ -32,6 +32,7 @@ struct Args {
 }
 
 fn main() -> anyhow::Result<()> {
+    pk_svc::tls::install_default_provider();
     let args = Args::parse();
     let settings = match Settings::load(args.profile.as_deref()).and_then(|s| s.check_paths().map(|()| s)) {
         Ok(s) => s,

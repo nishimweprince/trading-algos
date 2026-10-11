@@ -6,6 +6,7 @@ pub mod api;
 pub mod build;
 pub mod config;
 pub mod logging;
+pub mod tls;
 
 pub use alerts::{Alerts, Notifier};
 pub use config::{ExecutionMode, Settings};

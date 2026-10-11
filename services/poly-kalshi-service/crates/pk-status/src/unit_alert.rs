@@ -187,6 +187,7 @@ fn send_telegram(
 }
 
 fn main() {
+    pk_svc::tls::install_default_provider();
     let args = Args::parse();
     let result = std::panic::catch_unwind(|| {
         let state_dir = args
