@@ -119,3 +119,51 @@ def test_execution_fault_halts_until_ack() -> None:
     assert not risk.check_order(buy()).allowed
     assert risk.check_order(buy(reduce_only=True)).allowed
     assert risk.ack("http") == (True, "cleared execution_fault")
+
+
+# --- persisted halt ----------------------------------------------------------------------
+
+
+def test_a_kill_survives_a_new_state_until_ack(tmp_path) -> None:
+    path = tmp_path / "state" / "halt.json"
+    clock = Clock()
+    first = RiskState(LIMITS, clock=clock, state_path=path)
+    assert not first.restored and not path.exists()
+    first.kill("http", "drill")
+    second = RiskState(LIMITS, clock=clock, state_path=path)
+    assert second.halted and second.restored
+    assert second.halt is not None and second.halt.reason is HaltReason.KILL
+    assert second.halt.source == "http" and second.halt.detail == "drill"
+    assert second.snapshot()["halt"]["restored"] is True
+    assert not second.check_order(buy()).allowed
+    assert second.ack("http")[0] and not second.restored
+    third = RiskState(LIMITS, clock=clock, state_path=path)
+    assert not third.halted
+    assert [h["event"] for h in third.history] == ["halt", "ack"]
+    assert not list(path.parent.glob("*.tmp"))
+
+
+def test_an_unreadable_state_file_starts_halted(tmp_path) -> None:
+    path = tmp_path / "halt.json"
+    path.write_text("{not json")
+    risk = RiskState(LIMITS, clock=Clock(), state_path=path)
+    assert risk.halt is not None and risk.halt.reason is HaltReason.KILL
+    assert risk.halt.source == "state" and "unreadable" in risk.halt.detail
+    assert risk.ack("http")[0]
+    assert RiskState(LIMITS, clock=Clock(), state_path=path).halted is False
+
+
+def test_without_a_state_path_nothing_is_written(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    risk = state()
+    risk.kill("http")
+    risk.ack("http")
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_failed_save_keeps_the_halt_and_says_so(tmp_path) -> None:
+    blocker = tmp_path / "file"
+    blocker.write_text("")
+    risk = RiskState(LIMITS, clock=Clock(), state_path=blocker / "halt.json")
+    risk.kill("http")
+    assert risk.halted and risk.snapshot()["persist_error"]

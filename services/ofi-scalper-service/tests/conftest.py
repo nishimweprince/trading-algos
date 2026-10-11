@@ -36,6 +36,7 @@ def make_settings(tmp_path: Path, **overrides: Any) -> Settings:
         "OFI_MANUAL_APPROVAL_NOTIONAL_USD": 400,
         "OFI_RECORD_DIR": str(tmp_path / "raw"),
         "OFI_KILL_FILE_PATH": str(tmp_path / "KILL"),
+        "OFI_STATE_DIR": str(tmp_path / "state"),
         "EVENTS_LOG_PATH": str(tmp_path / "events.jsonl"),
         "OFI_HOST_TAG": "test",
     }
@@ -92,7 +93,9 @@ async def build(
             settings,
             streams=streams,
             account=AccountReader(rest),
-            risk=RiskState(RiskLimits.from_settings(settings)),
+            risk=RiskState(
+                RiskLimits.from_settings(settings), state_path=settings.state_dir / "halt.json"
+            ),
             gate=RegimeGate.from_settings(settings),
             alerts=Alerts(RecordingNotifier()),
             recorder=recorder,

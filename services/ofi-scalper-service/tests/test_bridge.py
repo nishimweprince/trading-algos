@@ -236,3 +236,27 @@ def test_shadow_daily_loss_halts_and_liquidates(tmp_path: Path) -> None:
     bridge.on_sample(sample(T0 + S, bid=59600.0, ask=59600.1), GATE_ON)
     assert risk.halt is not None and risk.halt.reason is HaltReason.DAILY_LOSS
     assert bridge.policies["BTCUSDT"].phase is Phase.FLAT
+
+
+def test_a_restored_halt_skips_entries_without_a_second_record(tmp_path: Path) -> None:
+    dial = Dial()
+    bridge, risk = shadow_bridge(tmp_path, dial)
+    risk.state_path = tmp_path / "state" / "halt.json"
+    risk.kill("http")
+    restored = RiskState(risk.limits, state_path=risk.state_path)
+    settings = make_settings(
+        tmp_path, OFI_EXECUTION_MODE="shadow", OFI_MODEL_VERSION="v1", OFI_ORDER_NOTIONAL_USD=180
+    )
+    again = ExecutionBridge(
+        settings,
+        risk=restored,
+        alerts=Alerts(RecordingNotifier()),
+        model=bridge.model,
+        filters=dict(DEFAULT_FILTERS),
+        state_dir=tmp_path / "state2",
+        fees=lambda _s: FEES,
+    )
+    dial.set(up=0.8, down=0.05)
+    again.on_sample(sample(T0), GATE_ON)
+    assert again.book.recent_signals[-1]["action"] == "skip:halted"
+    assert not again.orders and not again.counts.get("halt_kill_switch")  # no second record

@@ -110,6 +110,17 @@ async def test_kill_file_halts_and_ack_needs_it_gone(build, monkeypatch, tmp_pat
     assert not runtime.risk.halted
 
 
+async def test_a_kill_survives_a_restart(build) -> None:
+    runtime = build(FakeFuturesStream({}))
+    assert runtime.kill("http", "drill")
+    restarted = build(FakeFuturesStream({}))
+    assert restarted.risk.halted and restarted.risk.restored
+    await restarted.start()
+    assert ("started-halted", "OFI started halted") in restarted.alerts.sent
+    assert restarted.ack("http")[0]
+    assert not build(FakeFuturesStream({})).risk.halted
+
+
 async def test_recording_is_gap_checked_clean(build) -> None:
     runtime = build(FakeFuturesStream(healthy_frames()), record=True)
     await runtime.start()

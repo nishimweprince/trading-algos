@@ -297,7 +297,8 @@ class ExecutionBridge:
         self.last_sample: dict[str, dict[str, Any]] = {}
         # symbol -> (rejected entries in a row, no new entry before this t_ns)
         self.reject_backoff: dict[str, tuple[int, int]] = {}
-        self._halt_handled = False
+        # A halt restored from disk was handled (recorded, closed) before the restart.
+        self._halt_handled = risk.restored
         self._marks: dict[str, dict[str, float]] = {}
         self._funding: dict[str, dict[str, Any]] = {}
         self._pending: list[Cycle] = []

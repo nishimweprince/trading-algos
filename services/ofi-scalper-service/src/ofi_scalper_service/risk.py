@@ -14,16 +14,23 @@ Two kinds of stop:
 - **Pause** (stale book, depth gap, stream down): per symbol, clears itself
   when the condition does. No new exposure while paused.
 
+With a ``state_path`` the halt and the recent halt/ack history are saved there
+on every change and loaded at construction, so a halt survives a restart. An
+unreadable file starts halted. Replay and backtest pass no path.
+
 The execution bridge runs every order past ``check_order`` (and so the
 governor) before it is sent, and reacts to a halt by cancelling and flattening.
 """
 
 from __future__ import annotations
 
+import json
+import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 from ta_plugin_binance_futures.limiter import OrderRateGovernor
@@ -35,6 +42,9 @@ __all__ = [
     "RiskLimits",
     "RiskState",
 ]
+
+STATE_SCHEMA = 1
+HISTORY_KEPT = 50
 
 
 class HaltReason(StrEnum):
@@ -97,6 +107,7 @@ class RiskState:
     limits: RiskLimits
     clock: Callable[[], datetime] = field(default=lambda: datetime.now(UTC))
     governor: OrderRateGovernor | None = None
+    state_path: Path | None = None
 
     def __post_init__(self) -> None:
         if self.governor is None:
@@ -109,6 +120,11 @@ class RiskState:
         self.day: date = self.clock().date()
         self.day_start_equity: float | None = None
         self.history: list[dict[str, Any]] = []
+        # True while the halt in force was loaded from state_path, not raised here.
+        self.restored = False
+        self.persist_error: str | None = None
+        if self.state_path is not None:
+            self._load()
 
     # --- facts ------------------------------------------------------------------
 
@@ -176,6 +192,7 @@ class RiskState:
             return False, "daily loss halt clears only on the next UTC day"
         cleared = self.halt
         self.halt = None
+        self.restored = False
         if cleared.reason is HaltReason.DRAWDOWN:
             # A fresh peak, or the next tick would halt again on the same drawdown.
             self.peak_equity = self.equity
@@ -187,6 +204,7 @@ class RiskState:
                 "at": self.clock().isoformat(),
             }
         )
+        self._save()
         return True, f"cleared {cleared.reason.value}"
 
     # --- questions --------------------------------------------------------------
@@ -227,7 +245,9 @@ class RiskState:
                 "source": self.halt.source,
                 "at": self.halt.at.isoformat(),
                 "detail": self.halt.detail,
+                "restored": self.restored,
             },
+            "persist_error": self.persist_error,
             "pauses": {symbol: sorted(r) for symbol, r in self.pauses.items() if r},
             "positions": dict(self.positions),
             "equity": self.equity,
@@ -257,7 +277,59 @@ class RiskState:
                 "at": self.halt.at.isoformat(),
             }
         )
+        self._save()
         return reason
+
+    def _load(self) -> None:
+        assert self.state_path is not None
+        if not self.state_path.exists():
+            return
+        try:
+            doc = json.loads(self.state_path.read_text())
+            halt = doc.get("halt")
+            history = doc.get("history") or []
+            if halt is not None:
+                self.halt = _Halt(
+                    HaltReason(halt["reason"]),
+                    str(halt["source"]),
+                    datetime.fromisoformat(halt["at"]),
+                    str(halt.get("detail") or ""),
+                )
+                self.restored = True
+            self.history = [dict(h) for h in history][-HISTORY_KEPT:]
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            # Fail closed: a halt we cannot read might have been a kill.
+            self.halt = _Halt(
+                HaltReason.KILL, "state", self.clock(), f"unreadable {self.state_path}: {exc}"
+            )
+            self.restored = True
+
+    def _save(self) -> None:
+        if self.state_path is None:
+            return
+        halt = self.halt
+        doc = {
+            "schema": STATE_SCHEMA,
+            "updated_at": self.clock().isoformat(),
+            "halt": None
+            if halt is None
+            else {
+                "reason": halt.reason.value,
+                "source": halt.source,
+                "at": halt.at.isoformat(),
+                "detail": halt.detail,
+            },
+            "history": self.history[-HISTORY_KEPT:],
+        }
+        tmp = self.state_path.with_name(self.state_path.name + ".tmp")
+        try:
+            self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp.write_text(json.dumps(doc, indent=1))
+            os.replace(tmp, self.state_path)
+            self.persist_error = None
+        except OSError as exc:
+            # The halt still holds in memory; status shows the save failed.
+            self.persist_error = f"{type(exc).__name__}: {exc}"
 
     def _roll_day(self) -> None:
         today = self.clock().date()

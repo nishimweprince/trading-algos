@@ -138,6 +138,8 @@ fell seconds behind and kept falling; `depth10@100ms` held a steady ~250 ms.
 
 Kill switch, three ways: `touch data/KILL.dev`, `POST /v1/kill`, or `/kill`
 to the scalper's own Telegram bot from an admin id. Acknowledging is HTTP-only.
+A halt is saved in `<OFI_STATE_DIR>/halt.json` and survives a restart (the
+service starts halted and alerts); an unreadable file also starts halted.
 
 ## How a sample is taken
 

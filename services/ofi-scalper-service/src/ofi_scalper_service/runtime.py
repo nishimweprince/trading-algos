@@ -156,6 +156,26 @@ class ScalperRuntime:
     # --- lifecycle --------------------------------------------------------------
 
     async def start(self) -> None:
+        if self.risk.restored and self.risk.halt is not None:
+            halt = self.risk.halt
+            log_event(
+                "ofi_started_halted",
+                level=logging.CRITICAL,
+                reason=halt.reason.value,
+                source=halt.source,
+                at=halt.at.isoformat(),
+                detail=halt.detail,
+            )
+            self.alerts.send(
+                "started-halted",
+                "OFI started halted",
+                [
+                    f"{halt.reason.value} by {halt.source} at {halt.at:%Y-%m-%d %H:%M} UTC",
+                    halt.detail,
+                    "POST /v1/kill/ack to resume",
+                ],
+                always=True,
+            )
         if self.recorder is not None:
             self.recorder.start()
         if self.sample_log is not None:
