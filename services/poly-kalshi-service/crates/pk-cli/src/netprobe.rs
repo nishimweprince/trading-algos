@@ -23,7 +23,7 @@ pub struct Args {
     every: f64,
     #[arg(long, default_value = "research/data/netprobe")]
     out: PathBuf,
-    #[arg(long, env = "POLY_CLOB_URL", default_value = "https://clob-v2.polymarket.com")]
+    #[arg(long, env = "POLY_CLOB_URL", default_value = "https://clob.polymarket.com")]
     clob_url: String,
     #[arg(long, env = "KALSHI_REST_URL", default_value = "https://api.elections.kalshi.com/trade-api/v2")]
     kalshi_url: String,

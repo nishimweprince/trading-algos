@@ -395,7 +395,7 @@ impl Settings {
             kalshi_ws_url: e.or("KALSHI_WS_URL", "wss://api.elections.kalshi.com/trade-api/ws/v2"),
             poly_gamma_url: e.or("POLY_GAMMA_URL", "https://gamma-api.polymarket.com"),
             poly_ws_url: e.or("POLY_WS_URL", "wss://ws-subscriptions-clob.polymarket.com/ws/market"),
-            poly_clob_url: e.or("POLY_CLOB_URL", "https://clob-v2.polymarket.com"),
+            poly_clob_url: e.or("POLY_CLOB_URL", "https://clob.polymarket.com"),
             observer_enabled,
             observer_port,
             polybolt_url: e.or("POLYBOLT_URL", "wss://ws-live-v2.polymarket.com/ws"),

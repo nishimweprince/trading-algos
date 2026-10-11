@@ -77,7 +77,7 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
     if !args.cancel_all && env::var("PK_ORDER_PROBE").as_deref() != Some("on") {
         anyhow::bail!("PK_ORDER_PROBE is not on: the probe sends real (post-only, unfillable) orders");
     }
-    let clob_url = env::var_or("POLY_CLOB_URL", "https://clob-v2.polymarket.com");
+    let clob_url = env::var_or("POLY_CLOB_URL", "https://clob.polymarket.com");
     let gamma_url = env::var_or("POLY_GAMMA_URL", "https://gamma-api.polymarket.com");
     let host_tag = env::var_or("PK_HOST_TAG", "unknown");
     let wallet = WalletConfig {
