@@ -2,7 +2,7 @@
 //!
 //! **`poly-kalshi-service`** (the trader) keeps only what an order depends on:
 //! the feeds, the books, the live rule, the paper venue, the ledger, and the
-//! probe's order path. Lines from every feed task are stamped from one strictly
+//! order path (the probe, or live orders with their reconciler). Lines from every feed task are stamped from one strictly
 //! increasing clock ([`ingest::Ingest`]) and handed to one engine thread, which
 //! forwards each line to the observer pipe and then applies it.
 //!
@@ -40,8 +40,13 @@ pub fn build_engine(
     let mut cfg = EngineConfig::new(settings.params.clone(), settings.assets.clone());
     cfg.role = role;
     let trades = role != Role::Observe;
-    cfg.venue = (trades && settings.execution_mode == pk_svc::ExecutionMode::Paper)
+    let live = settings.execution_mode == pk_svc::ExecutionMode::Live;
+    // Live keeps the paper venue as the shadow of each real order.
+    cfg.venue = (trades && settings.execution_mode != pk_svc::ExecutionMode::Off)
         .then(|| PaperVenue::new(settings.paper_latency_ms));
+    cfg.live = trades && live;
+    cfg.order_size_pct = settings.order_size_pct;
+    cfg.follow_tape_latency = true;
     cfg.shadow = if role == Role::Trade {
         pk_core::shadow::Shadow::default()
     } else {
@@ -50,7 +55,7 @@ pub fn build_engine(
     cfg.limit_offset = settings.limit_offset;
     cfg.size_to_depth = settings.size_to_depth;
     cfg.age_outlier_ms = (trades && settings.age_outlier_ms > 0.0).then_some(settings.age_outlier_ms);
-    cfg.emit_intents = trades && settings.order_probe;
+    cfg.emit_intents = trades && settings.order_path();
     let mut stamp = serde_json::Map::new();
     stamp.insert("epoch".into(), settings.results_epoch.clone().into());
     stamp.insert("build".into(), pk_svc::build::build_id().into());
@@ -61,6 +66,7 @@ pub fn build_engine(
             settings.paper_latency_ms,
             settings.limit_offset,
             settings.size_to_depth,
+            settings.order_size_pct,
         )
         .into(),
     );

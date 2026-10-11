@@ -8,7 +8,8 @@ Work the phases in order. Each task says what to change, where, and how to know 
 is done. Phases 1 and 2 are code that ships to Dublin. Phase 3 is research on the
 tapes. Phases 4 and 5 end in decisions, not code, unless their numbers say otherwise.
 
-Still out of scope: live orders. `PK_EXECUTION_MODE=live` stays refused.
+Live orders now exist behind `PK_LIVE_CONFIRM=yes` (README, "Live execution"). This
+plan does not turn them on: the gates decide that.
 
 ---
 

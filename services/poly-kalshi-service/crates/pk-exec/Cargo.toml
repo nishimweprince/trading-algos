@@ -20,7 +20,7 @@ hmac.workspace = true
 sha2.workspace = true
 rust_decimal.workspace = true
 polymarket_client_sdk_v2.workspace = true
-alloy.workspace = true
+alloy = { workspace = true, features = ["providers", "reqwest"] }
 parking_lot.workspace = true
 secrecy.workspace = true
 url.workspace = true

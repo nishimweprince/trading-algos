@@ -4,7 +4,15 @@
 //! The strategy parameters and the risk limits are read once. Nothing at
 //! runtime changes them: no endpoint, no Telegram command. Changing one means
 //! editing the env file and restarting, and every decision records the values
-//! it was made with. `PK_EXECUTION_MODE=live` is refused.
+//! it was made with. Two values move at runtime by design, and both are
+//! journaled when they change: the order size (`PK_ORDER_SIZE_PCT` of the
+//! balance, recomputed when flat) and the paper venue's latency (seeded by
+//! `PK_PAPER_LATENCY_MS`, then the measured p50 of the order path).
+//!
+//! `PK_EXECUTION_MODE=live` sends real orders. It is refused unless
+//! `PK_LIVE_CONFIRM=yes`, a `POLY_PRIVATE_KEY`, `POLY_SIGNATURE_TYPE=0` (the
+//! service redeems winnings from the EOA itself) and a `POLYGON_RPC_URL` are
+//! all set. Passing the paper gates is a human decision, not a setting.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -24,6 +32,8 @@ pub enum ExecutionMode {
     Off,
     /// Decisions go to the paper venue: simulated fills, real fees, cash ledger.
     Paper,
+    /// Real orders on Polymarket; the ledger mirrors the wallet.
+    Live,
 }
 
 impl ExecutionMode {
@@ -31,6 +41,7 @@ impl ExecutionMode {
         match self {
             ExecutionMode::Off => "off",
             ExecutionMode::Paper => "paper",
+            ExecutionMode::Live => "live",
         }
     }
 }
@@ -48,7 +59,16 @@ pub struct Settings {
     pub assets: Vec<String>,
     pub params: StrategyParams,
     pub shadow_variants: Vec<Variant>,
+    /// The paper venue's latency until the order path has measured its own.
     pub paper_latency_ms: i64,
+    /// Order size as a percent of the balance; 0 = the static `PK_NOTIONAL_USD`.
+    pub order_size_pct: f64,
+    /// Probes between decisions, so the latency estimate keeps moving (s; 0 = off).
+    pub probe_cadence_s: f64,
+    /// The latency estimate is the p50 of this many recent round trips…
+    pub latency_window: usize,
+    /// …once at least this many exist.
+    pub latency_min_samples: usize,
     pub limit_offset: f64,
     pub size_to_depth: bool,
     pub paper_start_cash_usd: f64,
@@ -88,6 +108,10 @@ pub struct Settings {
     pub poly_private_key: Option<String>,
     pub poly_funder: Option<String>,
     pub poly_signature_type: u8,
+    /// Polygon JSON-RPC, for redeeming settled positions (live).
+    pub polygon_rpc_url: Option<String>,
+    /// The collateral to redeem against; the exchange's own (pUSD) when unset.
+    pub poly_redeem_collateral: Option<String>,
 
     pub status_host: String,
     pub status_port: u16,
@@ -182,11 +206,8 @@ impl Settings {
         let mode = match e.or("PK_EXECUTION_MODE", "paper").to_lowercase().as_str() {
             "off" => ExecutionMode::Off,
             "paper" => ExecutionMode::Paper,
-            "live" => anyhow::bail!(
-                "PK_EXECUTION_MODE=live is refused: real orders wait for the paper gates \
-                 and a host in a jurisdiction Polymarket allows"
-            ),
-            other => anyhow::bail!("PK_EXECUTION_MODE={other} is not off or paper"),
+            "live" => ExecutionMode::Live,
+            other => anyhow::bail!("PK_EXECUTION_MODE={other} is not off, paper or live"),
         };
         let assets: Vec<String> = e
             .or("PK_ASSETS", "BTC,ETH,SOL,XRP,BNB")
@@ -219,6 +240,11 @@ impl Settings {
             "PK_MAX_ENTRY_PX must be in (0, 1]"
         );
         anyhow::ensure!(params.notional_usd > 0.0, "PK_NOTIONAL_USD must be positive");
+        let order_size_pct: f64 = e.num("PK_ORDER_SIZE_PCT", 5.0)?;
+        anyhow::ensure!(
+            (0.0..=100.0).contains(&order_size_pct),
+            "PK_ORDER_SIZE_PCT must be within 0..=100 (0 = static PK_NOTIONAL_USD)"
+        );
         anyhow::ensure!(
             (0..=900).contains(&params.entry_early_s) && (0..=900).contains(&params.entry_late_s),
             "PK_ENTRY_EARLY_S and PK_ENTRY_LATE_S must be within 0..=900"
@@ -236,13 +262,24 @@ impl Settings {
         let daily_loss: f64 = e.required("PK_DAILY_LOSS_LIMIT_USD")?.parse()?;
         anyhow::ensure!(max_open > 0.0 && daily_loss > 0.0, "risk limits must be positive");
         anyhow::ensure!(
-            params.notional_usd <= max_open,
+            order_size_pct > 0.0 || params.notional_usd <= max_open,
             "PK_NOTIONAL_USD cannot exceed PK_MAX_OPEN_NOTIONAL_USD"
         );
         let paper_latency_ms: i64 = e.num("PK_PAPER_LATENCY_MS", 150)?;
         anyhow::ensure!(
             (0..=5000).contains(&paper_latency_ms),
             "PK_PAPER_LATENCY_MS must be within 0..=5000"
+        );
+        let latency_window: usize = e.num("PK_LATENCY_WINDOW", 50)?;
+        let latency_min_samples: usize = e.num("PK_LATENCY_MIN_SAMPLES", 10)?;
+        anyhow::ensure!(
+            latency_min_samples >= 1 && latency_min_samples <= latency_window,
+            "PK_LATENCY_MIN_SAMPLES must be within 1..=PK_LATENCY_WINDOW"
+        );
+        let probe_cadence_s: f64 = e.num("PK_PROBE_CADENCE_S", 30.0)?;
+        anyhow::ensure!(
+            probe_cadence_s == 0.0 || probe_cadence_s >= 5.0,
+            "PK_PROBE_CADENCE_S must be 0 (off) or at least 5"
         );
         let limit_offset: f64 = e.num("PK_LIMIT_OFFSET", 0.0)?;
         anyhow::ensure!((0.0..=0.05).contains(&limit_offset), "PK_LIMIT_OFFSET must be within 0..=0.05");
@@ -284,6 +321,28 @@ impl Settings {
             !order_probe || poly_private_key.is_some(),
             "PK_ORDER_PROBE=on needs POLY_PRIVATE_KEY"
         );
+        let poly_signature_type: u8 = e.num("POLY_SIGNATURE_TYPE", 0)?;
+        let polygon_rpc_url = e.get("POLYGON_RPC_URL");
+        if mode == ExecutionMode::Live {
+            let refused = |why: &str| anyhow::anyhow!("PK_EXECUTION_MODE=live is refused: {why}");
+            if e.get("PK_LIVE_CONFIRM").map(|v| v.to_lowercase()).as_deref() != Some("yes") {
+                return Err(refused(
+                    "set PK_LIVE_CONFIRM=yes once the paper gates pass and this host may trade",
+                ));
+            }
+            if poly_private_key.is_none() {
+                return Err(refused("POLY_PRIVATE_KEY is not set"));
+            }
+            if poly_signature_type != 0 {
+                return Err(refused(
+                    "POLY_SIGNATURE_TYPE must be 0: the service redeems winnings from the EOA, \
+                     and proxy or Safe wallets need Polymarket's relayer",
+                ));
+            }
+            if polygon_rpc_url.is_none() {
+                return Err(refused("POLYGON_RPC_URL is not set (needed to redeem settled positions)"));
+            }
+        }
         let api_key = e.required("API_KEY")?;
         anyhow::ensure!(api_key.len() >= 16, "API_KEY must be at least 16 characters");
         let log_level = e.or("LOG_LEVEL", "INFO").to_uppercase();
@@ -308,6 +367,10 @@ impl Settings {
             params,
             shadow_variants,
             paper_latency_ms,
+            order_size_pct,
+            probe_cadence_s,
+            latency_window,
+            latency_min_samples,
             limit_offset,
             size_to_depth: e.flag("PK_SIZE_TO_DEPTH", false)?,
             paper_start_cash_usd: e.num("PK_PAPER_START_CASH_USD", 1000.0)?,
@@ -340,7 +403,9 @@ impl Settings {
             order_probe,
             poly_private_key,
             poly_funder: e.get("POLY_FUNDER"),
-            poly_signature_type: e.num("POLY_SIGNATURE_TYPE", 0)?,
+            poly_signature_type,
+            polygon_rpc_url,
+            poly_redeem_collateral: e.get("POLY_REDEEM_COLLATERAL"),
             status_host: e.or("PK_STATUS_HOST", "127.0.0.1"),
             status_port,
             telegram_bot_token,
@@ -397,6 +462,11 @@ impl Settings {
         Ok(())
     }
 
+    /// Whether the trader opens the real order path (probe or live orders).
+    pub fn order_path(&self) -> bool {
+        self.order_probe || self.execution_mode == ExecutionMode::Live
+    }
+
     pub fn telegram_enabled(&self) -> bool {
         self.telegram_bot_token.is_some()
     }
@@ -428,7 +498,8 @@ mod tests {
         assert_eq!(s.state_dir, PathBuf::from("data/state/dev"));
         assert_eq!(s.shadow_variants.len(), 17);
         assert_eq!(s.execution_mode, ExecutionMode::Paper);
-        assert!(!s.order_probe);
+        assert!(!s.order_probe && !s.order_path());
+        assert_eq!((s.order_size_pct, s.latency_window, s.latency_min_samples), (5.0, 50, 10));
     }
 
     #[test]
@@ -438,14 +509,52 @@ mod tests {
             m.insert(k.into(), v.into());
             Settings::from_env(m, None)
         };
-        assert!(with("PK_EXECUTION_MODE", "live").unwrap_err().to_string().contains("refused"));
+        assert!(with("PK_EXECUTION_MODE", "live").unwrap_err().to_string().contains("PK_LIVE_CONFIRM"));
+        assert!(with("PK_EXECUTION_MODE", "maybe").is_err());
         assert!(with("PK_ASSETS", "BTC,FOO").is_err());
-        assert!(with("PK_NOTIONAL_USD", "600").is_err());
+        // A static size above the open cap is refused; a percentage is capped per order.
+        assert!(with("PK_NOTIONAL_USD", "600").is_ok());
+        let mut m = base();
+        m.extend([("PK_NOTIONAL_USD".into(), "600".into()), ("PK_ORDER_SIZE_PCT".into(), "0".into())]);
+        assert!(Settings::from_env(m, None).is_err());
+        assert!(with("PK_ORDER_SIZE_PCT", "101").is_err());
+        assert!(with("PK_LATENCY_MIN_SAMPLES", "0").is_err());
+        assert!(with("PK_PROBE_CADENCE_S", "1").is_err());
         assert!(with("PK_ORDER_PROBE", "on").is_err());
         assert!(with("POLY_CLOB_API_KEY", "k").is_err());
         assert!(with("API_KEY", "replace-with-a-long-random-key").is_err());
         assert!(with("PK_SHADOW_VARIANTS", "[{\"name\":\"live\"}]").is_err());
         assert_eq!(with("PK_MAX_POLY_LAG_MS", "250").unwrap().params.max_poly_lag_ms, Some(250.0));
         assert!(with("PK_SHADOW_VARIANTS", "").unwrap().shadow_variants.is_empty());
+    }
+
+    #[test]
+    fn live_needs_every_guard() {
+        let full = || {
+            let mut m = base();
+            for (k, v) in [
+                ("PK_EXECUTION_MODE", "live"),
+                ("PK_LIVE_CONFIRM", "yes"),
+                ("POLY_PRIVATE_KEY", "0xabc"),
+                ("POLYGON_RPC_URL", "https://polygon.example"),
+            ] {
+                m.insert(k.into(), v.into());
+            }
+            m
+        };
+        let s = Settings::from_env(full(), None).unwrap();
+        assert_eq!(s.execution_mode, ExecutionMode::Live);
+        assert!(s.order_path() && !s.order_probe);
+        let without = |k: &str| {
+            let mut m = full();
+            m.remove(k);
+            Settings::from_env(m, None).unwrap_err().to_string()
+        };
+        assert!(without("PK_LIVE_CONFIRM").contains("PK_LIVE_CONFIRM"));
+        assert!(without("POLY_PRIVATE_KEY").contains("POLY_PRIVATE_KEY"));
+        assert!(without("POLYGON_RPC_URL").contains("POLYGON_RPC_URL"));
+        let mut proxy = full();
+        proxy.insert("POLY_SIGNATURE_TYPE".into(), "1".into());
+        assert!(Settings::from_env(proxy, None).unwrap_err().to_string().contains("POLY_SIGNATURE_TYPE"));
     }
 }

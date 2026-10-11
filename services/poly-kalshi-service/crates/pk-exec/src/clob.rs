@@ -125,6 +125,17 @@ pub struct OrderState {
     pub status: String,
     #[serde(default)]
     pub size_matched: Decimal,
+    #[serde(default)]
+    pub price: Option<Decimal>,
+}
+
+/// Collateral and outcome tokens both carry 6 decimals on chain; the
+/// balance endpoint answers in those base units.
+pub const BASE_UNITS: Decimal = Decimal::from_parts(1_000_000, 0, 0, false, 0);
+
+#[derive(Debug, Deserialize)]
+struct BalanceResp {
+    balance: Decimal,
 }
 
 #[derive(Default)]
@@ -266,6 +277,41 @@ impl<S: OrderSigner> ClobExec<S> {
         (ack, timing)
     }
 
+    /// A GET whose query string is not signed (the venue signs the path only).
+    async fn authed_get(&self, path: &str, query: &str) -> anyhow::Result<reqwest::Response> {
+        let headers = self.signer.creds().headers(unix_now_s(), "GET", path, b"");
+        let full = if query.is_empty() { path.to_owned() } else { format!("{path}?{query}") };
+        Ok(self.http.send(Method::GET, &full, &headers, None).await?.error_for_status()?)
+    }
+
+    /// The wallet's pUSD (collateral) the CLOB will let us spend, in USD.
+    pub async fn balance(&self, signature_type: u8) -> anyhow::Result<Decimal> {
+        let q = format!("asset_type=COLLATERAL&signature_type={signature_type}");
+        let b: BalanceResp = self.authed_get("/balance-allowance", &q).await?.json().await?;
+        Ok(b.balance / BASE_UNITS)
+    }
+
+    /// Shares of one outcome token held.
+    pub async fn token_balance(&self, token: &str, signature_type: u8) -> anyhow::Result<Decimal> {
+        let q = format!("asset_type=CONDITIONAL&token_id={token}&signature_type={signature_type}");
+        let b: BalanceResp = self.authed_get("/balance-allowance", &q).await?.json().await?;
+        Ok(b.balance / BASE_UNITS)
+    }
+
+    /// Orders resting on the account (a page; the reconciler only needs to
+    /// know whether there are any).
+    pub async fn open_orders(&self) -> anyhow::Result<Vec<serde_json::Value>> {
+        let v: serde_json::Value = self.authed_get("/data/orders", "").await?.json().await?;
+        Ok(match v {
+            serde_json::Value::Array(a) => a,
+            serde_json::Value::Object(mut o) => match o.remove("data") {
+                Some(serde_json::Value::Array(a)) => a,
+                _ => Vec::new(),
+            },
+            _ => Vec::new(),
+        })
+    }
+
     /// The kill switch: cancel every open order on the account.
     pub async fn cancel_all(&self) -> anyhow::Result<CancelAck> {
         let resp = self.authed(Method::DELETE, "/cancel-all", None).await?.error_for_status()?;
@@ -274,8 +320,7 @@ impl<S: OrderSigner> ClobExec<S> {
 
     pub async fn order_state(&self, order_id: &str) -> anyhow::Result<OrderState> {
         let path = format!("/data/order/{order_id}");
-        let resp = self.authed(Method::GET, &path, None).await?.error_for_status()?;
-        Ok(resp.json().await?)
+        Ok(self.authed_get(&path, "").await?.json().await?)
     }
 
     /// The touch of one token from the REST book (off the hot path).

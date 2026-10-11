@@ -144,7 +144,7 @@ async function tick() {
   FETCHED.summary = body.fetched_at;
   const dataAge = body.fetched_at ? Math.round(Date.now() / 1000 - body.fetched_at) : null;
   put("sub", live
-    ? `<b>${esc(live.mode)}</b> · ${esc(live.host)} · gap ≥ ${f(live.params.gap_threshold)} · cap ${f(live.params.max_entry_px)} · $${f(live.params.notional_usd, 0)} · ${live.risk && live.risk.halted ? '<span class="bad">HALTED</span>' : live.kalshi_closed ? '<span class="warn">paused: Kalshi closed</span>' : '<span class="good">running</span>'} · <span class="muted" title="results epoch (PK_RESULTS_EPOCH) and code build; results shown are this epoch only">epoch ${esc(live.epoch)} · ${esc((live.build || "").slice(0, 8))}${body.excluded_records ? ` · ${body.excluded_records} older records excluded` : ""}</span>`
+    ? `${live.mode === "live" ? '<b class="bad">LIVE</b>' : `<b>${esc(live.mode)}</b>`} · ${esc(live.host)} · gap ≥ ${f(live.params.gap_threshold)} · cap ${f(live.params.max_entry_px)} · <span title="order size: PK_ORDER_SIZE_PCT of the balance, recomputed when flat">$${f(live.params.notional_usd)}${live.sizing && live.sizing.pct ? ` (${f(live.sizing.pct, 1)}% of $${f(live.sizing.basis_balance)})` : ""}</span> · ${live.risk && live.risk.halted ? '<span class="bad">HALTED</span>' : live.kalshi_closed ? '<span class="warn">paused: Kalshi closed</span>' : '<span class="good">running</span>'} · <span class="muted" title="results epoch (PK_RESULTS_EPOCH) and code build; results shown are this epoch only">epoch ${esc(live.epoch)} · ${esc((live.build || "").slice(0, 8))}${body.excluded_records ? ` · ${body.excluded_records} older records excluded` : ""}</span>`
     : '<span class="bad">service unreachable</span>');
   const money = (v) => v == null ? "–" : (v < 0 ? "−$" : "$") + f(Math.abs(v));
   const L = (live && live.ledger) || {}, cap = L.start_cash, dd = res.drawdown || {};
@@ -251,8 +251,16 @@ async function tick() {
     ["avg fee / share", f(E.avg_fee_cents_per_share) + "¢"], ["order latency p50 (paper model)", f(E.order_latency_ms_p50, 0) + " ms"],
     ["Kalshi age at decision p50 / p90", `${f(E.kalshi_age_ms_p50, 0)} / ${f(E.kalshi_age_ms_p90, 0)} ms`],
     ...(() => { const op = (live && live.order_path) || {}; if (!op.enabled) return [["real order path", "off (PK_ORDER_PROBE)"]];
-      const d = op.decision_to_ack_ms || {}, w = op.warm_rtt_ms || {};
-      return [["decision → ack p50 / p99 (probe, real CLOB)", d.n ? `${f(d.p50, 1)} / ${f(d.p99, 1)} ms · n ${d.n}` : "–"],
+      const d = op.decision_to_ack_ms || {}, w = op.warm_rtt_ms || {}, lat = op.latency || {}, lv = op.live;
+      const ago = (ns) => ns ? Math.round(Date.now() / 1000 - ns / 1e9) + " s ago" : "–";
+      const liveRows = lv ? [["wallet balance (pUSD) · reconciled", `${money(lv.balance)} · ${ago(lv.last_reconcile_ns)}`, lv.reconcile_errors ? "warn" : ""],
+        ["live entries · filled · refused", `${lv.entries ?? 0} · ${lv.filled ?? 0} · ${lv.refused ?? 0}`],
+        ["balance rejects · stray orders", `${lv.balance_rejects ?? 0} · ${lv.stray_orders ?? 0}`, lv.balance_rejects || lv.stray_orders ? "bad" : ""],
+        ["ledger vs wallet", lv.position_drift ? esc(lv.position_drift) : "match", lv.position_drift ? "bad" : "good"],
+        ["redeemed · pending · errors", `${lv.redeemed ?? 0} · ${lv.redeem_pending ?? 0} · ${lv.redeem_errors ?? 0}`, lv.redeem_errors ? "warn" : ""],
+        ["gas (POL)", lv.gas_pol == null ? "–" : f(lv.gas_pol, 3), lv.gas_pol != null && lv.gas_pol < 0.05 ? "bad" : ""]] : [];
+      return [["paper latency in force", lat.ms == null ? "–" : `${f(lat.ms, 1)} ms · ${esc(lat.source)} · n ${lat.n}`, lat.source === "seed" ? "warn" : ""], ...liveRows,
+        [`decision → ack p50 / p99 (${op.mode === "live" ? "live orders + probe" : "probe"}, real CLOB)`, d.n ? `${f(d.p50, 1)} / ${f(d.p99, 1)} ms · n ${d.n}` : "–"],
         ["pre-signed at the decision", op.presign_hit_rate == null ? "–" : f(op.presign_hit_rate * 100, 0) + "%"],
         ["warm HTTP/2 round trip p50 / p99", w.n ? `${f(w.p50, 1)} / ${f(w.p99, 1)} ms` : "–"],
         ["probe posted / rejected / fills", `${op.posted ?? 0} / ${op.rejected ?? 0} / ${op.fills ?? 0}`, op.fills ? "bad" : ""]]; })(),

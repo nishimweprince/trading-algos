@@ -13,10 +13,10 @@ Because the first crossing decides, the threshold defines the trade, so this is
 a different strategy from the manual's, with its own gates (below). Paper runs in Dublin, the closest location allowed to trade on
 Polymarket; London is close-only and records only.
 
-**Phases 1–2 only: record, replay, paper.** Nothing here can place a real order.
-`PK_EXECUTION_MODE=live` is refused at startup until the paper gates pass and a host
-in a permitted jurisdiction exists. The UK, US, DE and FR are all close-only on
-Polymarket.
+**Record, replay, paper, and live behind its guards.** `PK_EXECUTION_MODE=live`
+places real orders (see "Live execution"). It is refused at startup without
+`PK_LIVE_CONFIRM=yes`, which is set only once the paper gates pass, on a host in a
+permitted jurisdiction. The UK, US, DE and FR are all close-only on Polymarket.
 
 ## Run
 
@@ -91,9 +91,59 @@ The transport is one warm HTTP/2 connection (pinned DNS refreshed off-path,
 keep-alive pings, a replacement warmed before it is swapped in). Orders are
 signed ahead of the decision when a gap nears the threshold, so the hot path is
 a cache lookup and one POST. In the trader, the same exec bridge mirrors each
-paper entry with a probe at the decision instant. Paper stays the venue of
-record, and `PK_EXECUTION_MODE=live` is still refused. Set `PK_PAPER_LATENCY_MS`
-from the measured p50.
+paper entry with a probe at the decision instant, and probes on a cadence
+(`PK_PROBE_CADENCE_S`) between decisions.
+
+**The paper venue's latency is measured, not configured.** `PK_PAPER_LATENCY_MS`
+is only the seed. Once `PK_LATENCY_MIN_SAMPLES` round trips exist, the latency in
+force is the p50 of the last `PK_LATENCY_WINDOW` decision → acknowledgement times.
+It is held in memory, and each move of ≥ 1 ms goes to the engine as a `latency`
+control line. So the tape records it, a replay reproduces it, and the journal has
+a `latency` record. The status page shows the value in force and whether it is
+still the seed.
+
+## Live execution
+
+`PK_EXECUTION_MODE=live` with `PK_LIVE_CONFIRM=yes`, a funded `POLY_PRIVATE_KEY`
+(an EOA: `POLY_SIGNATURE_TYPE=0`), the CLOB token approvals, a `POLYGON_RPC_URL` and
+a little POL for gas.
+
+- **Entries.** Each decision is a FAK BUY at the decision's limit, rounded down to
+  the tick and never above `PK_MAX_ENTRY_PX`. It takes what rests at or below the
+  limit and the venue cancels the rest. Its size is the engine's, already cut to
+  the depth at the limit with `PK_SIZE_TO_DEPTH=true`. The entry is refused under
+  the token's minimum size, or above `PK_MAX_OPEN_NOTIONAL_USD`.
+- **Results go through the engine.** The fill (from the acknowledgement, or by
+  polling the order until it is no longer live) goes back as a `live_fill`
+  control line. The engine opens the position and writes a `fill` record with
+  `venue: "live"` in the paper schema, so `pk readout` and the gates read live
+  fills unchanged. The paper venue still simulates each order as a shadow
+  (`paper_fill` records), which gives the live-vs-paper comparison.
+- **Compounding size.** The order size is `PK_ORDER_SIZE_PCT` of the balance (paper:
+  ledger cash; live: the wallet's pUSD). It is held in memory and recomputed
+  only at a reconciliation with no open position and no order in flight. Every
+  change is a `sizing` record.
+- **Reconciliation** runs every 30 s and after each fill or redemption:
+  - it reads the wallet balance (a `balance` line: ledger cash is reset to it,
+    any drift is a `reconcile` record, and the size is recomputed when flat);
+  - it cancels and alerts on any resting order (entries are FAK, so nothing
+    should rest);
+  - it compares each open position with its token balance (`position_drift`);
+  - it redeems settled winners on chain (a `redeem` record with the tx hash).
+    `redeem_failed` is alerted after 20 tries; `redeem_no_effect` if the shares
+    are still in the wallet; `gas_low` under 0.05 POL.
+- **Risk.**
+  - `PK_DAILY_LOSS_LIMIT_USD` halts on the ledger's realised P&L and on the
+    wallet's equity drawdown since the day's first reconciliation.
+  - Three balance/allowance rejects in a row halt.
+  - Any halt (kill file, `POST /v1/kill`, Telegram `/kill`) also cancels every
+    order on the account.
+  - `POST /v1/flatten` or Telegram `/flatten` halts and sells every open
+    position with a FAK at two ticks under the bid (`exit` records).
+- **Startup.** A live order path that cannot connect (CLOB auth, Polygon RPC)
+  exits the process non-zero, so `OnFailure` alerts. At startup the trader
+  cancels everything and reads the wallet before its first entry. The ledger
+  stores its mode, so a paper ledger is archived, never read as a live one.
 
 `pk netprobe --minutes 1440` measures the warm round trip to the CLOB and Kalshi
 from a host (the AWS-versus-Azure comparison in `infra/systemd/README.md`).
@@ -167,7 +217,8 @@ match them field by field.
 Every journal record carries `epoch` (`PK_RESULTS_EPOCH`), `build` (the git commit) and `config` (a hash of the strategy parameters).
 - The status page, `pk readout` and the export use only the current epoch, and the page header shows how many older records were set aside.
 - Epoch 7 starts with the Rust service (`PK_RESULTS_EPOCH=7`, also the default).
-- Changing the epoch archives the paper ledger (`ledger.epoch-<old>.json`) and starts a fresh one.
+- Changing the epoch archives the paper ledger (`ledger.epoch-<old>.json`) and starts a fresh one. So does switching between paper and live (`ledger.epoch-<old>.live.json` for a live one).
+- `config` hashes `PK_ORDER_SIZE_PCT` rather than the size, and the latency seed rather than the latency: those two move at runtime and are journaled as `sizing` and `latency` records.
 - Bump the epoch whenever a fix invalidates earlier results.
 - Records from before epochs existed, i.e. the ghost-level period, are always excluded.
 
@@ -185,7 +236,7 @@ pk acceptance --hours 24
 ```
 
 - `replay run` re-runs the tape through the live engine. It writes a journal and a per-second `grid.parquet`; `--reverse` replays the reverse direction (Polymarket signals, Kalshi executes).
-- `replay compare` must show 100% agreement with live on the same tape.
+- `replay compare` must show 100% agreement with live on the same tape. A tape recorded with the order path on carries the measured latency as `latency` lines: pass `--tape-latency` to follow them as the trader did (`--latency-ms` holds until the first one); without it `--latency-ms` holds throughout.
 - `nulls` is the manual's null battery. Expect `signal` ≈ +5 pp and `random_same_rule` ≈ 0 pp. Its random arms use a seeded generator of their own, not numpy's.
 - `readout` reports the gates below, the shadow-variant table, markouts and capacity. `--exclude-assets` reads the journal as if those assets were never traded, next to the full read (PREREG part 4, A1).
 - `fills` decides once and fills many times (latency × limit offset × size) from each entry's ask ladder.

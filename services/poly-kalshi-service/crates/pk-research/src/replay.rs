@@ -184,6 +184,9 @@ pub struct ReplayConfig {
     pub start_cash: f64,
     pub shadow: String,
     pub limit_offset: f64,
+    /// Follow the tape's `latency` lines (what the trader used) after the
+    /// configured latency, instead of holding the configured one.
+    pub tape_latency: bool,
 }
 
 pub fn build_engine(cfg: &ReplayConfig, journal: Box<dyn Sink + Send>) -> anyhow::Result<Engine> {
@@ -192,6 +195,7 @@ pub fn build_engine(cfg: &ReplayConfig, journal: Box<dyn Sink + Send>) -> anyhow
     ec.venue = Some(PaperVenue::new(cfg.latency_ms));
     ec.shadow = Shadow::new(parse_variants(&cfg.shadow, &cfg.params)?, &cfg.params);
     ec.limit_offset = cfg.limit_offset;
+    ec.follow_tape_latency = cfg.tape_latency;
     let risk = RiskState::new(RiskLimits {
         max_open_notional_usd: 1e12,
         daily_loss_limit_usd: 1e12,

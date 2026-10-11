@@ -4,6 +4,7 @@
 //! 0..7 exact, then 8 sub-buckets per power of two (≤ 12.5% relative error),
 //! over the whole `u64` range. The caller picks the unit (ns, µs, ms).
 //! [`Sample`] holds the moments research needs (mean, standard error, t).
+//! [`Rolling`] keeps the last N values for an exact recent quantile.
 
 use serde::Serialize;
 
@@ -207,6 +208,42 @@ impl FromIterator<f64> for Sample {
     }
 }
 
+/// The last `cap` values, oldest dropped first, for an exact quantile of what
+/// happened recently (the order path's measured latency).
+#[derive(Clone, Debug)]
+pub struct Rolling {
+    cap: usize,
+    values: std::collections::VecDeque<f64>,
+}
+
+impl Rolling {
+    pub fn new(cap: usize) -> Self {
+        let cap = cap.max(1);
+        Self { cap, values: std::collections::VecDeque::with_capacity(cap) }
+    }
+
+    pub fn push(&mut self, x: f64) {
+        if self.values.len() == self.cap {
+            self.values.pop_front();
+        }
+        self.values.push_back(x);
+    }
+
+    pub fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+
+    pub fn quantile(&self, q: f64) -> Option<f64> {
+        let mut sorted: Vec<f64> = self.values.iter().copied().collect();
+        sorted.sort_by(f64::total_cmp);
+        quantile_sorted(&sorted, q)
+    }
+}
+
 /// The exact q-quantile of a sorted slice, by linear interpolation (numpy's default).
 pub fn quantile_sorted(sorted: &[f64], q: f64) -> Option<f64> {
     if sorted.is_empty() {
@@ -301,6 +338,17 @@ mod tests {
         assert_eq!(s.mean(), Some(2.5));
         assert!((s.sd().unwrap() - 1.2909944).abs() < 1e-6);
         assert!((s.t().unwrap() - 3.8729833).abs() < 1e-6);
+    }
+
+    #[test]
+    fn rolling_keeps_the_last_n() {
+        let mut r = Rolling::new(3);
+        assert_eq!(r.quantile(0.5), None);
+        for x in [100.0, 1.0, 2.0, 3.0] {
+            r.push(x);
+        }
+        assert_eq!(r.len(), 3);
+        assert_eq!(r.quantile(0.5), Some(2.0));
     }
 
     #[test]

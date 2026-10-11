@@ -1,5 +1,5 @@
 //! The trader's API (`HOST:PORT`, loopback): health without a key; status,
-//! recent records, the series, and the kill switch with `X-API-Key`.
+//! recent records, the series, the kill switch and (live) flatten with `X-API-Key`.
 
 use std::sync::Arc;
 
@@ -62,6 +62,10 @@ pub fn router(rt: Arc<Runtime>) -> Router {
                 let fired = rt.kill("http", &reason);
                 Json(json!({"halted": true, "fired": fired}))
             }),
+        )
+        .route(
+            "/v1/flatten",
+            post(|State(rt): State<Arc<Runtime>>| async move { Json(rt.flatten("http").await) }),
         )
         .route(
             "/v1/kill/ack",

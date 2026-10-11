@@ -95,6 +95,7 @@ fn cfg() -> ReplayConfig {
         start_cash: 1e9,
         shadow: pk_core::shadow::DEFAULT_VARIANTS.into(),
         limit_offset: 0.0,
+        tape_latency: false,
     }
 }
 

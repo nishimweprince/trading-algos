@@ -13,7 +13,11 @@
 //!   window, polled until known and written as control lines; Polymarket's
 //!   `market_resolved` WS event usually beats it. Open positions from before a
 //!   restart get their windows back first.
-//! - **Health**: stale feeds, the observer's liveness, a heartbeat log line.
+//! - **Health**: stale feeds, the observer's liveness, a heartbeat log line,
+//!   and (with an order path) cancel-all once after any halt.
+//!
+//! Live, [`Runtime::live_view`] is what the order path's reconciler reads of
+//! the ledger, and [`Runtime::flatten`] halts and sells every open position.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
@@ -31,7 +35,7 @@ use pk_tape::Recorder;
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
-use crate::exec_bridge::{ExecBridge, ExecMsg};
+use crate::exec_bridge::{ExecBridge, ExecMsg, Held, LiveView};
 use crate::ingest::{Ingest, Line};
 use crate::link::ObserverLink;
 use crate::now_ns;
@@ -46,6 +50,8 @@ const RECYCLE_POLY_AFTER_REMOVED: u64 = 60;
 /// Kalshi answered 429 to a burst of per-asset discovery at restart.
 const DISCOVER_STAGGER: Duration = Duration::from_millis(250);
 const KALSHI_STATUS_S: f64 = 30.0;
+/// Settled winners are redeemed while their window is still known.
+const REDEEM_HORIZON_S: i64 = pk_engine::KEEP_WINDOWS_S;
 
 pub struct Runtime {
     pub settings: Settings,
@@ -71,6 +77,8 @@ pub struct Runtime {
     cpu: Mutex<(Instant, Duration, Option<f64>)>,
     pub telegram: Mutex<Option<Arc<crate::telegram::Stats>>>,
     pub stopping: AtomicBool,
+    /// The order path has cancelled everything for the current halt.
+    halt_cancelled: AtomicBool,
 }
 
 impl Runtime {
@@ -110,6 +118,7 @@ impl Runtime {
             cpu: Mutex::new((Instant::now(), cpu_time::ProcessTime::now().as_duration(), None)),
             telegram: Mutex::new(None),
             stopping: AtomicBool::new(false),
+            halt_cancelled: AtomicBool::new(false),
         }
     }
 
@@ -339,10 +348,16 @@ impl Runtime {
 
     pub async fn resolution_tick(self: Arc<Self>) {
         // After a restart, open positions need their window back to be settled.
+        // Live winners need theirs to be redeemed.
         let missing: Vec<(String, i64)> = {
             let e = self.engine.lock();
+            let horizon = now_ns() / pk_core::NS - REDEEM_HORIZON_S;
             e.ledger
-                .open_positions()
+                .positions
+                .values()
+                .filter(|p| {
+                    p.is_open() || (e.live && p.payout.is_some_and(|x| x > 0.0) && p.open_unix > horizon)
+                })
                 .filter(|p| !e.has_window(&p.asset, p.open_unix))
                 .map(|p| (p.asset.clone(), p.open_unix))
                 .collect()
@@ -427,6 +442,7 @@ impl Runtime {
 
     pub async fn health_tick(self: Arc<Self>) {
         self.sample_cpu();
+        self.cancel_orders_for_halt();
         if let Some(link) = &self.link {
             let l = link.clone();
             if let Ok(Some(why)) = tokio::task::spawn_blocking(move || l.check()).await {
@@ -482,6 +498,7 @@ impl Runtime {
 
     pub fn kill(&self, source: &str, reason: &str) -> bool {
         let fired = self.engine.lock().risk.kill(source, reason);
+        self.cancel_orders_for_halt();
         if fired {
             self.alerts.send(
                 "kill",
@@ -491,6 +508,76 @@ impl Runtime {
             );
         }
         fired
+    }
+
+    /// Once per halt, cancel every order on the account (the kill file halts
+    /// inside the engine, so the health tick calls this too).
+    fn cancel_orders_for_halt(&self) {
+        let halted = self.engine.lock().risk.halted;
+        if !halted {
+            self.halt_cancelled.store(false, Ordering::Relaxed);
+            return;
+        }
+        if self.halt_cancelled.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        if let Some(bridge) = self.exec.lock().clone() {
+            tokio::spawn(async move { bridge.cancel_all().await });
+        }
+    }
+
+    /// Halt, cancel everything, and sell every open live position.
+    pub async fn flatten(&self, source: &str) -> Value {
+        self.kill(source, "flatten");
+        let bridge = self.exec.lock().clone();
+        match bridge {
+            Some(b) if b.live.is_some() => {
+                let results = b.flatten().await;
+                self.alerts.send(
+                    "flatten",
+                    "poly-kalshi: flattened",
+                    results.iter().map(Value::to_string).collect(),
+                    true,
+                );
+                json!({"halted": true, "flattened": results})
+            }
+            _ => json!({"halted": true, "flattened": [], "note": "not live: nothing to sell"}),
+        }
+    }
+
+    /// The ledger as the live reconciler needs it.
+    pub fn live_view(&self) -> LiveView {
+        let now = now_ns();
+        let e = self.engine.lock();
+        let held = |p: &pk_core::Position| {
+            let w = e.window(&p.asset, p.open_unix);
+            Held {
+                asset: p.asset.clone(),
+                open_unix: p.open_unix,
+                side: p.side.clone(),
+                shares: p.shares,
+                token: w.map(|w| if p.side == "yes" { w.yes_token.clone() } else { w.no_token.clone() }),
+                condition_id: w.map(|w| w.condition_id.clone()),
+                fee_rate: w.map_or(pk_core::fees::DEFAULT_RATE, |w| w.fee_rate),
+                fee_exponent: w.map_or(pk_core::fees::DEFAULT_EXPONENT, |w| w.fee_exponent),
+            }
+        };
+        let horizon = now / pk_core::NS - REDEEM_HORIZON_S;
+        LiveView {
+            open: e.ledger.open_positions().map(held).collect(),
+            winners: e
+                .ledger
+                .positions
+                .values()
+                .filter(|p| {
+                    p.status == "settled" && p.payout.is_some_and(|x| x > 0.0) && p.open_unix > horizon
+                })
+                .map(held)
+                .collect(),
+            in_flight: e.ledger.in_flight(),
+            day_drawdown: e.ledger.day_drawdown(now),
+            daily_loss_limit: e.risk.limits.daily_loss_limit_usd,
+        }
     }
 
     pub fn ready(&self) -> (bool, Value) {
@@ -508,10 +595,11 @@ impl Runtime {
 
     pub fn status(&self) -> Value {
         let s = &self.settings;
-        let (engine_status, stamp, recent) = {
+        let (engine_status, stamp, recent, notional, latency_ms) = {
             let e = self.engine.lock();
             let recent: Vec<Value> = e.recent.iter().rev().take(50).cloned().collect();
-            (e.status(), e.stamp.clone(), recent)
+            let latency = e.venue.map(|v| v.latency_ns as f64 / 1e6);
+            (e.status(), e.stamp.clone(), recent, e.params.notional_usd, latency)
         };
         json!({
             "profile": s.profile,
@@ -524,10 +612,12 @@ impl Runtime {
             "params": {
                 "gap_threshold": s.params.gap_threshold,
                 "max_entry_px": s.params.max_entry_px,
-                "notional_usd": s.params.notional_usd,
+                "notional_usd": notional,
+                "order_size_pct": s.order_size_pct,
                 "entry_early_s": s.params.entry_early_s,
                 "entry_late_s": s.params.entry_late_s,
-                "paper_latency_ms": s.paper_latency_ms,
+                "paper_latency_ms": latency_ms.unwrap_or(s.paper_latency_ms as f64),
+                "paper_latency_seed_ms": s.paper_latency_ms,
                 "limit_offset": s.limit_offset,
                 "max_poly_spread": s.params.max_poly_spread,
                 "max_poly_lag_ms": s.params.max_poly_lag_ms,

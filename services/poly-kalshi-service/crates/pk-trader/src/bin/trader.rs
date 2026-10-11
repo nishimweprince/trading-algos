@@ -1,4 +1,7 @@
-//! `poly-kalshi-service`: the trader. Paper only; `PK_EXECUTION_MODE=live` is refused.
+//! `poly-kalshi-service`: the trader. Paper by default; `PK_EXECUTION_MODE=live`
+//! sends real orders once its guards pass (see `pk_svc::config`). Live, an
+//! order path that does not start is fatal: the process exits non-zero so
+//! systemd's `OnFailure` alert fires, rather than trading blind.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -7,11 +10,11 @@ use clap::Parser;
 use pk_core::journal::JsonlDaily;
 use pk_core::{Ledger, RiskLimits, RiskState};
 use pk_engine::Role;
-use pk_exec::WalletConfig;
+use pk_exec::{LiveLimits, WalletConfig};
 use pk_feeds::{Discovery, Emit, FeedKind, KalshiSigner, PolyShards, spawn_feed};
 use pk_svc::{Alerts, Notifier, Settings};
 use pk_tape::Recorder;
-use pk_trader::exec_bridge::ExecBridge;
+use pk_trader::exec_bridge::{BridgeConfig, ExecBridge, Hooks};
 use pk_trader::ingest::Ingest;
 use pk_trader::link::{LinkSink, ObserverLink};
 use pk_trader::observer::SharedJournal;
@@ -21,7 +24,7 @@ use pk_trader::telegram::{Handler, TelegramCommands};
 #[derive(Parser)]
 #[command(
     name = "poly-kalshi-service",
-    about = "poly-kalshi: Kalshi-signal / Polymarket-leg 15-minute convergence (paper)"
+    about = "poly-kalshi: Kalshi-signal / Polymarket-leg 15-minute convergence (paper or live)"
 )]
 struct Args {
     #[arg(long)]
@@ -48,10 +51,13 @@ fn main() -> anyhow::Result<()> {
 async fn run(settings: Settings) -> anyhow::Result<()> {
     let notifier = settings.notify.enabled.then(|| Notifier::new(settings.notify.clone()));
     let alerts = Alerts::new(notifier, Duration::from_secs(300));
-    let ledger = Ledger::open(
+    let live = settings.execution_mode == pk_svc::ExecutionMode::Live;
+    // Live starts from an empty wallet mirror; the first balance read sets it.
+    let ledger = Ledger::open_mode(
         Some(&settings.state_dir.join("ledger.json")),
-        settings.paper_start_cash_usd,
+        if live { 0.0 } else { settings.paper_start_cash_usd },
         Some(&settings.results_epoch),
+        if live { "live" } else { "paper" },
     )?;
     let risk = RiskState::new(RiskLimits {
         max_open_notional_usd: settings.max_open_notional_usd,
@@ -121,32 +127,99 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
     }
     tracing::info!(profile = ?settings.profile, mode = settings.execution_mode.as_str(), "pk_starting");
 
-    if settings.order_probe {
-        let rt2 = rt.clone();
+    // Paper with percentage sizing: seed the size from the ledger, on the tape.
+    if !live && settings.order_size_pct > 0.0 {
+        let equity = {
+            let e = rt.engine.lock();
+            e.ledger.cash + e.ledger.open_positions().map(|p| p.cost + p.fee).sum::<f64>()
+        };
+        rt.control(serde_json::json!({"type": "sizing", "balance": equity}));
+    }
+
+    if settings.order_path() {
         let wallet = WalletConfig {
             clob_url: settings.poly_clob_url.clone(),
             private_key: settings.poly_private_key.clone().unwrap_or_default(),
             funder: settings.poly_funder.clone(),
             signature_type: settings.poly_signature_type,
         };
-        tokio::spawn(async move {
-            let journal_rt = rt2.clone();
-            let journal: pk_trader::exec_bridge::JournalFn = Arc::new(move |t, r| journal_rt.journal(t, r));
-            match ExecBridge::connect(&wallet, journal).await {
-                Ok(bridge) => {
-                    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-                    *rt2.exec.lock() = Some(bridge.clone());
-                    *rt2.exec_tx.lock() = Some(tx);
-                    bridge.run(rx).await;
-                }
-                Err(e) => rt2.alerts.send(
-                    "order_path",
-                    "poly-kalshi: the order path did not start",
-                    vec![format!("{e:#}"), "Paper trading continues without the probe.".into()],
-                    true,
-                ),
+        let hooks = {
+            let w = Arc::downgrade(&rt);
+            let (w1, w2, w3, w4) = (w.clone(), w.clone(), w.clone(), w.clone());
+            Hooks {
+                journal: Arc::new(move |t, r| {
+                    if let Some(rt) = w.upgrade() {
+                        rt.journal(t, r)
+                    }
+                }),
+                control: Arc::new(move |v| {
+                    if let Some(rt) = w1.upgrade() {
+                        rt.control(v)
+                    }
+                }),
+                alert: Arc::new(move |key, subject, lines, urgent| {
+                    if let Some(rt) = w2.upgrade() {
+                        rt.alerts.send(key, subject, lines, urgent)
+                    }
+                }),
+                kill: Arc::new(move |source, reason| {
+                    if let Some(rt) = w3.upgrade() {
+                        rt.kill(source, reason);
+                    }
+                }),
+                view: Arc::new(move || w4.upgrade().map(|rt| rt.live_view()).unwrap_or_default()),
             }
+        };
+        let cfg = BridgeConfig {
+            latency_seed_ms: settings.paper_latency_ms as f64,
+            latency_window: settings.latency_window,
+            latency_min_samples: settings.latency_min_samples,
+        };
+        let live_cfg = live.then(|| {
+            let d = |x: f64| rust_decimal::Decimal::from_f64_retain(x).unwrap_or_default().round_dp(4);
+            (
+                LiveLimits {
+                    max_entry_px: d(settings.params.max_entry_px),
+                    max_notional: d(settings.max_open_notional_usd),
+                    ..LiveLimits::default()
+                },
+                settings.polygon_rpc_url.clone().unwrap_or_default(),
+                settings.poly_redeem_collateral.clone(),
+            )
         });
+        let cadence =
+            (settings.probe_cadence_s > 0.0).then(|| Duration::from_secs_f64(settings.probe_cadence_s));
+        match ExecBridge::connect(&wallet, hooks, cfg, live_cfg).await {
+            Ok(bridge) => {
+                let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                *rt.exec.lock() = Some(bridge.clone());
+                *rt.exec_tx.lock() = Some(tx);
+                if live {
+                    // Nothing of ours should rest; then read the wallet before trading.
+                    bridge.cancel_all().await;
+                    bridge.reconcile().await;
+                }
+                tokio::spawn(bridge.clone().run(rx));
+                tokio::spawn(bridge.run_background(cadence));
+            }
+            Err(e) if live => {
+                tracing::error!(error = %format!("{e:#}"), "live order path did not start");
+                rt.alerts.send(
+                    "order_path",
+                    "poly-kalshi: the LIVE order path did not start; exiting",
+                    vec![format!("{e:#}")],
+                    true,
+                );
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                std::process::exit(3);
+            }
+            Err(e) => rt.alerts.send(
+                "order_path",
+                "poly-kalshi: the order path did not start",
+                vec![format!("{e:#}"), "Paper trading continues without the probe.".into()],
+                true,
+            ),
+        }
     }
 
     tokio::spawn(rt.clone().every(pk_trader::runtime::TICK, |r| Box::pin(r.window_tick())));
@@ -164,6 +237,10 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
         let handler: Handler = Arc::new(move |command, user| {
             let rt = hrt.clone();
             Box::pin(async move {
+                if command == "flatten" {
+                    let out = rt.flatten(&format!("telegram user {user}")).await;
+                    return format!("HALTED and flattened: {}", out["flattened"]);
+                }
                 if command == "kill" {
                     let fired = rt.kill("telegram", &format!("user {user}"));
                     return if fired {

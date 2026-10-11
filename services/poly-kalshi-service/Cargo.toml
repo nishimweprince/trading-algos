@@ -23,7 +23,7 @@ base64 = "0.22"
 hmac = "0.12"
 sha2 = "0.10"
 rust_decimal = { version = "1", features = ["serde"] }
-polymarket_client_sdk_v2 = { version = "0.8", features = ["clob"] }
+polymarket_client_sdk_v2 = { version = "0.8", features = ["clob", "ctf"] }
 alloy = { version = "1.6", default-features = false, features = ["signer-local", "signers", "sol-types"] }
 axum = { version = "0.8", features = ["http2"] }
 chrono = { version = "0.4", features = ["serde"] }

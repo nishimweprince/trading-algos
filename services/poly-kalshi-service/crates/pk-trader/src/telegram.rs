@@ -1,4 +1,5 @@
-//! Inbound Telegram commands on the service's own bot: `/kill` and `/status`.
+//! Inbound Telegram commands on the service's own bot: `/kill`, `/flatten`
+//! (live: halt and sell every open position) and `/status`.
 //!
 //! It long-polls `getUpdates` on `PK_TELEGRAM_BOT_TOKEN`, which must be a bot
 //! of its own: two pollers on one token take turns receiving updates. Only
@@ -28,6 +29,7 @@ pub fn parse_command(text: &str) -> Option<&'static str> {
     let word = rest.split_whitespace().next().unwrap_or_default();
     match word.split('@').next().unwrap_or_default().to_lowercase().as_str() {
         "kill" => Some("kill"),
+        "flatten" => Some("flatten"),
         "status" => Some("status"),
         _ => None,
     }
@@ -176,6 +178,7 @@ mod tests {
         assert_eq!(parse_command("/kill"), Some("kill"));
         assert_eq!(parse_command("/KILL@pk_bot now"), Some("kill"));
         assert_eq!(parse_command("/status"), Some("status"));
+        assert_eq!(parse_command("/flatten"), Some("flatten"));
         assert_eq!(parse_command("/ack"), None);
         assert_eq!(parse_command("kill"), None);
         assert_eq!(parse_command("/"), None);
