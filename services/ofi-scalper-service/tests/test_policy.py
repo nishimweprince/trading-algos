@@ -120,6 +120,20 @@ def test_gate_inventory_multiplier_shrinks_the_size() -> None:
     assert place.qty == Decimal("0.002")
 
 
+def test_a_shrunk_size_rounds_up_to_the_venue_minimum() -> None:
+    # 180 x 0.5 = $90 is under BTC's $100 minimum; the full $180 is not.
+    policy = SymbolPolicy("BTCUSDT", PARAMS, BTC)
+    (place,) = policy.on_sample(ctx(size_mult=0.5)).actions
+    assert place.qty == Decimal("0.002")
+
+
+def test_a_shrunk_size_that_is_already_valid_is_kept() -> None:
+    eth = Filters(Decimal("0.01"), Decimal("0.001"), Decimal("0.001"), Decimal("20"))
+    policy = SymbolPolicy("ETHUSDT", PARAMS, eth)
+    (place,) = policy.on_sample(ctx(bid=2500.0, ask=2500.01, size_mult=0.5)).actions
+    assert place.qty == Decimal("0.036")
+
+
 def test_one_cycle_at_a_time() -> None:
     policy, _ = entered()
     assert not policy.on_sample(ctx(T0 + 100 * MS)).actions

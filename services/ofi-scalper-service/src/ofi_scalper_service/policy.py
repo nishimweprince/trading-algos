@@ -374,6 +374,10 @@ class SymbolPolicy:
             return Step(self._watch_chase(ctx))
         return Step()
 
+    def _valid(self, qty: Decimal, price: Decimal) -> bool:
+        f = self.filters
+        return qty > 0 and qty >= f.min_qty and qty * price >= f.min_notional
+
     def _maybe_enter(self, ctx: Context) -> Step:
         scores = ctx.scores
         if scores is None or ctx.t_ns < self.cooldown_until_ns:
@@ -405,8 +409,15 @@ class SymbolPolicy:
             _floor(price, self.filters.tick) if side == "buy" else _ceil(price, self.filters.tick)
         )
         qty = _floor(Decimal(str(ctx.notional_usd * ctx.size_mult)) / price, self.filters.step)
-        if qty <= 0 or qty < self.filters.min_qty or qty * price < self.filters.min_notional:
-            return Step(signal=signal("skip:below_minimum"))
+        if not self._valid(qty, price):
+            # A gate's size multiplier must not turn a valid order into no order:
+            # if the full size clears the venue minimum, trade the minimum instead.
+            full = _floor(Decimal(str(ctx.notional_usd)) / price, self.filters.step)
+            if not self._valid(full, price):
+                return Step(signal=signal("skip:below_minimum"))
+            qty = max(
+                self.filters.min_qty, _ceil(self.filters.min_notional / price, self.filters.step)
+            )
         cycle_id = f"{self.symbol}-{ctx.t_ns}"
         self.cycle = Cycle(
             cycle_id=cycle_id,
