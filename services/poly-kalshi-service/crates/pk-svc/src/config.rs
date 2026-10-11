@@ -10,9 +10,11 @@
 //! `PK_PAPER_LATENCY_MS`, then the measured p50 of the order path).
 //!
 //! `PK_EXECUTION_MODE=live` sends real orders. It is refused unless
-//! `PK_LIVE_CONFIRM=yes`, a `POLY_PRIVATE_KEY`, `POLY_SIGNATURE_TYPE=0` (the
-//! service redeems winnings from the EOA itself) and a `POLYGON_RPC_URL` are
-//! all set. Passing the paper gates is a human decision, not a setting.
+//! `PK_LIVE_CONFIRM=yes`, a `POLY_PRIVATE_KEY` and a `POLYGON_RPC_URL` are set,
+//! and the wallet is one the service can redeem from: the EOA itself
+//! (`POLY_SIGNATURE_TYPE=0`), or a deposit wallet (`POLY_SIGNATURE_TYPE=3`,
+//! `POLY_FUNDER`) with a `POLY_RELAYER_API_KEY`. Passing the paper gates is a
+//! human decision, not a setting.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -107,7 +109,13 @@ pub struct Settings {
     pub order_probe: bool,
     pub poly_private_key: Option<String>,
     pub poly_funder: Option<String>,
+    /// 0 EOA, 3 deposit wallet (`poly_funder`); 1 and 2 only for the probe.
     pub poly_signature_type: u8,
+    /// Polymarket's relayer, which redeems for a deposit wallet (live, type 3).
+    pub poly_relayer_url: String,
+    pub poly_relayer_api_key: Option<String>,
+    /// The address that owns the relayer key; the EOA when unset.
+    pub poly_relayer_api_key_address: Option<String>,
     /// Polygon JSON-RPC, for redeeming settled positions (live).
     pub polygon_rpc_url: Option<String>,
     /// The collateral to redeem against; the exchange's own (pUSD) when unset.
@@ -322,6 +330,14 @@ impl Settings {
             "PK_ORDER_PROBE=on needs POLY_PRIVATE_KEY"
         );
         let poly_signature_type: u8 = e.num("POLY_SIGNATURE_TYPE", 0)?;
+        anyhow::ensure!(poly_signature_type <= 3, "POLY_SIGNATURE_TYPE must be 0, 1, 2 or 3");
+        let poly_funder = e.get("POLY_FUNDER");
+        anyhow::ensure!(
+            poly_signature_type != 3 || poly_funder.is_some(),
+            "POLY_SIGNATURE_TYPE=3 (deposit wallet) needs POLY_FUNDER: the wallet's address, \
+             shown as the deposit address on polymarket.com"
+        );
+        let poly_relayer_api_key = e.get("POLY_RELAYER_API_KEY");
         let polygon_rpc_url = e.get("POLYGON_RPC_URL");
         if mode == ExecutionMode::Live {
             let refused = |why: &str| anyhow::anyhow!("PK_EXECUTION_MODE=live is refused: {why}");
@@ -333,10 +349,16 @@ impl Settings {
             if poly_private_key.is_none() {
                 return Err(refused("POLY_PRIVATE_KEY is not set"));
             }
-            if poly_signature_type != 0 {
+            if poly_signature_type != 0 && poly_signature_type != 3 {
                 return Err(refused(
-                    "POLY_SIGNATURE_TYPE must be 0: the service redeems winnings from the EOA, \
-                     and proxy or Safe wallets need Polymarket's relayer",
+                    "POLY_SIGNATURE_TYPE must be 0 (an EOA) or 3 (a deposit wallet): the service \
+                     cannot redeem winnings from proxy or Safe wallets",
+                ));
+            }
+            if poly_signature_type == 3 && poly_relayer_api_key.is_none() {
+                return Err(refused(
+                    "POLY_RELAYER_API_KEY is not set (a deposit wallet redeems through Polymarket's \
+                     relayer; create one under polymarket.com > Settings > API Keys)",
                 ));
             }
             if polygon_rpc_url.is_none() {
@@ -402,8 +424,11 @@ impl Settings {
             polybolt_credentials,
             order_probe,
             poly_private_key,
-            poly_funder: e.get("POLY_FUNDER"),
+            poly_funder,
             poly_signature_type,
+            poly_relayer_url: e.or("POLY_RELAYER_URL", "https://relayer-v2.polymarket.com"),
+            poly_relayer_api_key,
+            poly_relayer_api_key_address: e.get("POLY_RELAYER_API_KEY_ADDRESS"),
             polygon_rpc_url,
             poly_redeem_collateral: e.get("POLY_REDEEM_COLLATERAL"),
             status_host: e.or("PK_STATUS_HOST", "127.0.0.1"),
@@ -556,5 +581,19 @@ mod tests {
         let mut proxy = full();
         proxy.insert("POLY_SIGNATURE_TYPE".into(), "1".into());
         assert!(Settings::from_env(proxy, None).unwrap_err().to_string().contains("POLY_SIGNATURE_TYPE"));
+
+        // A deposit wallet: its address, and a relayer key to redeem with.
+        let deposit = |extra: &[(&str, &str)]| {
+            let mut m = full();
+            m.insert("POLY_SIGNATURE_TYPE".into(), "3".into());
+            m.extend(extra.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())));
+            Settings::from_env(m, None)
+        };
+        assert!(deposit(&[]).unwrap_err().to_string().contains("POLY_FUNDER"));
+        let no_key = deposit(&[("POLY_FUNDER", "0xw")]).unwrap_err().to_string();
+        assert!(no_key.contains("POLY_RELAYER_API_KEY"), "{no_key}");
+        let s = deposit(&[("POLY_FUNDER", "0xw"), ("POLY_RELAYER_API_KEY", "rk")]).unwrap();
+        assert_eq!((s.poly_signature_type, s.poly_funder.as_deref()), (3, Some("0xw")));
+        assert_eq!(s.poly_relayer_url, "https://relayer-v2.polymarket.com");
     }
 }

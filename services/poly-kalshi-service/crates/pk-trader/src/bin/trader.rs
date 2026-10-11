@@ -10,11 +10,11 @@ use clap::Parser;
 use pk_core::journal::JsonlDaily;
 use pk_core::{Ledger, RiskLimits, RiskState};
 use pk_engine::Role;
-use pk_exec::{LiveLimits, WalletConfig};
+use pk_exec::{LiveLimits, RelayerConfig, WalletConfig};
 use pk_feeds::{Discovery, Emit, FeedKind, KalshiSigner, PolyShards, spawn_feed};
 use pk_svc::{Alerts, Notifier, Settings};
 use pk_tape::Recorder;
-use pk_trader::exec_bridge::{BridgeConfig, ExecBridge, Hooks};
+use pk_trader::exec_bridge::{BridgeConfig, ExecBridge, Hooks, RedeemConfig};
 use pk_trader::ingest::Ingest;
 use pk_trader::link::{LinkSink, ObserverLink};
 use pk_trader::observer::SharedJournal;
@@ -184,8 +184,15 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
                     max_notional: d(settings.max_open_notional_usd),
                     ..LiveLimits::default()
                 },
-                settings.polygon_rpc_url.clone().unwrap_or_default(),
-                settings.poly_redeem_collateral.clone(),
+                RedeemConfig {
+                    rpc_url: settings.polygon_rpc_url.clone().unwrap_or_default(),
+                    collateral: settings.poly_redeem_collateral.clone(),
+                    relayer: (settings.poly_signature_type == 3).then(|| RelayerConfig {
+                        url: settings.poly_relayer_url.clone(),
+                        api_key: settings.poly_relayer_api_key.clone().unwrap_or_default(),
+                        api_key_address: settings.poly_relayer_api_key_address.clone(),
+                    }),
+                },
             )
         });
         let cadence =

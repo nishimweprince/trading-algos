@@ -158,13 +158,22 @@ pub struct BridgeConfig {
     pub latency_min_samples: usize,
 }
 
+/// Where live redemptions are sent from.
+pub struct RedeemConfig {
+    pub rpc_url: String,
+    /// Overrides the exchange's collateral (pUSD).
+    pub collateral: Option<String>,
+    /// A deposit wallet's relayer key (`POLY_SIGNATURE_TYPE=3`); None redeems from the EOA.
+    pub relayer: Option<pk_exec::RelayerConfig>,
+}
+
 impl ExecBridge<SdkSigner> {
     /// Authenticate, open the warm connection, and (live) the redeemer.
     pub async fn connect(
         wallet: &WalletConfig,
         hooks: Hooks,
         cfg: BridgeConfig,
-        live: Option<(LiveLimits, String, Option<String>)>,
+        live: Option<(LiveLimits, RedeemConfig)>,
     ) -> anyhow::Result<Arc<Self>> {
         let signer = Arc::new(SdkSigner::connect(wallet).await?);
         tracing::info!(address = %signer.address(), "order path authenticated");
@@ -173,24 +182,50 @@ impl ExecBridge<SdkSigner> {
         let exec = Arc::new(ClobExec::new(http, signer, PresignCache::new(Duration::from_secs(10), 64)));
         let live = match live {
             None => None,
-            Some((limits, rpc, collateral)) => {
-                let r = Arc::new(
-                    pk_exec::CtfRedeemer::connect(&rpc, &wallet.private_key, collateral.as_deref()).await?,
-                );
-                tracing::info!(address = %r.address(), "redeemer connected");
-                let (r1, r2) = (r.clone(), r);
-                let redeem: RedeemFn = Arc::new(move |c| {
-                    let r = r1.clone();
-                    Box::pin(async move { pk_exec::Redeem::redeem(r.as_ref(), &c).await })
-                });
-                let gas: GasFn = Arc::new(move || {
-                    let r = r2.clone();
-                    Box::pin(async move { pk_exec::Redeem::gas_balance(r.as_ref()).await })
-                });
+            Some((limits, rc)) => {
+                let (redeem, gas) = match (rc.relayer, &wallet.funder) {
+                    // A deposit wallet: the relayer submits, and pays the gas.
+                    (Some(relayer), Some(funder)) => {
+                        let r = Arc::new(
+                            pk_exec::WalletRedeemer::new(
+                                relayer,
+                                &wallet.private_key,
+                                funder,
+                                rc.collateral.as_deref(),
+                            )?
+                            .with_rpc(&rc.rpc_url)
+                            .await?,
+                        );
+                        tracing::info!(wallet = %r.wallet(), "redeemer connected (deposit wallet, relayer)");
+                        let redeem: RedeemFn = Arc::new(move |c| {
+                            let r = r.clone();
+                            Box::pin(async move { pk_exec::Redeem::redeem(r.as_ref(), &c).await })
+                        });
+                        (redeem, None)
+                    }
+                    (Some(_), None) => anyhow::bail!("a deposit wallet redeemer needs POLY_FUNDER"),
+                    (None, _) => {
+                        let r = Arc::new(
+                            pk_exec::CtfRedeemer::connect(&rc.rpc_url, &wallet.private_key, rc.collateral.as_deref())
+                                .await?,
+                        );
+                        tracing::info!(address = %r.address(), "redeemer connected");
+                        let (r1, r2) = (r.clone(), r);
+                        let redeem: RedeemFn = Arc::new(move |c| {
+                            let r = r1.clone();
+                            Box::pin(async move { pk_exec::Redeem::redeem(r.as_ref(), &c).await })
+                        });
+                        let gas: GasFn = Arc::new(move || {
+                            let r = r2.clone();
+                            Box::pin(async move { pk_exec::Redeem::gas_balance(r.as_ref()).await })
+                        });
+                        (redeem, Some(gas))
+                    }
+                };
                 Some(LivePart {
                     exec: LiveExec::new(exec.clone(), limits),
                     redeem,
-                    gas: Some(gas),
+                    gas,
                     signature_type: wallet.signature_type,
                 })
             }
