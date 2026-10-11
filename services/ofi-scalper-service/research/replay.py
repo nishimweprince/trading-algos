@@ -302,7 +302,7 @@ class Replayer:
     def _collect_halts(self) -> None:
         for variant, risk in self._variant_risks:
             for event in risk.history:
-                if event["event"] == "halt" and event not in variant.halts:
+                if event["event"] in {"halt", "fault"} and event not in variant.halts:
                     variant.halts.append(event)
 
     def _roll_days(self) -> None:

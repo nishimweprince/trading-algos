@@ -113,8 +113,11 @@ def build_runtime(settings: Settings, notifier: Any | None) -> ScalperRuntime:
         settings, rest=rest, on_raw=recorder.write if recorder is not None else None
     )
     account = factory.account(settings, rest=rest)
+    # Shadow records loss-limit breaches and keeps trading; only a kill halts.
     risk = RiskState(
-        RiskLimits.from_settings(settings), state_path=settings.state_dir / "halt.json"
+        RiskLimits.from_settings(settings),
+        state_path=settings.state_dir / "halt.json",
+        enforce_loss_limits=False,
     )
     alerts = Alerts(notifier)
     runtime = ScalperRuntime(

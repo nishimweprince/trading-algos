@@ -42,7 +42,7 @@ __all__ = [
     "Context",
     "Cycle",
     "Filters",
-    "Halt",
+    "CloseFailed",
     "Phase",
     "Place",
     "PolicyParams",
@@ -222,12 +222,16 @@ class Cancel:
 
 
 @dataclass(frozen=True, slots=True)
-class Halt:
+class CloseFailed:
+    """Every close attempt ended with a position left: the bridge records a
+    fault and closes the rest itself."""
+
     symbol: str
+    cycle_id: str
     reason: str
 
 
-Action = Place | Close | Cancel | Halt
+Action = Place | Close | Cancel | CloseFailed
 
 
 @dataclass(frozen=True, slots=True)
@@ -663,7 +667,11 @@ class SymbolPolicy:
         if self.phase is Phase.CLOSING and cycle.remaining > 0:
             if cycle.close_attempts >= self.params.max_close_attempts:
                 return [
-                    Halt(self.symbol, f"{cycle.cycle_id}: {cycle.close_attempts} closes failed")
+                    CloseFailed(
+                        self.symbol,
+                        cycle.cycle_id,
+                        f"{cycle.cycle_id}: {cycle.close_attempts} closes failed",
+                    )
                 ]
             return [self._close_order(cycle.exit_reason or "close_retry")]
         return []

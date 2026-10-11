@@ -9,10 +9,10 @@ import pytest
 from ofi_scalper_service.policy import (
     Cancel,
     Close,
+    CloseFailed,
     Context,
     Cycle,
     Filters,
-    Halt,
     Phase,
     Place,
     PolicyParams,
@@ -245,15 +245,16 @@ def test_close_fill_finishes_after_the_tp_is_gone() -> None:
     assert cycle.exit_reason == "time_stop" and cycle.exit_avg == 59990.0
 
 
-def test_failed_closes_retry_then_halt() -> None:
+def test_failed_closes_retry_then_report() -> None:
     policy, tp = opened()
     policy.on_sample(ctx(T0 + 20 * S))
     policy.on_update(tp.cycle_id, "tp", Decimal(0), None, True, T0 + 20 * S)
     (retry,) = policy.on_update(tp.cycle_id, "close1", Decimal(0), None, True, T0 + 20 * S)
     assert isinstance(retry, Close) and retry.attempt == 2
     (retry,) = policy.on_update(tp.cycle_id, "close2", Decimal(0), None, True, T0 + 20 * S)
-    (halt,) = policy.on_update(tp.cycle_id, "close3", Decimal(0), None, True, T0 + 20 * S)
-    assert isinstance(halt, Halt) and "3 closes failed" in halt.reason
+    (failed,) = policy.on_update(tp.cycle_id, "close3", Decimal(0), None, True, T0 + 20 * S)
+    assert isinstance(failed, CloseFailed) and "3 closes failed" in failed.reason
+    assert failed.cycle_id == tp.cycle_id
 
 
 def test_a_lost_take_profit_closes_the_position() -> None:

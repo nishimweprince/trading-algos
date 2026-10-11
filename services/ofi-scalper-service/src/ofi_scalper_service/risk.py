@@ -7,10 +7,13 @@ and acknowledge. A model output is never an argument to anything here.
 
 Two kinds of stop:
 
-- **Halt** (kill switch, daily loss, drawdown, execution fault): cancel all,
-  flatten, stop. Only
-  an operator ``ack`` clears it; a daily-loss halt also waits for the next UTC
-  day. While halted, only reduce-only orders pass.
+- **Halt** (kill switch; daily loss and drawdown when ``enforce_loss_limits``):
+  close everything and stop. Only an operator ``ack`` clears it; a daily-loss
+  halt also waits for the next UTC day. While halted, only reduce-only orders
+  pass.
+- **Breach** (daily loss and drawdown when not ``enforce_loss_limits``, as in
+  the shadow service): recorded once per UTC day or drawdown episode, never a
+  stop. Research enforces the limits so its gates mean something.
 - **Pause** (stale book, depth gap, stream down): per symbol, clears itself
   when the condition does. No new exposure while paused.
 
@@ -18,8 +21,10 @@ With a ``state_path`` the halt and the recent halt/ack history are saved there
 on every change and loaded at construction, so a halt survives a restart. An
 unreadable file starts halted. Replay and backtest pass no path.
 
-The execution bridge runs every order past ``check_order`` (and so the
-governor) before it is sent, and reacts to a halt by cancelling and flattening.
+An order-path fault (closes that keep failing) is recorded with
+``record_fault``; it does not halt. The execution bridge runs every order past
+``check_order`` (and so the governor) before it is sent, and reacts to a halt
+by closing every cycle.
 """
 
 from __future__ import annotations
@@ -51,8 +56,7 @@ class HaltReason(StrEnum):
     KILL = "kill_switch"
     DAILY_LOSS = "daily_loss_limit"
     DRAWDOWN = "max_drawdown"
-    # The order path cannot be trusted (repeated UNKNOWN outcomes, a position
-    # the bridge did not open, closes that keep failing).
+    # Closes that keep failing: recorded by record_fault, never a halt.
     EXECUTION = "execution_fault"
 
 
@@ -108,6 +112,7 @@ class RiskState:
     clock: Callable[[], datetime] = field(default=lambda: datetime.now(UTC))
     governor: OrderRateGovernor | None = None
     state_path: Path | None = None
+    enforce_loss_limits: bool = True
 
     def __post_init__(self) -> None:
         if self.governor is None:
@@ -123,6 +128,10 @@ class RiskState:
         # True while the halt in force was loaded from state_path, not raised here.
         self.restored = False
         self.persist_error: str | None = None
+        self.breaches: list[dict[str, Any]] = []  # today's, record-only mode
+        self._new_breaches: list[dict[str, Any]] = []
+        self._daily_breached = False
+        self._drawdown_breached = False
         if self.state_path is not None:
             self._load()
 
@@ -141,17 +150,45 @@ class RiskState:
         self.equity = equity
         if self.day_start_equity is None:
             self.day_start_equity = equity
-        self.peak_equity = equity if self.peak_equity is None else max(self.peak_equity, equity)
-        if self.halt is not None:
+        if self.peak_equity is None or equity > self.peak_equity:
+            self.peak_equity = equity
+            self._drawdown_breached = False  # a new peak starts a new episode
+        if self.halt is not None and self.enforce_loss_limits:
             return None
         if self.day_start_equity - equity >= self.limits.daily_loss_limit_usd:
-            return self._halt(
-                HaltReason.DAILY_LOSS, "risk", f"down {self.day_start_equity - equity:.2f} today"
-            )
+            detail = f"down {self.day_start_equity - equity:.2f} today"
+            if self.enforce_loss_limits:
+                return self._halt(HaltReason.DAILY_LOSS, "risk", detail)
+            if not self._daily_breached:
+                self._daily_breached = True
+                self._breach(HaltReason.DAILY_LOSS, detail)
         drawdown = (self.peak_equity - equity) / self.peak_equity * 100 if self.peak_equity else 0
         if drawdown >= self.limits.max_drawdown_pct:
-            return self._halt(HaltReason.DRAWDOWN, "risk", f"{drawdown:.2f}% from peak")
+            detail = f"{drawdown:.2f}% from peak"
+            if self.enforce_loss_limits:
+                return self._halt(HaltReason.DRAWDOWN, "risk", detail)
+            if not self._drawdown_breached:
+                self._drawdown_breached = True
+                self._breach(HaltReason.DRAWDOWN, detail)
         return None
+
+    def take_breaches(self) -> list[dict[str, Any]]:
+        """Breaches recorded since the last call (record-only mode)."""
+        new, self._new_breaches = self._new_breaches, []
+        return new
+
+    def record_fault(self, detail: str) -> dict[str, Any]:
+        """An order-path fault: recorded in the history, never a halt."""
+        event = {
+            "event": "fault",
+            "reason": HaltReason.EXECUTION.value,
+            "source": "bridge",
+            "detail": detail,
+            "at": self.clock().isoformat(),
+        }
+        self.history.append(event)
+        self._save()
+        return event
 
     def set_pause(self, symbol: str, reason: str, active: bool) -> bool:
         """Raise or clear one pause reason; returns True if the state changed."""
@@ -174,13 +211,6 @@ class RiskState:
         if self.halt is not None:
             return False
         self._halt(HaltReason.KILL, source, detail)
-        return True
-
-    def execution_fault(self, detail: str) -> bool:
-        """Halt on an order-path fault. Returns False if already halted."""
-        if self.halt is not None:
-            return False
-        self._halt(HaltReason.EXECUTION, "bridge", detail)
         return True
 
     def ack(self, source: str) -> tuple[bool, str]:
@@ -248,6 +278,8 @@ class RiskState:
                 "restored": self.restored,
             },
             "persist_error": self.persist_error,
+            "enforce_loss_limits": self.enforce_loss_limits,
+            "breaches": list(self.breaches),
             "pauses": {symbol: sorted(r) for symbol, r in self.pauses.items() if r},
             "positions": dict(self.positions),
             "equity": self.equity,
@@ -279,6 +311,20 @@ class RiskState:
         )
         self._save()
         return reason
+
+    def _breach(self, reason: HaltReason, detail: str) -> None:
+        event = {
+            "event": "breach",
+            "reason": reason.value,
+            "source": "risk",
+            "detail": detail,
+            "enforced": False,
+            "at": self.clock().isoformat(),
+        }
+        self.history.append(event)
+        self.breaches.append(event)
+        self._new_breaches.append(event)
+        self._save()
 
     def _load(self) -> None:
         assert self.state_path is not None
@@ -336,3 +382,5 @@ class RiskState:
         if today != self.day:
             self.day = today
             self.day_start_equity = self.equity
+            self.breaches = []
+            self._daily_breached = False

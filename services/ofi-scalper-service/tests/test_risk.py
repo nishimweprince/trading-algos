@@ -111,14 +111,42 @@ def test_no_api_changes_limits() -> None:
     assert risk.snapshot()["limits"]["daily_loss_limit_usd"] == 50
 
 
-def test_execution_fault_halts_until_ack() -> None:
+def test_a_fault_is_recorded_without_a_halt() -> None:
     risk = state()
-    assert risk.execution_fault("3 consecutive UNKNOWN")
-    assert not risk.execution_fault("again")  # the first reason is kept
-    assert risk.halt is not None and risk.halt.reason is HaltReason.EXECUTION
-    assert not risk.check_order(buy()).allowed
-    assert risk.check_order(buy(reduce_only=True)).allowed
-    assert risk.ack("http") == (True, "cleared execution_fault")
+    event = risk.record_fault("c1: 3 closes failed")
+    assert not risk.halted and risk.check_order(buy()).allowed
+    assert event["event"] == "fault" and event["reason"] == "execution_fault"
+    assert risk.history[-1] == event
+
+
+def test_record_only_loss_limits_never_halt_and_record_once() -> None:
+    clock = Clock()
+    risk = RiskState(LIMITS, clock=clock, enforce_loss_limits=False)
+    risk.update_equity(1_000)
+    assert risk.update_equity(949) is None and not risk.halted
+    (daily,) = risk.take_breaches()
+    assert daily["reason"] == "daily_loss_limit" and daily["enforced"] is False
+    assert risk.update_equity(940) is None
+    assert risk.take_breaches() == []  # once per UTC day
+    assert risk.update_equity(899) is None  # 10.1% from the 1000 peak
+    (drawdown,) = risk.take_breaches()
+    assert drawdown["reason"] == "max_drawdown"
+    assert [b["reason"] for b in risk.snapshot()["breaches"]] == [
+        "daily_loss_limit",
+        "max_drawdown",
+    ]
+    risk.update_equity(880)
+    assert risk.take_breaches() == []  # the same drawdown episode
+    clock.now += timedelta(days=1)
+    risk.update_equity(880)
+    assert risk.snapshot()["breaches"] == []  # a new day
+    risk.update_equity(820)  # down 60 today: a new daily breach
+    assert [b["reason"] for b in risk.take_breaches()] == ["daily_loss_limit"]
+    risk.update_equity(1_100)  # a new peak re-arms the drawdown breach
+    risk.update_equity(980)
+    assert [b["reason"] for b in risk.take_breaches()] == ["max_drawdown"]
+    assert not risk.halted
+    assert risk.check_order(buy()).allowed
 
 
 # --- persisted halt ----------------------------------------------------------------------

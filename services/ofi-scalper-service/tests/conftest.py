@@ -94,7 +94,9 @@ async def build(
             streams=streams,
             account=AccountReader(rest),
             risk=RiskState(
-                RiskLimits.from_settings(settings), state_path=settings.state_dir / "halt.json"
+                RiskLimits.from_settings(settings),
+                state_path=settings.state_dir / "halt.json",
+                enforce_loss_limits=False,
             ),
             gate=RegimeGate.from_settings(settings),
             alerts=Alerts(RecordingNotifier()),

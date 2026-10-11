@@ -37,10 +37,10 @@ from .policy import (
     Action,
     Cancel,
     Close,
+    CloseFailed,
     Context,
     Cycle,
     Filters,
-    Halt,
     Phase,
     Place,
     SymbolPolicy,
@@ -135,6 +135,8 @@ class ShadowVenue:
         self.touch: dict[str, tuple[float, float]] = {}
         self.books: dict[str, Any] = {}  # symbol -> live local book (bids/asks dicts)
         self.resting: dict[str, TrackedOrder] = {}
+        # Market orders that arrived with no touch: they fill at the next one.
+        self.waiting: dict[str, TrackedOrder] = {}
         self.queue_ahead: dict[str, Decimal] = {}  # exact: quantities come as decimal text
         self._pending: list[tuple[int, int, str, TrackedOrder]] = []
         self._seq = 0
@@ -155,6 +157,14 @@ class ShadowVenue:
         heapq.heappush(self._pending, (t_ns + self.delay_ns, self._seq, kind, order))
 
     # --- market state ---------------------------------------------------------------
+
+    def set_touch(self, symbol: str, bid: float, ask: float, t_ns: int) -> None:
+        """The grid sample's touch; a market order waiting for one fills now."""
+        self.touch[symbol] = (bid, ask)
+        for key, order in list(self.waiting.items()):
+            if order.symbol == symbol:
+                del self.waiting[key]
+                self._arrive(order, t_ns)
 
     def _touch(self, symbol: str) -> tuple[float, float] | None:
         book = self.books.get(symbol)
@@ -199,7 +209,7 @@ class ShadowVenue:
         touch = self._touch(order.symbol)
         if order.market:
             if touch is None:
-                self.bridge.update(order, Decimal(0), None, True, t_ns, "no_touch")
+                self.waiting[order.key] = order
                 return
             price = touch[1] if order.side == "buy" else touch[0]
             self.bridge.update(order, Decimal(order.qty), price, True, t_ns)
@@ -332,7 +342,7 @@ class ExecutionBridge:
         self.advance(t_ns)
         bid, ask = self._quote(symbol, sample)
         if bid is not None and ask is not None:
-            self.shadow.touch[symbol] = (bid, ask)
+            self.shadow.set_touch(symbol, bid, ask, t_ns)
         self._check_halt(t_ns)
         self._mark(symbol, t_ns, sample)
         self.book.marks.on_sample(symbol, t_ns, sample.get("mid"))
@@ -378,6 +388,8 @@ class ExecutionBridge:
         self.risk.update_equity(
             self.settings.shadow_equity_usd + self.realized_usd + self._unrealized()
         )
+        for breach in self.risk.take_breaches():
+            self._record_breach(breach, t_ns)
         self._check_halt(t_ns)
 
     def on_trade(
@@ -451,12 +463,8 @@ class ExecutionBridge:
         """Carry out policy actions. Returns cycle_id -> reason for refused entries."""
         refused: dict[str, str] = {}
         for action in actions:
-            if isinstance(action, Halt):
-                if self.risk.execution_fault(action.reason):
-                    self.alerts.send(
-                        "bridge-halt", "OFI halted: execution fault", [action.reason], always=True
-                    )
-                self._check_halt(t_ns)
+            if isinstance(action, CloseFailed):
+                self._force_close(action, t_ns)
             elif isinstance(action, Cancel):
                 order = self.orders.get(f"{action.cycle_id}|{action.leg}")
                 if order is not None and not order.terminal:
@@ -591,7 +599,7 @@ class ExecutionBridge:
                 [f"{streak} in a row, last: {order.reason}", f"next try in {wait_ms / 1000:.0f} s"],
             )
 
-    # --- unknowns and halts --------------------------------------------------------------
+    # --- halts, breaches and faults ------------------------------------------------------
 
     def _check_halt(self, t_ns: int) -> None:
         if self.risk.halted and not self._halt_handled:
@@ -612,6 +620,7 @@ class ExecutionBridge:
             t_ns,
             {
                 "at": datetime.fromtimestamp(t_ns / 1e9, UTC).isoformat(),
+                "kind": "halt",
                 "reason": reason,
                 "detail": detail,
                 "mode": self.mode.value,
@@ -619,6 +628,91 @@ class ExecutionBridge:
         )
         for policy in self.policies.values():
             self.execute(policy.liquidate(reason, t_ns), t_ns)
+
+    def _record_breach(self, breach: dict[str, Any], t_ns: int) -> None:
+        """A loss limit was crossed in record-only mode: write it down, keep trading."""
+        reason = breach["reason"]
+        self.count(f"breach_{reason}")
+        log_event(
+            "ofi_loss_limit_breach",
+            level=logging.ERROR,
+            reason=reason,
+            detail=breach.get("detail"),
+            mode=self.mode.value,
+        )
+        self.book.halt(
+            t_ns,
+            {
+                "at": datetime.fromtimestamp(t_ns / 1e9, UTC).isoformat(),
+                "kind": "breach",
+                "reason": reason,
+                "detail": breach.get("detail"),
+                "enforced": False,
+                "mode": self.mode.value,
+            },
+        )
+        self.alerts.send(
+            f"breach-{reason}",
+            f"OFI loss limit crossed: {reason}",
+            [str(breach.get("detail") or ""), "recorded, still trading (shadow)"],
+            always=True,
+        )
+
+    def _force_close(self, action: CloseFailed, t_ns: int) -> None:
+        """Every close failed: record the fault, then close the rest at the last
+        sample's touch (else the entry price) so the cycle ends and trading goes on."""
+        policy = self.policies.get(action.symbol)
+        cycle = policy.cycle if policy is not None else None
+        if cycle is None or cycle.cycle_id != action.cycle_id or cycle.remaining <= 0:
+            return
+        fault = self.risk.record_fault(action.reason)
+        self.count("close_failed")
+        bid, ask = self._quote(action.symbol, self.last_sample.get(action.symbol) or {})
+        price = ask if cycle.exit_side == "buy" else bid
+        if price is None:
+            price = cycle.entry_avg
+        log_event(
+            "ofi_close_failed",
+            level=logging.ERROR,
+            symbol=action.symbol,
+            cycle_id=cycle.cycle_id,
+            detail=action.reason,
+            forced_price=price,
+            mode=self.mode.value,
+        )
+        self.book.halt(
+            t_ns,
+            {
+                "at": datetime.fromtimestamp(t_ns / 1e9, UTC).isoformat(),
+                "kind": "close_failed",
+                "reason": fault["reason"],
+                "detail": action.reason,
+                "enforced": False,
+                "forced_price": price,
+                "mode": self.mode.value,
+            },
+        )
+        self.alerts.send(
+            f"close-failed-{action.symbol}",
+            f"OFI: {action.symbol} closes failed, closed at the touch",
+            [action.reason, f"forced at {price}", "recorded, still trading (shadow)"],
+            always=True,
+        )
+        cycle.exit_reason = "forced_close"
+        order = TrackedOrder(
+            cycle_id=cycle.cycle_id,
+            symbol=cycle.symbol,
+            leg="forced",
+            side=cycle.exit_side,
+            qty=str(cycle.remaining),
+            price=None,
+            post_only=False,
+            reduce_only=True,
+            created_ns=t_ns,
+            state="filled",
+        )
+        self.orders[order.key] = order
+        self.update(order, cycle.remaining, price, True, t_ns, "forced_close")
 
     # --- records -------------------------------------------------------------------------
 

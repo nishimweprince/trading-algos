@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -10,7 +11,7 @@ import pytest
 from ofi_scalper_service.alerts import Alerts
 from ofi_scalper_service.execution_bridge import DEFAULT_FILTERS, ExecutionBridge
 from ofi_scalper_service.policy import Phase
-from ofi_scalper_service.risk import HaltReason, RiskLimits, RiskState
+from ofi_scalper_service.risk import RiskLimits, RiskState
 from tests.conftest import RecordingNotifier, make_settings
 from tests.model_fixture import Dial, dial_model
 
@@ -222,9 +223,10 @@ def test_shadow_kill_closes_open_positions(tmp_path: Path) -> None:
     assert bridge.book.recent_signals[-1]["action"] == "skip:halted"
 
 
-def test_shadow_daily_loss_halts_and_liquidates(tmp_path: Path) -> None:
+async def test_shadow_daily_loss_is_recorded_and_trading_continues(tmp_path: Path) -> None:
     dial = Dial()
     bridge, risk = shadow_bridge(tmp_path, dial, OFI_DAILY_LOSS_LIMIT_USD=1)
+    risk.enforce_loss_limits = False
     dial.set(up=0.8, down=0.05)
     bridge.on_sample(sample(T0), GATE_ON)
     bridge.on_trade("BTCUSDT", T0 + 1, 59999.0)
@@ -234,8 +236,55 @@ def test_shadow_daily_loss_halts_and_liquidates(tmp_path: Path) -> None:
         horizon_s=5, threshold=0.6, barrier_bp=500, buffer_bp=1
     )
     bridge.on_sample(sample(T0 + S, bid=59600.0, ask=59600.1), GATE_ON)
-    assert risk.halt is not None and risk.halt.reason is HaltReason.DAILY_LOSS
-    assert bridge.policies["BTCUSDT"].phase is Phase.FLAT
+    assert not risk.halted
+    assert bridge.policies["BTCUSDT"].phase is Phase.OPEN  # still holding
+    assert bridge.counts["breach_daily_loss_limit"] == 1
+    assert ("breach-daily_loss_limit", "OFI loss limit crossed: daily_loss_limit") in (
+        bridge.alerts.sent
+    )
+    bridge.on_sample(sample(T0 + 2 * S, bid=59500.0, ask=59500.1), GATE_ON)
+    assert bridge.counts["breach_daily_loss_limit"] == 1  # once a day
+
+
+async def test_failed_closes_are_forced_at_the_touch_without_a_halt(tmp_path: Path) -> None:
+    dial = Dial()
+    bridge, risk = shadow_bridge(tmp_path, dial)
+    dial.set(up=0.8, down=0.05)
+    bridge.on_sample(sample(T0), GATE_ON)
+    bridge.on_trade("BTCUSDT", T0 + 1, 59999.0)
+    btc = bridge.policies["BTCUSDT"]
+    assert btc.phase is Phase.OPEN
+    cycle_id = btc.cycle.cycle_id
+    bridge.shadow.touch.clear()  # no touch: each market close waits at the venue
+    bridge.execute(btc.liquidate("stop", T0 + S), T0 + S)
+    for attempt in range(1, 4):  # every close ends unfilled
+        order = bridge.orders[f"{cycle_id}|close{attempt}"]
+        bridge.shadow.waiting.pop(order.key)
+        bridge.update(order, Decimal(0), None, True, T0 + S, "rejected")
+    assert btc.phase is Phase.FLAT and not risk.halted
+    assert risk.history[-1]["event"] == "fault"
+    bridge.flush_pending()
+    (trade,) = bridge.book.recent_trades
+    assert trade["exit_reason"] == "forced_close" and trade["exit_price"] == 60000.0
+    assert bridge.counts["close_failed"] == 1
+
+
+def test_a_market_close_without_a_touch_waits_for_one(tmp_path: Path) -> None:
+    dial = Dial()
+    bridge, _ = shadow_bridge(tmp_path, dial)
+    dial.set(up=0.8, down=0.05)
+    bridge.on_sample(sample(T0), GATE_ON)
+    bridge.on_trade("BTCUSDT", T0 + 1, 59999.0)
+    btc = bridge.policies["BTCUSDT"]
+    bridge.shadow.touch.clear()
+    bridge.execute(btc.liquidate("stop", T0 + S), T0 + S)
+    assert btc.phase is Phase.CLOSING and bridge.shadow.waiting
+    dial.set()
+    bridge.on_sample(sample(T0 + 2 * S, bid=59990.0, ask=59990.1), GATE_ON)
+    assert btc.phase is Phase.FLAT and not bridge.shadow.waiting
+    bridge.flush_pending()
+    (trade,) = bridge.book.recent_trades
+    assert trade["exit_price"] == 59990.0
 
 
 def test_a_restored_halt_skips_entries_without_a_second_record(tmp_path: Path) -> None:
