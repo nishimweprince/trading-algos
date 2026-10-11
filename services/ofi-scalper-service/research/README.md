@@ -108,9 +108,8 @@ python -m research.pipeline --profile dev --provisional --jobs 3 [--order-rtt-ms
 
 On the VM, set `OFI_RESEARCH_DIR=/data/ofi/research` so features, scores and
 candidates land on the data disk. Keep `--jobs` below the vCPU count so the live
-service keeps headroom. The order round trip comes from testnet orders (the
-gateway's ledger, or the trades' `rtt_ms`); until one is measured the REST
-round trip stands in.
+service keeps headroom. No orders are sent any more, so the signed REST round
+trip stands in for the order round trip (`--order-rtt-ms` overrides it).
 
 | Step | Module | What |
 |---|---|---|
@@ -132,14 +131,22 @@ sizing, fees and trade records are the ones that trade live. Only the venue is
 simulated (`ShadowVenue`):
 
 - **Queue models:** `pessimistic` fills a resting order only on a trade printed
-  through its price; `queue` (risk-averse queue position) joins behind the
-  displayed quantity at its level, advances with trades at its price, moves up
-  when the level shrinks, and fills partially from the excess.
-- **Latency:** an order or cancel reaches the venue `delay` after the
-  decision: 1x is the one-way order latency (the recordings already carry the
-  real feed latency); 2x adds another feed latency and doubles the order's. A
-  post-only order that would cross at arrival is rejected; a cancel can lose to
-  a fill.
+  through its price (the lower bound selection uses). `queue` (the default, as
+  live shadow) joins behind the displayed quantity at its level; trades at its
+  price take the front and fill us from the excess; a level that shrinks by
+  more than the trades explain lost cancels, split between the front and the
+  back in proportion to their sizes; size that joins goes behind us. Depth
+  `txn_ms` and trade `trade_ms` keep a trade from counting twice whichever of
+  the two arrives first.
+- **Latency** (the same model as live shadow): an order or cancel reaches the
+  venue `m x (feed + RTT/2)` after the decision in recorded time (the book we
+  decided on was `feed` old, and the recording shows the venue state the order
+  meets that much later). The answer (a post-only rejection, a market fill)
+  reaches the policy `max(arrival, m x RTT)` after sending. `m` is the latency
+  multiple (0.5x, 1x, 2x). A cancel can lose to a fill.
+- **Market orders** walk the displayed levels (VWAP); beyond them the rest
+  fills at the last level, counted as `walk_exhausted`. One that arrives with
+  no touch waits for the next.
 - **Clocks:** risk (the UTC day for the daily-loss limit) and the order-rate
   governor run on event time. A daily-loss halt is acknowledged the next day,
   standing in for the operator.
@@ -153,8 +160,8 @@ held-out period. To try again, record more data and start a new run name.
 
 | Run | Data | Outcome |
 |---|---|---|
-| `--shallow` | >= 3 walk-forward days + 1 held-out day | `binding: false`, `tier: shallow`; if it passes, shadow and testnet (demo) may load the model for shallow paper trading |
-| `--provisional` | >= 3 walk-forward weeks + 1 held-out week | `binding: false`; if it passes, shadow and testnet may load the model |
+| `--shallow` | >= 3 walk-forward days + 1 held-out day | `binding: false`, `tier: shallow`; if it passes, shadow may load the model |
+| `--provisional` | >= 3 walk-forward weeks + 1 held-out week | `binding: false`; if it passes, shadow may load the model |
 | `--binding` | >= 3 walk-forward months + 1 held-out month | `binding: true`; required (with approval) before mainnet |
 
 Backtest one candidate by hand:
@@ -196,7 +203,10 @@ idle IO, a memory ceiling) so it cannot starve the recorder or the bridge.
 
 ### Speed-running the live gate
 
-A shallow pass only admits demo paper trading. Whether to accept a
+Not reachable since 2026-10-11: the scalper sends no orders, so there are no
+demo fills to judge. `gates.json` still carries the criteria for the record.
+
+A shallow pass only admitted demo paper trading. Whether to accept a
 **provisional** (weekly) pass instead of waiting four months for the binding
 one is decided on our own demo fills (`LIVE_SPEEDRUN` in `gates.py`):
 

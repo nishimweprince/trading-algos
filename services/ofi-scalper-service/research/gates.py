@@ -19,9 +19,9 @@ required ones.
 recordings) uses ``SHALLOW_THRESHOLDS``: one held-out day cannot carry a
 Sharpe ratio or a per-period stability count, so those are recorded but not
 required, and the per-symbol gates become informational. A shallow pass only
-admits the model to shadow and demo (testnet) paper trading; its result on our
-own demo fills decides whether to speed-run toward live (``LIVE_SPEEDRUN``),
-and live itself still needs a binding pass and explicit approval.
+admits the model to shadow trading. ``LIVE_SPEEDRUN`` (judged on demo fills)
+is kept for the record but unreachable since order entry was removed; live
+would need a binding pass, new order-entry code and explicit approval.
 The model directory is written either way (``load_model`` refuses one that
 failed), with ``strategy.md`` on a pass and ``REPORT.md`` on a fail. The
 held-out ledger is written before anything is evaluated, so a crash still

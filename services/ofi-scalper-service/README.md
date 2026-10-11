@@ -33,7 +33,7 @@ Under launchd: `infra/launchd/install.sh --service ofi-scalper-service dev`.
 | `OFI_EXECUTION_MODE` | Needs | Does |
 |---|---|---|
 | `off` (default) | nothing | Records and computes features; a halt only logs `ofi_would_act` |
-| `shadow` | `OFI_MODEL_VERSION` with a passing `gates.json` | Scores every grid sample, runs the policy and risk, builds every order, and fills them in a pessimistic simulator (a maker order needs a trade printed *through* its price). Nothing is sent |
+| `shadow` | `OFI_MODEL_VERSION` with a passing `gates.json` (or `OFI_ALLOW_UNGATED=true`) | Scores every grid sample, runs the policy and risk, builds every order, and fills them in a simulator on the mainnet book (see Shadow fills). Nothing is sent |
 
 - **Model** (`model.py`): `<OFI_MODEL_DIR>/<version>/` with a manifest holding
   the sha256 of every file. Any mismatch, an unknown feature, or a `gates.json`
@@ -51,12 +51,37 @@ Under launchd: `infra/launchd/install.sh --service ofi-scalper-service dev`.
 - **Bridge** (`execution_bridge.py`): every order passes `RiskState.check_order`
   first, then goes to the shadow simulator. A rejected entry blocks that symbol
   for `OFI_REJECT_COOLDOWN_MS`, doubling per rejection in a row up to
-  `OFI_REJECT_COOLDOWN_MAX_MS` (5 in a row also alerts). A halt (kill switch,
-  loss limits, execution fault) closes every cycle at market.
+  `OFI_REJECT_COOLDOWN_MAX_MS` (5 in a row also alerts). The kill switch
+  closes every cycle at market and enters nothing until an ack.
 - **Records** (`trades.py`): `<OFI_STATE_DIR>/trades/` (one line per cycle:
   fills, fees, funding, P&L, exit reason, mid move 1/5/30 s after the fill,
   order RTT) and `signals/` (every threshold crossing and what was done).
   `ofi-daily-check` adds the day's trading report to its Telegram summary.
+
+### Shadow fills
+
+`ShadowVenue` in `execution_bridge.py`, the same simulator research backtests use:
+
+- **Queue** (`OFI_SHADOW_QUEUE_MODEL=queue`, default): a resting order joins
+  behind the quantity displayed at its price. Trades at its price (by the other
+  side) take the front and fill us from the excess. When the level shrinks by
+  more than the trades explain, the rest are cancels, split between the front
+  and the back of the queue in proportion to their sizes; size that joins goes
+  behind us. Depth `txn_ms` and trade `trade_ms` stop a trade counting twice,
+  whichever arrives first. A print through the price fills what is left.
+  `pessimistic` fills only on such a print (a lower bound).
+- **Latency**: the order meets the book `feed p50 + RTT/2` after the decision
+  and its answer (post-only rejection, market fill) comes back after the RTT,
+  from `research/latency.json`, each at least `OFI_SHADOW_MIN_DELAY_MS` (10).
+  `OFI_SHADOW_DELAY_MS` pins one delay for both. `/v1/status.bridge.shadow_fills`
+  shows the values in use.
+- **Market closes** walk the displayed levels (VWAP); a close that finds no
+  touch waits for the next one.
+- **Loss limits** (`OFI_DAILY_LOSS_LIMIT_USD`, `OFI_MAX_DRAWDOWN_PCT`) on the
+  simulated equity are recorded as breaches (a `kind: breach` line in
+  `halts/`, an alert, once per UTC day or drawdown episode); trading goes on.
+  Closes that keep failing record a `close_failed` fault and close at the
+  last touch. Only the kill switch halts.
 
 ### Feed drills
 
