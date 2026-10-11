@@ -21,8 +21,6 @@ from ta_plugin_api import MARKET_DATA_GROUP, load_providers
 from ta_plugin_binance_futures.settings import BinanceFuturesSettingsMixin
 
 __all__ = [
-    "MICRO_LIVE_ACK",
-    "MICRO_LIVE_CAPS",
     "PROVIDER",
     "ExecutionMode",
     "Settings",
@@ -34,35 +32,12 @@ PROVIDER = "binance_futures"
 
 class ExecutionMode(StrEnum):
     OFF = "off"
-    # Orders built and logged, fills simulated; nothing is sent.
+    # Orders built and logged, fills simulated on the live mainnet book; nothing is sent.
     SHADOW = "shadow"
-    # Orders sent to execution-service on Binance demo trading.
-    TESTNET = "testnet"
-    # Real money on mainnet, hard-capped (MICRO_LIVE_CAPS): minimum-size orders on an
-    # allowlist of symbols, through a gateway on BINANCE_FUTURES_ENV=mainnet.
-    MICRO_LIVE = "micro_live"
-    LIVE = "live"
-
-    @property
-    def gateway(self) -> bool:
-        """Orders go to execution-service (demo or mainnet)."""
-        return self in (ExecutionMode.TESTNET, ExecutionMode.MICRO_LIVE)
-
-    @property
-    def venue_environment(self) -> str | None:
-        """The BINANCE_FUTURES_ENV the gateway must report for this mode."""
-        return {"testnet": "testnet", "micro_live": "mainnet"}.get(self.value)
 
 
-# Micro-live is real money: these caps are code, not configuration. ETHUSDT's
-# minimum notional is $20; BTCUSDT's minimum lot (0.001) is ~$80+, above the cap.
-MICRO_LIVE_CAPS = {
-    "order_notional_usd": 25.0,
-    "position_notional_usd": 30.0,
-    "total_notional_usd": 30.0,
-    "daily_loss_usd": 3.0,
-}
-MICRO_LIVE_ACK = "real-money-micro-live"
+# Order entry was removed on 2026-10-11: this service never sends an order.
+REMOVED_MODES = {"testnet", "micro_live", "live"}
 
 
 class Settings(BaseServiceSettings, NotificationSettings, BinanceFuturesSettingsMixin):
@@ -88,15 +63,11 @@ class Settings(BaseServiceSettings, NotificationSettings, BinanceFuturesSettings
     # Pinned model (model.py). Empty: no model, no entries.
     model_dir: Path = Field(default=Path("models"), validation_alias="OFI_MODEL_DIR")
     model_version: str | None = Field(default=None, validation_alias="OFI_MODEL_VERSION")
-    # Demo and shadow may run a model with no research gates pass (a rule model,
-    # or a quick ungated fit). Its trades are labelled ungated and never count
-    # toward the speed-run. Live refuses regardless.
+    # Shadow may run a model with no research gates pass (a rule model, or a quick
+    # ungated fit). Its trades are labelled ungated.
     allow_ungated: bool = Field(default=False, validation_alias="OFI_ALLOW_UNGATED")
-    # Testnet only: also run a shadow bridge on the mainnet feed beside the demo
-    # one, so one process yields demo fills and live-book would-have fills.
-    shadow_mirror: bool = Field(default=False, validation_alias="OFI_SHADOW_MIRROR")
-    # Simulated fills in shadow mode and the mirror: "queue" joins behind the displayed
-    # size (as research backtests do), "pessimistic" fills only on a trade through.
+    # Simulated fills: "queue" joins behind the displayed size (as research
+    # backtests do), "pessimistic" fills only on a trade through.
     shadow_queue_model: Literal["queue", "pessimistic"] = Field(
         default="queue", validation_alias="OFI_SHADOW_QUEUE_MODEL"
     )
@@ -106,25 +77,9 @@ class Settings(BaseServiceSettings, NotificationSettings, BinanceFuturesSettings
         default=None, ge=0, le=5_000, validation_alias="OFI_SHADOW_DELAY_MS"
     )
 
-    # The bridge's link to execution-service (testnet mode).
-    execution_url: str = Field(default="http://127.0.0.1:8010", validation_alias="EXECUTION_URL")
-    execution_api_key: SecretStr | None = Field(default=None, validation_alias="EXECUTION_API_KEY")
-    execution_account: str = Field(
-        default="binance_testnet", min_length=1, validation_alias="EXECUTION_ACCOUNT"
-    )
-    execution_timeout_seconds: float = Field(
-        default=2.0, gt=0, le=30, validation_alias="EXECUTION_TIMEOUT_SECONDS"
-    )
     # Fixed order size until Kelly sizing is enabled (after calibration on own fills).
     order_notional_usd: float = Field(
         default=100.0, gt=0, validation_alias="OFI_ORDER_NOTIONAL_USD"
-    )
-    max_consecutive_unknown: int = Field(
-        default=3, ge=1, validation_alias="OFI_MAX_CONSECUTIVE_UNKNOWN"
-    )
-    # A demo entry is priced only from a touch at most this old (exits allow 2 s).
-    entry_quote_max_age_ms: int = Field(
-        default=1_500, ge=100, le=2_000, validation_alias="OFI_ENTRY_QUOTE_MAX_AGE_MS"
     )
     # After a rejected entry the symbol waits this long before entering again,
     # doubling per rejection in a row up to the maximum.
@@ -134,23 +89,13 @@ class Settings(BaseServiceSettings, NotificationSettings, BinanceFuturesSettings
     reject_cooldown_max_ms: int = Field(
         default=60_000, ge=100, validation_alias="OFI_REJECT_COOLDOWN_MAX_MS"
     )
-    dead_man_ms: int = Field(default=15_000, ge=5_000, validation_alias="OFI_DEAD_MAN_MS")
-    fill_poll_ms: int = Field(default=200, ge=20, validation_alias="OFI_FILL_POLL_MS")
-    # Demo trading's own book: testnet orders are priced from it (signals are not).
-    testnet_quotes_ws_url: str = Field(
-        default="wss://demo-fstream.binance.com", validation_alias="OFI_TESTNET_QUOTES_WS_URL"
-    )
-    # Shadow mode's simulated account, so the loss and drawdown halts are exercised.
+    # Shadow mode's simulated account: equity for the loss and drawdown breach records.
     shadow_equity_usd: float = Field(default=500.0, gt=0, validation_alias="OFI_SHADOW_EQUITY_USD")
-    micro_live_ack: str | None = Field(default=None, validation_alias="OFI_MICRO_LIVE_ACK")
     # Symbols research trains, backtests and gates on, and whose recordings decide
     # whether a day is clean. Others (added to trade) are recorded and reported
     # but neither block a research day nor enter the training data.
     research_symbols_csv: str = Field(
         default="BTCUSDT,ETHUSDT", validation_alias="OFI_RESEARCH_SYMBOLS"
-    )
-    micro_live_symbols_csv: str = Field(
-        default="ETHUSDT", validation_alias="OFI_MICRO_LIVE_SYMBOLS"
     )
 
     maker_fee_bp: float | None = Field(default=None, ge=0, validation_alias="OFI_MAKER_FEE_BP")
@@ -176,7 +121,8 @@ class Settings(BaseServiceSettings, NotificationSettings, BinanceFuturesSettings
     status_port: int = Field(default=8040, gt=0, le=65535, validation_alias="OFI_STATUS_PORT")
     # Stage 2 research outputs: features, labels, candidates, scores, backtests.
     research_dir: Path = Field(default=Path("research/data"), validation_alias="OFI_RESEARCH_DIR")
-    # Bridge state, trades and signals (one directory per profile).
+    # Trades, signals, halts and drills (one directory per profile). Shadow-only
+    # records start fresh under shadow/: the old testnet records stay where they were.
     state_dir: Path = Field(default=Path("data/state"), validation_alias="OFI_STATE_DIR")
 
     # Deterministic regime gate. Empty disables that rule.
@@ -200,6 +146,16 @@ class Settings(BaseServiceSettings, NotificationSettings, BinanceFuturesSettings
         default="", validation_alias="OFI_TELEGRAM_ADMIN_USER_IDS"
     )
 
+    @field_validator("execution_mode", mode="before")
+    @classmethod
+    def refuse_removed_modes(cls, value: object) -> object:
+        if isinstance(value, str) and value.strip().lower() in REMOVED_MODES:
+            raise ValueError(
+                f"OFI_EXECUTION_MODE={value} was removed: ofi-scalper-service sends no "
+                "orders; use shadow or off"
+            )
+        return value
+
     @field_validator(
         "gate_spread_pctl",
         "sample_log_dir",
@@ -210,19 +166,11 @@ class Settings(BaseServiceSettings, NotificationSettings, BinanceFuturesSettings
         "telegram_bot_token",
         "model_version",
         "shadow_delay_ms",
-        "execution_api_key",
         mode="before",
     )
     @classmethod
     def blank_is_unset(cls, value: object) -> object:
         return None if isinstance(value, str) and not value.strip() else value
-
-    @field_validator("execution_api_key")
-    @classmethod
-    def reject_placeholder_execution_key(cls, value: SecretStr | None) -> SecretStr | None:
-        if value is not None and value.get_secret_value().startswith(PLACEHOLDER_PREFIX):
-            raise ValueError("still holds the .env.example placeholder value")
-        return value
 
     @field_validator("telegram_bot_token")
     @classmethod
@@ -243,78 +191,13 @@ class Settings(BaseServiceSettings, NotificationSettings, BinanceFuturesSettings
     def research_symbols(self) -> tuple[str, ...]:
         return tuple(t.strip().upper() for t in self.research_symbols_csv.split(",") if t.strip())
 
-    @property
-    def trading_symbols(self) -> tuple[str, ...]:
-        """Symbols the bridge may trade: all of them, or the micro-live allowlist."""
-        if self.execution_mode is not ExecutionMode.MICRO_LIVE:
-            return tuple(self.binance_futures_symbols)
-        allowed = {t.strip().upper() for t in self.micro_live_symbols_csv.split(",") if t.strip()}
-        return tuple(s for s in self.binance_futures_symbols if s in allowed)
-
-    def _check_micro_live(self) -> None:
-        if self.micro_live_ack != MICRO_LIVE_ACK:
-            raise ValueError(
-                f"OFI_EXECUTION_MODE=micro_live trades real money: set OFI_MICRO_LIVE_ACK="
-                f"{MICRO_LIVE_ACK} to confirm"
-            )
-        if self.model_version is None:
-            raise ValueError(
-                "OFI_EXECUTION_MODE=micro_live needs OFI_MODEL_VERSION (a passing model)"
-            )
-        if self.allow_ungated:
-            raise ValueError(
-                "OFI_ALLOW_UNGATED=true is for demo and shadow only: micro_live is real money "
-                "and needs a model whose research gates passed"
-            )
-        if not self.trading_symbols:
-            raise ValueError("OFI_MICRO_LIVE_SYMBOLS names none of BINANCE_FUTURES_SYMBOLS")
-        caps = MICRO_LIVE_CAPS
-        over = [
-            name
-            for name, value, cap in (
-                ("OFI_ORDER_NOTIONAL_USD", self.order_notional_usd, caps["order_notional_usd"]),
-                (
-                    "OFI_MAX_POSITION_NOTIONAL_USD",
-                    self.max_position_notional_usd,
-                    caps["position_notional_usd"],
-                ),
-                (
-                    "OFI_MAX_TOTAL_NOTIONAL_USD",
-                    self.max_total_notional_usd,
-                    caps["total_notional_usd"],
-                ),
-                ("OFI_DAILY_LOSS_LIMIT_USD", self.daily_loss_limit_usd, caps["daily_loss_usd"]),
-            )
-            if value > cap
-        ]
-        if over:
-            raise ValueError(f"micro_live caps exceeded ({MICRO_LIVE_CAPS}): {', '.join(over)}")
-
     @model_validator(mode="after")
     def check_ofi(self) -> Self:
-        if self.execution_mode is ExecutionMode.LIVE:
-            raise ValueError(
-                "OFI_EXECUTION_MODE=live is refused: mainnet orders wait for a binding "
-                "research gates pass and explicit approval (ofi-scalper-plan.md §1.7, Stage 5)"
-            )
         if self.execution_mode is ExecutionMode.SHADOW and self.model_version is None:
             raise ValueError(
-                "OFI_EXECUTION_MODE=shadow needs OFI_MODEL_VERSION: shadow runs the live "
-                "model, and only a model whose research gates passed"
+                "OFI_EXECUTION_MODE=shadow needs OFI_MODEL_VERSION: shadow runs the pinned "
+                "model (a gates pass, or any model with OFI_ALLOW_UNGATED=true)"
             )
-        if self.execution_mode.gateway and self.execution_api_key is None:
-            raise ValueError(
-                f"OFI_EXECUTION_MODE={self.execution_mode.value} needs EXECUTION_API_KEY"
-            )
-        if self.shadow_mirror and (
-            self.execution_mode is not ExecutionMode.TESTNET or self.model_version is None
-        ):
-            raise ValueError(
-                "OFI_SHADOW_MIRROR=true needs OFI_EXECUTION_MODE=testnet and OFI_MODEL_VERSION: "
-                "the mirror shadows the demo bridge's model on the mainnet feed"
-            )
-        if self.execution_mode is ExecutionMode.MICRO_LIVE:
-            self._check_micro_live()
         if self.order_notional_usd > self.max_position_notional_usd:
             raise ValueError("OFI_ORDER_NOTIONAL_USD cannot exceed OFI_MAX_POSITION_NOTIONAL_USD")
         if self.order_notional_usd > self.manual_approval_notional_usd:
@@ -370,7 +253,7 @@ def load_settings(profile: str | None = None) -> Settings:
             "events_log_path": "logs/events.{profile}.jsonl",
             "record_dir": "data/raw/{profile}",
             "kill_file_path": "data/KILL.{profile}",
-            "state_dir": "data/state/{profile}",
+            "state_dir": "data/state/shadow/{profile}",
         },
     )
     settings.validate_provider()

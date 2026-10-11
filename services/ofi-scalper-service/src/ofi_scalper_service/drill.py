@@ -4,8 +4,8 @@ Asks the running scalper (``POST /v1/drill/<name>``) to break its own feed:
 ``disconnect`` drops the public websocket mid-stream, ``gap_handling`` feeds
 one book an out-of-sequence depth diff. The service checks that the pause goes
 on, no entry is left resting, and the book resyncs; the result lands in
-``<state_dir>/drills.json`` beside the kill-switch and dead-man results, where
-``ofi-status`` and ``ofi-export`` read it. Shadow and testnet only.
+``<state_dir>/drills.json`` beside the kill-switch result, where ``ofi-status``
+and ``ofi-export`` read it. Shadow only.
 """
 
 from __future__ import annotations

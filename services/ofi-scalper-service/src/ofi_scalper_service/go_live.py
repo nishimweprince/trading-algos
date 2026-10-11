@@ -1,30 +1,29 @@
-"""The go-live switch for demo and shadow ("shallow") trading: one command, checked.
+"""The switch for shadow trading on the live feed: one command, checked.
 
     ofi-go-live --profile dev status
-    ofi-go-live --profile dev on                   # demo orders + shadow on the live feed
-    ofi-go-live --profile dev on --shadow-only     # shadow on the live feed, nothing sent
+    ofi-go-live --profile dev on                   # shadow on the live feed, nothing sent
     ofi-go-live --profile dev on --version v7      # a trained model instead of the rule
-    ofi-go-live --profile dev off                  # back to demo controls only
+    ofi-go-live --profile dev off                  # back to recording only
     ... --restart                                  # then restart the unit and report
 
-``on`` (demo + shadow) sets, in ``.env.<profile>``::
+``on`` sets, in ``.env.<profile>``::
 
-    OFI_EXECUTION_MODE=testnet    orders to execution-service on Binance demo trading
-    OFI_SHADOW_MIRROR=true        and a shadow bridge on the mainnet feed beside it
+    OFI_EXECUTION_MODE=shadow     simulated fills on the mainnet book
     OFI_MODEL_VERSION=<version>   the rule model (rules.py) unless --version names another
     OFI_ALLOW_UNGATED=true        only when that model has no research gates pass
+
+and comments out a leftover ``OFI_SHADOW_MIRROR`` (the demo-era mirror). A
+host still on ``OFI_EXECUTION_MODE=testnet`` is switched to shadow by ``on``.
 
 ``rules-*`` versions that do not exist yet are written with the rule's defaults.
 Before anything is kept, the edited file must load (``load_settings``) and the
 model must load the way the service will load it; otherwise the backup is put
-back. Live trading is not reachable from here: ``OFI_EXECUTION_MODE=live`` is
-refused by the settings themselves.
+back. This service sends no orders in any mode.
 """
 
 from __future__ import annotations
 
 import argparse
-import asyncio
 import json
 import os
 import shutil
@@ -91,26 +90,21 @@ def plan(
     action: str,
     *,
     version: str,
-    shadow_only: bool,
-    demo_only: bool,
     ungated: bool,
-    current: dict[str, str],
 ) -> dict[str, str | None]:
-    """The env values for an action."""
+    """The env values for an action. None comments a key out."""
     if action == "off":
-        mode = current.get("OFI_EXECUTION_MODE", "off")
         return {
-            # Demo controls (kill, dead-man, flatten) stay; shadow alone means nothing to keep.
-            "OFI_EXECUTION_MODE": "off" if mode == ExecutionMode.SHADOW.value else mode,
+            "OFI_EXECUTION_MODE": ExecutionMode.OFF.value,
             "OFI_MODEL_VERSION": None,
             "OFI_ALLOW_UNGATED": "false",
-            "OFI_SHADOW_MIRROR": "false",
+            "OFI_SHADOW_MIRROR": None,
         }
     return {
-        "OFI_EXECUTION_MODE": "shadow" if shadow_only else "testnet",
+        "OFI_EXECUTION_MODE": ExecutionMode.SHADOW.value,
         "OFI_MODEL_VERSION": version,
         "OFI_ALLOW_UNGATED": "true" if ungated else "false",
-        "OFI_SHADOW_MIRROR": "false" if shadow_only or demo_only else "true",
+        "OFI_SHADOW_MIRROR": None,
     }
 
 
@@ -144,26 +138,6 @@ def _validate(profile: str | None) -> tuple[Settings, dict[str, Any] | None]:
     return settings, (model.summary() if model is not None else None)
 
 
-async def _gateway_ready(settings: Settings) -> tuple[bool, str]:
-    from ta_clients.execution import ExecutionClient
-
-    from .app import _ClientSettings
-
-    if settings.execution_api_key is None:
-        return False, "no EXECUTION_API_KEY"
-    async with httpx.AsyncClient() as http:
-        client = ExecutionClient(
-            _ClientSettings(
-                ctrader_markets_url=settings.execution_url,
-                execution_timeout_seconds=settings.execution_timeout_seconds,
-                ctrader_api_key=settings.execution_api_key,
-                execution_account=settings.execution_account,
-            ),
-            http,
-        )
-        return await client.trading_ready()
-
-
 def _scalper_status(settings: Settings) -> dict[str, Any] | None:
     try:
         response = httpx.get(
@@ -178,12 +152,9 @@ def _scalper_status(settings: Settings) -> dict[str, Any] | None:
 
 def _report(settings: Settings, model: dict[str, Any] | None) -> list[str]:
     lines = [
-        f"mode {settings.execution_mode.value}"
-        + (" + shadow mirror on the live feed" if settings.shadow_mirror else ""),
+        f"mode {settings.execution_mode.value}",
         f"model {model['version']} ({model['kind']}{', ungated' if model['ungated'] else ''})"
         if model
-        else "model none (controls only)"
-        if settings.execution_mode is ExecutionMode.TESTNET
         else "model none",
     ]
     if model:
@@ -217,9 +188,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("action", choices=("status", "on", "off"))
     parser.add_argument("--profile", default=None)
     parser.add_argument("--version", default=DEFAULT_RULES_VERSION)
-    which = parser.add_mutually_exclusive_group()
-    which.add_argument("--shadow-only", action="store_true", help="no demo orders")
-    which.add_argument("--demo-only", action="store_true", help="no shadow mirror")
     parser.add_argument("--restart", action="store_true", help="restart the unit afterwards")
     parser.add_argument("--unit", default="ofi-scalper-service")
     args = parser.parse_args(argv)
@@ -242,14 +210,7 @@ def main(argv: list[str] | None = None) -> int:
         if _ensure_rules_model(model_dir, args.version):
             print(f"wrote {model_dir / args.version} (rule model, default parameters)")
         ungated = _model_is_ungated(model_dir, args.version)
-    updates = plan(
-        args.action,
-        version=args.version,
-        shadow_only=args.shadow_only,
-        demo_only=args.demo_only,
-        ungated=ungated,
-        current=current,
-    )
+    updates = plan(args.action, version=args.version, ungated=ungated)
     backup = env_path.with_name(f"{env_path.name}.bak-{time.strftime('%Y%m%dT%H%M%S')}")
     shutil.copy2(env_path, backup)
     env_path.write_text(apply_env(original, updates))
@@ -262,9 +223,6 @@ def main(argv: list[str] | None = None) -> int:
     print(f"{env_path.name} updated (backup {backup.name})")
     for key in KEYS:
         print(f"  {key}={updates[key] if updates[key] is not None else '(unset)'}")
-    if settings.execution_mode is ExecutionMode.TESTNET:
-        ready, reason = asyncio.run(_gateway_ready(settings))
-        print(f"execution-service: {'ready' if ready else 'NOT ready: ' + reason}")
     if args.restart:
         result = subprocess.run(["sudo", "systemctl", "restart", args.unit], check=False)
         if result.returncode != 0:

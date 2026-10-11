@@ -81,7 +81,6 @@ def state_dir(tmp_path: Path) -> Path:
     (state / "daily").mkdir(parents=True, exist_ok=True)
     (state / "daily" / f"{DAY_A}.json").write_text(json.dumps({"date": DAY_A, "ok": True}))
     _write_jsonl(state / "halts" / f"{DAY_B}.jsonl", [HALT])
-    (state / "bridge.json").write_text(json.dumps({"schema": 1, "policies": {}}))
     (state / "drills.json").write_text(json.dumps({"kill_switch": {"result": "passed"}}))
     return state
 
@@ -141,9 +140,13 @@ def test_full_document(tmp_path: Path, state_dir: Path, model_dir: Path) -> None
     assert marks["overall"]["300s"] == {"n": 1, "mean_bp": -4.0}
     assert marks["by_model_version"]["rules-v5"]["episodes"] == 2
     assert document["markouts_from_signal"]["episodes"] == 0
-    assert document["halts"] == {"total": 1, "by_reason": {"kill_switch": 1}, "recent": [HALT]}
+    assert document["halts"] == {
+        "total": 1,
+        "by_reason": {"kill_switch": 1},
+        "by_kind": {"halt": 1},
+        "recent": [HALT],
+    }
     assert document["daily"][DAY_A]["ok"] is True
-    assert document["bridge"]["schema"] == 1
     assert document["drills"]["kill_switch"]["result"] == "passed"
     assert document["latency"]["host"] == "test"
     assert document["model"]["found"] is True
@@ -213,7 +216,7 @@ def test_empty_state_exports_cleanly(tmp_path: Path) -> None:
     assert document["performance"]["overall"]["trades"] == 0
     assert document["signal_counts"]["total"] == 0 and document["trades"] == []
     assert document["shadow"] is None and document["model"] is None
-    assert document["bridge"] is None and document["meta"]["days"] == []
+    assert "bridge" not in document and document["meta"]["days"] == []
 
 
 def test_run_writes_file(

@@ -8,9 +8,9 @@
 | ``GET /v1/features?symbol=`` | yes | the latest feature vector |
 | ``GET /v1/signals`` | yes | recent threshold crossings and what was done |
 | ``GET /v1/trades?date=`` | yes | recent cycles, or one UTC day's with its summary |
-| ``POST /v1/kill`` | yes | halt: cancel all, flatten (logged only in mode off); until ack |
+| ``POST /v1/kill`` | yes | halt: close every shadow cycle, enter nothing; until ack |
 | ``POST /v1/kill/ack`` | yes | clear a halt (refused while the kill file exists) |
-| ``POST /v1/drill/{name}`` | yes | ``disconnect`` or ``gap_handling`` drill (shadow, testnet) |
+| ``POST /v1/drill/{name}`` | yes | ``disconnect`` or ``gap_handling`` drill (shadow) |
 | ``GET /dashboard`` | page; its calls use the key | signals, cycles, policy state, live |
 """
 
@@ -18,16 +18,13 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal
 from typing import Annotated, Any
 
 import httpx
 from fastapi import Depends, FastAPI, Query
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
-from ta_clients.execution import ExecutionClient
 from ta_core import ServiceError, create_base_app
 from ta_core.logging_config import configure_file_logs, configure_logging, log_event
 from ta_notify import Notifier
@@ -56,34 +53,18 @@ class KillRequest(BaseModel):
     reason: str = Field(default="", max_length=200)
 
 
-@dataclass(frozen=True)
-class _ClientSettings:
-    """What ``ta_clients.ExecutionClient`` reads, mapped from this service's settings."""
-
-    ctrader_markets_url: str
-    execution_timeout_seconds: float
-    ctrader_api_key: Any
-    execution_account: str
-    execution_source: str = "ofi_scalper"
-    execution_volume_lots: Any = Decimal("0")  # unused: every order carries its own size
-
-
 def load_pinned_model(settings: Settings) -> LoadedModel | None:
     """The pinned model, verified; None without OFI_MODEL_VERSION. Raises if unusable."""
     if settings.model_version is None:
         return None
     # Mode off may load a non-passing model to watch its features; it trades nothing.
-    # OFI_ALLOW_UNGATED lets demo and shadow trade one; real money never does
-    # (config also refuses the flag with micro_live, and live outright).
-    require_pass = settings.execution_mode is not ExecutionMode.OFF and (
-        not settings.allow_ungated
-        or settings.execution_mode not in (ExecutionMode.SHADOW, ExecutionMode.TESTNET)
-    )
+    # OFI_ALLOW_UNGATED lets shadow trade one.
+    require_pass = settings.execution_mode is ExecutionMode.SHADOW and not settings.allow_ungated
     return load_model(settings.model_dir, settings.model_version, require_pass=require_pass)
 
 
 def shadow_fills(settings: Settings) -> dict[str, Any]:
-    """The fill model of shadow mode and the mirror: research's, at 1x latency."""
+    """The fill model of shadow mode: research's, at 1x latency."""
     delay_ms = settings.shadow_delay_ms
     if delay_ms is None:
         delay_ms = order_delay_ms(default_latency_path())
@@ -93,64 +74,22 @@ def shadow_fills(settings: Settings) -> dict[str, Any]:
 def build_bridge(
     settings: Settings,
     *,
-    factory: Any,
     risk: RiskState,
     alerts: Alerts,
     model: LoadedModel | None,
     fees: Any,
-) -> tuple[ExecutionBridge | None, httpx.AsyncClient | None]:
+) -> ExecutionBridge | None:
     if settings.execution_mode is ExecutionMode.OFF:
-        return None, None
-    client = http = quotes = None
-    if settings.execution_mode.gateway:
-        http = httpx.AsyncClient()
-        client = ExecutionClient(
-            _ClientSettings(
-                ctrader_markets_url=settings.execution_url,
-                execution_timeout_seconds=settings.execution_timeout_seconds,
-                ctrader_api_key=settings.execution_api_key,
-                execution_account=settings.execution_account,
-            ),
-            http,
-        )
-        if settings.execution_mode is ExecutionMode.TESTNET:
-            # Demo has its own book: price orders from demo's touch. Micro-live trades
-            # the mainnet book the features come from, so its samples price it.
-            quotes = factory.quotes(settings, settings.testnet_quotes_ws_url)
-    bridge = ExecutionBridge(
+        return None
+    return ExecutionBridge(
         settings,
         risk=risk,
         alerts=alerts,
         model=model,
-        client=client,
-        quotes=quotes,
         state_dir=settings.state_dir,
         fees=fees,
         # Trade and signal records are written off the decision loop.
         book=TradeBook(settings.state_dir, writer=BackgroundAppender()),
-        **(shadow_fills(settings) if settings.execution_mode is ExecutionMode.SHADOW else {}),
-    )
-    return bridge, http
-
-
-def build_mirror(
-    settings: Settings, *, alerts: Alerts, model: LoadedModel | None, fees: Any
-) -> ExecutionBridge | None:
-    """OFI_SHADOW_MIRROR: a shadow bridge on the mainnet feed beside the demo one.
-
-    Its own simulated account and risk state (a demo execution fault does not stop
-    it; the kill switch does), and its own records under ``<state_dir>/shadow``.
-    """
-    if not settings.shadow_mirror or model is None:
-        return None
-    shadow_settings = settings.model_copy(update={"execution_mode": ExecutionMode.SHADOW})
-    return ExecutionBridge(
-        shadow_settings,
-        risk=RiskState(RiskLimits.from_settings(settings)),
-        alerts=alerts,
-        model=model,
-        state_dir=settings.state_dir / "shadow",
-        fees=fees,
         **shadow_fills(settings),
     )
 
@@ -187,15 +126,9 @@ def build_runtime(settings: Settings, notifier: Any | None) -> ScalperRuntime:
         sample_log=sample_log,
         model=model,
     )
-    runtime.bridge, runtime.bridge_http = build_bridge(
-        settings, factory=factory, risk=risk, alerts=alerts, model=model, fees=runtime.fee_bp
+    runtime.bridge = build_bridge(
+        settings, risk=risk, alerts=alerts, model=model, fees=runtime.fee_bp
     )
-    if runtime.bridge is not None:
-        # The mirror scores its own copy of the model: a rule scorer keeps state.
-        mirror_model = load_pinned_model(settings) if settings.shadow_mirror else None
-        runtime.mirror = build_mirror(
-            settings, alerts=alerts, model=mirror_model, fees=runtime.fee_bp
-        )
     return runtime
 
 
@@ -249,9 +182,6 @@ def create_app(settings: Settings | None = None, runtime: ScalperRuntime | None 
             await current.close()
             if telegram is not None:
                 await telegram.aclose()
-            bridge_http = getattr(current, "bridge_http", None)
-            if bridge_http is not None:
-                await bridge_http.aclose()
             await http.aclose()
 
     def readiness() -> tuple[bool, dict[str, Any]]:
@@ -284,11 +214,8 @@ def create_app(settings: Settings | None = None, runtime: ScalperRuntime | None 
         return latest
 
     @app.get("/v1/signals", dependencies=auth)
-    async def signals(
-        limit: int = Query(default=100, ge=1, le=500), shadow: bool = False
-    ) -> dict[str, Any]:
-        current = current_runtime()
-        bridge = current.mirror if shadow else current.bridge
+    async def signals(limit: int = Query(default=100, ge=1, le=500)) -> dict[str, Any]:
+        bridge = current_runtime().bridge
         items = list(bridge.book.recent_signals)[-limit:] if bridge is not None else []
         return {"signals": items[::-1]}
 
@@ -296,10 +223,8 @@ def create_app(settings: Settings | None = None, runtime: ScalperRuntime | None 
     async def trades(
         day: Annotated[date | None, Query(alias="date")] = None,
         limit: Annotated[int, Query(ge=1, le=500)] = 100,
-        shadow: bool = False,
     ) -> dict[str, Any]:
-        current = current_runtime()
-        bridge = current.mirror if shadow else current.bridge
+        bridge = current_runtime().bridge
         if bridge is None:
             return {"trades": [], "summary": summarise([])}
         if day is None:

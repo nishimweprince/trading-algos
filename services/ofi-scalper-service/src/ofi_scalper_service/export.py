@@ -2,13 +2,14 @@
 
 Reads everything the service wrote about its own trading and writes it as a
 single JSON document for analysis:
-- performance overall, by day and by symbol, for demo and the shadow mirror;
+- performance overall, by day and by symbol, for shadow trading (and, when the
+  state directory still has one, the old demo-era shadow mirror's records);
 - every trade (cycle) record (``pandas.DataFrame(doc["trades"])``);
 - signal *counts* by action, symbol, side and day. Signals are events,
   thousands a day, so the raw records are left out unless ``--signals``;
 - markouts from signal time (mean signed mid move per horizon, 0.1-900 s),
   overall, by action and by model version;
-- daily recording reports, bridge state, drills, latency, the pinned model's
+- daily recording reports, drills, latency, the pinned model's
   JSON files, and research results (runs, candidates' calibration, full
   selection grids with score diagnostics, gates, report).
 
@@ -165,6 +166,8 @@ def _halts(halts: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "total": len(halts),
         "by_reason": _count(halts, lambda h: str(h.get("reason") or "unknown")),
+        # halt (the kill switch), breach (a loss limit, recorded only), close_failed
+        "by_kind": _count(halts, lambda h: str(h.get("kind") or "halt")),
         "recent": halts[-20:],
     }
 
@@ -294,7 +297,6 @@ def build_export(
         "trades": trades,
         "shadow": shadow,
         "daily": daily,
-        "bridge": _read_json(state_dir / "bridge.json"),
         "drills": _read_json(state_dir / "drills.json"),
         "latency": latency,
         "model": _model(settings.model_dir, settings.model_version),
@@ -309,7 +311,9 @@ def run(argv: list[str] | None = None) -> None:
     parser = base_parser("Export performance, signals and state as one JSON file")
     parser.add_argument("--out", type=Path, default=None, help="Write here instead of stdout")
     parser.add_argument("--days", type=int, default=None, help="Only the last N UTC days")
-    parser.add_argument("--no-shadow", action="store_true", help="Skip the shadow bridge")
+    parser.add_argument(
+        "--no-shadow", action="store_true", help="Skip the old shadow-mirror records"
+    )
     parser.add_argument(
         "--signals", action="store_true", help="Include the raw signal records (else counts)"
     )

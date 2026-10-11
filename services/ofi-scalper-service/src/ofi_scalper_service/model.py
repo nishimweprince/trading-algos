@@ -278,7 +278,7 @@ def load_model(
     if require_pass and not gates.passed:
         why = "gates.json did not pass" if "gates.json" in files else f"an ungated {kind} model"
         raise ModelError(
-            f"{version}: {why}. Shadow and testnet need a model whose research gates passed "
+            f"{version}: {why}. Shadow needs a model whose research gates passed "
             "(ofi-scalper-plan.md §1.7), unless OFI_ALLOW_UNGATED=true."
         )
 

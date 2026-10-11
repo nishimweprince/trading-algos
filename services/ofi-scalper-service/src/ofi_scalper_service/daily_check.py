@@ -10,7 +10,7 @@ missing hours, an unrecovered depth break, or a backwards timestamp.
 It also writes the summary to ``<OFI_STATE_DIR>/daily/<date>.json`` (with the
 recording host and book mode), which the status page and its history read.
 
-In shadow or testnet mode it adds the day's trading report (plan §5 <output>):
+In shadow mode it adds the day's trading report (plan §5 <output>):
 trades, net P&L, fees, win rate, largest loss, maker fill rate, adverse
 selection, order round trip and calibration (Brier) on our own fills.
 """

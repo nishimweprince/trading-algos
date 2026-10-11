@@ -14,8 +14,6 @@ dependencies = [
   "httpx>=0.27,<1",
   "pydantic-settings>=2.6,<3",
   "ta-core[web]",
-  "ta-clients",
-  "ta-contracts",
   "ta-notify",
   # The provider is a plugin, discovered through the ta.market_data entry point.
   "ta-plugin-api",
@@ -24,8 +22,6 @@ dependencies = [
 
 [tool.uv.sources]
 ta-core = { workspace = true }
-ta-clients = { workspace = true }
-ta-contracts = { workspace = true }
 ta-notify = { workspace = true }
 ta-plugin-api = { workspace = true }
 ta-plugin-binance-futures = { workspace = true }

@@ -100,25 +100,7 @@ def create_status_app(
             and settings.execution_mode is not ExecutionMode.OFF,
         )
     )
-    # OFI_SHADOW_MIRROR's records, beside the demo ones.
-    shadow_trading = builders.Cached(
-        lambda: (
-            builders.trading(settings.state_dir / "shadow", model_loaded=True)
-            if settings.shadow_mirror
-            else None
-        )
-    )
     unit_cache = builders.Cached(units, ttl=POLL_SECONDS)
-    speedrun = builders.Cached(
-        lambda: builders.speedrun(
-            settings.state_dir, model_dir=settings.model_dir, model_version=settings.model_version
-        )
-    )
-    # A micro-live scalper runs as its own profile ("live"); its records sit beside ours.
-    micro_dir = settings.state_dir.parent / "live"
-    micro = builders.Cached(
-        lambda: builders.trading(micro_dir, model_loaded=True) if micro_dir.is_dir() else None
-    )
 
     async def refresh() -> None:
         assert fetcher is not None
@@ -188,14 +170,11 @@ def create_status_app(
     async def summary() -> dict[str, Any]:
         if state["fetched_at"] is None and fetcher is not None:
             await refresh()  # the first request after start: do not wait for the poller
-        unit_states, data, results, trades, shadow_trades, run, micro_trades = await asyncio.gather(
+        unit_states, data, results, trades = await asyncio.gather(
             asyncio.to_thread(unit_cache.get),
             asyncio.to_thread(collection.get),
             asyncio.to_thread(research.get),
             asyncio.to_thread(trading.get),
-            asyncio.to_thread(shadow_trading.get),
-            asyncio.to_thread(speedrun.get),
-            asyncio.to_thread(micro.get),
         )
         return {
             "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -211,12 +190,9 @@ def create_status_app(
             ),
             "research": results,
             "trading": trades,
-            "shadow_trading": shadow_trades,
             "execution": builders.execution(
                 state["status"], model_dir=settings.model_dir, state_dir=settings.state_dir
             ),
-            "speedrun": run,
-            "micro_live": micro_trades,
         }
 
     @app.get("/api/history")

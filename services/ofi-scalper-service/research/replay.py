@@ -265,10 +265,6 @@ class Replayer:
                 binance_futures_symbols=cfg.symbols,
                 order_notional_usd=shadow.order_notional_usd,
                 shadow_equity_usd=shadow.shadow_equity_usd,
-                max_consecutive_unknown=3,
-                fill_poll_ms=200,
-                dead_man_ms=15_000,
-                execution_account="shadow",
             )
             variants = shadow.variants or [Variant("default", self.model, book=shadow.book)]
             bridges = []

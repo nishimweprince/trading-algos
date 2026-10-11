@@ -5,9 +5,9 @@ feeding each event it samples every grid time the event has passed
 (``GridClock``), so a live sample equals a replay of the recording. A timer
 covers quiet markets the same way.
 
-With a model and ``OFI_EXECUTION_MODE`` shadow or testnet, every grid sample
-also goes to the execution bridge (model -> policy -> risk -> orders), and a
-halt cancels and flattens through it. With mode off, the runtime records and
+With a model and ``OFI_EXECUTION_MODE=shadow``, every grid sample also goes to
+the execution bridge (model -> policy -> risk -> simulated orders), and the kill
+switch closes every cycle through it. With mode off, the runtime records and
 computes features only, and logs what a halt would have done.
 """
 
@@ -50,7 +50,7 @@ from .trades import BNB_DISCOUNT
 
 __all__ = ["ScalperRuntime"]
 
-# Operator drills runtime.run_drill can perform (status.py also lists kill_switch, dead_man).
+# Operator drills runtime.run_drill can perform (status.py also lists kill_switch).
 DRILLS = ("disconnect", "gap_handling")
 GATE_SECONDS = 5.0
 GATE_NS = int(GATE_SECONDS * 1e9)
@@ -109,9 +109,6 @@ class ScalperRuntime:
         self.recorder = recorder
         self.model = model
         self.bridge = bridge
-        self.bridge_http: Any | None = None  # the bridge's HTTP client; the app closes it
-        # OFI_SHADOW_MIRROR: a shadow bridge on this (mainnet) feed beside the demo one.
-        self.mirror: ExecutionBridge | None = None
         self._gate_at: dict[str, int] = {}
         self._clock_ns = clock_ns
         self.grid_ns = settings.grid_ms * 1_000_000
@@ -210,7 +207,7 @@ class ScalperRuntime:
         self.spawn(self._quiet_grid(), "ofi-quiet-grid")
 
     async def _start_bridge(self) -> None:
-        """Order filters (lot step, minimum notional), then the bridge's own boot."""
+        """Order filters (lot step, minimum notional) from the mainnet REST, then the bridge."""
         assert self.bridge is not None
         delay = 1.0
         while True:
@@ -226,9 +223,6 @@ class ScalperRuntime:
         configured = {s: Filters.from_order_filters(f) for s, f in filters.items()}
         self.bridge.configure(configured)
         await self.bridge.start()
-        if self.mirror is not None:
-            self.mirror.configure(configured)
-            await self.mirror.start()
 
     def init_engine(self, tick_sizes: dict[str, float]) -> None:
         """The feature engine for these symbols. Live calls it after loading
@@ -607,10 +601,6 @@ class ScalperRuntime:
             log_event("ofi_kill_switch", level=logging.CRITICAL, source=source, detail=detail)
             if self.bridge is not None:
                 self.bridge.on_halt("kill_switch")
-                if self.mirror is not None:
-                    # The mirror keeps its own risk state: the kill switch stops it too.
-                    self.mirror.risk.kill(source, detail)
-                    self.mirror.on_halt("kill_switch")
             else:
                 self._would("cancel_all", "*", "kill_switch")
                 self._would("flatten", "*", "kill_switch")
@@ -626,9 +616,6 @@ class ScalperRuntime:
         if self.settings.kill_file_path.exists():
             return False, f"remove {self.settings.kill_file_path} first"
         ok, message = self.risk.ack(source)
-        if ok and self.mirror is not None and self.mirror.risk.halted:
-            _, mirror_message = self.mirror.risk.ack(source)
-            message = f"{message}; shadow mirror: {mirror_message}"
         if ok:
             log_event("ofi_halt_acknowledged", level=logging.WARNING, source=source)
             self.alerts.send("ack", "OFI halt acknowledged", [message, f"by {source}"], always=True)
@@ -642,14 +629,14 @@ class ScalperRuntime:
         Breaks the real feed path (``streams.drop`` / ``streams.inject_gap``) and
         checks what must follow: the pause goes on, no entry stays resting
         un-cancelled while paused, and the book comes back verified with the
-        pause cleared. Shadow and testnet only.
+        pause cleared. Shadow only.
         """
         from .config import ExecutionMode
 
         if name not in DRILLS:
             raise ValueError(f"unknown drill {name!r}: one of {', '.join(DRILLS)}")
-        if self.settings.execution_mode not in (ExecutionMode.SHADOW, ExecutionMode.TESTNET):
-            raise ValueError("drills run in shadow or testnet mode only")
+        if self.settings.execution_mode is not ExecutionMode.SHADOW:
+            raise ValueError("drills run in shadow mode only")
         symbol = self.streams.symbols[0]
         pause = "stream_public" if name == "disconnect" else "depth_resync"
         started = time.time()
@@ -746,21 +733,13 @@ class ScalperRuntime:
     # --- reads ------------------------------------------------------------------
 
     def _set_pause(self, symbol: str, reason: str, active: bool) -> bool:
-        """Feed pauses hold for the mirror's risk state too: same feed, same book."""
-        if self.mirror is not None:
-            self.mirror.risk.set_pause(symbol, reason, active)
         changed = self.risk.set_pause(symbol, reason, active)
         if changed and active:
             self.counts[f"paused_{reason}"] += 1  # a pause too short to see still counts
         return changed
 
     def _bridges(self) -> list[ExecutionBridge]:
-        return [b for b in (self.bridge, self.mirror) if b is not None]
-
-    def _mirror_status(self) -> dict[str, Any] | None:
-        if self.mirror is None:
-            return None
-        return {**self.mirror.status(), "risk": self.mirror.risk.snapshot()}
+        return [self.bridge] if self.bridge is not None else []
 
     def readiness(self) -> tuple[bool, dict[str, Any]]:
         streams_ready, details = self.streams.readiness()
@@ -783,7 +762,6 @@ class ScalperRuntime:
             "fees": self.fees,
             "model": self.model.summary() if self.model is not None else None,
             "bridge": self.bridge.status() if self.bridge is not None else None,
-            "shadow_mirror": self._mirror_status(),
             "key_check": self.key_check,
             "heartbeat": self.last_heartbeat,
             "counts": dict(self.counts),

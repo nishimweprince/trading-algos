@@ -1,48 +1,32 @@
-"""The execution bridge: model -> policy -> risk -> orders.
+"""The execution bridge: model -> policy -> risk -> simulated orders.
 
-Modelled on ``backtesting_service/execution_bridge.py``: deterministic
-operation ids, reconcile before trusting local state, halt after repeated
-UNKNOWN outcomes, and shadow builds exactly what testnet would send.
+Nothing is ever sent to an exchange: this service trades in shadow only.
 
 Per grid sample and symbol: score the sample, ask ``SymbolPolicy`` what to do,
 run every proposed order past ``RiskState.check_order``, and hand what passes
-to a venue:
+to ``ShadowVenue``, which fills it against the live mainnet book the way the
+exchange would have (queue position, latency; see its docstring).
 
-- **shadow** (``ShadowVenue``): nothing is sent. A pessimistic simulator fills
-  a resting maker order only when a trade prints *through* its price, and a
-  market order at the opposite touch.
-- **testnet** (``GatewayVenue``): orders go to execution-service over HTTP and
-  fills are read back by polling the operation. An UNKNOWN outcome is
-  reconciled through ``get_operation``, never resubmitted. Orders are priced
-  from demo trading's own touch; the signal is still mainnet's.
+The kill switch halts: every cycle is closed and nothing new is entered until
+an operator ack. Loss limits are recorded as breaches but do not stop trading
+(``RiskState.enforce_loss_limits``), so data collection never stops.
 
-Halts (kill switch, loss limits, execution faults): cancel everything, close
-every cycle reduce-only, flatten as a backstop. Only an operator ack resumes.
-
-The core is synchronous so a replay can drive shadow mode deterministically
-from recorded event times; only the gateway's I/O is asynchronous.
+The core is synchronous so a replay drives it deterministically from recorded
+event times; the live service drives it from the feed.
 """
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import heapq
-import json
 import logging
-import os
 import time
-from collections import deque
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Protocol
-from uuid import UUID
+from typing import Any
 
-from ta_clients.execution import ExecutionResult, ExecutionState, operation_id_for
-from ta_contracts.execution import OrderRequest
 from ta_core.logging_config import log_event
 
 from .alerts import Alerts
@@ -67,27 +51,15 @@ from .trades import ADVERSE_HORIZONS_S, TradeBook, trade_record
 __all__ = [
     "DEFAULT_FILTERS",
     "ExecutionBridge",
-    "GatewayVenue",
     "ShadowVenue",
     "TrackedOrder",
 ]
 
-SOURCE = "ofi_scalper"
 NS = 1_000_000_000
 TERMINAL = {"filled", "closed", "partially_filled_final", "cancelled", "rejected"}
 # Unfilled endings that are not a refusal by the venue: no entry back-off after these.
 # A post-only order that would take expires on Binance too; it is not rejected.
 NOT_REFUSED = {"cancelled", "post_only_would_take", "not_submitted"}
-QUOTE_MAX_AGE_MS = 2_000
-# An order round trip this slow is logged and counted (the HTTP timeout is 2 s).
-SLOW_ORDER_MS = 500.0
-# A post-only entry priced from an older touch can cross in the fast moves signals
-# fire on, and Binance expires it at once. Exits and marks keep 2 s. Demo's
-# bookTicker only sends on a change and a quiet demo book changes about once a
-# second, so 500 ms skipped 93 of 141 signals (2026-10-08, no crossing expiry
-# among the 34 entries); OFI_ENTRY_QUOTE_MAX_AGE_MS overrides this default.
-ENTRY_QUOTE_MAX_AGE_MS = 1_500
-CONTROL_SECONDS = 5.0
 
 # Mainnet USDⓈ-M filters (2026-10), for replays that have no exchangeInfo.
 DEFAULT_FILTERS = {
@@ -106,18 +78,15 @@ class TrackedOrder:
     price: str | None  # None: market
     post_only: bool
     reduce_only: bool
-    operation_id: str
     created_ns: int
     state: str = "new"
     executed: str = "0"
     avg_price: float | None = None
-    order_id: int | None = None
     terminal: bool = False
     reason: str | None = None
     sent_ns: int | None = None
     acked_ns: int | None = None
     cancel_requested: bool = False
-    cancel_sent: bool = False
 
     @property
     def key(self) -> str:
@@ -132,12 +101,6 @@ class TrackedOrder:
         if self.sent_ns is None or self.acked_ns is None:
             return None
         return round((self.acked_ns - self.sent_ns) / 1e6, 3)
-
-
-class Venue(Protocol):
-    def submit(self, order: TrackedOrder, t_ns: int) -> None: ...
-
-    def cancel(self, order: TrackedOrder, t_ns: int) -> None: ...
 
 
 # --- shadow ----------------------------------------------------------------------------
@@ -297,167 +260,6 @@ class ShadowVenue:
         self.bridge.update(order, min(executed, Decimal(order.qty)), price, done, t_ns)
 
 
-# --- testnet: execution-service over HTTP ---------------------------------------------
-
-
-class GatewayVenue:
-    """Sends through execution-service; fills come back by polling the operation."""
-
-    def __init__(self, bridge: ExecutionBridge, client: Any, *, poll_ms: int) -> None:
-        self.bridge = bridge
-        self.client = client
-        self.poll_seconds = poll_ms / 1000
-        self.queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
-        self.controls: deque[dict[str, Any]] = deque(maxlen=50)
-
-    # sync entry points (the bridge's core calls these)
-
-    def submit(self, order: TrackedOrder, t_ns: int) -> None:
-        order.state = "queued"
-        self.queue.put_nowait(("submit", order))
-
-    def cancel(self, order: TrackedOrder, t_ns: int) -> None:
-        order.cancel_requested = True
-        if order.order_id is not None and not order.cancel_sent:
-            self.queue.put_nowait(("cancel", order))
-        # else: sent once the gateway reports an order id
-
-    def control(self, name: str, *args: Any, delay: float = 0.0) -> None:
-        self.queue.put_nowait(("control", (name, args, delay)))
-
-    # async side
-
-    async def worker(self) -> None:
-        while True:
-            kind, item = await self.queue.get()
-            try:
-                if kind == "submit":
-                    await self._submit(item)
-                elif kind == "cancel":
-                    await self._cancel(item)
-                else:
-                    await self._control(*item)
-            except Exception as exc:  # noqa: BLE001 - one bad job must not stop the queue
-                log_event(
-                    "ofi_bridge_job_failed", level=logging.ERROR, kind=kind, error=repr(exc)[:200]
-                )
-
-    async def _submit(self, order: TrackedOrder) -> None:
-        payload = self.bridge.payload(order)
-        order.state = "sent"
-        self.bridge.persist()  # sent: from here on, reconcile, never resubmit
-        # Timed around the request alone: the state write above is not venue latency.
-        order.sent_ns = self.bridge.clock_ns()
-        result = await self.client.submit(payload)
-        order.acked_ns = self.bridge.clock_ns()
-        rtt = order.rtt_ms
-        if rtt is not None and rtt >= SLOW_ORDER_MS:
-            self.bridge.count("slow_orders")
-            log_event(
-                "ofi_slow_order",
-                level=logging.WARNING,
-                symbol=order.symbol,
-                leg=order.leg,
-                rtt_ms=rtt,
-                outcome=str(getattr(result, "state", "")),
-            )
-        self.absorb(order, result)
-
-    async def _cancel(self, order: TrackedOrder) -> None:
-        if order.terminal or order.cancel_sent or order.order_id is None:
-            return
-        order.cancel_sent = True
-        result = await self.client.cancel_order(
-            operation_id=operation_id_for(
-                symbol=order.symbol, pair_id=order.cycle_id, side=f"{order.leg}-cancel"
-            ),
-            occurred_at=datetime.now(UTC),
-            order_id=order.order_id,
-        )
-        if result.state is ExecutionState.UNKNOWN:
-            self.bridge.note_unknown(f"cancel {order.key}: {result.reason}")
-        # The original order's operation says what really happened; the poller reads it.
-
-    async def _control(self, name: str, args: tuple[Any, ...], delay: float) -> None:
-        if delay:
-            await asyncio.sleep(delay)
-        result: ExecutionResult = await getattr(self.client, name)(*args)
-        entry = {
-            "at": datetime.now(UTC).isoformat(),
-            "control": name,
-            "args": list(args),
-            "state": result.state.value,
-            "reason": result.reason,
-            "response": result.response,
-        }
-        self.controls.append(entry)
-        level = logging.INFO if result.state is ExecutionState.SUCCEEDED else logging.ERROR
-        log_event("ofi_bridge_control", level=level, **entry)
-        if result.state is ExecutionState.UNKNOWN:
-            self.bridge.note_unknown(f"{name}: {result.reason}", control=True)
-        elif result.state is ExecutionState.SUCCEEDED:
-            self.bridge.note_ok(control=True)
-
-    async def poller(self) -> None:
-        while True:
-            await asyncio.sleep(self.poll_seconds)
-            await self.poll_once()
-
-    async def poll_once(self) -> None:
-        for order in list(self.bridge.orders.values()):
-            if order.terminal or order.state in {"new", "queued", "sent", "refused"}:
-                continue
-            result = await self.client.get_operation(UUID(order.operation_id))
-            if result.state is ExecutionState.NOT_FOUND:
-                # The gateway never recorded it, so it was never sent to Binance.
-                self.bridge.update(
-                    order, Decimal(0), None, True, self.bridge.clock_ns(), "not_submitted"
-                )
-                continue
-            self.absorb(order, result, polled=True)
-
-    def absorb(self, order: TrackedOrder, result: ExecutionResult, *, polled: bool = False) -> None:
-        now = self.bridge.clock_ns()
-        if result.state is ExecutionState.UNKNOWN:
-            order.state = "unknown"
-            order.reason = result.reason
-            if not polled:
-                self.bridge.note_unknown(f"{order.key}: {result.reason}")
-            self.bridge.persist()
-            return
-        if not polled:
-            self.bridge.note_ok()
-        target = next(
-            (
-                t
-                for t in (result.response or {}).get("targets", [])
-                if isinstance(t, dict) and t.get("account") == self.client.account
-            ),
-            None,
-        )
-        if target is None:
-            if result.state is ExecutionState.REJECTED:
-                self.bridge.update(order, Decimal(0), None, True, now, result.reason)
-            return
-        state = str(target.get("state"))
-        if isinstance(target.get("order_id"), int):
-            order.order_id = target["order_id"]
-        order.state = state
-        executed = Decimal(str(target.get("executed_volume_lots") or "0"))
-        price = target.get("execution_price")
-        reason = target.get("error_code") or (result.reason if state == "rejected" else None)
-        self.bridge.update(
-            order,
-            executed,
-            float(price) if price is not None else None,
-            state in TERMINAL,
-            now,
-            reason,
-        )
-        if order.cancel_requested and not order.terminal and not order.cancel_sent:
-            self.queue.put_nowait(("cancel", order))
-
-
 # --- the bridge -------------------------------------------------------------------------
 
 
@@ -470,8 +272,6 @@ class ExecutionBridge:
         alerts: Alerts,
         model: LoadedModel | None,
         filters: dict[str, Filters] | None = None,
-        client: Any | None = None,
-        quotes: Any | None = None,
         state_dir: Path | None = None,
         clock_ns: Callable[[], int] = time.time_ns,
         fees: Callable[[str], tuple[float, float] | None] = lambda _symbol: None,
@@ -481,26 +281,20 @@ class ExecutionBridge:
     ) -> None:
         self.settings = settings
         self.mode: ExecutionMode = settings.execution_mode
+        if self.mode is not ExecutionMode.SHADOW:
+            raise ValueError(f"the bridge only trades in shadow, not {self.mode.value}")
         self.risk = risk
         self.alerts = alerts
         self.model = model
         self.flow_guard = FlowGuard(model.policy) if model is not None else None
-        self.client = client
-        self.quotes = quotes
         self.clock_ns = clock_ns
         self.fees = fees
-        self.state_path = None if state_dir is None else state_dir / "bridge.json"
         self.book = book if book is not None else TradeBook(state_dir)
         self.policies: dict[str, SymbolPolicy] = {}
         if filters is not None:
             self.configure(filters)
         self.orders: dict[str, TrackedOrder] = {}
         self.last_sample: dict[str, dict[str, Any]] = {}
-        self.consecutive_unknown = 0
-        # Controls (the dead-man every few seconds) count apart from orders, and a
-        # control that succeeds resets them: only an unbroken run halts.
-        self.consecutive_control_unknown = 0
-        self.position_mismatch: str | None = None
         # symbol -> (rejected entries in a row, no new entry before this t_ns)
         self.reject_backoff: dict[str, tuple[int, int]] = {}
         self._halt_handled = False
@@ -509,201 +303,24 @@ class ExecutionBridge:
         self._pending: list[Cycle] = []
         self.realized_usd = 0.0
         self.counts: dict[str, int] = {}
-        self.venue_ready = self.mode is ExecutionMode.SHADOW
-        self.gateway_reason: str | None = None
-        self.shadow: ShadowVenue | None = None
-        self.gateway: GatewayVenue | None = None
-        self.venue: Venue
-        if self.mode.gateway:
-            if client is None:
-                raise ValueError(f"{self.mode.value} mode needs an execution client")
-            self.gateway = GatewayVenue(self, client, poll_ms=settings.fill_poll_ms)
-            self.venue = self.gateway
-        else:
-            self.shadow = ShadowVenue(self, queue_model=queue_model, delay_ns=delay_ns)
-            self.venue = self.shadow
-        self._tasks: list[asyncio.Task[None]] = []
-        self.dead_man_armed = False
+        self.shadow = ShadowVenue(self, queue_model=queue_model, delay_ns=delay_ns)
+        self.venue = self.shadow
 
     def configure(self, filters: dict[str, Filters]) -> None:
         """One policy per symbol, once the order filters are known. No model: none."""
         if self.model is None:
             return
-        allowed = set(getattr(self.settings, "trading_symbols", None) or filters)
         for symbol, symbol_filters in filters.items():
-            if symbol in allowed:
-                self.policies[symbol] = SymbolPolicy(symbol, self.model.policy, symbol_filters)
+            self.policies[symbol] = SymbolPolicy(symbol, self.model.policy, symbol_filters)
 
-    # --- lifecycle (testnet I/O) -------------------------------------------------------
+    # --- lifecycle ---------------------------------------------------------------------
 
     async def start(self) -> None:
-        self.restore()
-        if self.gateway is None:
-            return
-        if self.quotes is not None:
-            await self.quotes.start()
-        self._tasks = [
-            asyncio.create_task(self.gateway.worker(), name="ofi-bridge-worker"),
-            asyncio.create_task(self._boot(), name="ofi-bridge-boot"),
-        ]
+        """Nothing to connect: the shadow venue lives in this process."""
 
     async def close(self) -> None:
-        for task in self._tasks:
-            task.cancel()
-        for task in self._tasks:
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-        self._tasks.clear()
-        if self.gateway is not None and self.dead_man_armed and not self._busy():
-            # Clean stop with nothing working: disarm. Otherwise leave it armed so
-            # Binance cancels what rests if this process does not come back.
-            with contextlib.suppress(Exception):
-                await self.client.dead_man(list(self.settings.binance_futures_symbols), 0)
-        if self.quotes is not None:
-            await self.quotes.close()
         self.flush_pending()
         self.book.close()
-        self.persist()
-
-    async def _boot(self) -> None:
-        """Reconcile what the last process left before trusting anything local."""
-        assert self.gateway is not None
-        while True:
-            ready, reason = await self.client.trading_ready()
-            if ready:
-                break
-            self.gateway_reason = reason
-            await asyncio.sleep(CONTROL_SECONDS)
-        for order in list(self.orders.values()):
-            if order.terminal:
-                continue
-            if order.state in {"new", "queued"}:
-                # Never left this process: the gateway has never seen it.
-                self.update(order, Decimal(0), None, True, self.clock_ns(), "not_submitted")
-                continue
-            order.state = "unknown"  # "sent" before the restart: ask, do not resend
-        if not await self._check_environment():
-            return
-        await self.gateway.poll_once()
-        await self._cancel_strays()
-        await self._check_positions()
-        self.venue_ready = True
-        self.gateway_reason = None
-        self._tasks.append(asyncio.create_task(self.gateway.poller(), name="ofi-bridge-poller"))
-        self._tasks.append(asyncio.create_task(self._control_loop(), name="ofi-bridge-control"))
-        log_event("ofi_bridge_ready", mode=self.mode.value, restored_orders=len(self.orders))
-
-    async def _check_environment(self) -> bool:
-        """The gateway must trade where this mode says: demo for testnet, mainnet for micro-live."""
-        expected = self.mode.venue_environment
-        details = await self.client.venue_health()
-        found = {
-            str(d.get("environment"))
-            for d in (details or {}).values()
-            if isinstance(d, dict) and d.get("environment")
-        }
-        if found == {expected}:
-            return True
-        reason = (
-            f"gateway environment {sorted(found) or 'unknown'}, {self.mode.value} needs {expected}"
-        )
-        self.gateway_reason = reason
-        self.risk.execution_fault(reason)
-        self.alerts.send(
-            "venue-environment", "OFI: wrong gateway environment", [reason], always=True
-        )
-        log_event("ofi_bridge_wrong_environment", level=logging.CRITICAL, reason=reason)
-        return False
-
-    async def _cancel_strays(self) -> None:
-        """Cancel open orders this bridge does not track (left by a crash or a human).
-
-        A process restarted inside the dead-man countdown re-arms it, so Binance never
-        cancels what the previous process left resting; this does. A symbol where the
-        bridge also has live orders of its own is not touched: it halts for a human.
-        """
-        assert self.gateway is not None
-        tracked = {o.order_id for o in self.orders.values() if not o.terminal and o.order_id}
-        busy = {o.symbol for o in self.orders.values() if not o.terminal}
-        symbols = set(self.settings.binance_futures_symbols)
-        strays: dict[str, int] = {}
-        for row in await self.client.list_orders():
-            symbol = str(row.get("instrument") or "")
-            if symbol in symbols and row.get("order_id") not in tracked:
-                strays[symbol] = strays.get(symbol, 0) + 1
-        for symbol, count in sorted(strays.items()):
-            if symbol in busy:
-                reason = f"{count} untracked open order(s) on {symbol} next to the bridge's own"
-                self.risk.execution_fault(reason)
-                self.alerts.send(
-                    "stray-orders", "OFI: untracked open orders", [reason], always=True
-                )
-                continue
-            log_event("ofi_bridge_stray_orders", level=logging.WARNING, symbol=symbol, count=count)
-            await self.gateway._control("cancel_all", (symbol,), 0.0)
-
-    async def _check_positions(self) -> None:
-        positions = await self.client.list_positions()
-        actual: dict[str, Decimal] = {}
-        for row in positions:
-            qty = Decimal(str(row.get("volume_lots") or "0"))
-            signed = qty if row.get("direction") == "buy" else -qty
-            actual[str(row.get("instrument"))] = (
-                actual.get(str(row.get("instrument")), Decimal(0)) + signed
-            )
-        problems = []
-        for symbol in self.settings.binance_futures_symbols:
-            expected = self._expected_position(symbol)
-            if actual.get(symbol, Decimal(0)) != expected:
-                problems.append(f"{symbol}: venue {actual.get(symbol, 0)} vs bridge {expected}")
-        if problems:
-            self.position_mismatch = "; ".join(problems)
-            self.risk.execution_fault(f"position mismatch: {self.position_mismatch}")
-            self.alerts.send(
-                "position-mismatch",
-                "OFI: a position the bridge did not open",
-                [
-                    self.position_mismatch,
-                    "Halted; nothing was flattened. Resolve it on the gateway "
-                    "(POST /v1/accounts/<alias>/flatten), then restart the scalper.",
-                ],
-                always=True,
-            )
-
-    def _expected_position(self, symbol: str) -> Decimal:
-        policy = self.policies.get(symbol)
-        cycle = policy.cycle if policy is not None else None
-        if cycle is None:
-            return Decimal(0)
-        return cycle.remaining if cycle.side == "buy" else -cycle.remaining
-
-    async def _control_loop(self) -> None:
-        """Every few seconds: gateway readiness, the dead-man, equity."""
-        symbols = list(self.settings.binance_futures_symbols)
-        while True:
-            ready, reason = await self.client.trading_ready()
-            self.gateway_reason = None if ready else reason
-            # Armed for as long as this process runs: if it dies, Binance cancels.
-            assert self.gateway is not None
-            self.gateway.control("dead_man", symbols, self.settings.dead_man_ms)
-            self.dead_man_armed = True
-            await self._update_equity_from_gateway()
-            await asyncio.sleep(CONTROL_SECONDS)
-
-    async def _update_equity_from_gateway(self) -> None:
-        accounts = await self.client.list_accounts()
-        wallet = next(
-            (
-                a.get("wallet_balance_usdt")
-                for a in accounts
-                if a.get("alias") == self.settings.execution_account
-            ),
-            None,
-        )
-        if wallet is None:
-            return
-        self.risk.update_equity(float(wallet) + self._unrealized())
-        self._check_halt(self.clock_ns())
 
     # --- the hot path ------------------------------------------------------------------
 
@@ -713,7 +330,7 @@ class ExecutionBridge:
         self.last_sample[symbol] = sample
         self.advance(t_ns)
         bid, ask = self._quote(symbol, sample)
-        if self.shadow is not None and bid is not None and ask is not None:
+        if bid is not None and ask is not None:
             self.shadow.touch[symbol] = (bid, ask)
         self._check_halt(t_ns)
         self._mark(symbol, t_ns, sample)
@@ -757,13 +374,10 @@ class ExecutionBridge:
             self.book.signal(t_ns, record)
             self.book.marks.on_signal(t_ns, record, sample.get("mid"))
         self._collect(symbol, t_ns)
-        if self.mode is ExecutionMode.SHADOW:
-            self.risk.update_equity(
-                self.settings.shadow_equity_usd + self.realized_usd + self._unrealized()
-            )
-            self._check_halt(t_ns)
-        if step.actions:
-            self.persist()
+        self.risk.update_equity(
+            self.settings.shadow_equity_usd + self.realized_usd + self._unrealized()
+        )
+        self._check_halt(t_ns)
 
     def on_trade(
         self,
@@ -773,19 +387,16 @@ class ExecutionBridge:
         qty: float = 0.0,
         buyer_is_maker: bool | None = None,
     ) -> None:
-        if self.shadow is not None:
-            self.shadow.advance(t_ns)
-            self.shadow.on_trade(symbol, price, t_ns, qty, buyer_is_maker)
+        self.shadow.advance(t_ns)
+        self.shadow.on_trade(symbol, price, t_ns, qty, buyer_is_maker)
 
     def on_book(self, symbol: str, book: Any) -> None:
-        """Every applied depth update (simulated venues only: touch and queue)."""
-        if self.shadow is not None:
-            self.shadow.on_book(symbol, book)
+        """Every applied depth update: the shadow venue's touch and queue."""
+        self.shadow.on_book(symbol, book)
 
     def advance(self, t_ns: int) -> None:
-        """Event time moved on: deliver delayed orders and cancels (simulated venues)."""
-        if self.shadow is not None:
-            self.shadow.advance(t_ns)
+        """Event time moved on: deliver delayed orders and cancels."""
+        self.shadow.advance(t_ns)
 
     def _estimate_fill_price(self, order: TrackedOrder) -> float | None:
         """The order's limit, else the side of the current venue touch it would take."""
@@ -798,9 +409,6 @@ class ExecutionBridge:
         return ask if order.side == "buy" else bid
 
     def _quote(self, symbol: str, sample: dict[str, Any]) -> tuple[float | None, float | None]:
-        if self.mode is ExecutionMode.TESTNET and self.quotes is not None:
-            quote = self.quotes.get(symbol, QUOTE_MAX_AGE_MS) if self.quotes is not None else None
-            return (quote.bid, quote.ask) if quote is not None else (None, None)
         return sample.get("best_bid"), sample.get("best_ask")
 
     def _blocked(
@@ -818,8 +426,6 @@ class ExecutionBridge:
         symbol is flat) must not fire for one already resting."""
         if self.risk.halted:
             return "halted"
-        if self.position_mismatch is not None:
-            return "position_mismatch"
         pauses = self.risk.paused(symbol)
         if pauses:
             return "paused:" + ",".join(sorted(pauses))
@@ -827,23 +433,12 @@ class ExecutionBridge:
             return "gate_pending"
         if not gate.get("on", False):
             return "gate:" + ",".join(gate.get("reasons") or ["off"])
-        if not self.venue_ready:
-            return "venue_not_ready"
-        if self.gateway is not None and self.gateway_reason is not None:
-            return "gateway_not_ready"
         if fees is None:
             return "fees_unknown"
         if bid is None or ask is None:
             return "no_venue_quote"
         if not entering:
             return None
-        max_age = getattr(self.settings, "entry_quote_max_age_ms", None) or ENTRY_QUOTE_MAX_AGE_MS
-        if (
-            self.mode is ExecutionMode.TESTNET
-            and self.quotes is not None
-            and self.quotes.get(symbol, max_age) is None
-        ):
-            return "stale_venue_quote"
         backoff = self.reject_backoff.get(symbol)
         if backoff is not None and self.clock_ns() < backoff[1]:
             return "reject_cooldown"
@@ -885,9 +480,6 @@ class ExecutionBridge:
             price=None if market else str(action.price),  # type: ignore[union-attr]
             post_only=False if market else action.post_only,  # type: ignore[union-attr]
             reduce_only=reduce_only,
-            operation_id=str(
-                operation_id_for(symbol=action.symbol, pair_id=action.cycle_id, side=leg)
-            ),
             created_ns=t_ns,
         )
         self.orders[order.key] = order
@@ -922,22 +514,6 @@ class ExecutionBridge:
         self.count(f"orders_{leg.rstrip('0123456789')}")
         self.venue.submit(order, t_ns)
         return None
-
-    def payload(self, order: TrackedOrder) -> dict[str, Any]:
-        request = OrderRequest(
-            operation_id=UUID(order.operation_id),
-            occurred_at=datetime.now(UTC),
-            source=SOURCE,
-            instrument=order.symbol,
-            execution_type="market" if order.market else "limit",
-            direction=order.side,
-            targets=[{"account": self.settings.execution_account, "volume_lots": order.qty}],
-            entry_price=None if order.market else Decimal(order.price or "0"),
-            post_only=True if order.post_only else None,
-            reduce_only=True if order.reduce_only else None,
-            note=order.key,
-        )
-        return request.model_dump(mode="json", exclude_none=True)
 
     def update(
         self,
@@ -984,11 +560,10 @@ class ExecutionBridge:
         self._sync_risk_position(order.symbol)
         self.execute(actions, t_ns)
         self._collect(order.symbol, t_ns)
-        self.persist()
 
     def _note_entry_outcome(self, order: TrackedOrder, t_ns: int) -> None:
-        """Back off after a rejected entry, so a persistent refusal (a gateway cap, a
-        filter, the balance) is not retried on every 100 ms grid step."""
+        """Back off after a rejected entry, so a persistent refusal (a filter, the
+        risk limits) is not retried on every 100 ms grid step."""
         if order.state != "rejected" or order.reason in NOT_REFUSED:
             self.reject_backoff.pop(order.symbol, None)
             return
@@ -1017,38 +592,6 @@ class ExecutionBridge:
 
     # --- unknowns and halts --------------------------------------------------------------
 
-    def note_unknown(self, detail: str, *, control: bool = False) -> None:
-        if control:
-            self.consecutive_control_unknown += 1
-            consecutive = self.consecutive_control_unknown
-        else:
-            self.consecutive_unknown += 1
-            consecutive = self.consecutive_unknown
-        self.count("control_unknown" if control else "unknown")
-        log_event(
-            "ofi_bridge_unknown",
-            level=logging.ERROR,
-            detail=detail,
-            control=control,
-            consecutive=consecutive,
-        )
-        if consecutive >= self.settings.max_consecutive_unknown:
-            kind = "control" if control else "order"
-            if self.risk.execution_fault(f"{consecutive} consecutive UNKNOWN {kind} outcomes"):
-                self.alerts.send(
-                    "bridge-unknown",
-                    "OFI halted: execution-service outcomes unknown",
-                    [detail, "Reconciling, never resubmitting. Ack once the gateway is healthy."],
-                    always=True,
-                )
-            self._check_halt(self.clock_ns())
-
-    def note_ok(self, *, control: bool = False) -> None:
-        if control:
-            self.consecutive_control_unknown = 0
-        else:
-            self.consecutive_unknown = 0
-
     def _check_halt(self, t_ns: int) -> None:
         if self.risk.halted and not self._halt_handled:
             self.on_halt(self.risk.halt.reason.value if self.risk.halt else "halt", t_ns)
@@ -1056,7 +599,7 @@ class ExecutionBridge:
             self._halt_handled = False
 
     def on_halt(self, reason: str, t_ns: int | None = None) -> None:
-        """Cancel everything, close every cycle reduce-only, flatten as a backstop."""
+        """Close every cycle and enter nothing until the halt is acked."""
         if self._halt_handled:
             return
         self._halt_handled = True
@@ -1073,16 +616,8 @@ class ExecutionBridge:
                 "mode": self.mode.value,
             },
         )
-        if self.gateway is not None:
-            self.gateway.control("cancel_all")
-        if self.position_mismatch is not None:
-            return  # the bridge's own view is wrong: cancel only, a human flattens
         for policy in self.policies.values():
             self.execute(policy.liquidate(reason, t_ns), t_ns)
-        if self.gateway is not None:
-            # After our own reduce-only closes had their chance; a no-op when flat.
-            self.gateway.control("flatten", delay=1.0)
-        self.persist()
 
     # --- records -------------------------------------------------------------------------
 
@@ -1161,16 +696,7 @@ class ExecutionBridge:
 
     # --- helpers -------------------------------------------------------------------------
 
-    def _busy(self) -> bool:
-        return any(p.phase is not Phase.FLAT for p in self.policies.values()) or any(
-            not o.terminal for o in self.orders.values()
-        )
-
     def _mid(self, symbol: str) -> float | None:
-        if self.mode is ExecutionMode.TESTNET and self.quotes is not None:
-            quote = self.quotes.get(symbol, QUOTE_MAX_AGE_MS)
-            if quote is not None:
-                return quote.mid
         sample = self.last_sample.get(symbol)
         return None if sample is None else sample.get("mid")
 
@@ -1201,74 +727,25 @@ class ExecutionBridge:
     def count(self, name: str) -> None:
         self.counts[name] = self.counts.get(name, 0) + 1
 
-    # --- persistence (testnet) --------------------------------------------------------------
-
-    def persist(self) -> None:
-        if self.state_path is None or not self.mode.gateway:
-            return
-        state = {
-            "schema": 1,
-            "model_version": self.model.version if self.model else None,
-            "policies": {s: p.snapshot() for s, p in self.policies.items()},
-            "orders": {k: asdict(o) for k, o in self.orders.items()},
-            "marks": self._marks,
-            "funding": self._funding,
-        }
-        try:
-            self.state_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.state_path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(state, default=str))
-            os.replace(tmp, self.state_path)
-        except OSError as exc:
-            log_event("ofi_bridge_persist_failed", level=logging.ERROR, error=str(exc)[:200])
-
-    def restore(self) -> None:
-        if self.state_path is None or not self.mode.gateway:
-            return
-        if not self.state_path.is_file():
-            return
-        state = json.loads(self.state_path.read_text())
-        for symbol, raw in (state.get("policies") or {}).items():
-            if symbol in self.policies:
-                self.policies[symbol].restore(raw)
-            elif raw.get("cycle"):
-                self.position_mismatch = f"{symbol}: a cycle from a model that is no longer loaded"
-        self.orders = {k: TrackedOrder(**raw) for k, raw in (state.get("orders") or {}).items()}
-        self._marks = state.get("marks") or {}
-        self._funding = state.get("funding") or {}
-        if self.position_mismatch is not None:
-            self.risk.execution_fault(self.position_mismatch)
-
     # --- reads -----------------------------------------------------------------------------
 
     def status(self) -> dict[str, Any]:
         out: dict[str, Any] = {
             "mode": self.mode.value,
-            "venue_ready": self.venue_ready,
-            "gateway_not_ready": self.gateway_reason,
-            "position_mismatch": self.position_mismatch,
-            "consecutive_unknown": self.consecutive_unknown,
-            "consecutive_control_unknown": self.consecutive_control_unknown,
             "reject_backoff": {
                 symbol: {"in_a_row": n, "until_ns": until}
                 for symbol, (n, until) in self.reject_backoff.items()
             },
             "ungated": self._ungated(),
-            "dead_man_armed": self.dead_man_armed,
             "policy": {s: p.snapshot() for s, p in self.policies.items()},
             "open_orders": [asdict(o) for o in self.orders.values() if not o.terminal],
             "realized_usd": round(self.realized_usd, 4),
             "counts": dict(self.counts),
         }
-        if self.gateway is not None:
-            out["controls"] = list(self.gateway.controls)[-10:]
-        if self.quotes is not None:
-            out["venue_quotes"] = self.quotes.status()
         if self.flow_guard is not None and self.flow_guard.enabled:
             out["flow_guard"] = dict(self.flow_guard.flagged)
-        if self.shadow is not None:
-            out["shadow_fills"] = {
-                "queue_model": self.shadow.queue_model,
-                "delay_ms": round(self.shadow.delay_ns / 1e6, 3),
-            }
+        out["shadow_fills"] = {
+            "queue_model": self.shadow.queue_model,
+            "delay_ms": round(self.shadow.delay_ns / 1e6, 3),
+        }
         return out

@@ -100,8 +100,7 @@ async function refresh() {
       ["model", esc(model.version || "none")],
       ["scoring p50/p99 µs", model.scoring_latency
         ? `${model.scoring_latency.p50_us} / ${model.scoring_latency.p99_us}` : ""],
-      ["venue ready", bridge.venue_ready ? "yes" : "no"],
-      ["unknown outcomes", esc(bridge.consecutive_unknown ?? "")],
+      ["fills", esc((bridge.shadow_fills || {}).queue_model || "")],
       ["equity", num(risk.equity)],
     ]);
     const s = trades.summary;

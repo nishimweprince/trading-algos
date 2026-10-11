@@ -52,9 +52,7 @@ h2:first-child { margin-top: 0; }
 .chip { display: inline-block; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line);
         margin: 2px 4px 2px 0; font-size: 12px; }
 .chip.good { border-color: var(--good); } .chip.bad { border-color: var(--bad); }
-.chip.st-idle { color: var(--muted); } .chip.st-sim { border-color: var(--accent); color: var(--accent); }
-.chip.st-demo { border-color: var(--good); color: var(--good); font-weight: 600; }
-.chip.st-live { border-color: var(--warn); color: var(--warn); font-weight: 600; }
+.chip.st-idle { color: var(--muted); } .chip.st-sim { border-color: var(--good); color: var(--good); font-weight: 600; }
 .chip.st-halted { border-color: var(--bad); color: var(--bad); font-weight: 600; }
 .bar { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; margin: 8px 0 4px; }
 .bar > div { height: 100%; background: var(--accent); }
@@ -271,8 +269,6 @@ function research(s) {
   }
   $("rs-body").innerHTML = out;
 }
-const yes = (v) => v === true ? `<span class="good">yes</span>` : v === false ? `<span class="bad">no</span>` : "-";
-const met = (v) => v === true ? `<span class="good">met</span>` : v === false ? `<span class="bad">not yet</span>` : `<span class="muted">-</span>`;
 function stateChip(s) {
   const st = (s.execution || {}).state;
   const el = $("state");
@@ -280,35 +276,24 @@ function stateChip(s) {
   el.className = "chip st-" + (st ? st.level : "idle");
 }
 function executionBlock(s) {
-  const e = s.execution || {}, st = e.state, m = e.model || {};
+  const e = s.execution || {}, st = e.state, m = e.model || {}, f = e.shadow_fills || {};
   if (!st) return `<div class="card">The scalper is unreachable: execution state unknown.</div>`;
   const drills = Object.entries(e.drills || {}).map(([k, v]) =>
     `<span class="chip ${v === "passed" ? "good" : ""}">${esc(k.replace("_", " "))}: ${esc(v)}</span>`).join(" ");
   return `<h2>Execution</h2><div class="grid">` +
-    card("Trading state", esc(st.label), `mode ${esc(st.mode)}`, st.level === "halted" ? "bad" : st.level === "demo" ? "good" : "") +
+    card("Trading state", esc(st.label), `mode ${esc(st.mode)}`, st.level === "halted" ? "bad" : st.level === "sim" ? "good" : "") +
     card("Model", esc(st.model_version || "none"), m.tier === "rules" ? "rule model: ungated, no research gates" : m.tier ? `gates ${m.passed ? "passed" : "failed"} &middot; tier ${esc(m.tier)}` : "no model loaded") +
-    card("Venue", yes(e.venue_ready), `gateway ${e.gateway_ok ? "ok" : "not ready"} &middot; dead-man ${e.dead_man_armed ? "armed" : "off"}`) +
-    card("Open orders", e.open_orders ?? "-", `unknown in a row ${e.consecutive_unknown ?? "-"} &middot; position mismatch ${e.position_mismatch ? "YES" : "no"}`) +
+    card("Simulated fills", esc(f.queue_model || "-"), f.arrive_ms != null
+      ? `order arrives ${num(f.arrive_ms, 1)} ms &middot; ack ${num(f.ack_ms, 1)} ms` : `delay ${num(f.delay_ms, 1)} ms`) +
+    card("Open orders", e.open_orders ?? "-", "simulated, on the mainnet book") +
     card("Halted", e.halted ? `<span class="bad">yes</span>` : `<span class="good">no</span>`, e.halt_reason ? esc(e.halt_reason) : "") +
-    card("Last control", esc((e.last_control || {}).control || "-"),
-      esc(((e.last_control || {}).at || "").replace("T", " ").slice(0, 19)) + " " + esc((e.last_control || {}).state || "")) +
+    card("Loss-limit breaches today", (e.breaches || []).length,
+      (e.breaches || []).map((b) => esc(b.reason)).join(", ") || "recorded only: trading continues") +
     `</div><div class="card" style="margin-top:12px"><h3>Drills</h3>${drills}</div>`;
 }
-function speedrunBlock(s) {
-  const r = s.speedrun;
-  if (!r || !r.model_version) return "";
-  return `<h2>Live speed-run (demo fills of ${esc(r.model_version)})</h2>` +
-    `<div class="card scroll">` + table(r.rows, [
-      ["Criterion", (x) => esc(x.name)], ["Value", (x) => esc(x.value ?? "-")],
-      ["Needs", (x) => esc(x.threshold ?? "-")], ["", (x) => met(x.met)],
-    ]) + `<div class="muted" style="margin-top:8px">${r.ready ? "All criteria met: a provisional pass plus approval may stand in for the binding run."
-      : "Not yet: small live waits for these, or for the binding run."}</div></div>`;
-}
 function trading(s) {
-  $("tr-body").innerHTML = executionBlock(s) + speedrunBlock(s) +
-    (s.micro_live ? tradingBlock(s.micro_live, "Micro-live (real money)") : "") +
-    tradingBlock(s.trading, "Demo trading (Binance demo fills)") +
-    (s.shadow_trading ? tradingBlock(s.shadow_trading, "Shadow on the live feed (simulated fills, mainnet book)") : "");
+  $("tr-body").innerHTML = executionBlock(s) +
+    tradingBlock(s.trading, "Shadow trading (simulated fills, mainnet book)");
 }
 function tradingBlock(t, title) {
   const sum = (x, label) => card(label, `<span class="${cls(x.net_usd)}">$${num(x.net_usd, 2)}</span>`,

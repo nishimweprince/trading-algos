@@ -33,7 +33,6 @@ __all__ = [
     "research",
     "roadmap",
     "execution",
-    "speedrun",
     "trading",
     "unit_states",
 ]
@@ -41,7 +40,6 @@ __all__ = [
 ROADMAP_PATH = Path(__file__).resolve().parents[2] / "status_roadmap.json"
 UNITS = (
     "ofi-scalper-service",
-    "execution-service-binance",
     "notification-service",
     "ofi-daily-check.timer",
     "ofi-status",
@@ -508,17 +506,9 @@ def trading(state_dir: Path, *, model_loaded: bool, today: date | None = None) -
     }
 
 
-# --- execution and the live speed-run ----------------------------------------------------------
+# --- execution ---------------------------------------------------------------------------------
 
-# Mirrors research/gates.py LIVE_SPEEDRUN (the service does not import research code).
-SPEEDRUN = {
-    "min_demo_days": 7,
-    "min_demo_trades": 150,
-    "net_edge_bp": 0.0,
-    "t_stat": 2.0,
-    "max_worse_than_backtest_bp": 1.0,
-}
-DRILLS = ("kill_switch", "dead_man", "disconnect", "gap_handling")
+DRILLS = ("kill_switch", "disconnect", "gap_handling")
 
 
 def _model_gates(model_dir: Path, version: str | None) -> dict[str, Any]:
@@ -543,10 +533,6 @@ def trading_state(mode: str, model_version: str | None, halted: bool) -> dict[st
     label, level = {
         "off": ("Recording only", "idle"),
         "shadow": ("Shadow: simulated fills on live data", "sim"),
-        "testnet": (
-            ("Demo paper trading", "demo") if model_version else ("Demo, controls only", "idle")
-        ),
-        "micro_live": ("Micro-live: real money, capped", "live"),
     }.get(mode, ("Unknown", "idle"))
     if halted:
         label, level = f"{label} (halted)", "halted"
@@ -563,106 +549,15 @@ def execution(status: dict[str, Any] | None, *, model_dir: Path, state_dir: Path
     version = _pick(status, "model", "version")
     risk = status.get("risk") or {}
     bridge = status.get("bridge") or {}
-    controls = [c for c in bridge.get("controls") or [] if isinstance(c, dict)]
-    last = controls[-1] if controls else {}
     return {
         "state": trading_state(mode, version, bool(risk.get("halted"))),
         "model": _model_gates(model_dir, version),
-        "venue_ready": bridge.get("venue_ready"),
-        "gateway_ok": bridge.get("gateway_not_ready") in (None, ""),
-        "dead_man_armed": bridge.get("dead_man_armed"),
         "open_orders": len(bridge.get("open_orders") or []),
-        "consecutive_unknown": bridge.get("consecutive_unknown"),
-        "position_mismatch": bridge.get("position_mismatch") is not None,
+        "shadow_fills": bridge.get("shadow_fills"),
+        "breaches": risk.get("breaches") or [],
         "halted": bool(risk.get("halted")),
         "halt_reason": _pick(risk, "halt", "reason"),
-        "last_control": {
-            "at": last.get("at"),
-            "control": last.get("control"),
-            "state": last.get("state"),
-        },
         "drills": drills,
-    }
-
-
-def speedrun(state_dir: Path, *, model_dir: Path, model_version: str | None) -> dict[str, Any]:
-    """Progress against the live speed-run criteria, on demo fills of the pinned model."""
-    log = JsonlDaily(state_dir / "trades")
-    trades: list[dict[str, Any]] = []
-    days: set[str] = set()
-    for path in sorted((state_dir / "trades").glob("*.jsonl")):
-        for t in log.read(path.stem):
-            if (
-                t.get("mode") == "testnet"
-                and model_version
-                and t.get("model_version") == model_version
-                and not t.get("ungated")  # a rule or ungated fit never counts
-            ):
-                trades.append(t)
-                days.add(path.stem)
-    summary = summarise(trades)
-    model = _model_gates(model_dir, model_version)
-    expected = model.get("backtest_mean_net_bp")
-    mean_bp = summary.get("mean_net_bp")
-    cv = model.get("cv_brier") or {}
-    cv_ref = [v for k, v in cv.items() if k in {"up", "down"} and isinstance(v, int | float)]
-    cv_brier = sum(cv_ref) / len(cv_ref) if cv_ref else None
-    drills_raw = _read_json(state_dir / "drills.json") or {}
-    halts = 0  # hard halts are not yet logged per day; the panel shows the current one
-    th = SPEEDRUN
-
-    def row(name: str, value: Any, threshold: Any, met: bool | None) -> dict[str, Any]:
-        return {"name": name, "value": value, "threshold": threshold, "met": met}
-
-    rows = [
-        row("Demo days", len(days), f">= {th['min_demo_days']}", len(days) >= th["min_demo_days"]),
-        row(
-            "Demo trades",
-            summary["trades"],
-            f">= {th['min_demo_trades']}",
-            summary["trades"] >= th["min_demo_trades"],
-        ),
-        row(
-            "Mean net bp / trade",
-            mean_bp,
-            "> 0",
-            None if mean_bp is None else mean_bp > th["net_edge_bp"],
-        ),
-        row(
-            "t-stat",
-            summary.get("t_stat"),
-            f"> {th['t_stat']}",
-            None if summary.get("t_stat") is None else summary["t_stat"] > th["t_stat"],
-        ),
-        row(
-            "vs held-out backtest (bp)",
-            None if mean_bp is None or expected is None else round(mean_bp - expected, 3),
-            f">= -{th['max_worse_than_backtest_bp']}",
-            None
-            if mean_bp is None or expected is None
-            else mean_bp - expected >= -th["max_worse_than_backtest_bp"],
-        ),
-        row(
-            "Brier on own fills vs CV",
-            summary.get("brier"),
-            None if cv_brier is None else f"<= {cv_brier:.4f}",
-            None
-            if summary.get("brier") is None or cv_brier is None
-            else summary["brier"] <= cv_brier,
-        ),
-        row("Hard-risk halts", halts, "0", halts == 0),
-        row(
-            "Drills done",
-            f"{sum(1 for d in DRILLS if _pick(drills_raw, d, 'result') == 'passed')}/{len(DRILLS)}",
-            "all",
-            all(_pick(drills_raw, d, "result") == "passed" for d in DRILLS),
-        ),
-    ]
-    return {
-        "model_version": model_version,
-        "tier": model.get("tier"),
-        "rows": rows,
-        "ready": all(r["met"] for r in rows),
     }
 
 

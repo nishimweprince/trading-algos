@@ -1,4 +1,4 @@
-"""ofi-go-live: one checked switch for demo + shadow trading, reversible."""
+"""ofi-go-live: one checked switch for shadow trading, reversible."""
 
 from __future__ import annotations
 
@@ -17,8 +17,9 @@ OFI_MAX_TOTAL_NOTIONAL_USD=800
 OFI_DAILY_LOSS_LIMIT_USD=50
 OFI_MANUAL_APPROVAL_NOTIONAL_USD=400
 OFI_RECORD_ENABLED=false
-# demo controls only
+# a demo-era host: testnet plus the mirror
 OFI_EXECUTION_MODE=testnet
+OFI_SHADOW_MIRROR=true
 EXECUTION_API_KEY=gateway-key-at-least-16
 EXECUTION_URL=http://127.0.0.1:9
 """
@@ -44,36 +45,16 @@ def read_env_text(text: str) -> dict[str, str]:
 
 
 def test_plan_for_each_switch() -> None:
-    on = plan(
-        "on", version="rules-v2", shadow_only=False, demo_only=False, ungated=True, current={}
-    )
+    on = plan("on", version="rules-v2", ungated=True)
     assert on == {
-        "OFI_EXECUTION_MODE": "testnet",
+        "OFI_EXECUTION_MODE": "shadow",
         "OFI_MODEL_VERSION": "rules-v2",
         "OFI_ALLOW_UNGATED": "true",
-        "OFI_SHADOW_MIRROR": "true",
+        "OFI_SHADOW_MIRROR": None,
     }
-    shadow = plan("on", version="v7", shadow_only=True, demo_only=False, ungated=False, current={})
-    assert shadow["OFI_EXECUTION_MODE"] == "shadow" and shadow["OFI_SHADOW_MIRROR"] == "false"
-    assert shadow["OFI_ALLOW_UNGATED"] == "false"
-    off = plan(
-        "off",
-        version="",
-        shadow_only=False,
-        demo_only=False,
-        ungated=False,
-        current={"OFI_EXECUTION_MODE": "testnet"},
-    )
-    assert off["OFI_EXECUTION_MODE"] == "testnet" and off["OFI_MODEL_VERSION"] is None
-    off_shadow = plan(
-        "off",
-        version="",
-        shadow_only=False,
-        demo_only=False,
-        ungated=False,
-        current={"OFI_EXECUTION_MODE": "shadow"},
-    )
-    assert off_shadow["OFI_EXECUTION_MODE"] == "off"
+    assert plan("on", version="v7", ungated=False)["OFI_ALLOW_UNGATED"] == "false"
+    off = plan("off", version="", ungated=False)
+    assert off["OFI_EXECUTION_MODE"] == "off" and off["OFI_MODEL_VERSION"] is None
 
 
 @pytest.fixture
@@ -83,21 +64,19 @@ def service_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
-def test_on_writes_the_rule_model_and_validates_then_off_reverts(service_dir: Path, capsys) -> None:
+def test_on_moves_a_testnet_host_to_shadow_then_off_reverts(service_dir: Path, capsys) -> None:
     assert go_live.main(["on", "--profile", "t"]) == 0
     env = read_env(service_dir / ".env.t")
-    assert env["OFI_EXECUTION_MODE"] == "testnet" and env["OFI_SHADOW_MIRROR"] == "true"
+    assert env["OFI_EXECUTION_MODE"] == "shadow" and "OFI_SHADOW_MIRROR" not in env
     assert env["OFI_MODEL_VERSION"] == "rules-v5" and env["OFI_ALLOW_UNGATED"] == "true"
     assert (service_dir / "models" / "rules-v5" / "manifest.json").is_file()
     assert list(service_dir.glob(".env.t.bak-*"))
     out = capsys.readouterr().out
-    assert "shadow mirror on the live feed" in out and "rules-v5 (rules, ungated)" in out
-    assert "execution-service: NOT ready" in out  # nothing listens on :9
+    assert "mode shadow" in out and "rules-v5 (rules, ungated)" in out
 
     assert go_live.main(["off", "--profile", "t"]) == 0
     env = read_env(service_dir / ".env.t")
-    assert "OFI_MODEL_VERSION" not in env and env["OFI_SHADOW_MIRROR"] == "false"
-    assert env["OFI_EXECUTION_MODE"] == "testnet"  # demo controls stay
+    assert "OFI_MODEL_VERSION" not in env and env["OFI_EXECUTION_MODE"] == "off"
 
 
 def test_a_missing_model_changes_nothing(service_dir: Path) -> None:

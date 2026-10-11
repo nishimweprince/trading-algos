@@ -15,9 +15,21 @@ def test_defaults(tmp_path) -> None:
     assert settings.gate_vol_1m_bp is None
 
 
-def test_live_mode_is_refused(tmp_path) -> None:
-    with pytest.raises(ValidationError, match="live is refused"):
-        make_settings(tmp_path, OFI_EXECUTION_MODE="live")
+@pytest.mark.parametrize("mode", ["testnet", "micro_live", "live"])
+def test_order_entry_modes_were_removed(tmp_path, mode: str) -> None:
+    with pytest.raises(ValidationError, match="was removed: ofi-scalper-service sends no orders"):
+        make_settings(tmp_path, OFI_EXECUTION_MODE=mode)
+
+
+def test_leftover_testnet_keys_are_ignored(tmp_path) -> None:
+    settings = make_settings(
+        tmp_path,
+        OFI_EXECUTION_MODE="shadow",
+        OFI_MODEL_VERSION="v1",
+        OFI_SHADOW_MIRROR="true",
+        EXECUTION_API_KEY="gateway-key-at-least-16",
+    )
+    assert settings.execution_mode is ExecutionMode.SHADOW
 
 
 def test_shadow_mode_needs_a_model(tmp_path) -> None:
@@ -25,16 +37,6 @@ def test_shadow_mode_needs_a_model(tmp_path) -> None:
         make_settings(tmp_path, OFI_EXECUTION_MODE="shadow")
     settings = make_settings(tmp_path, OFI_EXECUTION_MODE="shadow", OFI_MODEL_VERSION="v1")
     assert settings.execution_mode is ExecutionMode.SHADOW
-
-
-def test_testnet_mode_needs_the_gateway_key(tmp_path) -> None:
-    with pytest.raises(ValidationError, match="testnet needs EXECUTION_API_KEY"):
-        make_settings(tmp_path, OFI_EXECUTION_MODE="testnet")
-    # No model: controls only (kill, dead-man, flatten), never an entry.
-    settings = make_settings(
-        tmp_path, OFI_EXECUTION_MODE="testnet", EXECUTION_API_KEY="gateway-key-at-least-16"
-    )
-    assert settings.execution_mode is ExecutionMode.TESTNET and settings.model_version is None
 
 
 def test_order_size_must_fit_the_frozen_limits(tmp_path) -> None:
@@ -107,61 +109,6 @@ def test_unwritable_record_dir_fails_with_a_fix(tmp_path) -> None:
         ).check_record_dir()
     finally:
         locked.chmod(0o700)
-
-
-def test_shadow_mirror_needs_testnet_and_a_model(tmp_path) -> None:
-    with pytest.raises(ValueError, match="OFI_SHADOW_MIRROR"):
-        make_settings(tmp_path, OFI_SHADOW_MIRROR="true")
-    with pytest.raises(ValueError, match="OFI_SHADOW_MIRROR"):
-        make_settings(
-            tmp_path,
-            OFI_SHADOW_MIRROR="true",
-            OFI_EXECUTION_MODE="testnet",
-            EXECUTION_API_KEY="gateway-key-at-least-16",
-        )
-    settings = make_settings(
-        tmp_path,
-        OFI_SHADOW_MIRROR="true",
-        OFI_EXECUTION_MODE="testnet",
-        EXECUTION_API_KEY="gateway-key-at-least-16",
-        OFI_MODEL_VERSION="rules-v1",
-        OFI_ALLOW_UNGATED="true",
-    )
-    assert settings.shadow_mirror and settings.allow_ungated
-
-
-def test_micro_live_needs_the_ack_a_model_and_stays_under_the_caps(tmp_path) -> None:
-    from ofi_scalper_service.config import MICRO_LIVE_ACK
-
-    base = {
-        "OFI_EXECUTION_MODE": "micro_live",
-        "EXECUTION_API_KEY": "gateway-key-at-least-16",
-        "OFI_MODEL_VERSION": "v1",
-        "OFI_ORDER_NOTIONAL_USD": 25,
-        "OFI_MAX_POSITION_NOTIONAL_USD": 30,
-        "OFI_MAX_TOTAL_NOTIONAL_USD": 30,
-        "OFI_DAILY_LOSS_LIMIT_USD": 3,
-        "OFI_MANUAL_APPROVAL_NOTIONAL_USD": 30,
-    }
-    with pytest.raises(ValueError, match="OFI_MICRO_LIVE_ACK"):
-        make_settings(tmp_path, **base)
-    ok = make_settings(tmp_path, **base, OFI_MICRO_LIVE_ACK=MICRO_LIVE_ACK)
-    assert ok.trading_symbols == ("ETHUSDT",)
-    with pytest.raises(ValueError, match="OFI_DAILY_LOSS_LIMIT_USD"):
-        make_settings(
-            tmp_path, **{**base, "OFI_DAILY_LOSS_LIMIT_USD": 10}, OFI_MICRO_LIVE_ACK=MICRO_LIVE_ACK
-        )
-    with pytest.raises(ValueError, match="OFI_MODEL_VERSION"):
-        make_settings(
-            tmp_path,
-            **{k: v for k, v in base.items() if k != "OFI_MODEL_VERSION"},
-            OFI_MICRO_LIVE_ACK=MICRO_LIVE_ACK,
-        )
-    with pytest.raises(ValueError, match="OFI_ALLOW_UNGATED"):
-        make_settings(tmp_path, **base, OFI_MICRO_LIVE_ACK=MICRO_LIVE_ACK, OFI_ALLOW_UNGATED="true")
-    with pytest.raises(ValueError, match="live is refused"):
-        make_settings(tmp_path, OFI_EXECUTION_MODE="live")
-    assert make_settings(tmp_path).trading_symbols == ("BTCUSDT", "ETHUSDT")
 
 
 def test_shadow_fills_default_to_the_research_queue_model_at_measured_latency(
