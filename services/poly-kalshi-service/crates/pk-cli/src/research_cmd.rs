@@ -30,6 +30,10 @@ pub struct Strategy {
     /// Per-venue delay, e.g. k=9,p=-4 (PLAN 3.1).
     #[arg(long, default_value = "")]
     shift_ms: String,
+    /// Follow the tape's measured `latency` lines, as the trader did (after
+    /// `--latency-ms`); off, `--latency-ms` holds throughout.
+    #[arg(long, default_value_t = false)]
+    tape_latency: bool,
 }
 
 impl Strategy {
@@ -53,6 +57,7 @@ impl Strategy {
             start_cash: 1e9,
             shadow,
             limit_offset: self.limit_offset,
+            tape_latency: self.tape_latency,
         }
     }
 }

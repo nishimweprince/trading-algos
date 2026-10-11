@@ -212,6 +212,7 @@ impl Engine {
             side: if d.buy_yes == Some(true) { "yes" } else { "no" },
             decision: *d,
             decision_ns: recv_ns,
+            shadow: false,
         });
         None
     }

@@ -4,12 +4,12 @@
 //! least `back_ticks` below the best bid, then cancelled at once. Post-only
 //! makes the venue reject it rather than let it take liquidity, and pricing
 //! under the best bid means it would rest behind other bids even if post-only
-//! were ignored. The guard refuses everything else, so `PK_EXECUTION_MODE=live`
-//! stays refused and the probe is not a way around it.
+//! were ignored. The guard refuses everything else, so the probe is never a way
+//! to trade: real entries are `live`'s, behind `PK_EXECUTION_MODE=live`.
 //!
 //! What it measures is decision → acknowledgement on a warm HTTP/2 connection,
-//! with and without a pre-signed order, which is what the paper venue's
-//! `PK_PAPER_LATENCY_MS` has so far had to assume.
+//! with and without a pre-signed order. Those round trips set the paper venue's
+//! latency (`latency`), which `PK_PAPER_LATENCY_MS` only seeds.
 
 use std::collections::HashSet;
 use std::sync::Arc;

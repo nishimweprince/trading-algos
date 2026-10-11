@@ -32,15 +32,24 @@ pub fn build_id() -> String {
 
 /// Unset optional parameters are left out, so adding one does not change the
 /// hash of every configuration that does not use it.
+///
+/// With percentage sizing the order size moves with the balance, so the hash
+/// takes the percentage instead of `notional_usd`; the latency is the seed. The
+/// values in force are journaled as they change (`sizing`, `latency`).
 pub fn config_hash(
     params: &StrategyParams,
     latency_ms: i64,
     limit_offset: f64,
     size_to_depth: bool,
+    order_size_pct: f64,
 ) -> String {
     let mut fields = serde_json::to_value(params).expect("params serialise");
     let obj = fields.as_object_mut().expect("object");
     obj.insert("paper_latency_ms".into(), latency_ms.into());
+    if order_size_pct > 0.0 {
+        obj.remove("notional_usd");
+        obj.insert("order_size_pct".into(), order_size_pct.into());
+    }
     if limit_offset != 0.0 {
         obj.insert("limit_offset".into(), limit_offset.into());
     }
@@ -60,10 +69,17 @@ mod tests {
     #[test]
     fn hash_is_stable_and_sensitive() {
         let p = StrategyParams::default();
-        let a = config_hash(&p, 150, 0.0, false);
+        let a = config_hash(&p, 150, 0.0, false, 0.0);
         assert_eq!(a.len(), 10);
-        assert_eq!(a, config_hash(&p, 150, 0.0, false));
-        assert_ne!(a, config_hash(&p, 100, 0.0, false));
-        assert_ne!(a, config_hash(&StrategyParams { max_poly_spread: Some(0.01), ..p }, 150, 0.0, false));
+        assert_eq!(a, config_hash(&p, 150, 0.0, false, 0.0));
+        assert_ne!(a, config_hash(&p, 100, 0.0, false, 0.0));
+        assert_ne!(
+            a,
+            config_hash(&StrategyParams { max_poly_spread: Some(0.01), ..p.clone() }, 150, 0.0, false, 0.0)
+        );
+        let pct = config_hash(&p, 150, 0.0, false, 5.0);
+        assert_ne!(a, pct);
+        // The size moves with the balance; the hash does not.
+        assert_eq!(pct, config_hash(&StrategyParams { notional_usd: 7.0, ..p }, 150, 0.0, false, 5.0));
     }
 }

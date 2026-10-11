@@ -190,11 +190,12 @@ sudo systemctl enable --now poly-kalshi-service pk-status
 curl -s 127.0.0.1:8050/health/ready                      # both feeds up, all windows identified
 ```
 
-- **Kill switch:** `touch services/poly-kalshi-service/data/KILL.dev`, `POST /v1/kill`, or `/kill` to the bot. These halt new paper entries only; recording continues.
+- **Kill switch:** `touch services/poly-kalshi-service/data/KILL.dev`, `POST /v1/kill`, or `/kill` to the bot. These halt new entries and, with an order path, cancel every order on the account; recording continues. Live, `POST /v1/flatten` or `/flatten` also sells every open position.
+- **Live:** only on a permitted host (Dublin), with `PK_EXECUTION_MODE=live` and `PK_LIVE_CONFIRM=yes` (service README, "Live execution"). A live order path that does not start exits the trader non-zero, so `pk-unit-alert@` fires. Keep the env file `chmod 600`: it holds `POLY_PRIVATE_KEY`.
 - **Read the gates:** `target/release/pk readout --journal data/state/dev/journal`.
 - **Restarts:** each restart starts a new hour file (`pk_<day>_<hour>_<session>.zst`). It never appends to one a crash may have left truncated. The research commands still read the older `.gz` hours.
 - **Upgrades:** `git pull && cargo build --release --workspace && sudo systemctl restart poly-kalshi-service pk-status`. The running binaries are replaced on disk; the restart picks them up.
-- **Order-path probe:** `target/release/pk probe-orders` with `PK_ORDER_PROBE=on` and a funded `POLY_PRIVATE_KEY` (README, "Order path"). It posts post-only orders below the bid and cancels them at once; it never fills.
+- **Order-path probe:** `target/release/pk probe-orders` with `PK_ORDER_PROBE=on` and a funded `POLY_PRIVATE_KEY` (README, "Order path"). It posts post-only orders below the bid and cancels them at once; it never fills. In the trader the same probe sets the paper venue's latency (no need to copy its p50 into `PK_PAPER_LATENCY_MS`).
 
 ## poly-kalshi on the Dublin host (`polymarket`, Azure North Europe)
 

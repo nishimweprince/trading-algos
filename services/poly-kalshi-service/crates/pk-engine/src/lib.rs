@@ -24,6 +24,14 @@
 //!   ([`Engine::note_fill`]).
 //! - `Full`: both in one object (replay, tests), the reference the split is
 //!   checked against.
+//!
+//! **Live.** With `EngineConfig::live`, an entry is an [`OrderIntent`] for the
+//! real order path, its cost is reserved in the ledger, and the paper venue
+//! still simulates it as a shadow (`paper_fill` records, no ledger). What the
+//! order path learns comes back as control lines, so the tape replays the same
+//! ledger: `live_fill` and `live_exit` (positions), `balance` (the wallet, and
+//! the sizing check when flat), `latency` (the paper venue's measured latency)
+//! and `sizing` (the size's seed).
 
 use std::collections::{HashMap, VecDeque};
 
@@ -35,6 +43,7 @@ use pk_core::metrics::Metrics;
 use pk_core::num::{lag_ms, px_key, round_dp, round_opt};
 use pk_core::risk::RiskState;
 use pk_core::shadow::{Shadow, quote_json};
+use pk_core::sizing::Sizer;
 use pk_core::window::{Window, secs_f64, window_open};
 use pk_core::{Book, BookSide, BookState, NS, Quote};
 use serde_json::{Map, Value, json};
@@ -110,6 +119,8 @@ pub(crate) struct Pending {
     pub(crate) side: &'static str,
     pub(crate) decision: Decision,
     pub(crate) decision_ns: i64,
+    /// Live: the paper venue's simulation of a real order (no ledger).
+    pub(crate) shadow: bool,
 }
 
 #[derive(Debug)]
@@ -137,6 +148,13 @@ pub struct OrderIntent {
     /// The leg's touch at the decision, for pricing a probe against.
     pub best_bid: Option<f64>,
     pub best_ask: Option<f64>,
+    pub condition_id: String,
+    pub fee_rate: f64,
+    pub fee_exponent: f64,
+    /// The cost reserved for it (shares × entry + the taker fee).
+    pub reserved: f64,
+    /// Live: a real order, not a probe.
+    pub live: bool,
 }
 
 /// An asset's gap is nearing the threshold: sign an order for this leg ahead.
@@ -146,6 +164,9 @@ pub struct PresignHint {
     pub token: String,
     pub best_bid: Option<f64>,
     pub best_ask: Option<f64>,
+    /// The entry a decision at this ask would send: its limit and size.
+    pub limit_px: Option<f64>,
+    pub contracts: Option<i64>,
 }
 
 /// Hints start at this fraction of the threshold, at most one per asset per second.
@@ -172,6 +193,13 @@ pub struct EngineConfig {
     pub emit_intents: bool,
     /// Which venue is the signal and which the execution (research).
     pub direction: Direction,
+    /// Real orders: entries become intents and the paper venue is a shadow.
+    pub live: bool,
+    /// Order size as a percent of the balance (0 = `params.notional_usd`).
+    pub order_size_pct: f64,
+    /// Apply `latency` control lines to the paper venue (the trader, and a
+    /// replay that should reproduce it). Off: the configured latency holds.
+    pub follow_tape_latency: bool,
 }
 
 /// `Forward` is the trade: Kalshi signals, Polymarket executes. `Reverse`
@@ -197,6 +225,9 @@ impl EngineConfig {
             age_outlier_ms: None,
             emit_intents: false,
             direction: Direction::Forward,
+            live: false,
+            order_size_pct: 0.0,
+            follow_tape_latency: false,
         }
     }
 }
@@ -238,6 +269,9 @@ pub struct Engine {
     age_outlier_ms: Option<f64>,
     emit_intents: bool,
     pub(crate) reverse: bool,
+    pub live: bool,
+    pub sizer: Sizer,
+    follow_tape_latency: bool,
     pub intents: Vec<OrderIntent>,
     pub hints: Vec<PresignHint>,
     prev_p_ns: Option<i64>,
@@ -255,6 +289,7 @@ fn invalid_key(leg: usize, state: &str) -> String {
 impl Engine {
     pub fn new(cfg: EngineConfig, ledger: Ledger, risk: RiskState, journal: Box<dyn Sink + Send>) -> Self {
         let n = cfg.assets.len();
+        let notional = cfg.params.notional_usd;
         Self {
             trade: matches!(cfg.role, Role::Full | Role::Trade),
             observe: matches!(cfg.role, Role::Full | Role::Observe),
@@ -288,8 +323,11 @@ impl Engine {
             sample_sec: None,
             grid_open: None,
             age_outlier_ms: cfg.age_outlier_ms,
-            emit_intents: cfg.emit_intents,
+            emit_intents: cfg.emit_intents || cfg.live,
             reverse: cfg.direction == Direction::Reverse,
+            live: cfg.live,
+            follow_tape_latency: cfg.follow_tape_latency,
+            sizer: Sizer::new(cfg.order_size_pct, notional),
             intents: Vec::new(),
             hints: Vec::new(),
             prev_p_ns: None,
@@ -711,6 +749,16 @@ impl Engine {
                 self.count(&format!("{kind}_{prefix}"));
                 Some(Vec::new())
             }
+            Some(kind @ ("latency" | "sizing" | "live_fill" | "live_exit" | "balance")) => {
+                if self.trade {
+                    let kind = kind.to_owned();
+                    match serde_json::from_str::<Value>(text) {
+                        Ok(v) => self.order_path_line(&kind, &v, recv_ns),
+                        Err(_) => return None,
+                    }
+                }
+                Some(Vec::new())
+            }
             Some("resolution") => {
                 if let (Some(asset), Some(open), Some(venue), Some(outcome)) =
                     (ctl.asset.as_deref(), ctl.open_unix, ctl.venue.as_deref(), ctl.outcome.as_deref())
@@ -923,11 +971,14 @@ impl Engine {
         self.state[idx].last_hint_ns = recv_ns;
         let token = if gap > 0.0 { &w.yes_token } else { &w.no_token };
         let book = self.books.get(token);
+        let ask = book.and_then(Book::best_ask);
         self.hints.push(PresignHint {
             asset: w.asset.clone(),
             token: token.clone(),
             best_bid: book.and_then(Book::best_bid),
-            best_ask: book.and_then(Book::best_ask),
+            best_ask: ask,
+            limit_px: ask.map(|a| self.limit_px(a)),
+            contracts: ask.filter(|a| *a > 0.0).map(|a| (self.params.notional_usd / a).floor() as i64),
         });
     }
 
@@ -987,10 +1038,19 @@ impl Engine {
             self.ledger.reject("insufficient_cash", &w.asset, round_dp(est, 2));
             let lines = vec![
                 format!("cash={:.2} needed={est:.2}", self.ledger.cash),
-                "P&L will flat-line from here".to_owned(),
+                if self.live {
+                    "the wallet's last reconciled balance; fund it or lower PK_ORDER_SIZE_PCT".to_owned()
+                } else {
+                    "P&L will flat-line from here".to_owned()
+                },
             ];
+            let subject = if self.live {
+                "poly-kalshi: LIVE entry rejected, insufficient balance"
+            } else {
+                "poly-kalshi: paper entry rejected, insufficient cash"
+            };
             if let Some(alert) = self.alert.as_mut() {
-                alert("insufficient_cash", "poly-kalshi: paper entry rejected, insufficient cash", &lines);
+                alert("insufficient_cash", subject, &lines);
             }
         }
         if let Some(b) = blocked {
@@ -999,6 +1059,10 @@ impl Engine {
         }
         let side = side_str(d.buy_yes);
         let token = if d.buy_yes == Some(true) { w.yes_token.clone() } else { w.no_token.clone() };
+        if self.live {
+            self.ledger.reserve(&format!("{}:{}", w.asset, w.open_unix), est);
+            self.count("live_orders");
+        }
         if self.emit_intents {
             let book = self.books.get(&token);
             self.intents.push(OrderIntent {
@@ -1012,6 +1076,11 @@ impl Engine {
                 limit_px: self.limit_px(entry),
                 contracts: d.contracts,
                 decision_ns: recv_ns,
+                condition_id: w.condition_id.clone(),
+                fee_rate: w.fee_rate,
+                fee_exponent: w.fee_exponent,
+                reserved: round_dp(est, 4),
+                live: self.live,
             });
         }
         self.pending.push(Pending {
@@ -1021,6 +1090,7 @@ impl Engine {
             side,
             decision: *d,
             decision_ns: recv_ns,
+            shadow: self.live,
         });
         None
     }
@@ -1055,7 +1125,7 @@ impl Engine {
         let result = venue.fill(book, limit, d.contracts, w.fee_rate, w.fee_exponent);
         let touch_fee = taker_fee(entry, d.contracts as f64, w.fee_rate, w.fee_exponent);
         let record = json!({
-            "type": "fill",
+            "type": if order.shadow { "paper_fill" } else { "fill" },
             "asset": w.asset,
             "open_unix": w.open_unix,
             "t_ns": recv_ns,
@@ -1074,6 +1144,12 @@ impl Engine {
             "touch_fee": round_dp(touch_fee, 4),
             "depth_at_limit": round_dp(depth, 2),
         });
+        if order.shadow {
+            // The real order's result arrives as `live_fill`; this is the comparison.
+            self.count(if result.shares > 0.0 { "paper_fills" } else { "paper_no_fills" });
+            self.write(recv_ns, record, false);
+            return;
+        }
         self.count(if result.shares > 0.0 { "fills" } else { "no_fills" });
         if self.observe {
             self.add_markout(recv_ns, w, order.side, result.shares > 0.0, result.vwap().unwrap_or(limit));
@@ -1279,6 +1355,194 @@ impl Engine {
             "cash": round_dp(self.ledger.cash, 2),
         });
         self.write(recv_ns, record, true);
+        if !self.live {
+            // Paper's balance is the ledger's cash; live waits for the wallet's
+            // balance after the redemption (`balance`).
+            self.resize(self.ledger.cash, recv_ns, "settle");
+        }
+    }
+
+    // --- the order path's results (control lines) ------------------------------------
+
+    /// Recompute the order size if nothing is at risk.
+    fn resize(&mut self, balance: f64, recv_ns: i64, source: &str) {
+        let open = self.ledger.open_positions().count();
+        let in_flight = self.ledger.in_flight() + self.pending.iter().filter(|p| !p.shadow).count();
+        if let Some(notional) = self.sizer.reconcile(balance, open, in_flight, recv_ns) {
+            self.apply_size(notional, balance, recv_ns, source);
+        }
+    }
+
+    fn apply_size(&mut self, notional: f64, balance: f64, recv_ns: i64, source: &str) {
+        self.params.notional_usd = notional;
+        self.count("resized");
+        let record = json!({
+            "type": "sizing",
+            "t_ns": recv_ns,
+            "source": source,
+            "balance": round_dp(balance, 4),
+            "pct": self.sizer.pct,
+            "notional": notional,
+        });
+        self.write(recv_ns, record, true);
+    }
+
+    fn order_path_line(&mut self, kind: &str, v: &Value, recv_ns: i64) {
+        let f = |k: &str| v.get(k).and_then(Value::as_f64);
+        let s = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
+        // A wallet's results apply only to a live engine: a paper replay of a
+        // live tape simulates its own fills.
+        if matches!(kind, "live_fill" | "live_exit" | "balance") && !self.live {
+            return;
+        }
+        match kind {
+            "latency" => {
+                if !self.follow_tape_latency {
+                    return;
+                }
+                let Some(ms) = f("ms").filter(|m| m.is_finite() && *m >= 0.0) else { return };
+                if let Some(venue) = self.venue.as_mut() {
+                    venue.latency_ns = (ms * 1e6).round() as i64;
+                }
+                let record = json!({
+                    "type": "latency", "t_ns": recv_ns, "ms": round_dp(ms, 1),
+                    "n": v.get("n"), "source": v.get("source"),
+                });
+                self.write(recv_ns, record, false);
+            }
+            "sizing" => {
+                // The seed: set from this balance whatever is open.
+                let Some(balance) = f("balance") else { return };
+                if let Some(notional) = self.sizer.set(balance, recv_ns) {
+                    self.apply_size(notional, balance, recv_ns, "seed");
+                }
+            }
+            "balance" => {
+                let Some(balance) = f("balance").filter(|b| b.is_finite()) else { return };
+                let before = self.ledger.cash;
+                let drift = self.ledger.set_cash(balance, recv_ns);
+                if drift.abs() >= 0.005 {
+                    let record = json!({
+                        "type": "reconcile", "t_ns": recv_ns, "balance": round_dp(balance, 4),
+                        "ledger_cash": round_dp(before, 4), "drift": round_dp(drift, 4),
+                        "open_positions": self.ledger.open_positions().count(),
+                        "in_flight": self.ledger.in_flight(),
+                    });
+                    self.count("reconcile_drift");
+                    self.write(recv_ns, record, false);
+                }
+                if self.sizer.basis_balance.is_none() {
+                    let open_cost: f64 = self.ledger.open_positions().map(|p| p.cost + p.fee).sum();
+                    if let Some(n) = self.sizer.set(balance + open_cost, recv_ns) {
+                        self.apply_size(n, balance + open_cost, recv_ns, "seed");
+                    }
+                } else {
+                    self.resize(balance, recv_ns, "reconcile");
+                }
+            }
+            "live_fill" => self.live_fill(v, recv_ns),
+            "live_exit" => {
+                let (asset, open) = (s("asset"), v.get("open_unix").and_then(Value::as_i64).unwrap_or(0));
+                let (shares, proceeds, fee) =
+                    (f("shares").unwrap_or(0.0), f("proceeds").unwrap_or(0.0), f("fee").unwrap_or(0.0));
+                let Some(p) = self.ledger.close(&asset, open, shares, proceeds, fee, recv_ns) else { return };
+                self.count("exits");
+                let record = json!({
+                    "type": "exit", "asset": asset, "open_unix": open, "t_ns": recv_ns,
+                    "side": p.side, "shares": shares, "proceeds": round_dp(proceeds, 4),
+                    "fee": round_dp(fee, 4), "remaining": p.shares, "pnl": round_opt(p.pnl, 4),
+                    "order_id": v.get("order_id"), "cash": round_dp(self.ledger.cash, 2),
+                });
+                self.write(recv_ns, record, true);
+            }
+            _ => {}
+        }
+    }
+
+    /// A real order's result: release its reservation, open the position, and
+    /// write a `fill` record in the paper venue's schema (so the readout and
+    /// the gates read live fills the same way).
+    fn live_fill(&mut self, v: &Value, recv_ns: i64) {
+        let f = |k: &str| v.get(k).and_then(Value::as_f64);
+        let asset = v.get("asset").and_then(Value::as_str).unwrap_or_default().to_owned();
+        let Some(open) = v.get("open_unix").and_then(Value::as_i64) else { return };
+        let side: &'static str =
+            if v.get("side").and_then(Value::as_str) == Some("yes") { "yes" } else { "no" };
+        self.ledger.release(&format!("{asset}:{open}"));
+        let shares = f("shares").unwrap_or(0.0).max(0.0);
+        let cost = f("cost").unwrap_or(0.0).max(0.0);
+        let (rate, exponent) = self
+            .window(&asset, open)
+            .map(|w| (w.fee_rate, w.fee_exponent))
+            .unwrap_or((pk_core::fees::DEFAULT_RATE, pk_core::fees::DEFAULT_EXPONENT));
+        let vwap = (shares > 0.0).then(|| cost / shares);
+        let fee = f("fee").unwrap_or_else(|| vwap.map_or(0.0, |px| taker_fee(px, shares, rate, exponent)));
+        let entry = f("entry_px");
+        let ordered = f("ordered").unwrap_or(0.0);
+        let decision_ns = v.get("decision_ns").and_then(Value::as_i64);
+        let record = json!({
+            "type": "fill",
+            "venue": "live",
+            "asset": asset,
+            "open_unix": open,
+            "t_ns": recv_ns,
+            "latency_ms": decision_ns.map(|d| round_dp((recv_ns - d) as f64 / 1e6, 1)),
+            "decision_to_ack_ms": f("decision_to_ack_ms"),
+            "side": side,
+            "limit_px": f("limit_px"),
+            "ordered": ordered,
+            "shares": shares,
+            "vwap": round_opt(vwap, 4),
+            "cost": round_dp(cost, 4),
+            "fee": round_dp(fee, 4),
+            "levels": Value::Null,
+            "best_ask_at_fill": Value::Null,
+            "touch_px": entry,
+            "touch_shares": ordered,
+            "touch_fee": entry.map(|e| round_dp(taker_fee(e, ordered, rate, exponent), 4)),
+            "depth_at_limit": Value::Null,
+            "order_id": v.get("order_id"),
+            "status": v.get("status"),
+            "error": v.get("error"),
+        });
+        self.count(if shares > 0.0 { "fills" } else { "no_fills" });
+        if self.observe
+            && let Some(w) = self.window(&asset, open).cloned()
+        {
+            self.add_markout(recv_ns, &w, side, shares > 0.0, vwap.or(f("limit_px")).unwrap_or(0.0));
+        }
+        if shares > 0.0 {
+            let position = Position {
+                asset: asset.clone(),
+                open_unix: open,
+                side: side.into(),
+                shares,
+                cost,
+                fee,
+                entry_ns: recv_ns,
+                status: "open".into(),
+                outcome: None,
+                payout: None,
+                pnl: None,
+                settled_ns: None,
+            };
+            if let Err(e) = self.ledger.buy(position) {
+                tracing::error!(error = %e, "ledger buy (live)");
+                self.count("engine_errors");
+            }
+        } else {
+            self.ledger.save();
+        }
+        self.write(recv_ns, record, true);
+        if shares > 0.0 {
+            let known = self
+                .resolutions
+                .get(&(asset.clone(), open))
+                .and_then(|seen| seen.iter().find(|(v, _)| v == "poly").map(|(_, o)| o.clone()));
+            if let Some(outcome) = known {
+                self.settle(&asset, open, &outcome, recv_ns);
+            }
+        }
     }
 
     // --- output -----------------------------------------------------------------
@@ -1384,6 +1648,14 @@ impl Engine {
             "latency": self.metrics.snapshot(),
             "ledger": (now != 0).then(|| self.ledger.snapshot(now)),
             "risk": self.risk.snapshot(),
+            "live": self.live,
+            "sizing": {
+                "pct": self.sizer.pct,
+                "notional": self.params.notional_usd,
+                "basis_balance": self.sizer.basis_balance.map(|b| round_dp(b, 2)),
+                "updated_ns": self.sizer.updated_ns,
+            },
+            "paper_latency_ms": self.venue.map(|v| round_dp(v.latency_ns as f64 / 1e6, 1)),
         })
     }
 }

@@ -41,7 +41,7 @@ const JOURNAL_EVERY: Duration = Duration::from_secs(30);
 const SERIES_POINTS: usize = 1800;
 const CSP: &str = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; \
     connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
-const RECENT_FIELDS: [&str; 18] = [
+const RECENT_FIELDS: [&str; 22] = [
     "type",
     "asset",
     "open_unix",
@@ -60,8 +60,12 @@ const RECENT_FIELDS: [&str; 18] = [
     "touch_px",
     "outcome",
     "pnl",
+    "venue",
+    "notional",
+    "drift",
+    "proceeds",
 ];
-const COUNTER_PREFIXES: [&str; 11] = [
+const COUNTER_PREFIXES: [&str; 16] = [
     "fills",
     "no_fills",
     "settled",
@@ -73,6 +77,11 @@ const COUNTER_PREFIXES: [&str; 11] = [
     "windows_unidentified",
     "engine_errors",
     "age_outliers",
+    "live_orders",
+    "paper_",
+    "resized",
+    "reconcile_drift",
+    "exits",
 ];
 
 fn keep(body: Option<&Value>, keys: &[&str]) -> Value {
@@ -165,6 +174,13 @@ pub fn pick(status: Option<&Value>) -> Option<Value> {
             "rejected": o.pointer("/probe/rejected"),
             "fills": o.pointer("/probe/fills"),
             "open_orders": o.get("open_orders"),
+            "mode": o.get("mode"),
+            "latency": o.get("latency"),
+            "live": keep(o.get("live"), &[
+                "balance", "last_reconcile_ns", "reconcile_errors", "stray_orders", "position_drift",
+                "redeemed", "redeem_pending", "redeem_errors", "gas_pol", "entries", "filled", "refused",
+                "balance_rejects", "exits",
+            ]),
         }),
         _ => json!({"enabled": false}),
     };
@@ -186,6 +202,7 @@ pub fn pick(status: Option<&Value>) -> Option<Value> {
         "telegram": keep(st.get("telegram"), &["handled", "errors", "conflicts"]),
         "ledger": engine.get("ledger"),
         "risk": keep(engine.get("risk"), &["halted", "kill_file_present"]),
+        "sizing": engine.get("sizing"),
         "counters": counters,
         "order_path": order_path,
         "recent": recent,
@@ -663,7 +680,8 @@ mod tests {
             "engine": {"assets": {"BTC": {"gap": 0.1, "secret": 1}}, "counters": {"fills": 2, "something_else": 3},
                        "risk": {"halted": false, "kill_file_present": false, "halt_reason": "x"}},
             "feeds": {"kalshi": {"connected": true, "last_error": "token=abc"}},
-            "order_path": {"enabled": true, "exec": {"decision_to_ack_ms": {"n": 3, "p50": 12.5}}, "probe": {"fills": 0}},
+            "order_path": {"enabled": true, "exec": {"decision_to_ack_ms": {"n": 3, "p50": 12.5}}, "probe": {"fills": 0},
+                           "mode": "live", "live": {"balance": 12.5, "last_error": "secret detail"}},
             "recent": [{"type": "decision", "asset": "BTC", "kalshi": {"bid": 1}}],
             "api_key_leak": "never",
         });
@@ -674,6 +692,8 @@ mod tests {
         assert!(p["feeds"]["kalshi"].get("last_error").is_none());
         assert!(p["risk"].get("halt_reason").is_none());
         assert_eq!(p["order_path"]["decision_to_ack_ms"]["p50"], 12.5);
+        assert_eq!(p["order_path"]["live"]["balance"], 12.5);
+        assert!(p["order_path"]["live"].get("last_error").is_none());
         assert!(p["recent"][0].get("kalshi").is_none());
     }
 
