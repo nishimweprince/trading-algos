@@ -104,9 +104,23 @@ still the seed.
 
 ## Live execution
 
-`PK_EXECUTION_MODE=live` with `PK_LIVE_CONFIRM=yes`, a funded `POLY_PRIVATE_KEY`
-(an EOA: `POLY_SIGNATURE_TYPE=0`), the CLOB token approvals, a `POLYGON_RPC_URL` and
-a little POL for gas.
+`PK_EXECUTION_MODE=live` with `PK_LIVE_CONFIRM=yes`, a `POLY_PRIVATE_KEY`, a
+`POLYGON_RPC_URL`, and one of two wallets:
+
+- **An EOA** (`POLY_SIGNATURE_TYPE=0`): the key's own address holds the pUSD and
+  has the CLOB token approvals, plus a little POL for the redemption gas.
+- **A deposit wallet** (`POLY_SIGNATURE_TYPE=3`, `POLY_FUNDER` = its address):
+  the wallet polymarket.com creates for a new account, which already has the
+  approvals. Fund its deposit address. Orders are signed for it (EIP-1271), and
+  settled positions are redeemed by a signed batch that Polymarket's relayer
+  submits and pays for, so it needs a `POLY_RELAYER_API_KEY` (polymarket.com →
+  Settings → API Keys) and no POL. At startup the service checks on chain that
+  the key owns the wallet.
+
+The dashboard's cash is the CLOB's balance for that wallet and signature type.
+Funds at another address (for example the deposit wallet while
+`POLY_SIGNATURE_TYPE=0`) read as zero, and every entry is refused as
+`insufficient_cash`.
 
 - **Entries.** Each decision is a FAK BUY at the decision's limit, rounded down to
   the tick and never above `PK_MAX_ENTRY_PX`. It takes what rests at or below the
@@ -131,7 +145,8 @@ a little POL for gas.
   - it compares each open position with its token balance (`position_drift`);
   - it redeems settled winners on chain (a `redeem` record with the tx hash).
     `redeem_failed` is alerted after 20 tries; `redeem_no_effect` if the shares
-    are still in the wallet; `gas_low` under 0.05 POL.
+    are still in the wallet; `gas_low` under 0.05 POL (EOA only: a deposit
+    wallet's redemptions are gasless).
 - **Risk.**
   - `PK_DAILY_LOSS_LIMIT_USD` halts on the ledger's realised P&L and on the
     wallet's equity drawdown since the day's first reconciliation.

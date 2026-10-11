@@ -9,7 +9,8 @@
 //! histograms to `<out>/probe_stats.json`.
 //!
 //! Requires `PK_ORDER_PROBE=on` and a Polymarket wallet (`POLY_PRIVATE_KEY`,
-//! optionally `POLY_FUNDER` and `POLY_SIGNATURE_TYPE`) holding a few pUSD.
+//! optionally `POLY_FUNDER` and `POLY_SIGNATURE_TYPE`, 3 for a deposit wallet)
+//! holding a few pUSD.
 
 use std::io::Write as _;
 use std::path::PathBuf;
