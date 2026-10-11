@@ -13,6 +13,7 @@ __all__ = ["TF", "Bar", "Position", "Rejected", "Side", "Signal", "Swing", "Tren
 
 
 class TF(StrEnum):
+    M5 = "5m"
     M15 = "15m"
     H1 = "1h"
     H4 = "4h"
@@ -20,7 +21,13 @@ class TF(StrEnum):
 
     @property
     def ms(self) -> int:
-        return {"15m": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}[self.value]
+        return {
+            "5m": 300_000,
+            "15m": 900_000,
+            "1h": 3_600_000,
+            "4h": 14_400_000,
+            "1d": 86_400_000,
+        }[self.value]
 
 
 class Side(StrEnum):

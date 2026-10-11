@@ -47,8 +47,8 @@ class FsmCtx:
     atr: float  # ATR14(entry) at this bar
     vol_med: float  # median volume of the previous 20 entry bars
     prev_close: float
-    trend: Trend  # 4H trend state
-    swing_low: float | None  # last confirmed 1H swing low price
+    trend: Trend  # fast-TF trend state
+    swing_low: float | None  # last confirmed entry-TF swing low price
     swing_high: float | None
     range_min_strength: float = RANGE_MIN_STRENGTH_DEFAULT
 
@@ -114,7 +114,11 @@ class RetestFSM:
     def active(self) -> bool:
         return self.state in (BROKEN, RETESTING)
 
-    def step(self, bar: Bar, zone: Zone | None, ctx: FsmCtx, cfg: Entries) -> Armed | None:
+    def step(
+        self, bar: Bar, zone: Zone | None, ctx: FsmCtx, cfg: Entries, *, bar_scale: int = 1
+    ) -> Armed | None:
+        """Step one entry bar; ``bar_scale`` is entry bars per hour, so the
+        retest window keeps its wall-clock span whatever the entry TF."""
         if self.state == IDLE:
             if zone is not None:
                 self._try_break(bar, zone, ctx, cfg)
@@ -126,7 +130,7 @@ class RetestFSM:
                 self.state = IDLE
                 self.side = None
             return None
-        return self._track(bar, zone, ctx, cfg)
+        return self._track(bar, zone, ctx, cfg, bar_scale)
 
     # -- IDLE ------------------------------------------------------------------
     def _try_break(self, bar: Bar, z: Zone, ctx: FsmCtx, cfg: Entries) -> None:
@@ -176,7 +180,9 @@ class RetestFSM:
         self.idle_bars = 0
         self.flips_at_end = zone.flips if zone is not None else 0
 
-    def _track(self, bar: Bar, zone: Zone | None, ctx: FsmCtx, cfg: Entries) -> Armed | None:
+    def _track(
+        self, bar: Bar, zone: Zone | None, ctx: FsmCtx, cfg: Entries, bar_scale: int
+    ) -> Armed | None:
         self.bars_since += 1
         if zone is not None:
             self.strength = zone.strength
@@ -192,7 +198,7 @@ class RetestFSM:
             failed = bar.close > self.hi + tol
             touched = bar.high >= self.lo - tol
             extreme = bar.high
-        if failed or self.bars_since > cfg.retest_window_bars:
+        if failed or self.bars_since > cfg.retest_window_bars * bar_scale:
             self._end(FAILED, zone)
             return None
         if self.state == BROKEN and touched:

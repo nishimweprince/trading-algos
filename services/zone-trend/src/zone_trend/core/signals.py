@@ -8,11 +8,11 @@ limits, breakers) belong to the risk layer.
   against the side ("no new longs").
 - In a trend, continuation needs the latest impulse steeper than the latest
   correction, and no momentum decay.
-- Volatility: ATR14(1D)/close between the 10th and 95th percentiles of its
-  trailing year (at least ``MIN_VOL_HISTORY`` daily values).
+- Volatility: ATR14(slow)/close between the 10th and 95th percentiles of
+  its trailing year (day-scaled slow-close counts; 365/180 when slow is 1D).
 - Stop: the retest extreme (``exits.stop_anchor``: or the zone edge, or the
   further of the two) plus 0.3 * ATR14(entry). Skipped when under
-  0.4 * ATR14(entry), over 3 * ATR14(4H), or over ``max_stop_pct``.
+  0.4 * ATR14(entry), over 3 * ATR14(fast), or over ``max_stop_pct``.
 - Targets: TP1 at 1.5R; skipped when the next opposing zone is closer than
   1.0R. TP2 is the nearer of that zone's edge and 3R; None when that is not
   beyond TP1 (the runner is then left to the trail).
@@ -42,13 +42,19 @@ def signal_id(symbol: str, zone_id: str, entry_type: str, bar_time: int) -> str:
     return hashlib.sha1(f"{symbol}|{zone_id}|{entry_type}|{bar_time}".encode()).hexdigest()
 
 
-def vol_ok(history: list[float], bands: tuple[float, float]) -> tuple[bool, str]:
+def vol_ok(
+    history: list[float],
+    bands: tuple[float, float],
+    *,
+    window: int = VOL_WINDOW,
+    min_history: int = MIN_VOL_HISTORY,
+) -> tuple[bool, str]:
     """Is the newest ATR/close value inside the trailing-year percentile band?"""
-    window = history[-VOL_WINDOW:]
-    if len(window) < MIN_VOL_HISTORY:
+    vals = history[-window:]
+    if len(vals) < min_history:
         return False, "vol_history"
-    lo, hi = np.quantile(window, bands)
-    return (bool(lo <= window[-1] <= hi), "vol_filter")
+    lo, hi = np.quantile(vals, bands)
+    return (bool(lo <= vals[-1] <= hi), "vol_filter")
 
 
 def build_signal(
@@ -58,9 +64,9 @@ def build_signal(
     zones: list[Zone],
     trend: Trend,
     choch_side: Trend | None,
-    legs_h4: list[Leg],
+    legs_fast: list[Leg],
     atr_entry: float,
-    atr_h4: float,
+    atr_fast: float,
     vol_history: list[float],
     zone_strength: float,
     zone_origin: set[TF],
@@ -68,6 +74,8 @@ def build_signal(
 ) -> Signal | Rejected:
     side = armed.side
     long = side is Side.LONG
+    slow_tf = TF(cfg.timeframes.zones[0])
+    fast_tf = TF(cfg.timeframes.zones[1])
 
     def reject(reason: str, detail: str = "") -> Rejected:
         return Rejected(symbol, side, "B", armed.zone_id, armed.bar_time, reason, detail)
@@ -81,11 +89,17 @@ def build_signal(
     ):
         return reject("trend", trend.value)
     if with_trend and cfg.structure.slope_gate:
-        if not slope_ok(legs_h4, side):
+        if not slope_ok(legs_fast, side):
             return reject("slope")
-        if momentum_decay(legs_h4, side, cfg.structure.decay_ratio):
+        if momentum_decay(legs_fast, side, cfg.structure.decay_ratio):
             return reject("momentum_decay")
-    ok, why = vol_ok(vol_history, cfg.filters.vol_percentiles)
+    closes_per_day = 86_400_000 // slow_tf.ms
+    ok, why = vol_ok(
+        vol_history,
+        cfg.filters.vol_percentiles,
+        window=VOL_WINDOW * closes_per_day,
+        min_history=MIN_VOL_HISTORY * closes_per_day,
+    )
     if not ok:
         return reject(why)
 
@@ -102,8 +116,8 @@ def build_signal(
     dist = (entry - stop) if long else (stop - entry)
     if dist < ex.min_stop_atr_entry * atr_entry:
         return reject("stop_too_tight", f"{dist / atr_entry:.2f} ATR{cfg.timeframes.entry}")
-    if dist > ex.max_stop_atr_h4 * atr_h4:
-        return reject("stop_too_wide_atr", f"{dist / atr_h4:.2f} ATR4h")
+    if dist > ex.max_stop_atr_fast * atr_fast:
+        return reject("stop_too_wide_atr", f"{dist / atr_fast:.2f} ATR{fast_tf.value}")
     if dist / entry > ex.max_stop_pct:
         return reject("stop_too_wide_pct", f"{dist / entry:.4f}")
 
@@ -126,7 +140,7 @@ def build_signal(
     quality = 1
     quality += int(cfg.entries.fib_quality_band[0] <= armed.retr <= cfg.entries.fib_quality_band[1])
     quality += int(zone_strength >= cfg.zones.range_min_strength)
-    quality += int(TF.D1 in zone_origin)
+    quality += int(slow_tf in zone_origin)
     return Signal(
         id=signal_id(symbol, armed.zone_id, "B", armed.bar_time),
         symbol=symbol,

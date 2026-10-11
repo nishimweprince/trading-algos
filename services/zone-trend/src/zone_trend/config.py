@@ -11,12 +11,15 @@ come from the environment through the service settings.
 
 from __future__ import annotations
 
+import os
 from enum import StrEnum
 from pathlib import Path
 from typing import Literal, Self
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from zone_trend.types import TF
 
 __all__ = ["Config", "load_config"]
 
@@ -55,9 +58,30 @@ class Universe(_Section):
 
 
 class Timeframes(_Section):
-    zones: list[Literal["1d", "4h"]]
-    trend: Literal["4h"]
-    entry: Literal["1h", "15m"]
+    # Exactly [slow, fast], slow-first. The trend TF must equal the fast zone
+    # TF, and entry must sit below it, so the core always sees one ordered
+    # (slow, fast, entry) ladder. Overridable per-run with ZT_ZONES_TF
+    # ("4h,1h"), ZT_TREND_TF and ZT_ENTRY_TF (see load_config).
+    zones: list[Literal["5m", "15m", "1h", "4h", "1d"]]
+    trend: Literal["5m", "15m", "1h", "4h", "1d"]
+    entry: Literal["5m", "15m", "1h", "4h", "1d"]
+
+    @model_validator(mode="after")
+    def _ladder(self) -> Self:
+        zones = self.zones
+        if len(zones) != 2 or zones[0] == zones[1]:
+            raise ValueError("timeframes.zones must be exactly [slow, fast]")
+        if TF(zones[0]).ms <= TF(zones[1]).ms:
+            raise ValueError(f"timeframes.zones must be slow-first, got {zones}")
+        if self.trend != zones[1]:
+            raise ValueError(
+                f"timeframes.trend must equal the fast zone TF ({zones[1]}), got {self.trend}"
+            )
+        if TF(self.entry).ms >= TF(zones[1]).ms:
+            raise ValueError(
+                f"timeframes.entry ({self.entry}) must be below the fast zone TF ({zones[1]})"
+            )
+        return self
 
 
 class SwingLR(_Section):
@@ -70,6 +94,7 @@ class Swings(_Section):
     h4: SwingLR
     h1: SwingLR
     m15: SwingLR
+    m5: SwingLR
     k_atr: float = Field(ge=0, le=5)
 
 
@@ -82,6 +107,18 @@ class Structure(_Section):
 class LookbackDays(_Section):
     d1: int = Field(ge=30, le=2000)
     h4: int = Field(ge=7, le=730)
+    h1: int = Field(ge=3, le=365)
+    m15: int = Field(ge=1, le=90)
+    m5: int = Field(ge=1, le=90)
+
+    def days(self, tf: TF) -> int:
+        return {
+            TF.D1: self.d1,
+            TF.H4: self.h4,
+            TF.H1: self.h1,
+            TF.M15: self.m15,
+            TF.M5: self.m5,
+        }[tf]
 
 
 class WidthAtr(_Section):
@@ -97,11 +134,11 @@ class WidthAtr(_Section):
 class Zones(_Section):
     lookback_days: LookbackDays
     width_atr: WidthAtr
-    merge_atr_d1: float = Field(ge=0, le=3)
-    max_width_atr_d1: float = Field(gt=0, le=5)
-    break_atr_h4: float = Field(ge=0, le=3)
+    merge_atr_slow: float = Field(ge=0, le=3)
+    max_width_atr_slow: float = Field(gt=0, le=5)
+    break_atr_fast: float = Field(ge=0, le=3)
     keep_per_side: int = Field(ge=1, le=20)
-    use_d1: bool = True
+    use_slow: bool = True
     hvn_lookback_days: int = Field(ge=7, le=730)
     range_min_strength: float = Field(ge=0, le=100)
 
@@ -134,7 +171,7 @@ class Exits(_Section):
     stop_anchor: Literal["retest", "zone", "further"]
     stop_buffer_atr: float = Field(ge=0, le=3)
     min_stop_atr_entry: float = Field(ge=0, le=5)
-    max_stop_atr_h4: float = Field(gt=0, le=10)
+    max_stop_atr_fast: float = Field(gt=0, le=10)
     max_stop_pct: float = Field(gt=0, le=0.2)
     tp1_r: float = Field(gt=0, le=10)
     tp1_fraction: float = Field(gt=0, lt=1)
@@ -249,7 +286,19 @@ class Config(_Section):
 
 
 def load_config(path: Path | str = DEFAULT_PATH) -> Config:
-    """Read and validate a config file; raises ``pydantic.ValidationError``."""
+    """Read and validate a config file; raises ``pydantic.ValidationError``.
+
+    The ``timeframes`` section can be overridden per-run without editing the
+    file: ``ZT_ZONES_TF`` (slow,fast, e.g. ``4h,1h``), ``ZT_TREND_TF`` and
+    ``ZT_ENTRY_TF``. Unset or empty values leave the file untouched.
+    """
     with Path(path).open() as fh:
         raw = yaml.safe_load(fh)
+    tf = raw.setdefault("timeframes", {})
+    if zones := os.environ.get("ZT_ZONES_TF"):
+        tf["zones"] = [s.strip() for s in zones.split(",")]
+    if trend := os.environ.get("ZT_TREND_TF"):
+        tf["trend"] = trend.strip()
+    if entry := os.environ.get("ZT_ENTRY_TF"):
+        tf["entry"] = entry.strip()
     return Config.model_validate(raw)

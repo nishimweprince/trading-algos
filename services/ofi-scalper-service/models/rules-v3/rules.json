@@ -1,0 +1,11 @@
+{
+  "signal": "ofi_int_5000ms",
+  "z_entry": 3.5,
+  "halflife_s": 300.0,
+  "warmup_s": 300.0,
+  "imbalance_min": 0.6,
+  "tfi_feature": "tfi_5000ms",
+  "max_spread_ticks": 2.0,
+  "hold_ms": 5000,
+  "confidence": 1.0
+}

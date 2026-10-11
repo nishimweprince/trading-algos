@@ -1,9 +1,8 @@
 # PROTOTYPE: 15m entries for the 1H-vs-15m backtest comparison (2026-10-09).
-# Everything is default.yaml except the entry timeframe and the bar-count
-# windows, which are scaled x4 to keep the same wall-clock spans (48h retest
-# window, 3h limit validity, 72h time stop; the FSM cooldown is scaled in
-# code). ATR-relative parameters transfer as-is; stops and trails are
-# tighter in absolute terms because 15m ATR < 1H ATR. Not validated: no M4
+# Everything is default.yaml except the entry timeframe; entry-bar windows
+# (48h retest, 3h limit validity, 72h time stop, FSM cooldown) scale to the
+# entry TF in code. ATR-relative parameters transfer as-is; stops and trails
+# are tighter in absolute terms because 15m ATR < 1H ATR. Not validated: no M4
 # walk-forward, and the funding blackout is not enforced for market entries
 # (see PLAN.md). Live/shadow still run default.yaml (1H).
 mode: backtest            # backtest | shadow | live
@@ -25,19 +24,20 @@ swings:
   h4: {left: 5, right: 5}
   h1: {left: 3, right: 3}
   m15: {left: 3, right: 3}
+  m5: {left: 3, right: 3}
   k_atr: 1.0
 structure:
   ema_period: 50
   decay_ratio: 0.6
   slope_gate: true         # ablation switch: impulse-vs-correction slope and momentum decay
 zones:
-  lookback_days: {d1: 365, h4: 90}
+  lookback_days: {d1: 365, h4: 90, h1: 30, m15: 7, m5: 2}
   width_atr: {min: 0.25, max: 0.6}
-  merge_atr_d1: 0.5
-  max_width_atr_d1: 1.0
-  break_atr_h4: 0.25
+  merge_atr_slow: 0.5
+  max_width_atr_slow: 1.0
+  break_atr_fast: 0.25
   keep_per_side: 6
-  use_d1: true             # ablation switch: seed zones from 1D swings as well as 4H
+  use_slow: true             # ablation switch: seed zones from slow-TF swings as well as fast-TF
   hvn_lookback_days: 90
   range_min_strength: 70
 entries:
@@ -45,11 +45,11 @@ entries:
   breakout_buffer_atr: 0.10
   min_body_ratio: 0.5
   volume_mult: 1.3
-  retest_window_bars: 192
+  retest_window_bars: 48
   retest_tolerance_atr: 0.25
   fib_band: [0.382, 0.786]
   fib_quality_band: [0.5, 0.618]
-  limit_valid_bars: 12
+  limit_valid_bars: 3
   max_chase_atr: 0.8
   # Rejection candle (not defined in the spec; decided 2026-10-09): the
   # zone-side wick is at least this share of the range, and the close sits in
@@ -60,7 +60,7 @@ exits:
   stop_anchor: retest       # retest | zone | further (spec: "the retest swing or zone edge")
   stop_buffer_atr: 0.3
   min_stop_atr_entry: 0.4
-  max_stop_atr_h4: 3.0
+  max_stop_atr_fast: 3.0
   max_stop_pct: 0.06
   tp1_r: 1.5
   tp1_fraction: 0.4
@@ -71,7 +71,7 @@ exits:
   trail_atr: 3.0
   trail_atr_decay: 2.0
   trail_min_step_atr: 0.25
-  time_stop_bars: 288
+  time_stop_bars: 72
   time_stop_min_r: 0.5
 sizing:
   mode: movement           # movement | fixed_margin

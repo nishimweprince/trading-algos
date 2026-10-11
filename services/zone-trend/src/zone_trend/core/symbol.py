@@ -1,12 +1,13 @@
 """Per-symbol core state and the processing order for each closed entry bar.
 
-``SymbolCore.on_close`` follows the spec:
+``SymbolCore.on_close`` follows the spec, on the configured (slow, fast,
+entry) ladder (default 1D/4H/1H):
 
-1. Append the entry bar (1H, or 15m in the prototype config); a 4H or 1D bar
-   that closed at the same instant is appended first.
+1. Append the entry bar; a fast or slow bar that closed at the same instant
+   is appended first.
 2. Update swings for every timeframe that received a bar.
-3. If 4H or 1D changed: update trend states, slopes, and rebuild the zones.
-4. On a 4H close: apply breaks, flips, touches and deletions.
+3. If fast or slow changed: update trend states, slopes, and rebuild the zones.
+4. On a fast close: apply breaks, flips, touches and deletions.
 5. Step the retest FSM of every zone within 2 x ATR14(entry) of price, and of
    every FSM mid-retest.
 6. Build signals (or rejections) from what armed.
@@ -40,6 +41,12 @@ __all__ = ["CloseResult", "SymbolCore"]
 
 PROXIMITY_ATR = 2.0
 HVN_BINS = 50
+DAY_MS = 86_400_000
+# Kept swings alternate high/low, so tails cover every reader with margin:
+# trend needs the last 2 highs + 2 lows (4 swings); legs feed slope_ok (last
+# impulse + correction) and momentum_decay (last 4 impulses), i.e. ≤ 8 legs.
+_TREND_TAIL = 8
+_LEGS_TAIL = 16
 
 
 @dataclass
@@ -53,32 +60,40 @@ class SymbolCore:
     def __init__(self, symbol: str, cfg: Config):
         self.symbol = symbol
         self.cfg = cfg
+        self.slow_tf = TF(cfg.timeframes.zones[0])
+        self.fast_tf = TF(cfg.timeframes.zones[1])
         self.entry_tf = TF(cfg.timeframes.entry)
+        # Entry-bar counts that name wall-clock spans (retest window, time
+        # stop, FSM cooldown) scale by entry bars per hour.
+        self.entry_scale = TF.H1.ms // self.entry_tf.ms
         ema = cfg.structure.ema_period
         self.series = {tf: BarSeries(tf, ema_period=ema) for tf in TF}
         sw = cfg.swings
-        lr = {TF.D1: sw.d1, TF.H4: sw.h4, TF.H1: sw.h1, TF.M15: sw.m15}
+        lr = {TF.D1: sw.d1, TF.H4: sw.h4, TF.H1: sw.h1, TF.M15: sw.m15, TF.M5: sw.m5}
         self.swings = {tf: SwingTracker(lr[tf].left, lr[tf].right, sw.k_atr) for tf in TF}
         # ENTERED/FAILED cooldown, kept at 24h of entry bars whatever the entry TF.
-        self.reset_bars = RESET_BARS * TF.H1.ms // self.entry_tf.ms
-        self.structure = {TF.D1: StructureState(TF.D1), TF.H4: StructureState(TF.H4)}
-        self.zones = ZoneBook(cfg.zones)
+        self.reset_bars = RESET_BARS * self.entry_scale
+        self.structure = {
+            self.slow_tf: StructureState(self.slow_tf),
+            self.fast_tf: StructureState(self.fast_tf),
+        }
+        self.zones = ZoneBook(cfg.zones, self.slow_tf, self.fast_tf)
         self.fsm: dict[str, RetestFSM] = {}
-        self.vol_history: list[float] = []  # ATR14(1D) / close, one per 1D close
-        self.legs_h4: list[Leg] = []
+        self.vol_history: list[float] = []  # ATR14(slow) / close, one per slow close
+        self.legs_fast: list[Leg] = []
         self.now = -1
 
     # -- views -------------------------------------------------------------------
     @property
     def trend(self) -> Trend:
-        return self.structure[TF.H4].trend
+        return self.structure[self.fast_tf].trend
 
     def atr(self, tf: TF) -> float:
         s = self.series[tf]
         return s.last_atr if len(s) else math.nan
 
     def decay(self, side: Side) -> bool:
-        return momentum_decay(self.legs_h4, side, self.cfg.structure.decay_ratio)
+        return momentum_decay(self.legs_fast, side, self.cfg.structure.decay_ratio)
 
     def _last_swing(self, kind: str) -> float | None:
         for sw in reversed(self.swings[self.entry_tf].swings):
@@ -87,45 +102,45 @@ class SymbolCore:
         return None
 
     # -- the entry-bar step ------------------------------------------------------
-    def on_close(self, entry: Bar, h4: Bar | None = None, d1: Bar | None = None) -> CloseResult:
-        for bar in (d1, h4):
+    def on_close(self, entry: Bar, fast: Bar | None = None, slow: Bar | None = None) -> CloseResult:
+        for bar in (slow, fast):
             if bar is not None and bar.close_time != entry.close_time:
                 raise ValueError("higher-timeframe bars must close with the entry bar they ride on")
         self.now = entry.close_time
         res = CloseResult()
-        etf = self.entry_tf
+        etf, ftf, stf = self.entry_tf, self.fast_tf, self.slow_tf
 
         # 1-2: bars and swings
-        if d1 is not None:
-            self._append(TF.D1, d1)
-            atr_d1 = self.atr(TF.D1)
-            if math.isfinite(atr_d1):
-                self.vol_history.append(atr_d1 / d1.close)
-        if h4 is not None:
-            self._append(TF.H4, h4)
+        if slow is not None:
+            self._append(stf, slow)
+            atr_slow = self.atr(stf)
+            if math.isfinite(atr_slow):
+                self.vol_history.append(atr_slow / slow.close)
+        if fast is not None:
+            self._append(ftf, fast)
         prev_close = self.series[etf].last.close if len(self.series[etf]) else entry.open
         self._append(etf, entry)
 
         # 3: structure and zones
-        if d1 is not None:
-            s = self.series[TF.D1]
-            self.structure[TF.D1].update(
-                self.swings[TF.D1].visible(self.now), d1.close, self.now, s.ema[-1], None
+        if slow is not None:
+            s = self.series[stf]
+            self.structure[stf].update(
+                self.swings[stf].tail(_TREND_TAIL), slow.close, self.now, s.ema[-1], None
             )
-        if h4 is not None:
-            s = self.series[TF.H4]
-            sw_h4 = self.swings[TF.H4].visible(self.now)
-            self.structure[TF.H4].update(
-                sw_h4, h4.close, self.now, s.ema[-1], self.structure[TF.D1].trend
+        if fast is not None:
+            s = self.series[ftf]
+            sw_fast = self.swings[ftf].tail(_LEGS_TAIL)
+            self.structure[ftf].update(
+                sw_fast, fast.close, self.now, s.ema[-1], self.structure[stf].trend
             )
-            self.legs_h4 = legs(sw_h4, TF.H4.ms, self.atr(TF.D1), h4.close)
-        if h4 is not None or d1 is not None:
+            self.legs_fast = legs(sw_fast, ftf.ms, self.atr(stf), fast.close)
+        if fast is not None or slow is not None:
             self._rebuild_zones(entry.close)
 
-        # 4: breaks on the 4H close
-        if h4 is not None:
+        # 4: breaks on the fast close
+        if fast is not None:
             res.zone_events = self.zones.mark_breaks(
-                self.now, h4.high, h4.low, h4.close, self.atr(TF.H4)
+                self.now, fast.high, fast.low, fast.close, self.atr(ftf)
             )
 
         # 5-6: retest FSMs and signals
@@ -137,20 +152,21 @@ class SymbolCore:
         self.swings[tf].update(self.series[tf])
 
     def _rebuild_zones(self, close: float) -> None:
-        h4 = self.series[TF.H4]
-        lookback = self.cfg.zones.hvn_lookback_days * 6
-        window = h4.bars[-lookback:]
+        fast = self.series[self.fast_tf]
+        lookback = self.cfg.zones.hvn_lookback_days * 86_400_000 // self.fast_tf.ms
+        window = fast.bars[-lookback:]
         hvn = volume_profile_hvn(
             [b.high for b in window],
             [b.low for b in window],
             [b.volume for b in window],
             bins=HVN_BINS,
         )
+        lookback = self.cfg.zones.lookback_days
         self.zones.rebuild(
             self.now,
-            self.swings[TF.D1].visible(self.now),
-            self.swings[TF.H4].visible(self.now),
-            self.atr(TF.D1),
+            self.swings[self.slow_tf].window(self.now, lookback.days(self.slow_tf) * DAY_MS),
+            self.swings[self.fast_tf].window(self.now, lookback.days(self.fast_tf) * DAY_MS),
+            self.atr(self.slow_tf),
             close,
             hvn,
         )
@@ -183,7 +199,7 @@ class SymbolCore:
             if zid not in near and fsm.state == "IDLE":
                 del self.fsm[zid]
                 continue
-            armed = fsm.step(entry, zone, ctx, self.cfg.entries)
+            armed = fsm.step(entry, zone, ctx, self.cfg.entries, bar_scale=self.entry_scale)
             if armed is None:
                 continue
             out = build_signal(
@@ -191,10 +207,10 @@ class SymbolCore:
                 armed,
                 zones=self.zones.zones,
                 trend=self.trend,
-                choch_side=self.structure[TF.H4].choch_side,
-                legs_h4=self.legs_h4,
+                choch_side=self.structure[self.fast_tf].choch_side,
+                legs_fast=self.legs_fast,
                 atr_entry=atr,
-                atr_h4=self.atr(TF.H4),
+                atr_fast=self.atr(self.fast_tf),
                 vol_history=self.vol_history,
                 zone_strength=zone.strength if zone else fsm.strength,
                 zone_origin=zone.tf_origin if zone else set(),
@@ -210,7 +226,8 @@ class SymbolCore:
             pos,
             self.atr(self.entry_tf),
             decay=self.decay(pos.side),
-            choch_against=self.structure[TF.H4].choch_against(pos.side, pos.opened_at),
+            choch_against=self.structure[self.fast_tf].choch_against(pos.side, pos.opened_at),
             fee_taker=self.cfg.exchange.fee_taker,
             cfg=self.cfg.exits,
+            bar_scale=self.entry_scale,
         )

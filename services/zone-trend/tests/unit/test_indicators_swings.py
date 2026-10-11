@@ -98,6 +98,25 @@ def test_leg_filter_rejects_small_pivots():
     assert loose and not strict
 
 
+def test_tail_window_match_naive_filters_at_every_close():
+    drifted_h = [h + off for off in (0, 50, -50, 100, -100, 150) for h in BASE_H]
+    drifted_l = [lo + off for off in (0, 50, -50, 100, -100, 150) for lo in BASE_L]
+    tracker, _ = feed(drifted_h, drifted_l)
+    assert len(tracker.swings) > 8  # tails actually cut something
+    # The bisect indexes assume append order stays sorted by both keys.
+    assert [s.pivot_time for s in tracker.swings] == sorted(s.pivot_time for s in tracker.swings)
+    assert [s.t_conf for s in tracker.swings] == sorted(s.t_conf for s in tracker.swings)
+    closes = sorted({s.t_conf for s in tracker.swings})
+    for now in closes:
+        naive_visible = [s for s in tracker.swings if s.t_conf <= now]
+        assert tracker.visible(now) == naive_visible
+        for lookback in (0, 3 * H, 24 * H):
+            naive_window = [s for s in naive_visible if s.pivot_time >= now - lookback]
+            assert tracker.window(now, lookback) == naive_window
+    assert tracker.tail(4) == tracker.swings[-4:]
+    assert tracker.tail(10**9) == tracker.swings
+
+
 def test_same_kind_swings_collapse_to_the_more_extreme_with_later_t_conf():
     # Two peaks with no confirmable low between them: 110 then 115.
     highs = [101.0] * 14 + [105, 110, 105, 104, 105, 106, 115, 106, 105, 104, 103]

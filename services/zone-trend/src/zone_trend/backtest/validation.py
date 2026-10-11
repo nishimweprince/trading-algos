@@ -33,7 +33,7 @@ ABLATIONS: dict[str, tuple[str, str, object]] = {
     "fib_band": ("entries", "fib_band", [0.3, 0.8]),  # the spec band vs a plain band
     "slope": ("structure", "slope_gate", False),
     "funding": ("filters", "funding_max_8h", 0.01),
-    "htf_zones": ("zones", "use_d1", False),
+    "htf_zones": ("zones", "use_slow", False),
     "btc_gate": ("filters", "btc_gate", False),
 }
 

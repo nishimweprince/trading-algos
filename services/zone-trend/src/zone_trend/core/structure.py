@@ -100,11 +100,11 @@ class Leg:
     slope: float  # normalised, signed
 
 
-def legs(swings: list[Swing], tf_ms: int, atr_d1: float, close: float) -> list[Leg]:
-    if not (math.isfinite(atr_d1) and atr_d1 > 0 and close > 0):
+def legs(swings: list[Swing], tf_ms: int, atr_slow: float, close: float) -> list[Leg]:
+    if not (math.isfinite(atr_slow) and atr_slow > 0 and close > 0):
         return []
     bars_per_day = 86_400_000 / tf_ms
-    vol = atr_d1 / close
+    vol = atr_slow / close
     out = []
     for a, b in zip(swings, swings[1:], strict=False):
         bars = max((b.pivot_time - a.pivot_time) / tf_ms, 1.0)

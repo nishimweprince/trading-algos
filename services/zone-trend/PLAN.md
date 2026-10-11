@@ -301,6 +301,9 @@ Verdict: the 1H-tuned entry logic does not transfer to 15m by time-scaling alone
 ### Majors backtest, 1H (2026-10-09; at the user's request)
 10 large-cap perps (BTC ETH BNB XRP DOGE ADA LINK LTC BCH TRX), 2021-01..2026-10, default config: `runs/713db5ab894f`, 181 trades, PF 0.90, −0.13R/trade, DD 6.9%. Winners: DOGE (+10.9), ADA (+9.8), ETH (+7.0), XRP (+3.0). Losers: LTC (−24.4), BCH (−9.9), LINK (−8.8), TRX, BNB; BTC flat. Portfolio contention costs BTC 6 fills vs the 2-symbol run (17 vs 23). Breadth alone does not fix the edge: per-symbol expectancy ranges from −0.60R (LTC) to +0.44R (DOGE), so symbol selection/weighting is the next question, still behind the M4 gate.
 
+### 15m backtest on 18 majors (2026-10-09; at the user's request)
+`runs/19bcea9d592b`: 659 trades, PF 0.83, −0.12R/trade, DD 20.1%, end equity 413.5. Same verdict at scale: finer entries multiply a negative edge (DD 3x the 1H 10-major run). Per-symbol results reshuffle vs 1H — LTC goes from worst (−24.4) to near flat (−3.8), XRP flips positive to −15.4, BTC −0.2 to −13.3; only ADA (+13.8), XLM (+17.1) and SOL (+12.7) stay clearly positive on both timeframes.
+
 ### Majors backtest II, 1H, 18 symbols (2026-10-09; at the user's request)
 All 18 large-cap USDT perps listed before 2021 (the prior 10 plus SOL AVAX DOT NEAR XLM ETC FIL ATOM), 2021-01..2026-10, default config. New symbols synced from Vision (4,290 month files, 0 failures; snapshot `1e320f47c3b1f9c9`).
 - Zone (`runs/618ce3b2edd7`): 308 trades, PF 0.87, −0.12R/trade, net −48.2 (fees 24.7), DD 14.8%, Sharpe −0.44, end equity 451.8 from $500. Exits: 184 stop, 62 stop-after-TP1, 42 TP2, 16 TP1, 4 time. Top rejections: slope 361, vol_filter 208, no_room 175, stop_too_wide_pct 119, btc_gate 49. No same-minute conflicts; 8 breaker events, not halted.
@@ -318,3 +321,13 @@ The 6 net-positive coins from Majors II (DOT NEAR ADA ETH DOGE FIL), same window
 - It genuinely risks ≈5%/trade (median effective 4.89%, mean 4.29%; 9 trades halved during DD ≥ 15%).
 - 10× risk buys only ~2× the dollars (+112.4 vs +59.9) at 5× the drawdown (22.5% vs 4.2%, one stop from the 25% permanent halt). 79 signals rejected by the 1.5×-equity notional cap, so only 39 of the 103 trades get taken — concurrent positions block each other. 25 breaker pauses tripped but no signal arrived during one.
 - Per coin: ADA +136.3 (+0.80R), ETH +48.0, DOT +21.0, DOGE +7.1, NEAR +1.3, FIL −101.4 (−0.67R, 5 trades). Path-dependent dispersion dwarfs the 0.5% run's. Verdict: sizing up scales the pain faster than the profit; same selection-bias warning as the winners-only run.
+
+### Prototype: 5m entries on the 1H/15m ladder (2026-10-11; at the user's request, backtest only)
+`timeframes` now accepts `5m` (`TF.M5`, `swings.m5`, `lookback_days.m5`); `config/proto-5m.yaml` runs zones [1H, 15m], trend 15m, entry 5m, with entry-bar windows scaling ×12 in code. `zt data resample-5m` derives 5m months from synced 1m months; 5m→1h aggregates match native 1h at validator tolerances on all complete hours except the already-quarantined 1m volume-loss days. Live/shadow stay on 1H (the runner refuses sub-hourly entry).
+
+Perf: the core re-scanned the full swing list on every fast close — quadratic, ~4.5h projected per 5m tape. `SwingTracker` now serves `tail`/`window` by bisection (append order is sorted by pivot and confirmation time) and the core passes tails to trend/legs plus lookback windows to the zone rebuild; outputs bit-identical (golden suite green), tapes build in ~10 min. The run itself went to tmux (`zt-5m`, log `/tmp/zt-5m-run.log`) so a disconnect could not end it.
+
+Result, BTC+ETH 2021-01..2026-10 (`/research`):
+- 5m (`runs/7299ab486bbf`): 757 trades, win rate 42.7%, PF 0.78, −0.22R/trade, DD 15.9%, end equity 426.8 from $500. Both coins negative: BTC −34.4 (−0.22R over 313 trades), ETH −38.7 (−0.21R over 444). Exits: 392 stop, 184 TP1, 82 stop-after-TP1, 61 TP2, 38 CHoCH. Costs 28% of gross wins (from 14% on 15m, 9% on 1H). 3,391 signals (vs 227 on 15m); top rejections: no_room 794, slope 721, vol_filter 379, min_notional 233 (vs 10 on 15m, 3 on 1H), stop_too_wide_atr 152. No same-minute conflicts; 40 breaker events, not halted.
+
+Verdict: same as 15m, stronger — the 1H-tuned logic degrades further down the ladder (PF 1.23 → 0.80 → 0.78, expectancy +0.03R → −0.09R → −0.22R, DD 5.1% → 15.9%). This time both coins lose (15m ETH was flat-positive). Position sizes collapse with 5m-ATR stops (min-notional ×23 vs 15m, no_room now the top rejection). Retuning would be its own research loop, re-gated by M4.

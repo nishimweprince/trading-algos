@@ -16,11 +16,19 @@ kept one, the more extreme of the two survives; a replacement takes the later
 
 ``t_conf`` is the close time of bar ``i + R``; nothing may read a swing before
 then.
+
+``swings`` stays sorted by both ``pivot_time`` and ``t_conf`` (non-decreasing):
+each bar's pivot candidacy is evaluated exactly once, in bar order, so later
+appends have later pivots and later-or-equal confirmations, and a replacement
+keeps its slot with a later pivot and ``max`` confirmation time. ``visible``,
+``tail`` and ``window`` bisect on that order instead of scanning, which is
+what keeps sub-hourly ladders (a zone rebuild every 15m close) linear.
 """
 
 from __future__ import annotations
 
 import math
+from bisect import bisect_left, bisect_right
 from dataclasses import replace
 
 from zone_trend.core.series import BarSeries
@@ -83,4 +91,21 @@ class SwingTracker:
 
     def visible(self, now: int) -> list[Swing]:
         """Swings whose confirmation time is at or before ``now``."""
-        return [sw for sw in self.swings if sw.t_conf <= now]
+        j = bisect_right(self.swings, now, key=lambda sw: sw.t_conf)
+        return self.swings[:j]
+
+    def tail(self, n: int) -> list[Swing]:
+        """The last ``n`` swings (or all of them); trend and legs read tails only."""
+        return self.swings[-n:] if n > 0 else []
+
+    def window(self, now: int, lookback_ms: int) -> list[Swing]:
+        """Visible swings with ``pivot_time`` inside ``[now - lookback_ms, now]``.
+
+        Both keys are sorted, so the conjunction is one slice; a caller that
+        used to pass ``visible(now)`` into a lookback filter gets the identical
+        list (dropped swings are a pivot-ordered prefix, so successors are
+        unchanged).
+        """
+        i = bisect_left(self.swings, now - lookback_ms, key=lambda sw: sw.pivot_time)
+        j = bisect_right(self.swings, now, key=lambda sw: sw.t_conf)
+        return self.swings[i:j]

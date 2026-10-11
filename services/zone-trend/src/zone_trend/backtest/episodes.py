@@ -57,12 +57,15 @@ def collect(
 ) -> list[Episode]:
     lo = int(pd.Timestamp(start + "-01", tz="UTC").value // 1_000_000)
     hi = int((pd.Timestamp(end + "-01", tz="UTC") + pd.offsets.MonthBegin()).value // 1e6)
-    h1, h4, d1 = (
-        load(paths, "klines", symbol, tf, end_ms=hi + PAD * H) for tf in ("1h", "4h", "1d")
+    entry_tf = cfg.timeframes.entry
+    fast_tf, slow_tf = cfg.timeframes.zones[1], cfg.timeframes.zones[0]
+    entry, fast, slow = (
+        load(paths, "klines", symbol, tf, end_ms=hi + PAD * H)
+        for tf in (entry_tf, fast_tf, slow_tf)
     )
     episodes: list[Episode] = []
     history: list[Bar] = []
-    for core, step in replay(symbol, h1, h4, d1, cfg):
+    for core, step in replay(symbol, entry, fast, slow, cfg):
         history.append(step.bar)
         t = step.bar.close_time
         if not lo <= t < hi or len(episodes) >= limit:

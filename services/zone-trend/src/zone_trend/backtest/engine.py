@@ -172,7 +172,8 @@ def run(paths: DataPaths, cfg: Config, spec: RunSpec) -> RunResult:
     months = pd.period_range(spec.start, spec.end, freq="M").strftime("%Y-%m")
     union = sorted({s for m in months for s in spec.members(m)})
     step_ms = TF(cfg.timeframes.entry).ms
-    # The BTC gate needs BTC's 1D trend even when BTC is not traded.
+    bar_scale = TF.H1.ms // step_ms  # entry bars per hour, for wall-clock stops
+    # The BTC gate needs BTC's slow-TF trend even when BTC is not traded.
     gate = spec.kind == "zone" and bool(paths.months("klines", BTC, cfg.timeframes.entry))
     tape_symbols = sorted(set(union) | ({BTC} if gate else set()))
     tape_end_ms = month_bounds(spec.tape_end, spec.tape_end)[1] if spec.tape_end else end_ms
@@ -341,6 +342,7 @@ def run(paths: DataPaths, cfg: Config, spec: RunSpec) -> RunResult:
                 choch_against=tp.choch_against(p.side, p.opened_at, t),
                 fee_taker=cfg.exchange.fee_taker,
                 cfg=cfg.exits,
+                bar_scale=bar_scale,
             ):
                 if isinstance(act, exits.MoveStop):
                     p.stop = act.price

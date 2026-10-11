@@ -124,6 +124,14 @@ class Runner:
         symbols: list[str],
         clock_ms: Callable[[], int],
     ) -> None:
+        # The runner warms up and steps on hourly bars. Entry == 1h leaves
+        # [1d, 4h] as the only valid slow/fast pair, so this one check pins
+        # the whole ladder to the default triple.
+        if cfg.timeframes.entry != "1h":
+            raise SystemExit(
+                f"live/shadow step on hourly bars but timeframes.entry is "
+                f"{cfg.timeframes.entry}; sub-hourly live stepping is not built yet"
+            )
         self.cfg = cfg
         self.settings = settings
         self.t = trading
@@ -437,6 +445,7 @@ class Runner:
                 choch_against=core.structure[TF.H4].choch_against(pos.side, pos.opened_at),
                 fee_taker=self.cfg.exchange.fee_taker,
                 cfg=self.cfg.exits,
+                bar_scale=core.entry_scale,
             ):
                 if isinstance(act, exits.MoveStop):
                     await self.venue.move_stop(sym, act.price)

@@ -13,6 +13,7 @@ import pytest
 from fake_exchange import Reply
 from test_lookahead import CFG, frames, synthetic
 
+from zone_trend.config import Timeframes
 from zone_trend.core.replay import bars_from_frame, replay
 from zone_trend.core.symbol import SymbolCore
 from zone_trend.live.runner import Runner
@@ -93,3 +94,24 @@ async def test_shadow_runner_signals_match_backtest_replay(tmp_path, seed):
     live = set(recorded.loc[recorded["stage"] != "core", "id"]) if len(recorded) else set()
     assert live == expected
     assert expected, "the fixture produced no signals after the cut; pick another seed"
+
+
+async def test_runner_refuses_sub_hourly_entry(tmp_path):
+    cfg = CFG.model_copy(
+        update={"timeframes": Timeframes(zones=["4h", "1h"], trend="1h", entry="15m")}
+    )
+    sym = "AAAUSDT"
+    public = PublicFake()
+    settings = LiveSettings(_env_file=None, zt_symbols_csv=sym)
+    repo = Repo(f"sqlite:///{tmp_path / 'zt.db'}")
+    with pytest.raises(SystemExit, match="hourly bars"):
+        Runner(
+            cfg,
+            settings,
+            public,
+            PaperVenue(public, 500.0, 0.0005, 5),
+            repo,
+            _noop_alert,
+            [sym],
+            clock_ms=lambda: 0,
+        )

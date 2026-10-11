@@ -89,11 +89,19 @@ def _data_sync(args: argparse.Namespace) -> int:
     return 1 if errors else 0
 
 
-def _data_resample_15m(args: argparse.Namespace) -> int:
+def _data_resample(args: argparse.Namespace, tf: str) -> int:
     symbols = [s.upper() for s in _csv(args.symbols)]
-    for sym, (built, skipped) in resample_main(args.data_dir, symbols, args.force).items():
+    for sym, (built, skipped) in resample_main(args.data_dir, symbols, args.force, tf).items():
         print(f"{sym:14s} built {built} month files (kept {skipped})")
     return 0
+
+
+def _data_resample_15m(args: argparse.Namespace) -> int:
+    return _data_resample(args, "15m")
+
+
+def _data_resample_5m(args: argparse.Namespace) -> int:
+    return _data_resample(args, "5m")
 
 
 def _data_exchange_info(args: argparse.Namespace) -> int:
@@ -199,6 +207,8 @@ def _backtest(args: argparse.Namespace) -> int:
 
     paths = DataPaths.from_env(args.data_dir)
     cfg = load_config(args.config)
+    tf = cfg.timeframes
+    print(f"# ladder zones {','.join(tf.zones)} trend {tf.trend} entry {tf.entry}")
     universe, symbols = _universe_or_symbols(paths, args.symbols)
     end = args.end or f"{datetime.now(UTC):%Y-%m}"
     spec = RunSpec(
@@ -257,6 +267,8 @@ def _wf(args: argparse.Namespace) -> int:
 
     paths = DataPaths.from_env(args.data_dir)
     cfg = load_config(args.config)
+    tf = cfg.timeframes
+    print(f"# ladder zones {','.join(tf.zones)} trend {tf.trend} entry {tf.entry}")
     universe, symbols = _universe_or_symbols(paths, args.symbols)
     end = args.end or _last_full_month()
     out = args.out or Path("runs") / f"wf-{args.start}-{end}"
@@ -414,6 +426,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--symbols", required=True, help="comma list")
     p.add_argument("--force", action="store_true", help="rebuild months that exist")
     p.set_defaults(func=_data_resample_15m)
+
+    p = data.add_parser(
+        "resample-5m", parents=[common], help="derive 5m months from synced 1m months"
+    )
+    p.add_argument("--symbols", required=True, help="comma list")
+    p.add_argument("--force", action="store_true", help="rebuild months that exist")
+    p.set_defaults(func=_data_resample_5m)
 
     p = data.add_parser("exchange-info", parents=[common], help="snapshot exchangeInfo")
     p.set_defaults(func=_data_exchange_info)

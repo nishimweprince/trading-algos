@@ -2,10 +2,11 @@
 
 The tape holds what the portfolio engine needs per entry-bar close: the
 signals and rejections, plus the inputs to the exit rules (ATR14(entry),
-momentum decay per side, the 4H CHoCH events) and the 1D trend for the BTC
-gate. Exits are evaluated by the same ``core.exits.evaluate`` the live runner
-calls, fed from the tape instead of a live core, so splitting the replay from
-the portfolio loop changes nothing about the decisions.
+momentum decay per side, the fast-TF CHoCH events) and the slow-TF trend
+for the BTC gate. Exits are evaluated by the same ``core.exits.evaluate``
+the live runner calls, fed from the tape instead of a live core, so
+splitting the replay from the portfolio loop changes nothing about the
+decisions.
 
 Each tape covers the symbol's whole history up to ``end_ms`` (warm-up
 included), so a symbol entering the universe arrives with warm state. Tapes
@@ -50,8 +51,8 @@ class Tape:
     atr_entry: np.ndarray
     decay_long: np.ndarray  # bool
     decay_short: np.ndarray
-    d1_trend: np.ndarray  # int8: 1 up, -1 down, 0 range
-    choch_down: list[int] = field(default_factory=list)  # 4H CHoCH against longs
+    slow_trend: np.ndarray  # int8: 1 up, -1 down, 0 range
+    choch_down: list[int] = field(default_factory=list)  # fast-TF CHoCH against longs
     choch_up: list[int] = field(default_factory=list)  # against shorts
     signals: dict[int, list[Signal]] = field(default_factory=dict)
     rejected: list[Rejected] = field(default_factory=list)
@@ -66,44 +67,48 @@ class Tape:
         i = self.index(t)
         if i is None:
             return None
-        return {1: Trend.UP, -1: Trend.DOWN, 0: Trend.RANGE}[int(self.d1_trend[i])]
+        return {1: Trend.UP, -1: Trend.DOWN, 0: Trend.RANGE}[int(self.slow_trend[i])]
 
     def choch_against(self, side: Side, since: int, until: int) -> bool:
         times = self.choch_down if side is Side.LONG else self.choch_up
         return any(since <= t <= until for t in times)
 
 
-def _frames(paths: DataPaths, symbol: str, entry_tf: str, end_ms: int | None):
+def _frames(
+    paths: DataPaths, symbol: str, entry_tf: str, fast_tf: str, slow_tf: str, end_ms: int | None
+):
     frames = tuple(
-        load(paths, "klines", symbol, tf, end_ms=end_ms) for tf in (entry_tf, "4h", "1d")
+        load(paths, "klines", symbol, tf, end_ms=end_ms) for tf in (entry_tf, fast_tf, slow_tf)
     )
     if any(f.empty for f in frames):
         raise ValueError(
-            f"{symbol}: {entry_tf}, 4h and 1d klines are all required; sync them first"
+            f"{symbol}: {entry_tf}, {fast_tf} and {slow_tf} klines are all required; "
+            "sync them first"
         )
     return frames
 
 
 def zone_tape(symbol: str, paths: DataPaths, cfg: Config, end_ms: int | None = None) -> Tape:
+    slow_tf, fast_tf = TF(cfg.timeframes.zones[0]), TF(cfg.timeframes.zones[1])
     entry_tf = cfg.timeframes.entry
-    entry, h4, d1 = _frames(paths, symbol, entry_tf, end_ms)
+    entry, fast, slow = _frames(paths, symbol, entry_tf, fast_tf.value, slow_tf.value, end_ms)
     n = len(entry)
     atr = np.full(n, np.nan)
     dec_l = np.zeros(n, bool)
     dec_s = np.zeros(n, bool)
-    d1t = np.zeros(n, np.int8)
+    slowt = np.zeros(n, np.int8)
     signals: dict[int, list[Signal]] = defaultdict(list)
     rejected: list[Rejected] = []
     core = None
-    for i, (core, step) in enumerate(replay(symbol, entry, h4, d1, cfg)):
+    for i, (core, step) in enumerate(replay(symbol, entry, fast, slow, cfg)):
         atr[i] = core.atr(TF(entry_tf))
         dec_l[i] = core.decay(Side.LONG)
         dec_s[i] = core.decay(Side.SHORT)
-        d1t[i] = _TREND_CODE[core.structure[TF.D1].trend]
+        slowt[i] = _TREND_CODE[core.structure[slow_tf].trend]
         for s in step.result.signals:
             signals[s.bar_time].append(s)
         rejected += step.result.rejected
-    events = core.structure[TF.H4].events if core else []
+    events = core.structure[fast_tf].events if core else []
     return Tape(
         symbol,
         entry["close_time"].to_numpy(np.int64),
@@ -111,7 +116,7 @@ def zone_tape(symbol: str, paths: DataPaths, cfg: Config, end_ms: int | None = N
         atr,
         dec_l,
         dec_s,
-        d1t,
+        slowt,
         [t for t, k in events if k == "choch_down"],
         [t for t, k in events if k == "choch_up"],
         dict(signals),
@@ -122,7 +127,11 @@ def zone_tape(symbol: str, paths: DataPaths, cfg: Config, end_ms: int | None = N
 def ema_benchmark_tape(
     symbol: str, paths: DataPaths, cfg: Config, end_ms: int | None = None
 ) -> Tape:
-    entry, _, d1 = _frames(paths, symbol, cfg.timeframes.entry, end_ms)
+    # The benchmark is always the 1D EMA 20/100 rule, whatever the zone ladder.
+    entry = load(paths, "klines", symbol, cfg.timeframes.entry, end_ms=end_ms)
+    d1 = load(paths, "klines", symbol, "1d", end_ms=end_ms)
+    if entry.empty or d1.empty:
+        raise ValueError(f"{symbol}: {cfg.timeframes.entry} and 1d klines are required")
     n = len(entry)
     close = d1["close"].to_numpy(float)
     fast, slow = ema_series(close, 20), ema_series(close, 100)

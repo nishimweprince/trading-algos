@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from zone_trend.cli import main
 from zone_trend.config import DEFAULT_PATH, Config, load_config
+from zone_trend.types import TF
 
 
 @pytest.fixture
@@ -61,6 +62,60 @@ def test_research_risk_is_backtest_only(raw):
         data["sizing"]["risk_pct"] = 0.05
         with pytest.raises(ValidationError, match="backtest-only"):
             Config.model_validate(data)
+
+
+def test_htf_ladder_accepts_slow_fast_entry(raw):
+    cfg = _validate(raw, timeframes={"zones": ["4h", "1h"], "trend": "1h", "entry": "15m"})
+    assert cfg.timeframes.zones == ["4h", "1h"]
+    assert cfg.zones.lookback_days.days(TF.H1) == 30
+
+
+def test_htf_ladder_accepts_5m_entry(raw):
+    cfg = _validate(raw, timeframes={"zones": ["1h", "15m"], "trend": "15m", "entry": "5m"})
+    assert cfg.timeframes.entry == "5m"
+    assert cfg.zones.lookback_days.days(TF.M5) == 2
+
+
+@pytest.mark.parametrize(
+    "zones, trend, entry",
+    [
+        (["1h", "4h"], "4h", "15m"),  # fast-first
+        (["4h"], "4h", "1h"),  # not a pair
+        (["4h", "4h"], "4h", "1h"),  # not distinct
+        (["1d", "4h"], "1h", "15m"),  # trend is not the fast TF
+        (["1d", "4h"], "4h", "4h"),  # entry not below fast
+        (["1d", "4h"], "4h", "1d"),  # entry above fast
+    ],
+)
+def test_htf_ladder_violations_refused(raw, zones, trend, entry):
+    with pytest.raises(ValidationError, match="timeframes"):
+        _validate(raw, timeframes={"zones": zones, "trend": trend, "entry": entry})
+
+
+def test_timeframes_env_override(monkeypatch, tmp_path):
+    monkeypatch.setenv("ZT_ZONES_TF", "4h,1h")
+    monkeypatch.setenv("ZT_TREND_TF", "1h")
+    monkeypatch.setenv("ZT_ENTRY_TF", "15m")
+    cfg = load_config()
+    assert cfg.timeframes.zones == ["4h", "1h"]
+    assert cfg.timeframes.trend == "1h"
+    assert cfg.timeframes.entry == "15m"
+
+
+def test_timeframes_env_override_empty_is_ignored(monkeypatch):
+    monkeypatch.setenv("ZT_ZONES_TF", "")
+    monkeypatch.setenv("ZT_TREND_TF", "")
+    monkeypatch.setenv("ZT_ENTRY_TF", "")
+    cfg = load_config()
+    assert cfg.timeframes.zones == ["1d", "4h"]
+    assert cfg.timeframes.entry == "1h"
+
+
+def test_timeframes_env_override_invalid_refused(monkeypatch):
+    monkeypatch.setenv("ZT_ZONES_TF", "1h,4h")
+    monkeypatch.setenv("ZT_TREND_TF", "4h")
+    with pytest.raises(ValidationError, match="slow-first"):
+        load_config()
 
 
 def test_cli_config_check(capsys):

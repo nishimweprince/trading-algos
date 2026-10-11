@@ -27,13 +27,13 @@ DIP = bar(2, 103.5, 103.6, 100.6, 101.0)  # back within hi + 0.25 ATR
 REJECT = bar(3, 100.6, 101.6, 99.8, 101.5)  # long lower wick, close in top third
 
 
-def run(bars, zone=ZONE, ctx=CTX):
+def run(bars, zone=ZONE, ctx=CTX, **kw):
     fsm = RetestFSM(zone.id)
     out = []
     prev = ctx.prev_close
     for b in bars:
         c = FsmCtx(ctx.atr, ctx.vol_med, prev, ctx.trend, ctx.swing_low, ctx.swing_high)
-        out.append(fsm.step(b, zone, c, CFG.entries))
+        out.append(fsm.step(b, zone, c, CFG.entries, **kw))
         prev = b.close
     return fsm, out
 
@@ -73,6 +73,17 @@ def test_timeout_fails_and_reset_after_24_bars():
     assert fsm2.state == "IDLE"
 
 
+def test_retest_window_scales_with_bar_scale():
+    drift = [bar(i, 103, 104, 102.5, 103.5) for i in range(1, CFG.entries.retest_window_bars + 2)]
+    fsm, _ = run([BREAKOUT, *drift], bar_scale=4)  # 48h window, not 48 bars
+    assert fsm.state != FAILED
+    long = [
+        bar(i, 103, 104, 102.5, 103.5) for i in range(1, 4 * CFG.entries.retest_window_bars + 2)
+    ]
+    fsm2, _ = run([BREAKOUT, *long], bar_scale=4)
+    assert fsm2.state == FAILED
+
+
 def armed():
     return run([BREAKOUT, RALLY, DIP, REJECT])[1][-1]
 
@@ -81,9 +92,9 @@ SIGNAL_KW = dict(
     zones=[ZONE],
     trend=Trend.UP,
     choch_side=None,
-    legs_h4=[Leg(True, 2.0), Leg(False, -1.0)],
+    legs_fast=[Leg(True, 2.0), Leg(False, -1.0)],
     atr_entry=1.0,
-    atr_h4=3.0,
+    atr_fast=3.0,
     vol_history=[0.03] * 200,
     zone_strength=50.0,
     zone_origin={TF.D1},
@@ -114,11 +125,11 @@ def test_tp2_is_the_nearer_opposing_zone_and_no_room_rejects():
 @pytest.mark.parametrize(
     "override, reason",
     [
-        ({"atr_entry": 20.0, "atr_h4": 10.0}, "stop_too_tight"),  # 7.7 < 0.4 x 20
-        ({"atr_h4": 0.5}, "stop_too_wide_atr"),
+        ({"atr_entry": 20.0, "atr_fast": 10.0}, "stop_too_tight"),  # 7.7 < 0.4 x 20
+        ({"atr_fast": 0.5}, "stop_too_wide_atr"),
         ({"trend": Trend.RANGE, "choch_side": Trend.UP}, "choch"),
         ({"trend": Trend.DOWN}, "trend"),
-        ({"legs_h4": [Leg(True, 0.5), Leg(False, -1.0)]}, "slope"),
+        ({"legs_fast": [Leg(True, 0.5), Leg(False, -1.0)]}, "slope"),
         ({"vol_history": [0.03] * 100}, "vol_history"),
         ({"vol_history": [0.03] * 199 + [0.5]}, "vol_filter"),
     ],
@@ -189,3 +200,17 @@ def test_time_stop_and_choch_exit():
     assert exits.evaluate(
         pos, 1.0, decay=False, choch_against=True, fee_taker=0.0, cfg=CFG.exits
     ) == [exits.ExitNextOpen("choch")]
+
+
+def test_time_stop_scales_with_bar_scale():
+    pos = position(bars_open=CFG.exits.time_stop_bars)  # 72 bars is 18h at 15m
+    assert (
+        exits.evaluate(
+            pos, 1.0, decay=False, choch_against=False, fee_taker=0.0, cfg=CFG.exits, bar_scale=4
+        )
+        == []
+    )
+    pos.bars_open = 4 * CFG.exits.time_stop_bars
+    assert exits.evaluate(
+        pos, 1.0, decay=False, choch_against=False, fee_taker=0.0, cfg=CFG.exits, bar_scale=4
+    ) == [exits.ExitNextOpen("time")]

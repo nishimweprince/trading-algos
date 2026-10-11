@@ -52,10 +52,13 @@ def evaluate(
     choch_against: bool,
     fee_taker: float,
     cfg: Exits,
+    bar_scale: int = 1,
 ) -> list[MoveStop | ExitNextOpen]:
+    """Exit decisions; ``bar_scale`` is entry bars per hour, so the time stop
+    keeps its wall-clock span whatever the entry TF."""
     if choch_against:
         return [ExitNextOpen("choch")]
-    if pos.bars_open >= cfg.time_stop_bars and pos.mfe_r < cfg.time_stop_min_r:
+    if pos.bars_open >= cfg.time_stop_bars * bar_scale and pos.mfe_r < cfg.time_stop_min_r:
         return [ExitNextOpen("time")]
     if not pos.tp1_done:
         return []

@@ -53,7 +53,7 @@ def test_choch_forces_range_until_a_newer_swing():
 
 def test_slopes_are_normalised_by_daily_volatility():
     # +10% over 6 4H bars (one day) with ATR1D/close = 5% -> slope 2.0
-    out = legs([sw("low", 100, 0), sw("high", 110, 6 * H4)], H4, atr_d1=5.0, close=100)
+    out = legs([sw("low", 100, 0), sw("high", 110, 6 * H4)], H4, atr_slow=5.0, close=100)
     assert out == [Leg(True, pytest.approx(2.0))]
 
 
@@ -116,11 +116,30 @@ def test_old_and_unconfirmed_swings_do_not_seed():
     assert zones == []
 
 
+def test_slow_lookback_comes_from_slow_tf():
+    zb = ZoneBook(CFG.zones, TF.H4, TF.H1)  # slow lookback is 90 days, not 365
+    old = Swing(TF.H4, "high", NOW - 100 * DAY_MS, 200, NOW - 100 * DAY_MS + 1, 10, 3)
+    assert zb.rebuild(NOW, [old], [], 10, 150) == []
+    fresh = Swing(TF.H4, "high", NOW - 10 * DAY_MS, 200, NOW - 10 * DAY_MS + 1, 10, 3)
+    assert len(zb.rebuild(NOW, [fresh], [], 10, 150)) == 1
+    assert len(book().rebuild(NOW, [d1("high", 200, 100)], [], 10, 150)) == 1
+
+
+def test_timeframe_bonus_follows_slow_tf():
+    zb = ZoneBook(CFG.zones, TF.H4, TF.H1)
+    t = NOW - 10 * DAY_MS
+    slow_seed = Swing(TF.H4, "high", t, 200, t + 1, 10, 3)
+    other_seed = Swing(TF.D1, "high", t, 200, t + 1, 10, 3)
+    z_slow = zb.rebuild(NOW, [slow_seed], [], 10, 150)[0]
+    z_other = zb.rebuild(NOW, [other_seed], [], 10, 150)[0]
+    assert z_slow.strength == pytest.approx(z_other.strength + 10)
+
+
 def test_break_flips_role_and_strength_rewards_flip():
     zb = book()
     zb.rebuild(NOW, [d1("high", 200, 30)], [], 10, 150)
     before = zb.zones[0].strength
-    events = zb.mark_breaks(NOW + 1, 206, 199, 205, atr_h4=4.0)  # 205 > 200 + 1
+    events = zb.mark_breaks(NOW + 1, 206, 199, 205, atr_fast=4.0)  # 205 > 200 + 1
     assert events == [(zb.zones[0].id, "break_up")]
     assert zb.zones[0].role == "support" and zb.zones[0].flips == 1
     zb.rebuild(NOW + 2, [d1("high", 200, 30)], [], 10, 150)  # state carried over
@@ -130,8 +149,8 @@ def test_break_flips_role_and_strength_rewards_flip():
 def test_two_opposite_breaks_within_30_days_delete_the_zone():
     zb = book()
     zb.rebuild(NOW, [d1("high", 200, 30)], [], 10, 150)
-    zb.mark_breaks(NOW + 1, 206, 199, 205, atr_h4=4.0)
-    events = zb.mark_breaks(NOW + 5 * DAY_MS, 199, 190, 191, atr_h4=4.0)
+    zb.mark_breaks(NOW + 1, 206, 199, 205, atr_fast=4.0)
+    events = zb.mark_breaks(NOW + 5 * DAY_MS, 199, 190, 191, atr_fast=4.0)
     assert ("deleted" in [e for _, e in events]) and zb.zones == []
     assert zb.rebuild(NOW + 6 * DAY_MS, [d1("high", 200, 30)], [], 10, 150) == []
 
@@ -140,16 +159,16 @@ def test_three_deep_retests_delete_the_zone():
     zb = book()
     zb.rebuild(NOW, [d1("low", 100, 30)], [], 10, 150)  # support [100, 103]
     for i in range(3):
-        zb.mark_breaks(NOW + 2 * i, 104, 100.5, 103.5, atr_h4=4.0)  # deep visit, no break
-        zb.mark_breaks(NOW + 2 * i + 1, 110, 105, 108, atr_h4=4.0)  # leave
+        zb.mark_breaks(NOW + 2 * i, 104, 100.5, 103.5, atr_fast=4.0)  # deep visit, no break
+        zb.mark_breaks(NOW + 2 * i + 1, 110, 105, 108, atr_fast=4.0)  # leave
     assert zb.zones == []
 
 
 def test_shallow_visits_count_as_touches():
     zb = book()
     zb.rebuild(NOW, [d1("low", 100, 30)], [], 10, 150)
-    zb.mark_breaks(NOW + 1, 106, 102.5, 105, atr_h4=4.0)
-    zb.mark_breaks(NOW + 2, 110, 105, 108, atr_h4=4.0)
+    zb.mark_breaks(NOW + 1, 106, 102.5, 105, atr_fast=4.0)
+    zb.mark_breaks(NOW + 2, 110, 105, 108, atr_fast=4.0)
     assert zb.zones[0].extra_touches == 1 and zb.zones[0].deep_retests == 0
 
 

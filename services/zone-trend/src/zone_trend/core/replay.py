@@ -1,7 +1,7 @@
 """Signal-only replay of one symbol through ``SymbolCore``.
 
-Feeds entry bars (1H, or 15m) in order and attaches a 4H or 1D bar exactly
-at the entry close where it closes, which is how the backtester and the live
+Feeds entry bars in order and attaches a fast- or slow-TF bar exactly at
+the entry close where it closes, which is how the backtester and the live
 runner deliver them. No positions are opened; this is the harness for
 look-ahead tests, golden episodes and quick inspection.
 """
@@ -39,14 +39,14 @@ class ReplayStep:
 def replay(
     symbol: str,
     entry: pd.DataFrame,
-    h4: pd.DataFrame,
-    d1: pd.DataFrame,
+    fast: pd.DataFrame,
+    slow: pd.DataFrame,
     cfg: Config,
     core: SymbolCore | None = None,
 ) -> Iterator[tuple[SymbolCore, ReplayStep]]:
     core = core or SymbolCore(symbol, cfg)
-    h4_at = {b.close_time: b for b in bars_from_frame(h4)}
-    d1_at = {b.close_time: b for b in bars_from_frame(d1)}
+    fast_at = {b.close_time: b for b in bars_from_frame(fast)}
+    slow_at = {b.close_time: b for b in bars_from_frame(slow)}
     for bar in bars_from_frame(entry):
-        res = core.on_close(bar, h4_at.get(bar.close_time), d1_at.get(bar.close_time))
+        res = core.on_close(bar, fast_at.get(bar.close_time), slow_at.get(bar.close_time))
         yield core, ReplayStep(bar, res)
