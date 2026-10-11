@@ -149,18 +149,32 @@ class ShadowVenue:
     In both, a print through the price fills whatever is left.
 
     ``delay_ns`` is the time from decision to the order (or cancel) reaching the
-    venue. Meanwhile the market moves on: the post-only check and a market
-    order's price use the touch at arrival, and a cancel can lose to a fill.
+    venue, in local time (``latency.ShadowLatency``). Meanwhile the market moves
+    on: the post-only check and a market order's fill use the book at arrival,
+    and a cancel can lose to a fill. A market order walks the book's levels
+    (VWAP); beyond the displayed depth the rest fills at the last level
+    (``walk_exhausted``). What is decided at arrival (a post-only rejection, a
+    market fill) reaches the policy at ``ack_delay_ns`` after sending, as the
+    exchange's answer would.
     """
 
+    WALK_LEVELS = 20
+
     def __init__(
-        self, bridge: ExecutionBridge, *, queue_model: str = "queue", delay_ns: int = 0
+        self,
+        bridge: ExecutionBridge,
+        *,
+        queue_model: str = "queue",
+        delay_ns: int = 0,
+        ack_delay_ns: int | None = None,
     ) -> None:
         if queue_model not in {"pessimistic", "queue"}:
             raise ValueError(f"unknown queue model {queue_model!r}")
         self.bridge = bridge
         self.queue_model = queue_model
         self.delay_ns = delay_ns
+        self.ack_delay_ns = delay_ns if ack_delay_ns is None else max(ack_delay_ns, delay_ns)
+        self.walk_exhausted = 0
         self.touch: dict[str, tuple[float, float]] = {}
         self.books: dict[str, Any] = {}  # symbol -> live local book (bids/asks dicts)
         self.book_txn: dict[str, int] = {}  # symbol -> engine time of the last depth (ms)
@@ -168,7 +182,7 @@ class ShadowVenue:
         # Market orders that arrived with no touch: they fill at the next one.
         self.waiting: dict[str, TrackedOrder] = {}
         self.queue: dict[str, QueuePos] = {}  # exact: quantities come as decimal text
-        self._pending: list[tuple[int, int, str, TrackedOrder]] = []
+        self._pending: list[tuple[int, int, str, TrackedOrder, Any]] = []
         self._seq = 0
 
     # --- time --------------------------------------------------------------------
@@ -176,15 +190,33 @@ class ShadowVenue:
     def advance(self, t_ns: int) -> None:
         """Deliver every order and cancel that has reached the venue by ``t_ns``."""
         while self._pending and self._pending[0][0] <= t_ns:
-            at, _, kind, order = heapq.heappop(self._pending)
+            at, _, kind, order, payload = heapq.heappop(self._pending)
             if kind == "submit":
                 self._arrive(order, at)
-            else:
+            elif kind == "cancel":
                 self._cancel_now(order, at)
+            else:  # notify: the answer to an order decided at arrival
+                executed, price, reason = payload
+                self.bridge.update(order, executed, price, True, at, reason)
 
-    def _later(self, kind: str, order: TrackedOrder, t_ns: int) -> None:
+    def _later(self, kind: str, order: TrackedOrder, at_ns: int, payload: Any = None) -> None:
         self._seq += 1
-        heapq.heappush(self._pending, (t_ns + self.delay_ns, self._seq, kind, order))
+        heapq.heappush(self._pending, (at_ns, self._seq, kind, order, payload))
+
+    def _answer(
+        self,
+        order: TrackedOrder,
+        executed: Decimal,
+        price: float | None,
+        t_ns: int,
+        reason: str | None = None,
+    ) -> None:
+        """A final answer decided at arrival, delivered at the order's ack time."""
+        assert order.acked_ns is not None
+        if order.acked_ns <= t_ns:
+            self.bridge.update(order, executed, price, True, t_ns, reason)
+        else:
+            self._later("notify", order, order.acked_ns, (executed, price, reason))
 
     # --- market state ---------------------------------------------------------------
 
@@ -261,38 +293,61 @@ class ShadowVenue:
     def submit(self, order: TrackedOrder, t_ns: int) -> None:
         order.state, order.sent_ns = "shadow", t_ns
         if self.delay_ns:
-            self._later("submit", order, t_ns)
+            self._later("submit", order, t_ns + self.delay_ns)
         else:
             self._arrive(order, t_ns)
 
     def cancel(self, order: TrackedOrder, t_ns: int) -> None:
         if self.delay_ns:
-            self._later("cancel", order, t_ns)
+            self._later("cancel", order, t_ns + self.delay_ns)
         else:
             self._cancel_now(order, t_ns)
 
     def _arrive(self, order: TrackedOrder, t_ns: int) -> None:
-        order.acked_ns = t_ns
+        sent = order.sent_ns if order.sent_ns is not None else t_ns
+        order.acked_ns = max(sent + self.ack_delay_ns, t_ns)
         touch = self._touch(order.symbol)
         if order.market:
             if touch is None:
                 self.waiting[order.key] = order
                 return
-            price = touch[1] if order.side == "buy" else touch[0]
-            self.bridge.update(order, Decimal(order.qty), price, True, t_ns)
+            self._answer(order, Decimal(order.qty), self._walk(order, touch), t_ns)
             return
         assert order.price is not None
         price = float(order.price)
         if touch is not None and order.post_only:
             crosses = price >= touch[1] if order.side == "buy" else price <= touch[0]
             if crosses:
-                self.bridge.update(order, Decimal(0), None, True, t_ns, "post_only_would_take")
+                self._answer(order, Decimal(0), None, t_ns, "post_only_would_take")
                 return
         self.resting[order.key] = order
         if self.queue_model == "queue":
             self.queue[order.key] = QueuePos(
                 self._level(order) or Decimal(0), self.book_txn.get(order.symbol)
             )
+
+    def _walk(self, order: TrackedOrder, touch: tuple[float, float]) -> float:
+        """A market order's average price through the book's displayed levels."""
+        book = self.books.get(order.symbol)
+        best = touch[1] if order.side == "buy" else touch[0]
+        if book is None:
+            return best
+        bids, asks = book.top(self.WALK_LEVELS)
+        levels = asks if order.side == "buy" else bids
+        if not levels:
+            return best
+        left = Decimal(order.qty)
+        cost = Decimal(0)
+        for price, qty in levels:
+            take = min(left, Decimal(str(qty)))
+            cost += take * Decimal(str(price))
+            left -= take
+            if left <= 0:
+                break
+        if left > 0:
+            self.walk_exhausted += 1
+            cost += left * Decimal(str(levels[-1][0]))
+        return float(cost / Decimal(order.qty))
 
     def _cancel_now(self, order: TrackedOrder, t_ns: int) -> None:
         if self.resting.pop(order.key, None) is not None:
@@ -385,6 +440,7 @@ class ExecutionBridge:
         book: TradeBook | None = None,
         queue_model: str = "queue",
         delay_ns: int = 0,
+        ack_delay_ns: int | None = None,
     ) -> None:
         self.settings = settings
         self.mode: ExecutionMode = settings.execution_mode
@@ -411,7 +467,9 @@ class ExecutionBridge:
         self._pending: list[Cycle] = []
         self.realized_usd = 0.0
         self.counts: dict[str, int] = {}
-        self.shadow = ShadowVenue(self, queue_model=queue_model, delay_ns=delay_ns)
+        self.shadow = ShadowVenue(
+            self, queue_model=queue_model, delay_ns=delay_ns, ack_delay_ns=ack_delay_ns
+        )
         self.venue = self.shadow
 
     def configure(self, filters: dict[str, Filters]) -> None:
@@ -939,6 +997,8 @@ class ExecutionBridge:
             out["flow_guard"] = dict(self.flow_guard.flagged)
         out["shadow_fills"] = {
             "queue_model": self.shadow.queue_model,
-            "delay_ms": round(self.shadow.delay_ns / 1e6, 3),
+            "arrive_ms": round(self.shadow.delay_ns / 1e6, 3),
+            "ack_ms": round(self.shadow.ack_delay_ns / 1e6, 3),
+            "walk_exhausted": self.shadow.walk_exhausted,
         }
         return out

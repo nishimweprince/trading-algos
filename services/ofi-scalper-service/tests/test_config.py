@@ -111,26 +111,43 @@ def test_unwritable_record_dir_fails_with_a_fix(tmp_path) -> None:
         locked.chmod(0o700)
 
 
-def test_shadow_fills_default_to_the_research_queue_model_at_measured_latency(
-    tmp_path, monkeypatch
-) -> None:
+def test_shadow_fills_default_to_the_queue_model_at_measured_latency(tmp_path, monkeypatch) -> None:
     import json
 
     from ofi_scalper_service import app
 
     latency = tmp_path / "latency.json"
-    latency.write_text(json.dumps({"rest_rtt_ms": {"signed": {"p50": 12.0}}}))
+    latency.write_text(
+        json.dumps(
+            {"feed_latency_ms": {"depth": {"p50": 8.0}}, "rest_rtt_ms": {"signed": {"p50": 12.0}}}
+        )
+    )
     monkeypatch.setattr(app, "default_latency_path", lambda: latency)
     settings = make_settings(tmp_path)
     assert settings.shadow_queue_model == "queue" and settings.shadow_delay_ms is None
-    assert app.shadow_fills(settings) == {"queue_model": "queue", "delay_ns": 6_000_000}
+    # arrive = feed 8 + RTT/2 6 = 14 ms; ack = max(14, RTT 12) = 14 ms
+    assert app.shadow_fills(settings) == {
+        "queue_model": "queue",
+        "delay_ns": 14_000_000,
+        "ack_delay_ns": 14_000_000,
+    }
+
+    latency.write_text(json.dumps({"rest_rtt_ms": {"signed": {"p50": 40.0}}}))
+    # arrive = 20 ms, ack = the 40 ms round trip
+    assert app.shadow_fills(settings)["ack_delay_ns"] == 40_000_000
 
     monkeypatch.setattr(app, "default_latency_path", lambda: None)
-    assert app.shadow_fills(settings)["delay_ns"] == 0
+    assert app.shadow_fills(settings)["delay_ns"] == 10_000_000  # the floor
+    floor = make_settings(tmp_path, OFI_SHADOW_MIN_DELAY_MS="25")
+    assert app.shadow_fills(floor)["ack_delay_ns"] == 25_000_000
 
     pinned = make_settings(
         tmp_path, OFI_SHADOW_QUEUE_MODEL="pessimistic", OFI_SHADOW_DELAY_MS="2.5"
     )
-    assert app.shadow_fills(pinned) == {"queue_model": "pessimistic", "delay_ns": 2_500_000}
+    assert app.shadow_fills(pinned) == {
+        "queue_model": "pessimistic",
+        "delay_ns": 2_500_000,
+        "ack_delay_ns": 2_500_000,
+    }
     with pytest.raises(ValidationError):
         make_settings(tmp_path, OFI_SHADOW_QUEUE_MODEL="optimistic")

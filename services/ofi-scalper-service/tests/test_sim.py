@@ -32,6 +32,7 @@ def entered(tmp_path: Path, **sim):
     bridge, risk = shadow_bridge(tmp_path, dial)
     bridge.shadow.queue_model = sim.get("queue_model", "pessimistic")
     bridge.shadow.delay_ns = sim.get("delay_ns", 0)
+    bridge.shadow.ack_delay_ns = sim.get("ack_delay_ns", bridge.shadow.delay_ns)
     book = Book({60000.0: 2.0, 59999.9: 5.0}, {60000.1: 1.0})
     bridge.on_book("BTCUSDT", book)
     dial.set(up=0.8, down=0.05)
@@ -196,3 +197,45 @@ def test_a_level_beyond_a_partial_snapshot_is_ignored(tmp_path: Path) -> None:
     book.bids = {60000.5: 1.0, 60000.2: 1.0}  # top-2 snapshot above our bid
     bridge.on_book("BTCUSDT", book, txn_ms=60)
     assert pos.ahead == Decimal("2.0") and pos.level == Decimal("2.0")
+
+
+# --- latency and market orders -----------------------------------------------------------
+
+
+def test_a_market_close_walks_the_book(tmp_path: Path) -> None:
+    bridge, book = entered(tmp_path)
+    bridge.on_trade("BTCUSDT", T0 + 1, 59999.0, 1.0, True)
+    book.bids = {59950.0: 0.001, 59949.0: 0.001, 59948.0: 0.0005}
+    book.asks = {59950.1: 1.0}
+    bridge.on_sample(sample(T0 + S, bid=59950.0, ask=59950.1), GATE_ON)  # stop
+    bridge.flush_pending()
+    (trade,) = bridge.book.recent_trades
+    # 0.001 @ 59950, 0.001 @ 59949, 0.0005 @ 59948, then 0.0005 more at the last level
+    assert trade["exit_price"] == pytest.approx((59950 + 59949 + 59948) / 3)
+    assert bridge.shadow.walk_exhausted == 1
+    assert bridge.status()["shadow_fills"]["walk_exhausted"] == 1
+
+
+def test_a_post_only_rejection_is_learned_at_ack_time(tmp_path: Path) -> None:
+    bridge, book = entered(tmp_path, delay_ns=5 * MS, ack_delay_ns=20 * MS)
+    order = entry(bridge)
+    book.asks = {60000.0: 1.0}  # the ask came down to our bid meanwhile
+    book.bids = {59999.9: 1.0}
+    bridge.advance(T0 + 5 * MS)  # arrives and is rejected at the venue...
+    assert bridge.policies["BTCUSDT"].phase is Phase.ENTRY_RESTING
+    bridge.advance(T0 + 20 * MS)  # ...and we hear of it a round trip after sending
+    assert bridge.policies["BTCUSDT"].phase is Phase.FLAT
+    assert order.reason == "post_only_would_take" and order.rtt_ms == 20.0
+
+
+def test_a_market_order_waits_for_a_touch(tmp_path: Path) -> None:
+    bridge, book = entered(tmp_path)
+    bridge.on_trade("BTCUSDT", T0 + 1, 59999.0, 1.0, True)
+    btc = bridge.policies["BTCUSDT"]
+    bridge.shadow.books.clear()
+    bridge.shadow.touch.clear()
+    bridge.execute(btc.liquidate("stop", T0 + S), T0 + S)
+    assert btc.phase is Phase.CLOSING and bridge.shadow.waiting
+    bridge.on_book("BTCUSDT", Book({59990.0: 1.0}, {59990.1: 1.0}))
+    bridge.on_sample(sample(T0 + 2 * S, bid=59990.0, ask=59990.1), GATE_ON)
+    assert btc.phase is Phase.FLAT

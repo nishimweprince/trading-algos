@@ -22,6 +22,7 @@ import asyncio
 import json
 import statistics
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -32,7 +33,14 @@ from ta_plugin_binance_futures.streams import AggTrade, BookSnapshot, BookTick, 
 
 from .config import PROVIDER, load_settings
 
-__all__ = ["default_latency_path", "order_rtt_p50", "order_delay_ms", "percentiles", "run"]
+__all__ = [
+    "ShadowLatency",
+    "default_latency_path",
+    "order_rtt_p50",
+    "percentiles",
+    "run",
+    "shadow_latency",
+]
 
 SERVICE_ROOT = Path(__file__).resolve().parents[2]
 
@@ -73,15 +81,45 @@ def order_rtt_p50(raw: dict[str, Any]) -> float:
     return float(rtt["p50"]) if isinstance(rtt, dict) and "p50" in rtt else 0.0
 
 
-def order_delay_ms(path: Path | None) -> float:
-    """One-way order delay (half the round trip): what backtests apply at 1x latency."""
-    if path is None or not path.is_file():
-        return 0.0
-    try:
-        raw = json.loads(path.read_text())
-    except (OSError, ValueError):
-        return 0.0
-    return order_rtt_p50(raw) / 2 if isinstance(raw, dict) else 0.0
+def feed_p50(raw: dict[str, Any]) -> float:
+    """Depth feed latency P50 of a latency file (exchange event to local receive)."""
+    depth = (raw.get("feed_latency_ms") or {}).get("depth")
+    return max(float(depth["p50"]), 0.0) if isinstance(depth, dict) and "p50" in depth else 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class ShadowLatency:
+    """The shadow venue's clock, in local (receive) time from a decision.
+
+    The book we decide on is ``feed`` old, and an order needs half the round trip
+    to reach the venue, so the venue state it meets is the one we see
+    ``feed + RTT/2`` after deciding (``arrive``). Its answer is back ``RTT`` after
+    sending, but cannot come before the arrival we simulate (``ack``).
+    """
+
+    arrive_ms: float
+    ack_ms: float
+    feed_ms: float
+    rtt_ms: float
+    source: str  # the latency file, or "floor"
+
+    def as_kwargs(self) -> dict[str, int]:
+        return {"delay_ns": int(self.arrive_ms * 1e6), "ack_delay_ns": int(self.ack_ms * 1e6)}
+
+
+def shadow_latency(path: Path | None, floor_ms: float) -> ShadowLatency:
+    """Arrive and ack delays from ``ofi-latency``'s file, each at least ``floor_ms``."""
+    raw: Any = None
+    if path is not None and path.is_file():
+        try:
+            raw = json.loads(path.read_text())
+        except (OSError, ValueError):
+            raw = None
+    if not isinstance(raw, dict):
+        return ShadowLatency(floor_ms, floor_ms, 0.0, 0.0, "floor")
+    feed, rtt = feed_p50(raw), order_rtt_p50(raw)
+    arrive = max(feed + rtt / 2, floor_ms)
+    return ShadowLatency(round(arrive, 3), round(max(arrive, rtt), 3), feed, rtt, str(path))
 
 
 async def measure(settings: Any, seconds: float, samples: int) -> dict[str, Any]:

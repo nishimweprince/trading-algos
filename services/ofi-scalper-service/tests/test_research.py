@@ -193,8 +193,9 @@ def test_brier_and_reliability() -> None:
 
 def test_latency_multiples_and_file(tmp_path: Path) -> None:
     latency = Latency(feed_ms=6.0, order_ms=10.0)
-    assert latency.delay_ns(1) == 10_000_000
-    assert latency.delay_ns(2) == 26_000_000  # one more feed latency, twice the order
+    assert latency.delay_ns(1) == 16_000_000  # feed + half the round trip
+    assert latency.ack_ns(1) == 20_000_000  # the round trip
+    assert latency.delay_ns(2) == 32_000_000 and latency.ack_ns(2) == 40_000_000
     path = tmp_path / "latency.json"
     path.write_text(
         json.dumps(
@@ -312,12 +313,13 @@ def test_strided_keeps_every_nth_row_per_symbol() -> None:
     ]
 
 
-def test_half_latency_takes_the_feed_saving_off_the_order_delay() -> None:
+def test_latency_scales_and_the_ack_never_precedes_arrival() -> None:
     lat = Latency(feed_ms=4.0, order_ms=6.0)
-    assert lat.delay_ns(1.0) == 6_000_000
-    assert lat.delay_ns(2.0) == 16_000_000
-    assert lat.delay_ns(0.5) == 1_000_000  # 0.5 x 6 - 0.5 x 4
-    assert Latency(feed_ms=10.0, order_ms=2.0).delay_ns(0.5) == 0  # floored
+    assert lat.delay_ns(0.5) == 5_000_000 and lat.ack_ns(0.5) == 6_000_000
+    slow_feed = Latency(feed_ms=10.0, order_ms=2.0)
+    assert slow_feed.delay_ns(1.0) == 12_000_000
+    assert slow_feed.ack_ns(1.0) == 12_000_000  # arrival is later than the round trip
+    assert Latency().delay_ns(1.0) == 0 == Latency().ack_ns(1.0)
 
 
 def test_latency_sensitivity_reports_bp_gained_at_half_latency() -> None:

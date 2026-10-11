@@ -34,7 +34,7 @@ from .alerts import Alerts
 from .config import PROVIDER, ExecutionMode, Settings, load_settings
 from .dashboard import DASHBOARD_HTML
 from .execution_bridge import ExecutionBridge
-from .latency import default_latency_path, order_delay_ms
+from .latency import default_latency_path, shadow_latency
 from .model import LoadedModel, load_model
 from .recorder import Recorder
 from .regime_gate import RegimeGate
@@ -65,10 +65,13 @@ def load_pinned_model(settings: Settings) -> LoadedModel | None:
 
 def shadow_fills(settings: Settings) -> dict[str, Any]:
     """The fill model of shadow mode: research's, at 1x latency."""
-    delay_ms = settings.shadow_delay_ms
-    if delay_ms is None:
-        delay_ms = order_delay_ms(default_latency_path())
-    return {"queue_model": settings.shadow_queue_model, "delay_ns": int(delay_ms * 1e6)}
+    if settings.shadow_delay_ms is not None:
+        delay_ns = int(settings.shadow_delay_ms * 1e6)
+        timing = {"delay_ns": delay_ns, "ack_delay_ns": delay_ns}
+    else:
+        latency = shadow_latency(default_latency_path(), settings.shadow_min_delay_ms)
+        timing = latency.as_kwargs()
+    return {"queue_model": settings.shadow_queue_model, **timing}
 
 
 def build_bridge(

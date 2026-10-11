@@ -71,10 +71,14 @@ class Settings(BaseServiceSettings, NotificationSettings, BinanceFuturesSettings
     shadow_queue_model: Literal["queue", "pessimistic"] = Field(
         default="queue", validation_alias="OFI_SHADOW_QUEUE_MODEL"
     )
-    # Decision-to-venue delay of those fills. Empty: half the order round trip from
-    # research/latency.json, the delay backtests use at 1x latency (0 without it).
+    # Decision-to-venue delay of those fills. Empty: feed latency + half the order
+    # round trip from research/latency.json (ack after the full round trip), each
+    # at least OFI_SHADOW_MIN_DELAY_MS. Set, it is used for both.
     shadow_delay_ms: float | None = Field(
         default=None, ge=0, le=5_000, validation_alias="OFI_SHADOW_DELAY_MS"
+    )
+    shadow_min_delay_ms: float = Field(
+        default=10.0, ge=0, le=5_000, validation_alias="OFI_SHADOW_MIN_DELAY_MS"
     )
 
     # Fixed order size until Kelly sizing is enabled (after calibration on own fills).

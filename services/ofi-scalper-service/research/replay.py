@@ -141,6 +141,7 @@ class Variant:
     model: Any
     queue_model: str = "queue"
     delay_ns: int = 0
+    ack_delay_ns: int | None = None  # None: the same as delay_ns
     book: TradeBook = field(default_factory=lambda: TradeBook(None, keep=10_000_000))
     halts: list[dict[str, Any]] = field(default_factory=list)
 
@@ -292,6 +293,7 @@ class Replayer:
                         book=variant.book,
                         queue_model=variant.queue_model,
                         delay_ns=variant.delay_ns,
+                        ack_delay_ns=variant.ack_delay_ns,
                     )
                 )
             self.runtime.bridge = bridges[0] if len(bridges) == 1 else FanOutBridge(bridges)

@@ -60,24 +60,29 @@ class BacktestModel:
 
 @dataclass(frozen=True)
 class Latency:
-    """Decision-to-venue delay. Recordings already carry 1x feed latency."""
+    """The shadow venue's delays in recorded (local receive) time, as live shadow
+    uses them (``latency.ShadowLatency``).
 
-    feed_ms: float = 0.0  # one-way feed latency (p50), added again per extra multiple
+    A decision at local time t sees a book ``feed`` old; the order reaches the
+    venue ``order`` later, and the recording shows that venue state at
+    ``t + feed + order``. The answer comes back a full round trip after sending.
+    Both scale with ``multiple`` (a host farther from, or nearer to, the venue).
+    """
+
+    feed_ms: float = 0.0  # one-way feed latency (p50)
     order_ms: float = 0.0  # one-way order latency (half the order round trip, p50)
 
     def delay_ns(self, multiple: float) -> int:
-        """Order delay at ``multiple`` x our latency.
+        """Decision to arrival at the venue, at ``multiple`` x our latency."""
+        return max(int(multiple * (self.feed_ms + self.order_ms) * 1e6), 0)
 
-        Above 1x the extra feed latency is added to the order's. Below 1x (a host
-        nearer the venue) the recordings still carry our full feed latency, so the
-        feed saving is taken off the order delay instead: an approximation of
-        reacting earlier, floored at zero.
-        """
-        return max(int(((multiple - 1) * self.feed_ms + multiple * self.order_ms) * 1e6), 0)
+    def ack_ns(self, multiple: float) -> int:
+        """Decision to the venue's answer: the round trip, never before arrival."""
+        return max(self.delay_ns(multiple), int(multiple * 2 * self.order_ms * 1e6))
 
     @classmethod
     def from_file(cls, path: Path, *, order_rtt_ms: float | None = None) -> Latency:
-        """``research/latency.json`` from ``ofi-latency``; order RTT measured on testnet."""
+        """``research/latency.json`` from ``ofi-latency``; ``order_rtt_ms`` overrides its RTT."""
         raw: dict[str, Any] = json.loads(path.read_text()) if path.is_file() else {}
         feed = ((raw.get("feed_latency_ms") or {}).get("depth") or {}).get("p50") or 0.0
         if order_rtt_ms is None:
@@ -173,6 +178,7 @@ def _variants(job: DayJob) -> list[Variant]:
                 BacktestModel(candidate.version, policy, tables[key]),
                 queue_model=spec.queue_model,
                 delay_ns=job.latency.delay_ns(spec.latency_multiple),
+                ack_delay_ns=job.latency.ack_ns(spec.latency_multiple),
             )
         )
     return variants
@@ -192,6 +198,7 @@ def _rules_variant(spec: VariantSpec, job: DayJob) -> Variant:
         BacktestModel(model.version, policy, model.scorer),
         queue_model=spec.queue_model,
         delay_ns=job.latency.delay_ns(spec.latency_multiple),
+        ack_delay_ns=job.latency.ack_ns(spec.latency_multiple),
     )
 
 
