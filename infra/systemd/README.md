@@ -15,9 +15,8 @@ Edit `User=`, the paths and `--profile` in each unit if yours differ.
 | `ofi-daily-check.service` + `.timer` | 00:20 UTC daily: checks yesterday's recordings and sends a Telegram summary |
 | `execution-service-binance.service` | Order entry on `127.0.0.1:8010` (`ADAPTERS=binance_futures`, testnet until approved); the only process with the trading key |
 | `ofi-status.service` | Read-only status page for colleagues on `127.0.0.1:8040`, published only through the Cloudflare Tunnel (`infra/cloudflare/README.md`) |
-| `execution-service-binance-live.service` | MAINNET gateway on `127.0.0.1:8011` (profile `binance-live`) for micro-live; holds the sub-account key. Not enabled: start by hand |
-| `ofi-scalper-live.service` | Micro-live scalper (profile `live`, port 8031, no recording, real money capped in code). Not enabled: start by hand after the steps in the scalper README |
-| `ofi-research.service` | One-shot Stage 2 pipeline (`--shallow` by default) at nice 19, idle IO and a memory ceiling, so research runs next to the recorder and the demo bridge. `sudo systemctl start ofi-research`; arguments in a drop-in |
+| `execution-service-binance-live.service` | MAINNET gateway on `127.0.0.1:8011` (profile `binance-live`); the OFI scalper no longer uses it (shadow only since 2026-10-11). Not enabled: start by hand |
+| `ofi-research.service` | One-shot Stage 2 pipeline (`--shallow` by default) at nice 19, idle IO and a memory ceiling, so research runs next to the recorder and the shadow bridge. `sudo systemctl start ofi-research`; arguments in a drop-in |
 | `ofi-unit-alert@.service` | `OnFailure=` hook on the three services above: a Telegram alert when one fails to start or crashes |
 
 ## Host setup (once)
@@ -79,6 +78,8 @@ sudo systemctl enable --now notification-service ofi-scalper-service ofi-daily-c
 Never start the service with `sudo .venv/bin/ofi-scalper-service`. Files it creates would then belong to root, and the unit, which runs as `ofi`, could no longer write its logs.
 
 ## Order entry (testnet)
+
+The OFI scalper no longer sends orders (shadow only since 2026-10-11) and does not need this gateway; it stays documented for other services.
 
 1. Create **demo-trading** API keys (Binance demo trading, not the main site).
    On the demo account set one-way position mode, single-asset margin,

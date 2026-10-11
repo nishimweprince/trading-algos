@@ -5,10 +5,11 @@ order books kept verified, every raw frame recorded, the feature engine on a
 100 ms grid, a deterministic regime gate, hard risk with a kill switch, and the
 hot path **model → policy → risk → execution bridge** (Phase C).
 
-Orders need two things: an execution mode that sends or simulates them, and a
-pinned model whose research gates passed. Until research produces one, the
-service records and computes features; testnet can run "controls only" for the
-kill, dead-man and flatten drills. `OFI_EXECUTION_MODE=live` is refused.
+The service sends no orders. In `shadow` mode it runs a pinned model through
+the policy, risk and bridge and fills every order in a simulator on the
+mainnet book; in `off` it records and computes features only. The order-entry
+modes (`testnet`, `micro_live`, `live`) were removed on 2026-10-11 and are
+refused at startup.
 
 Port 8030. Data comes from `ta-plugin-binance-futures` through
 `load_providers` (the plugin's `streams`, `rest` and `account` factory extras).
@@ -33,9 +34,6 @@ Under launchd: `infra/launchd/install.sh --service ofi-scalper-service dev`.
 |---|---|---|
 | `off` (default) | nothing | Records and computes features; a halt only logs `ofi_would_act` |
 | `shadow` | `OFI_MODEL_VERSION` with a passing `gates.json` | Scores every grid sample, runs the policy and risk, builds every order, and fills them in a pessimistic simulator (a maker order needs a trade printed *through* its price). Nothing is sent |
-| `testnet` | `EXECUTION_API_KEY`, execution-service on `BINANCE_FUTURES_ENV=testnet` | Sends orders to execution-service (`ADAPTERS=binance_futures`), priced from demo trading's own touch; fills are polled back. Without a model: controls only |
-| `micro_live` | `OFI_MICRO_LIVE_ACK=real-money-micro-live`, a passing `OFI_MODEL_VERSION`, a gateway on `BINANCE_FUTURES_ENV=mainnet` | Real money, hard-capped in code (`config.MICRO_LIVE_CAPS`: order $25, position and total $30, daily loss $3), only `OFI_MICRO_LIVE_SYMBOLS` (ETHUSDT). Priced from the mainnet book the features come from. Runs as profile `live` beside the dev scalper |
-| `live` | refused | Mainnet at full size waits for a binding gates pass (or the speed-run) and explicit approval (Stage 5) |
 
 - **Model** (`model.py`): `<OFI_MODEL_DIR>/<version>/` with a manifest holding
   the sha256 of every file. Any mismatch, an unknown feature, or a `gates.json`
@@ -51,85 +49,42 @@ Under launchd: `infra/launchd/install.sh --service ofi-scalper-service dev`.
   (`OFI_ORDER_NOTIONAL_USD`); Kelly sizing stays off until calibration on our
   own fills passes.
 - **Bridge** (`execution_bridge.py`): every order passes `RiskState.check_order`
-  first. UNKNOWN outcomes are reconciled through the gateway, never resubmitted;
-  `OFI_MAX_CONSECUTIVE_UNKNOWN` in a row halts. A rejected entry blocks that
-  symbol for `OFI_REJECT_COOLDOWN_MS`, doubling per rejection in a row up to
-  `OFI_REJECT_COOLDOWN_MAX_MS` (5 in a row also alerts). A halt (kill switch, loss
-  limits, execution fault) cancels all, closes every cycle reduce-only, then
-  flattens as a backstop. In testnet the dead-man (`countdownCancelAll`,
-  `OFI_DEAD_MAN_MS`) is re-armed every 5 s, state survives restarts in
-  `<OFI_STATE_DIR>/bridge.json`, and at startup a position the bridge did not
-  open halts without flattening, for a human to resolve.
+  first, then goes to the shadow simulator. A rejected entry blocks that symbol
+  for `OFI_REJECT_COOLDOWN_MS`, doubling per rejection in a row up to
+  `OFI_REJECT_COOLDOWN_MAX_MS` (5 in a row also alerts). A halt (kill switch,
+  loss limits, execution fault) closes every cycle at market.
 - **Records** (`trades.py`): `<OFI_STATE_DIR>/trades/` (one line per cycle:
   fills, fees, funding, P&L, exit reason, mid move 1/5/30 s after the fill,
   order RTT) and `signals/` (every threshold crossing and what was done).
   `ofi-daily-check` adds the day's trading report to its Telegram summary.
 
-- **Startup checks** (testnet and micro-live): the gateway must report the
-  environment the mode needs (demo for `testnet`, mainnet for `micro_live`), or
-  the bridge halts and never gets ready; and open orders the bridge does not
-  track (left by a crash inside the dead-man countdown, or by a human) are
-  cancelled per symbol before anything trades.
+### Feed drills
 
-### Micro-live (real money, capped)
-
-A second scalper process (profile `live`, port 8031, no recording) trades
-minimum size on mainnet through a second gateway (profile `binance-live`, port
-8011), while the dev scalper keeps recording and demo paper trading.
-
-1. Binance: a sub-account funded with the test money only (~$50 USDT in the
-   USDⓈ-M wallet), one-way mode, single-asset margin, ETHUSDT isolated, leverage
-   <= 2. A key on it: futures trading only, withdrawals off, IP-restricted to the VM.
-2. Paste the key into `services/execution-service/.env.binance-live`, then
-   `sudo systemctl start execution-service-binance-live` and check
-   `curl -s localhost:8011/health/ready` (environment `mainnet`, preflight ok).
-3. Plumbing drill on mainnet, no model: a far-from-market post-only ETHUSDT order
-   through `POST localhost:8011/v1/orders`, then the kill file and the dead-man
-   (as for testnet below).
-4. In `.env.live`: `OFI_MODEL_VERSION=<the passing model>` and
-   `OFI_MICRO_LIVE_ACK=real-money-micro-live`; then
-   `sudo systemctl start ofi-scalper-live`. Kill: `touch data/KILL.live`.
-
-### Testnet drills without a model (controls only)
-
-```sh
-# execution-service-binance running on demo trading; in .env.dev:
-#   OFI_EXECUTION_MODE=testnet, EXECUTION_API_KEY=<the gateway's API_KEY>
-sudo systemctl restart ofi-scalper-service
-curl -s -H "X-API-Key: $KEY" localhost:8030/v1/status | jq .bridge   # venue_ready, dead_man_armed
-# place a small resting order on the gateway (POST localhost:8010/v1/orders), then:
-touch ~/trading-algos/services/ofi-scalper-service/data/KILL.dev   # cancel-all, then flatten
-sudo systemctl kill -s KILL ofi-scalper-service                    # dead-man: Binance cancels
-```
-
-The feed drills run against the live service (shadow or testnet), break its own
-feed, check the pause, the entry cancels and the resync, and record the result
-in `drills.json`:
+The feed drills run against the live shadow service, break its own feed, check
+the pause, the entry cancels and the resync, and record the result in
+`drills.json`:
 
 ```sh
 .venv/bin/ofi-drill --profile dev disconnect     # drops the public websocket mid-stream
 .venv/bin/ofi-drill --profile dev gap_handling   # one out-of-sequence depth diff
 ```
 
-## Go live on demo and shadow (rule model, ungated)
+## Shadow trading with the rule model (ungated)
 
 Before a trained model passes its gates, a fixed rule (`rules.py`) can fill the
-model's slot so demo trading produces our own fills and shadow trading on the
-mainnet feed produces would-have fills, both through the unchanged policy, risk
-and bridge:
+model's slot so shadow trading on the mainnet feed produces would-have fills
+through the unchanged policy, risk and bridge:
 
 ```sh
 .venv/bin/ofi-go-live --profile dev status
-.venv/bin/ofi-go-live --profile dev on --restart      # demo orders + shadow mirror
-.venv/bin/ofi-go-live --profile dev on --shadow-only  # mainnet feed, nothing sent
-.venv/bin/ofi-go-live --profile dev off --restart     # back to demo controls only
+.venv/bin/ofi-go-live --profile dev on --restart      # shadow trading, rule model
+.venv/bin/ofi-go-live --profile dev off --restart     # back to recording only
 ```
 
-`on` writes `models/rules-v5` if it is missing, sets `OFI_EXECUTION_MODE=testnet`,
-`OFI_MODEL_VERSION`, `OFI_ALLOW_UNGATED` and `OFI_SHADOW_MIRROR=true` in
-`.env.<profile>` (backup next to it), and keeps the change only if the settings
-and the model load as the service will load them. It then checks
-execution-service and reports a halt that needs an ack. `--version v7` switches
+`on` writes `models/rules-v5` if it is missing, sets `OFI_EXECUTION_MODE=shadow`,
+`OFI_MODEL_VERSION` and `OFI_ALLOW_UNGATED` in `.env.<profile>` (backup next to
+it), comments out a leftover `OFI_SHADOW_MIRROR`, and keeps the change only if
+the settings and the model load as the service will load them. `--version v7` switches
 to a trained model instead; a model without a gates pass is still ungated.
 
 - **The rule** (`rules.py`): `ofi_int_5000ms` z-scored against its own
@@ -139,24 +94,16 @@ to a trained model instead; a model without a gates pass is still ungated.
   not cancelled as decay. Policy (rules-v5): 300 s horizon, 20 bp barrier, 2 bp
   buffer, 5 s entry timeout and 5 s hold, 600 s time stop, 60 s re-entry cooldown
   after any cycle. rules-v4 used 60 s / 12 bp / 5 s cooldown and lost ~6 bp a trade
-  on demo: ~0 bp gross against ~6.5 bp of fees. Write variants with
+  on Binance demo trading (before testnet was removed): ~0 bp gross against ~6.5 bp of fees. Write variants with
   `ofi-rules-model --version rules-v6 --z-entry 4 --barrier-bp 25`.
 - **Maker exits and the flow guard** (policy fields, off by default; set with
   `ofi-rules-model --exit-mode maker_chase --guard-z 3 --guard-tfi 0.3`, compare
   with `research.backtest --arm`): the time stop rests a post-only exit at the
   near touch for `exit_chase_ms`, repricing as it moves, then closes at market;
   the guard skips or cancels entries into hard opposite flow and ends a chase.
-- **Shadow mirror** (`OFI_SHADOW_MIRROR`, testnet only): a second bridge in
-  shadow mode on the mainnet feed with its own simulated account and risk
-  state. Feed pauses and the kill switch reach it; demo execution faults do
-  not. Records under `<OFI_STATE_DIR>/shadow/`; `/v1/trades?shadow=true`,
-  `/v1/signals?shadow=true`, `/v1/status.shadow_mirror`, and the status page's
-  Trading tab.
-- **Labels**: every signal and trade carries `ungated: true`; they do not count
-  toward the speed-run. Live is refused by the settings whatever the model.
-- **What it measures**: order handling, maker fill rate and RTT on demo, signal
-  frequency, and (shadow) the rule's after-cost result on mainnet's book. Demo's
-  book is synthetic, so demo P&L says nothing about mainnet edge.
+- **Labels**: every signal and trade carries `ungated: true`.
+- **What it measures**: signal frequency and the rule's after-cost result on
+  mainnet's book, with simulated fills.
 
 ## Book modes
 
@@ -183,10 +130,10 @@ fell seconds behind and kept falling; `depth10@100ms` held a steady ~250 ms.
 | `GET /health/ready` | no | both stream routes connected and every book verified |
 | `GET /v1/status` | yes | books, risk (halt, pauses, limits), gate, recorder, fees, counts, feed latency |
 | `GET /v1/features?symbol=` | yes | latest feature vector (grid or trade-burst sample) |
-| `GET /v1/signals?limit=&shadow=` | yes | recent threshold crossings, newest first (`shadow=true`: the mirror's) |
-| `GET /v1/trades?date=&limit=&shadow=` | yes | recent cycles (or one UTC day's) and their summary |
+| `GET /v1/signals?limit=` | yes | recent threshold crossings, newest first |
+| `GET /v1/trades?date=&limit=` | yes | recent cycles (or one UTC day's) and their summary |
 | `GET /dashboard` | page | signals, cycles, policy state and today's report, live; asks for the key |
-| `POST /v1/kill` | yes | halt (cancel all, close, flatten); body `{"reason": "..."}` optional |
+| `POST /v1/kill` | yes | halt (close every cycle); body `{"reason": "..."}` optional |
 | `POST /v1/kill/ack` | yes | clear a halt; refused while the kill file exists; daily-loss halts wait for the next UTC day |
 
 Kill switch, three ways: `touch data/KILL.dev`, `POST /v1/kill`, or `/kill`
@@ -226,10 +173,10 @@ depth break).
   gapcheck over a UTC day and sends a per-symbol summary (hours, MB, breaks,
   trade gaps); `infra/systemd/ofi-daily-check.timer` runs it at 00:20 UTC.
 - **Analysis export:** `ofi-export --profile dev --out export.json` writes
-  performance, signals, trades, daily reports, bridge, drills, latency and
+  performance, signals, trades, daily reports, halts, drills, latency and
   the pinned model as one JSON document (recordings excluded, no secrets).
-  `--days N` keeps the last N UTC days, `--no-shadow` skips the shadow
-  bridge, `--compact` writes without indentation.
+  `--days N` keeps the last N UTC days, `--no-shadow` skips the legacy
+  `shadow/` mirror records, `--compact` writes without indentation.
 
 On Linux, run it under systemd: see [infra/systemd/README.md](../../infra/systemd/README.md).
 
@@ -245,7 +192,7 @@ balances or paths). Share it through Cloudflare Tunnel + Access:
 
 `python -m research.pipeline --profile dev --shallow` (days) or `--provisional`
 (weeks) trains, selects and gates a model from the recordings; see
-`research/README.md` for the gate tiers and the live speed-run criteria. On the
+`research/README.md` for the gate tiers. On the
 VM: `sudo systemctl start ofi-research`. The backtest runs
 this service's own bridge, policy and risk on replayed recordings.
 
@@ -269,7 +216,7 @@ this service's own bridge, policy and risk on replayed recordings.
 | `runtime.py` | The live loop and watchers |
 | `model.py` | Pinned, hash-verified CatBoost model, calibrator, scorer |
 | `policy.py` | Entry, exit and sizing state machine (plan §1.5), pure; research imports it |
-| `execution_bridge.py` | Policy actions → risk → shadow simulator or execution-service |
+| `execution_bridge.py` | Policy actions → risk → shadow simulator |
 | `trades.py`, `dashboard.py` | Trade and signal records, daily report, `/dashboard` |
 | `recorder.py`, `gapcheck.py` | Raw feed recording and validation |
 | `telegram_commands.py`, `alerts.py` | `/kill`, `/status` in; alerts out via notification-service |

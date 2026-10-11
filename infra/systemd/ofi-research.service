@@ -1,5 +1,5 @@
 # One-shot: the Stage 2 research pipeline (replay -> train -> select -> gates),
-# run next to the recorder and the demo bridge without starving them: lowest CPU
+# run next to the recorder and the shadow bridge without starving them: lowest CPU
 # and IO priority, and a memory ceiling so the OOM killer picks this job, never
 # the recorder. Tune the ceiling and the arguments in a drop-in after resizing:
 #   sudo systemctl edit ofi-research   ([Service] MemoryMax=, Environment="OFI_RESEARCH_ARGS=...")
@@ -16,7 +16,7 @@ Group=ofi
 WorkingDirectory=/home/ofi/trading-algos/services/ofi-scalper-service
 Environment=OFI_RESEARCH_DIR=/data/ofi/research
 # Sized for 4 vCPU / 16 GB (D4ads_v6): 2 jobs (~2 GB each) leave 2 cores and ~5 GB
-# for the recorder, the demo bridge and execution-service. Keep --jobs <= vCPUs - 2.
+# for the recorder and the shadow bridge. Keep --jobs <= vCPUs - 2.
 # 300-900 s horizons at 20-40 bp: shorter ones cannot pay the round trip (shallow-2).
 # A run's split is fixed once written: bump --run (long-2, long-3, ...) to use new days.
 Environment="OFI_RESEARCH_ARGS=--shallow --run long-1 --jobs 2 --row-stride 3 --horizons 300,600,900 --barrier-bp 300:20|25,600:25|30,900:30|40"
