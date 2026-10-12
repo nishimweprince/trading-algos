@@ -17,6 +17,13 @@
 //! The engine thread hands over [`OrderIntent`]s with the instant it decided,
 //! and [`PresignHint`]s as a gap nears the threshold, so the order is usually
 //! signed before the decision and the hot path is one POST.
+//!
+//! Nothing waits in front of a live entry: [`ExecBridge::run`] only dispatches.
+//! Each live entry runs as its own task (assets cross together, and one FAK's
+//! post and poll must not hold back the next). Hints go to a worker of their
+//! own that keeps only the latest per asset. Probes stay serial on theirs.
+//! Token meta is fetched when a window is identified ([`ExecBridge::prefetch`]),
+//! so an entry does no REST read before its POST.
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -37,7 +44,7 @@ use rust_decimal::Decimal;
 use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use serde::Serialize;
 use serde_json::{Value, json};
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 
 pub const RECONCILE_EVERY: Duration = Duration::from_secs(30);
 /// Balance/allowance rejects in a row that halt trading.
@@ -137,6 +144,9 @@ pub struct ExecBridge<S: OrderSigner = SdkSigner> {
     latency: Mutex<LatencyEstimator>,
     /// The last token hinted or entered, for cadence probes.
     last_token: Mutex<Option<String>>,
+    /// Hints not yet handled, the latest per asset; `hint_ready` wakes the worker.
+    hints: Mutex<HashMap<String, PresignHint>>,
+    hint_ready: Notify,
     redeemed: Mutex<HashSet<String>>,
     redeem_tries: Mutex<HashMap<String, u32>>,
     pub status: Mutex<LiveStatus>,
@@ -253,6 +263,8 @@ impl<S: OrderSigner> ExecBridge<S> {
                 cfg.latency_min_samples,
             )),
             last_token: Mutex::new(None),
+            hints: Mutex::new(HashMap::new()),
+            hint_ready: Notify::new(),
             redeemed: Mutex::new(HashSet::new()),
             redeem_tries: Mutex::new(HashMap::new()),
             status: Mutex::new(LiveStatus::default()),
@@ -304,36 +316,78 @@ impl<S: OrderSigner> ExecBridge<S> {
         }
     }
 
+    /// Dispatch only: a live entry starts at once as its own task, a hint
+    /// replaces the asset's pending one, a probe joins the probe queue.
     pub async fn run(self: Arc<Self>, mut rx: mpsc::UnboundedReceiver<ExecMsg>) {
+        let (probe_tx, probe_rx) = mpsc::unbounded_channel();
+        tokio::spawn(self.clone().hint_worker());
+        tokio::spawn(self.clone().probe_worker(probe_rx));
         while let Some(msg) = rx.recv().await {
             match msg {
                 ExecMsg::Hint(h) => {
                     *self.last_token.lock() = Some(h.token.clone());
-                    let Some(top) = self.top(&h.token, h.best_bid, h.best_ask).await else { continue };
-                    match &self.live {
-                        Some(live) => {
-                            // The entry a decision at this ask would send.
-                            if let (Some(limit), Some(n)) = (dec(h.limit_px), h.contracts) {
-                                live.exec.presign_entry(&h.token, limit, Decimal::from(n), &top).await;
-                            }
-                        }
-                        None => {
-                            if let Err(e) = self.probe.presign(&h.token, &top).await {
-                                tracing::warn!(error = %e, "order path: presign");
-                            }
-                        }
-                    }
+                    self.hints.lock().insert(h.asset.clone(), h);
+                    self.hint_ready.notify_one();
                 }
                 ExecMsg::Intent(i, t_decision) => {
                     *self.last_token.lock() = Some(i.token.clone());
                     if i.live {
-                        self.enter(&i, t_decision).await;
+                        let this = self.clone();
+                        tokio::spawn(async move { this.enter(&i, t_decision).await });
                     } else {
-                        self.probe_intent(&i, t_decision).await;
+                        let _ = probe_tx.send((i, t_decision));
                     }
                 }
             }
+        }
+    }
+
+    /// Signs ahead for the latest hint of each asset; a backlog collapses.
+    async fn hint_worker(self: Arc<Self>) {
+        loop {
+            self.hint_ready.notified().await;
+            let hints: Vec<PresignHint> = self.hints.lock().drain().map(|(_, h)| h).collect();
+            for h in hints {
+                self.presign_hint(&h).await;
+            }
             self.exec().presign.prune();
+        }
+    }
+
+    async fn presign_hint(&self, h: &PresignHint) {
+        let Some(top) = self.top(&h.token, h.best_bid, h.best_ask).await else { return };
+        match &self.live {
+            Some(live) => {
+                // The entry a decision at this ask would send.
+                if let (Some(limit), Some(n)) = (dec(h.limit_px), h.contracts) {
+                    live.exec.presign_entry(&h.token, limit, Decimal::from(n), &top).await;
+                }
+            }
+            None => {
+                if let Err(e) = self.probe.presign(&h.token, &top).await {
+                    tracing::warn!(error = %e, "order path: presign");
+                }
+            }
+        }
+    }
+
+    /// Probes one at a time, so `ProbeLimits` hold as before.
+    async fn probe_worker(self: Arc<Self>, mut rx: mpsc::UnboundedReceiver<(OrderIntent, Instant)>) {
+        while let Some((i, t_decision)) = rx.recv().await {
+            self.probe_intent(&i, t_decision).await;
+        }
+    }
+
+    /// Read the tick and minimum size of tokens not cached yet, in the
+    /// background, so an entry on them does no REST read before its POST.
+    pub fn prefetch(self: &Arc<Self>, tokens: impl IntoIterator<Item = String>) {
+        let missing: Vec<String> = {
+            let meta = self.meta.lock();
+            tokens.into_iter().filter(|t| !meta.contains_key(t)).collect()
+        };
+        for token in missing {
+            let this = self.clone();
+            tokio::spawn(async move { this.meta(&token).await });
         }
     }
 
@@ -401,7 +455,7 @@ impl<S: OrderSigner> ExecBridge<S> {
             "error": ex.error.clone().or(ex.refused.clone()),
         }));
         if ex.balance_reject {
-            let n = live.exec.balance_rejects();
+            let n = ex.rejects_in_row;
             (self.hooks.alert)(
                 "balance_reject",
                 "poly-kalshi: live order rejected for balance or allowance",

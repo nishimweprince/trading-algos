@@ -129,6 +129,9 @@ pub struct Executed {
     pub error: Option<String>,
     pub refused: Option<String>,
     pub balance_reject: bool,
+    /// This reject's place in the run of balance rejects (1 = the first). Each
+    /// concurrent entry gets its own, so a halt at N fires once.
+    pub rejects_in_row: u32,
     #[serde(skip)]
     pub records: Vec<OrderTiming>,
     pub decision_to_ack_us: Option<u64>,
@@ -203,7 +206,7 @@ impl<S: OrderSigner> LiveExec<S> {
         if !ok {
             out.balance_reject = out.error.as_deref().is_some_and(is_balance_reject);
             if out.balance_reject {
-                self.balance_rejects.fetch_add(1, Ordering::Relaxed);
+                out.rejects_in_row = self.balance_rejects.fetch_add(1, Ordering::Relaxed) + 1;
             }
             return out;
         }

@@ -15,7 +15,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{any, get, post};
 use parking_lot::Mutex;
-use pk_engine::OrderIntent;
+use pk_engine::{OrderIntent, PresignHint};
 use pk_exec::presign::PresignCache;
 use pk_exec::{ClobExec, LiveExec, LiveLimits, RedeemReceipt, SdkSigner, WalletConfig, WarmConfig, WarmHttp};
 use pk_trader::exec_bridge::{BridgeConfig, ExecBridge, ExecMsg, Held, Hooks, LivePart, LiveView, RedeemFn};
@@ -39,6 +39,10 @@ struct Mock {
     tokens: std::collections::HashMap<String, String>,
     open_orders: Vec<Value>,
     cancel_alls: u32,
+    /// Delays before answering `POST /order` and `GET /book`.
+    post_delay: Duration,
+    book_delay: Duration,
+    book_calls: u32,
 }
 
 type Shared = Arc<Mutex<Mock>>;
@@ -56,7 +60,13 @@ async fn serve(state: Shared) -> SocketAddr {
         .route("/time", get(|| async { "1700000000" }))
         .route(
             "/book",
-            get(|| async {
+            get(|State(st): State<Shared>| async move {
+                let delay = {
+                    let mut m = st.lock();
+                    m.book_calls += 1;
+                    m.book_delay
+                };
+                tokio::time::sleep(delay).await;
                 axum::Json(json!({
                     "bids": [{"price": "0.44", "size": "100"}],
                     "asks": [{"price": "0.46", "size": "50"}],
@@ -67,6 +77,8 @@ async fn serve(state: Shared) -> SocketAddr {
         .route(
             "/order",
             any(|State(st): State<Shared>, body: Bytes| async move {
+                let delay = st.lock().post_delay;
+                tokio::time::sleep(delay).await;
                 let mut m = st.lock();
                 m.orders.push(serde_json::from_slice(&body).unwrap());
                 let (status, body) = m.posts.pop_front().expect("an order response queued");
@@ -151,10 +163,14 @@ async fn wait_for(seen: &Arc<Mutex<Seen>>, kind: &str, n: usize) -> Vec<Value> {
     }
 }
 
-#[tokio::test]
-async fn live_entries_reconcile_redeem_and_flatten() {
-    let state: Shared = Arc::default();
-    state.lock().collateral = "123450000".into();
+struct Rig {
+    bridge: Arc<ExecBridge>,
+    seen: Arc<Mutex<Seen>>,
+    view: Arc<Mutex<LiveView>>,
+}
+
+/// A live bridge on the mock CLOB, its hooks recorded in `seen`.
+async fn rig(state: Shared) -> Rig {
     let addr = serve(state.clone()).await;
     let base = format!("http://{addr}/");
     let signer = SdkSigner::connect(&WalletConfig {
@@ -199,6 +215,14 @@ async fn live_entries_reconcile_redeem_and_flatten() {
     let live = LivePart { exec: LiveExec::new(exec.clone(), limits), redeem, gas: None, signature_type: 0 };
     let cfg = BridgeConfig { latency_seed_ms: 150.0, latency_window: 50, latency_min_samples: 1 };
     let bridge = ExecBridge::new(exec, hooks, cfg, Some(live));
+    Rig { bridge, seen, view }
+}
+
+#[tokio::test]
+async fn live_entries_reconcile_redeem_and_flatten() {
+    let state: Shared = Arc::default();
+    state.lock().collateral = "123450000".into();
+    let Rig { bridge, seen, view } = rig(state.clone()).await;
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     tokio::spawn(bridge.clone().run(rx));
 
@@ -324,4 +348,83 @@ async fn live_entries_reconcile_redeem_and_flatten() {
     let stats = bridge.stats();
     assert_eq!(stats["mode"], "live");
     assert_eq!(stats["live"]["redeemed"], 1);
+}
+
+fn timings(seen: &Arc<Mutex<Seen>>, trigger: &str) -> Vec<Value> {
+    let s = seen.lock();
+    s.journal.iter().filter(|r| r["type"] == "order_timing" && r["trigger"] == trigger).cloned().collect()
+}
+
+/// Nothing holds a live entry back: not another entry still waiting on the
+/// venue, not a backlog of hints, not a REST read for the token's meta.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn entries_go_out_at_once() {
+    const SLOW_TOKEN: &str = "22222222222222222222222222222222222222222222222222222222222222222222222222222";
+    let state: Shared = Arc::default();
+    let Rig { bridge, seen, .. } = rig(state.clone()).await;
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(bridge.clone().run(rx));
+
+    // Meta is read when the window is identified, not at the entry.
+    bridge.prefetch([TOKEN.to_owned()]);
+    let t0 = Instant::now();
+    while state.lock().book_calls < 1 {
+        assert!(t0.elapsed() < Duration::from_secs(5), "prefetch never read the book");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    bridge.prefetch([TOKEN.to_owned()]); // cached: no second read
+    let matched = |id: &str| {
+        let ack = json!({
+            "success": true, "orderID": id, "status": "matched", "makingAmount": "4.6", "takingAmount": "10"
+        });
+        (200, ack)
+    };
+
+    // 1. Two entries at once, the venue slow to answer: neither waits for the other.
+    {
+        let mut m = state.lock();
+        m.post_delay = Duration::from_millis(200);
+        m.posts.extend([matched("0xa"), matched("0xb")]);
+    }
+    let sent = Instant::now();
+    tx.send(ExecMsg::Intent(intent(900, 10), Instant::now())).unwrap();
+    tx.send(ExecMsg::Intent(intent(1800, 10), Instant::now())).unwrap();
+    wait_for(&seen, "live_fill", 2).await;
+    let took = sent.elapsed();
+    assert!(took < Duration::from_millis(390), "entries ran one after the other: {took:?}");
+    let posts = timings(&seen, "decision");
+    assert_eq!(posts.len(), 2);
+    for p in &posts {
+        assert!(p["decision_to_write_us"].as_u64().unwrap() < 20_000, "{p}");
+    }
+    assert_eq!(state.lock().book_calls, 1);
+
+    // 2. A burst of hints stuck on a slow book read: the entry still goes out
+    //    at once, and the burst collapses to its latest hint.
+    {
+        let mut m = state.lock();
+        m.post_delay = Duration::ZERO;
+        m.book_delay = Duration::from_millis(300);
+        m.posts.push_back(matched("0xc"));
+    }
+    for k in 0..50 {
+        tx.send(ExecMsg::Hint(PresignHint {
+            asset: "ETH".into(),
+            token: SLOW_TOKEN.into(),
+            best_bid: Some(0.44),
+            best_ask: Some(0.46),
+            limit_px: Some(0.46),
+            contracts: Some(10 + k),
+        }))
+        .unwrap();
+    }
+    tx.send(ExecMsg::Intent(intent(2700, 10), Instant::now())).unwrap();
+    wait_for(&seen, "live_fill", 3).await;
+    let entry = timings(&seen, "decision").into_iter().find(|t| t["order_id"] == "0xc").unwrap();
+    assert!(entry["decision_to_write_us"].as_u64().unwrap() < 20_000, "{entry}");
+
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    let signed = bridge.stats()["exec"]["presign"]["signed_ahead"].as_u64().unwrap();
+    assert!((1..=2).contains(&signed), "50 hints signed {signed} orders");
 }

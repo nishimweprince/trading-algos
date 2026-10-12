@@ -282,6 +282,9 @@ impl Runtime {
         if let Some(k) = &self.kalshi {
             k.set_wanted(live.iter().map(|w| w.kalshi_ticker.clone()).collect());
         }
+        if let Some(bridge) = self.exec.lock().clone() {
+            bridge.prefetch(live.iter().flat_map(|w| [w.yes_token.clone(), w.no_token.clone()]));
+        }
         let sec_into = now - targets[0] as f64;
         if let Some(p) = &self.poly {
             let mut groups: HashMap<String, BTreeSet<String>> = HashMap::new();
