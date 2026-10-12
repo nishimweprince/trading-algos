@@ -105,6 +105,12 @@ pub struct Settings {
     pub polybolt_url: String,
     pub polybolt_credentials: Option<(String, String, String)>,
 
+    /// Binance spot and perp best bid/ask, recorded and compared with Kalshi
+    /// and Polymarket by the observer (`pk_core::leadlag`). Never traded.
+    pub binance_enabled: bool,
+    pub binance_spot_ws_url: String,
+    pub binance_perp_ws_url: String,
+
     /// The order probe (`pk_exec::probe`): real, unfillable orders.
     pub order_probe: bool,
     pub poly_private_key: Option<String>,
@@ -422,6 +428,9 @@ impl Settings {
             observer_port,
             polybolt_url: e.or("POLYBOLT_URL", "wss://ws-live-v2.polymarket.com/ws"),
             polybolt_credentials,
+            binance_enabled: e.flag("PK_BINANCE", true)?,
+            binance_spot_ws_url: e.or("BINANCE_SPOT_WS_URL", "wss://stream.binance.com:9443/stream"),
+            binance_perp_ws_url: e.or("BINANCE_PERP_WS_URL", "wss://fstream.binance.com/public/stream"),
             order_probe,
             poly_private_key,
             poly_funder,

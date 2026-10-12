@@ -87,6 +87,7 @@ h3.section { font-size:12px; text-transform:uppercase; letter-spacing:.08em; col
   <div class="card"><h2>By seconds into window</h2><table id="by-sec"></table></div>
   <div class="card"><h2>By entry price band</h2><table id="bands"></table></div>
 </div>
+<div class="card" style="margin-bottom:12px"><h2>Lead–lag · after a Binance shock, time until each venue's YES mid moves 1¢ the same way</h2><table id="leadlag"></table></div>
 
 <h3 class="section">History</h3>
 <div class="card" style="margin-bottom:12px"><h2>Paper equity (cumulative P&amp;L, settled trades)</h2><div id="curve" class="muted">no settled trades yet</div></div>
@@ -237,6 +238,7 @@ async function tick() {
     ["runtime lag p50 / p99", pq("loop_lag_ms", "ms", 1), (lat.loop_lag_ms || {}).p99 > 100 ? "bad" : ""],
     ["observer (stats process)", (() => { const o = (live && live.observer) || {}; if (!o.enabled) return "off (in-process)"; return (o.alive ? "up" : "DOWN") + ` · behind ${f(o.behind_ms, 0)} ms · dropped ${o.dropped ?? 0}`; })(), live && live.observer && live.observer.enabled && !live.observer.alive ? "bad" : ""],
     ["PolyBolt (spot + TWAP)", (() => { const p = ((live && live.observer) || {}).polybolt || {}; if (!p.enabled && p.connected == null) return "off (no CLOB credentials)"; return (p.connected ? "up" : "down") + ` · ${p.messages ?? 0} msgs`; })()],
+    ["Binance spot / perp (observer)", (() => { const b = ((live && live.observer) || {}).binance || {}; if (!b.enabled) return "off (PK_BINANCE)"; return (b.feeds || []).map((x) => (x.connected ? "up" : "DOWN") + ` · ${x.messages ?? 0} msgs`).join(" / ") || "starting"; })(), (((live && live.observer) || {}).binance || {}).enabled && (((live && live.observer) || {}).binance.feeds || []).some((x) => !x.connected) ? "bad" : ""],
     ["Kalshi book age at decision", pq("age_ms_kalshi", "ms")], ["Poly book age at decision", pq("age_ms_poly", "ms")],
     ["result delay Poly / Kalshi (p50)", `${f((lat.resolution_s_poly || {}).p50, 0)} / ${f((lat.resolution_s_kalshi || {}).p50, 0)} s`]]));
   const S = res.signal || {};
@@ -283,6 +285,27 @@ async function tick() {
     '<tr><td colspan="5" class="muted" style="text-align:left;border-bottom:none">Gate: median 5 s markout on fills no worse than −3¢. Worse means faster traders own the edge and we are their exit.</td></tr>');
   put("by-asset", grp(res.by_asset || {}));
   put("by-sec", grp(res.by_sec || {}));
+  const LL = (live && live.leadlag) || null;
+  const pct = (a, b) => b ? f(100 * a / b, 0) + "%" : "–";
+  const fol = (x) => x && x.n ? `${pct(x.responded, x.n)} · ${f(x.lag_ms_p50, 0)} / ${f(x.lag_ms_p90, 0)} ms · ${pct(x.moved_first, x.n)}` : "–";
+  if (!LL) put("leadlag", '<tr><td class="muted">off (PK_BINANCE=false) or the observer is unreachable</td></tr>');
+  else {
+    const P = LL.params || {}, rows = [];
+    for (const [asset, per] of Object.entries(LL.assets || {})) {
+      for (const [src, x] of Object.entries(per)) {
+        rows.push(`<tr><td>${esc(asset)}</td><td>${esc(src)}</td><td>${x.feed_lag_ms_p50 == null ? "–" : `${f(x.feed_lag_ms_p50, 0)} / ${f(x.feed_lag_ms_p90, 0)} ms`}</td>` +
+          `<td>${f(x.typical_1s_bps, 1)} bp${x.warm ? "" : ' <span class="muted">warming</span>'}</td><td>${x.shocks}${x.insensitive ? ` <span class="muted" title="skipped: Kalshi mid outside ${esc((P.kalshi_mid_range || []).join("–"))}">+${x.insensitive}</span>` : ""}</td>` +
+          `<td>${fol(x.kalshi)}</td><td>${fol(x.poly)}</td></tr>`);
+      }
+    }
+    for (const [src, x] of Object.entries(LL.totals || {})) {
+      rows.push(`<tr><td><b>all</b></td><td>${esc(src)}</td><td></td><td></td><td>${(x.kalshi || {}).n ?? 0}</td><td><b>${fol(x.kalshi)}</b></td><td><b>${fol(x.poly)}</b></td></tr>`);
+    }
+    put("leadlag", "<tr><th>asset</th><th>Binance</th><th title='receive time − Binance event time (perps only; spot carries no time)'>feed lag p50 / p90</th><th title='EWMA of the |1 s move|'>typical 1 s move</th><th>shocks</th>" +
+      "<th title='answered within the timeout · lag p50 / p90 · share that had already moved 1¢ that way in the second before'>Kalshi: answered · lag · moved first</th><th>Polymarket: answered · lag · moved first</th></tr>" +
+      (rows.length ? rows.join("") : '<tr><td colspan="7" class="muted">waiting for Binance…</td></tr>') +
+      `<tr><td colspan="7" class="muted" style="text-align:left;border-bottom:none">A shock is a Binance mid move over 1 s of ≥ ${f(P.shock_k, 0)}× the typical move (≥ ${f(P.min_shock_bps, 0)} bp), at most one per ${f((P.cooldown_ms || 0) / 1000, 0)} s, counted only while Kalshi's mid is ${esc((P.kalshi_mid_range || []).join("–"))}. Lags are from the shock to a 1¢ move the same way, within ${f((P.timeout_ms || 0) / 1000, 0)} s. A short Polymarket lag is the window this strategy has to act in.</td></tr>`);
+  }
   const C = res.curve || [];
   if (C.length > 1) {
     const W = 1000, H = 140, P = 6, vals = C.map((c) => c[1]), lo = Math.min(0, ...vals), hi = Math.max(0, ...vals), span = hi - lo || 1;

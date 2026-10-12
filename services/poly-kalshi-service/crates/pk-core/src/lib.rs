@@ -5,6 +5,7 @@ pub mod book;
 pub mod decision;
 pub mod fees;
 pub mod journal;
+pub mod leadlag;
 pub mod ledger;
 pub mod metrics;
 pub mod num;

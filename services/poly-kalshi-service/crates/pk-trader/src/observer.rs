@@ -10,15 +10,24 @@
 //! they arrive here, so in the file they can sit a few ms out of `recv_ns`
 //! order next to the market lines. Research that joins them sorts on
 //! `recv_ns`; the engine ignores venue `b`.
+//!
+//! Binance spot (`n`) and perp (`f`) best bid/ask lines are stamped and
+//! written the same way, but only when the best bid or ask changed (most
+//! updates change only a size). They also drive the lead–lag monitor
+//! (`pk_core::leadlag`), which the Kalshi and Polymarket mids from the engine
+//! follow; its `leadlag_shock` records go to the journal.
 
+use std::collections::HashMap;
 use std::io::BufRead;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use parking_lot::Mutex;
 use pk_core::journal::{JsonlDaily, Sink};
+use pk_core::leadlag::LeadLag;
 use pk_engine::Engine;
 use pk_tape::Recorder;
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::now_ns;
@@ -45,6 +54,26 @@ pub struct Observer {
     pub last_ns: AtomicU64,
     pub started_ns: i64,
     pub polybolt: Mutex<Option<pk_feeds::FeedHandle>>,
+    pub leadlag: Option<Mutex<LeadLag>>,
+    pub binance: Mutex<Vec<pk_feeds::FeedHandle>>,
+    /// The last best bid and ask per (venue, symbol): only changes are kept.
+    binance_last: Mutex<HashMap<(char, String), (String, String)>>,
+}
+
+#[derive(Deserialize)]
+struct BinanceFrame<'a> {
+    #[serde(borrow)]
+    data: Option<BookTicker<'a>>,
+}
+
+/// A `bookTicker` update: spot has no venue time, perps stamp `E`.
+#[derive(Deserialize)]
+struct BookTicker<'a> {
+    s: &'a str,
+    b: &'a str,
+    a: &'a str,
+    #[serde(rename = "E")]
+    event_ms: Option<i64>,
 }
 
 impl Observer {
@@ -61,6 +90,63 @@ impl Observer {
             last_ns: AtomicU64::new(0),
             started_ns: now_ns(),
             polybolt: Mutex::new(None),
+            leadlag: None,
+            binance: Mutex::new(Vec::new()),
+            binance_last: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Turn on the lead–lag monitor for the engine's assets.
+    pub fn with_leadlag(mut self) -> Self {
+        let ll = {
+            let e = self.engine.lock();
+            LeadLag::new(e.assets.clone(), e.stamp.clone())
+        };
+        self.leadlag = Some(Mutex::new(ll));
+        self
+    }
+
+    /// One Binance frame (`n` spot, `f` perp): to the tape when the best bid or
+    /// ask changed, and to the lead–lag monitor.
+    pub fn binance(&self, venue: char, text: &str) {
+        let t = now_ns();
+        let text = text.trim();
+        let Some(q) = serde_json::from_str::<BinanceFrame>(text).ok().and_then(|f| f.data) else {
+            // Acknowledgements, reconnect markers, errors: kept as they came.
+            if let Some(r) = &self.recorder {
+                r.lock().write(venue, t, text);
+            }
+            return;
+        };
+        {
+            let mut last = self.binance_last.lock();
+            let key = (venue, q.s.to_owned());
+            if last.get(&key).is_some_and(|(b, a)| b == q.b && a == q.a) {
+                return;
+            }
+            last.insert(key, (q.b.to_owned(), q.a.to_owned()));
+        }
+        if let Some(r) = &self.recorder {
+            r.lock().write(venue, t, text);
+        }
+        let (Some(ll), Ok(bid), Ok(ask)) = (&self.leadlag, q.b.parse::<f64>(), q.a.parse::<f64>()) else {
+            return;
+        };
+        let records = {
+            let mut ll = ll.lock();
+            let Some(idx) = q.s.strip_suffix("USDT").and_then(|asset| ll.asset_index(asset)) else { return };
+            ll.on_ref(idx, usize::from(venue == 'f'), t, (bid + ask) / 2.0, q.event_ms)
+        };
+        self.journal_all(t, &records);
+    }
+
+    fn journal_all(&self, t: i64, records: &[Value]) {
+        if records.is_empty() {
+            return;
+        }
+        let mut j = self.journal.0.lock();
+        for r in records {
+            j.write(t, r);
         }
     }
 
@@ -86,6 +172,23 @@ impl Observer {
             self.engine_errors.fetch_add(1, Ordering::Relaxed);
             tracing::error!("observer_engine_error");
         }
+        let Some(ll) = &self.leadlag else { return };
+        if !matches!(l.venue, 'k' | 'p') {
+            return;
+        }
+        let mids: Vec<_> = (0..e.assets.len()).filter_map(|i| e.mids(i).map(|m| (i, m))).collect();
+        drop(e);
+        let records: Vec<Value> = {
+            let mut ll = ll.lock();
+            mids.into_iter()
+                .flat_map(|(i, (open, k, p))| {
+                    let mut out = ll.on_follow(i, 0, l.recv_ns, open, k);
+                    out.extend(ll.on_follow(i, 1, l.recv_ns, open, p));
+                    out
+                })
+                .collect()
+        };
+        self.journal_all(l.recv_ns, &records);
     }
 
     fn internal(&self, t_ns: i64, text: &str) {
@@ -151,6 +254,11 @@ impl Observer {
             "recorder": self.recorder.as_ref().map(|r| serde_json::to_value(r.lock().stats()).unwrap_or(Value::Null)).unwrap_or(json!({"enabled": false})),
             "journal_errors": self.journal.0.lock().errors,
             "polybolt": self.polybolt.lock().as_ref().map(|p| p.stats()).unwrap_or(json!({"enabled": false})),
+            "binance": {
+                "enabled": self.leadlag.is_some(),
+                "feeds": self.binance.lock().iter().map(|f| f.stats()).collect::<Vec<_>>(),
+            },
+            "leadlag": self.leadlag.as_ref().map(|ll| ll.lock().snapshot()),
         })
     }
 }
@@ -188,5 +296,36 @@ mod tests {
         let j = pk_core::journal::read_journal(&dir.join("journal")).unwrap();
         assert_eq!(j, vec![json!({"type": "decision"})]);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn binance_keeps_bbo_changes_and_feeds_the_monitor() {
+        let dir = std::env::temp_dir().join("pk-obs-bn");
+        let journal = SharedJournal(Arc::new(Mutex::new(JsonlDaily::new(dir))));
+        let mut cfg = EngineConfig::new(StrategyParams::default(), vec!["BTC".into(), "HYPE".into()]);
+        cfg.role = Role::Observe;
+        let risk = RiskState::new(RiskLimits {
+            max_open_notional_usd: 1.0,
+            daily_loss_limit_usd: 1.0,
+            kill_file: None,
+        });
+        let engine = Engine::new(cfg, Ledger::new(1.0), risk, Box::new(journal.clone()));
+        let obs = Observer::new(engine, journal, None).with_leadlag();
+        let frame = |b: &str, a: &str, size: &str| {
+            format!(
+                r#"{{"stream":"hypeusdt@bookTicker","data":{{"e":"bookTicker","u":1,"s":"HYPEUSDT","b":"{b}","B":"{size}","a":"{a}","A":"1","T":1,"E":1791765297176}}}}"#
+            )
+        };
+        obs.binance('f', &frame("40.10", "40.11", "5"));
+        obs.binance('f', &frame("40.10", "40.11", "9")); // a size change only
+        obs.binance('f', &frame("40.11", "40.12", "9"));
+        obs.binance('f', r#"{"result":null,"id":1}"#);
+        obs.binance('n', r#"{"stream":"dogeusdt@bookTicker","data":{"u":1,"s":"DOGEUSDT","b":"0.1","B":"1","a":"0.2","A":"1"}}"#);
+        assert_eq!(obs.binance_last.lock().len(), 2);
+        let snap = obs.status()["leadlag"].clone();
+        assert!(snap["assets"]["HYPE"]["perp"]["typical_1s_bps"].is_null()); // one second seen: no move yet
+        assert!(snap["assets"]["HYPE"].get("spot").is_none());
+        assert!(snap["assets"]["BTC"].as_object().unwrap().is_empty());
+        assert!(snap["assets"]["HYPE"]["perp"]["feed_lag_ms_p50"].as_f64().is_some());
     }
 }

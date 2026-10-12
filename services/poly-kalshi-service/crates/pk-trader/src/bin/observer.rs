@@ -12,7 +12,7 @@ use parking_lot::Mutex;
 use pk_core::journal::JsonlDaily;
 use pk_core::{Ledger, RiskLimits, RiskState};
 use pk_engine::Role;
-use pk_feeds::ws::POLYBOLT_SYMBOLS;
+use pk_feeds::ws::{POLYBOLT_SYMBOLS, binance_stream};
 use pk_feeds::{FeedKind, spawn_feed};
 use pk_svc::Settings;
 use pk_svc::api::{ApiKey, require_key};
@@ -59,7 +59,8 @@ fn main() -> anyhow::Result<()> {
             )
         })
         .transpose()?;
-    let observer = Arc::new(Observer::new(engine, journal, recorder));
+    let observer = Observer::new(engine, journal, recorder);
+    let observer = Arc::new(if settings.binance_enabled { observer.with_leadlag() } else { observer });
 
     let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build()?;
     {
@@ -88,6 +89,18 @@ fn main() -> anyhow::Result<()> {
                     .collect();
                 feed.set_wanted(symbols);
                 *observer.polybolt.lock() = Some(feed);
+            }
+            if settings.binance_enabled {
+                for (futures, url) in
+                    [(false, &settings.binance_spot_ws_url), (true, &settings.binance_perp_ws_url)]
+                {
+                    let o = observer.clone();
+                    let emit: pk_feeds::Emit = Arc::new(move |venue, text: String| o.binance(venue, &text));
+                    let feed = spawn_feed(url.clone(), FeedKind::Binance { futures }, emit);
+                    let streams = settings.assets.iter().filter_map(|a| binance_stream(a, futures)).collect();
+                    feed.set_wanted(streams);
+                    observer.binance.lock().push(feed);
+                }
             }
             let key = ApiKey(Arc::new(settings.api_key.clone()));
             let app = Router::new()

@@ -197,7 +197,8 @@ pub fn pick(status: Option<&Value>) -> Option<Value> {
         "feed_age_s": engine.get("feed_age_s"),
         "recorder": keep(st.get("recorder"), &["enabled", "lines_written", "dropped", "errors", "disk_free_gb", "disk_paused"]),
         "latency": engine.get("latency"),
-        "observer": keep(st.get("observer"), &["enabled", "alive", "spawns", "dropped", "buffer_bytes", "fallback_writes", "behind_ms", "gaps", "engine_errors", "polybolt"]),
+        "observer": keep(st.get("observer"), &["enabled", "alive", "spawns", "dropped", "buffer_bytes", "fallback_writes", "behind_ms", "gaps", "engine_errors", "polybolt", "binance"]),
+        "leadlag": st.get("leadlag"),
         "host_load": st.get("host_load"),
         "telegram": keep(st.get("telegram"), &["handled", "errors", "conflicts"]),
         "ledger": engine.get("ledger"),
@@ -246,6 +247,8 @@ pub fn merge_observer(status: Option<Value>, obs: Option<Value>) -> Option<Value
     } else {
         keep(Some(&polybolt), &["enabled", "connected", "authed", "messages", "errors"])
     };
+    link["binance"] = obs.get("binance").cloned().unwrap_or(json!({"enabled": false}));
+    status["leadlag"] = obs.get("leadlag").cloned().unwrap_or(Value::Null);
     status["observer"] = link;
     Some(status)
 }
@@ -708,5 +711,13 @@ mod tests {
         let m = merge_observer(Some(status), Some(obs)).unwrap();
         assert_eq!(m["engine"]["latency"], json!({"engine_us": 1, "feed_ms_p": 2}));
         assert_eq!(m["observer"]["behind_ms"], 3.0);
+        assert!(m["leadlag"].is_null());
+        let status = json!({"observer": {"enabled": true}, "engine": {}});
+        let obs = json!({"leadlag": {"totals": {"perp": {}}}, "binance": {"enabled": true, "feeds": []}});
+        let m = merge_observer(Some(status), Some(obs)).unwrap();
+        assert_eq!(m["observer"]["binance"]["enabled"], true);
+        let p = pick(Some(&m)).unwrap();
+        assert_eq!(p["leadlag"]["totals"], json!({"perp": {}}));
+        assert_eq!(p["observer"]["binance"]["enabled"], true);
     }
 }

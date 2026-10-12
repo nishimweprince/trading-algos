@@ -781,6 +781,14 @@ impl Engine {
         Some((k?.quote(since), y?.quote(since), n?.quote(since)))
     }
 
+    /// The current window's open, Kalshi YES mid and Polymarket YES mid (the
+    /// observer's lead–lag monitor).
+    pub fn mids(&self, idx: usize) -> Option<(i64, Option<f64>, Option<f64>)> {
+        let open = self.state.get(idx)?.window.as_ref()?.open_unix;
+        let (k, y, _) = self.quotes(idx)?;
+        Some((open, k.mid(), y.mid()))
+    }
+
     /// Shares offered at or below `limit` on the leg a buy would take.
     fn depth(&self, w: &Window, buy_yes: bool, limit: f64) -> f64 {
         let id = if buy_yes { &w.yes_token } else { &w.no_token };

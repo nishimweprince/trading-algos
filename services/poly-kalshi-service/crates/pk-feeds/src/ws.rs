@@ -43,6 +43,8 @@ pub enum FeedKind {
     Kalshi { signer: Arc<KalshiSigner> },
     Poly { shard: Option<usize> },
     PolyBolt { credentials: (String, String, String) },
+    /// Binance best bid/ask streams (`<symbol>@bookTicker`), spot or USDⓈ-M perps.
+    Binance { futures: bool },
 }
 
 impl FeedKind {
@@ -51,6 +53,8 @@ impl FeedKind {
             FeedKind::Kalshi { .. } => 'k',
             FeedKind::Poly { .. } => 'p',
             FeedKind::PolyBolt { .. } => 'b',
+            FeedKind::Binance { futures: false } => 'n',
+            FeedKind::Binance { futures: true } => 'f',
         }
     }
 }
@@ -130,6 +134,7 @@ impl FeedHandle {
             "poly" => {
                 o.insert("removed_since_connect".into(), self.removed_since_connect().into());
             }
+            "binance_spot" | "binance_perp" => {}
             _ => {
                 o.insert("authed".into(), s.authed.load(Ordering::Relaxed).into());
                 o.insert("auth_failures".into(), s.auth_failures.load(Ordering::Relaxed).into());
@@ -146,6 +151,8 @@ pub fn spawn_feed(url: String, kind: FeedKind, emit: Emit) -> FeedHandle {
         FeedKind::Kalshi { .. } => "kalshi",
         FeedKind::Poly { .. } => "poly",
         FeedKind::PolyBolt { .. } => "polybolt",
+        FeedKind::Binance { futures: false } => "binance_spot",
+        FeedKind::Binance { futures: true } => "binance_perp",
     };
     let handle = FeedHandle { kind_name, shared: shared.clone() };
     tokio::spawn(run(url, kind, emit, shared));
@@ -232,9 +239,10 @@ async fn session(url: &str, kind: &FeedKind, emit: &Emit, shared: &Shared) -> Re
         ctl["tokens"] = shared.wanted.lock().iter().cloned().collect::<Vec<_>>().into();
     }
     match kind {
-        FeedKind::PolyBolt { .. } => {
+        // Recorded-only venues: the engine must not read their reconnects.
+        FeedKind::PolyBolt { .. } | FeedKind::Binance { .. } => {
             ctl["type"] = "pk_reconnect".into();
-            emit('b', ctl.to_string());
+            emit(venue, ctl.to_string());
         }
         _ => emit('c', ctl.to_string()),
     }
@@ -368,6 +376,10 @@ impl Session<'_> {
                     .collect();
                 Self::send(ws, json!({"op": "subscribe", "rid": "sub", "subscriptions": subs})).await?;
             }
+            FeedKind::Binance { .. } => {
+                let body = json!({"method": "SUBSCRIBE", "params": ids, "id": self.cmd_id()});
+                Self::send(ws, body).await?;
+            }
         }
         self.shared.subscribed.lock().extend(ids);
         Ok(())
@@ -386,6 +398,10 @@ impl Session<'_> {
                 self.shared.removed_since_connect.fetch_add(ids.len() as u64, Ordering::Relaxed);
             }
             FeedKind::PolyBolt { .. } => return Ok(()), // the symbol set is fixed
+            FeedKind::Binance { .. } => {
+                let body = json!({"method": "UNSUBSCRIBE", "params": ids, "id": self.cmd_id()});
+                Self::send(ws, body).await?;
+            }
         }
         let mut sub = self.shared.subscribed.lock();
         for id in &ids {
@@ -425,6 +441,18 @@ impl Session<'_> {
                     self.sync(ws).await?;
                 }
                 (self.emit)('b', text);
+                Ok(true)
+            }
+            FeedKind::Binance { .. } => {
+                // `{"result":null,"id":n}` acknowledges a (un)subscribe; an error has `code`.
+                if text.starts_with("{\"result\"") {
+                    return Ok(true);
+                }
+                if text.contains("\"code\"") && !text.contains("\"stream\"") {
+                    let head: String = text.chars().take(150).collect();
+                    set_error(self.shared, format!("binance: {head}"));
+                }
+                (self.emit)(self.kind.venue(), text);
                 Ok(true)
             }
         }
@@ -544,6 +572,11 @@ impl PolyShards {
             "shards": per,
         })
     }
+}
+
+/// The Binance `bookTicker` stream for an asset; HYPE has no Binance spot market.
+pub fn binance_stream(asset: &str, futures: bool) -> Option<String> {
+    (futures || asset != "HYPE").then(|| format!("{}usdt@bookTicker", asset.to_lowercase()))
 }
 
 pub const POLYBOLT_SYMBOLS: [(&str, &str); 7] = [
