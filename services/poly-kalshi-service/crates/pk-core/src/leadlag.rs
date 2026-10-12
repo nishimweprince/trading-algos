@@ -2,7 +2,8 @@
 //!
 //! A **shock** is a Binance mid move over the last second of at least
 //! [`SHOCK_K`] × the asset's typical one-second move (an EWMA of |1 s log
-//! return| per asset and source), and never less than [`MIN_SHOCK_BPS`]. From
+//! return| per asset and source, sampled on the clock: a second without a
+//! new best bid or ask is a zero move), and never less than [`MIN_SHOCK_BPS`]. From
 //! the shock it times how long each follower (Kalshi's YES mid, Polymarket's
 //! YES mid) takes to move at least 1¢ the same way (price up = YES up), and
 //! gives up after [`TIMEOUT_NS`]. A follower that had already moved 1¢ that way
@@ -120,8 +121,10 @@ impl Shock {
 #[derive(Debug)]
 struct Source {
     trail: Trail,
+    /// The second of the last update, the mid at that second's start, and the latest mid.
     sec: Option<i64>,
-    sec_mid: Option<f64>,
+    bound_mid: Option<f64>,
+    last_mid: Option<f64>,
     ewma_bps: Option<f64>,
     samples: u32,
     last_shock: Option<i64>,
@@ -137,7 +140,8 @@ impl Default for Source {
         Self {
             trail: Trail::default(),
             sec: None,
-            sec_mid: None,
+            bound_mid: None,
+            last_mid: None,
             ewma_bps: None,
             samples: 0,
             last_shock: None,
@@ -193,20 +197,27 @@ impl LeadLag {
         if let Some(v) = venue_ms {
             s.feed_lag_ms.push(t as f64 / 1e6 - v as f64);
         }
-        // The typical one-second move: one sample per new second.
+        // The typical one-second move, on the clock. The mid at each second's
+        // start is the last one before it, so after a quiet stretch the first
+        // second carries the move and the rest are zeros.
         let sec = t.div_euclid(W_NS);
-        if s.sec != Some(sec) {
-            if let Some(prev) = s.sec_mid {
-                let r = (mid / prev).ln().abs() * 1e4;
-                s.ewma_bps = Some(match s.ewma_bps {
+        match (s.sec, s.bound_mid, s.last_mid) {
+            (Some(prev), Some(bound), Some(last)) if prev != sec => {
+                let gap = (sec - prev).clamp(1, 3600);
+                let r = (last / bound).ln().abs() * 1e4;
+                let e = match s.ewma_bps {
                     Some(e) => e + EWMA_ALPHA * (r - e),
                     None => r,
-                });
-                s.samples += 1;
+                };
+                s.ewma_bps = Some(e * (1.0 - EWMA_ALPHA).powi(gap as i32 - 1));
+                s.samples = s.samples.saturating_add(gap as u32);
+                s.bound_mid = Some(last);
             }
-            s.sec = Some(sec);
-            s.sec_mid = Some(mid);
+            (None, ..) => s.bound_mid = Some(mid),
+            _ => {}
         }
+        s.sec = Some(sec);
+        s.last_mid = Some(mid);
         s.trail.push(t, mid);
         let (Some(ago), Some(ewma)) = (s.trail.second_ago(t), s.ewma_bps) else { return out };
         let ret_bps = (mid / ago).ln() * 1e4;
@@ -422,6 +433,21 @@ mod tests {
         assert_eq!((btc["shocks"].as_u64(), btc["kalshi"]["responded"].as_u64()), (Some(1), Some(1)));
         assert_eq!(btc["feed_lag_ms_p50"].as_f64(), Some(7.0));
         assert_eq!(snap["totals"]["perp"]["poly"]["lag_ms_p50"].as_f64(), Some(200.0));
+    }
+
+    #[test]
+    fn quiet_seconds_count_as_zero_moves() {
+        let mut ll = LeadLag::new(vec!["BTC".into()], Map::new());
+        ll.on_ref(0, 0, 0, 100.0, None);
+        ll.on_ref(0, 0, S, 100.1, None); // +10 bp in the first second
+        ll.on_ref(0, 0, 2 * S, 100.1, None);
+        let busy = ll.snapshot()["assets"]["BTC"]["spot"]["typical_1s_bps"].as_f64().unwrap();
+        // 90 s without a new best bid or ask: warm, and the typical move decays.
+        ll.on_ref(0, 0, 92 * S, 100.1, None);
+        let snap = ll.snapshot();
+        let quiet = &snap["assets"]["BTC"]["spot"];
+        assert_eq!(quiet["warm"], true);
+        assert!(quiet["typical_1s_bps"].as_f64().unwrap() < busy);
     }
 
     #[test]
