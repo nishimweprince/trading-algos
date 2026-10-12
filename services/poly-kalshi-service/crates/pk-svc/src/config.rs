@@ -25,7 +25,7 @@ use pk_core::shadow::{DEFAULT_VARIANTS, Variant, parse_variants};
 
 use crate::alerts::NotifyConfig;
 
-pub const SUPPORTED_ASSETS: [&str; 7] = ["BTC", "ETH", "SOL", "XRP", "BNB", "DOGE", "HYPE"];
+pub const SUPPORTED_ASSETS: [&str; 8] = ["BTC", "ETH", "SOL", "XRP", "BNB", "DOGE", "HYPE", "ZEC"];
 const PLACEHOLDER: &str = "replace-with";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -560,6 +560,33 @@ mod tests {
         assert!(with("PK_SHADOW_VARIANTS", "[{\"name\":\"live\"}]").is_err());
         assert_eq!(with("PK_MAX_POLY_LAG_MS", "250").unwrap().params.max_poly_lag_ms, Some(250.0));
         assert!(with("PK_SHADOW_VARIANTS", "").unwrap().shadow_variants.is_empty());
+    }
+
+    #[test]
+    fn every_supported_asset_loads_and_every_feed_covers_it() {
+        // Onboarding a coin means every table at once: PK_ASSETS validation
+        // here, the observer's PolyBolt symbols and the Binance lead-lag
+        // streams. A gap in any table silently drops the coin from that feed.
+        let mut m = base();
+        m.insert("PK_ASSETS".into(), SUPPORTED_ASSETS.join(","));
+        let s = Settings::from_env(m, None).unwrap();
+        assert_eq!(s.assets, SUPPORTED_ASSETS);
+        for a in SUPPORTED_ASSETS {
+            assert!(
+                pk_feeds::ws::POLYBOLT_SYMBOLS.iter().any(|(x, _)| x == &a),
+                "{a} has no PolyBolt symbol"
+            );
+            assert!(pk_feeds::ws::binance_stream(a, true).is_some(), "{a} has no Binance perp stream");
+            // HYPE is perp only (no Binance spot market); every other coin
+            // needs the spot leg too.
+            assert!(
+                a == "HYPE" || pk_feeds::ws::binance_stream(a, false).is_some(),
+                "{a} has no Binance spot stream"
+            );
+        }
+        for (x, _) in pk_feeds::ws::POLYBOLT_SYMBOLS {
+            assert!(SUPPORTED_ASSETS.contains(&x), "{x} is not a supported asset");
+        }
     }
 
     #[test]

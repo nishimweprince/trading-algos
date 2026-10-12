@@ -23,5 +23,8 @@ axum.workspace = true
 pk-core.workspace = true
 rustls.workspace = true
 
+[dev-dependencies]
+pk-feeds.workspace = true
+
 [lints]
 workspace = true

@@ -3606,6 +3606,7 @@ dependencies = [
  "dotenvy",
  "parking_lot",
  "pk-core",
+ "pk-feeds",
  "reqwest 0.13.5",
  "rustls",
  "serde",

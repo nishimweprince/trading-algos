@@ -29,7 +29,7 @@ use serde_json::{Value, json};
 
 use crate::frame::{Col, Frame};
 
-pub const ALL_ASSETS: &str = "BTC,ETH,SOL,XRP,BNB,DOGE,HYPE";
+pub const ALL_ASSETS: &str = "BTC,ETH,SOL,XRP,BNB,DOGE,HYPE,ZEC";
 
 /// Per-second snapshots of each asset's three quotes, taken before the next line.
 #[derive(Default)]

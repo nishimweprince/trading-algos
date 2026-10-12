@@ -579,7 +579,7 @@ pub fn binance_stream(asset: &str, futures: bool) -> Option<String> {
     (futures || asset != "HYPE").then(|| format!("{}usdt@bookTicker", asset.to_lowercase()))
 }
 
-pub const POLYBOLT_SYMBOLS: [(&str, &str); 7] = [
+pub const POLYBOLT_SYMBOLS: [(&str, &str); 8] = [
     ("BTC", "btcusd"),
     ("ETH", "ethusd"),
     ("SOL", "solusd"),
@@ -587,4 +587,5 @@ pub const POLYBOLT_SYMBOLS: [(&str, &str); 7] = [
     ("BNB", "bnbusd"),
     ("DOGE", "dogeusd"),
     ("HYPE", "hypeusd"),
+    ("ZEC", "zecusd"),
 ];

@@ -573,7 +573,9 @@ AWS comparison (`pk netprobe`, `infra/systemd/README.md`) is still to run on Dub
 
 ## Assets
 
-- **Keep all 7 in paper.** Paper costs nothing, and the signal statistics need n.
+- **Keep all 8 in paper.** Paper costs nothing, and the signal statistics need n.
+  (ZEC onboarded 2026-10-12, owner decision; it is the only further coin with
+  15-minute markets on Polymarket, Kalshi and a Binance USDT perp.)
 - **Read capacity per asset.** At the touch, only BTC carried size (about $31 per
   entry). XRP is about $8. The rest are $2 to 5, too thin for $50 live, whatever
   their edge.
