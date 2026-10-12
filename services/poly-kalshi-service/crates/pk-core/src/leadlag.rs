@@ -2,12 +2,18 @@
 //!
 //! A **shock** is a Binance mid move over the last second of at least
 //! [`SHOCK_K`] × the asset's typical one-second move (an EWMA of |1 s log
-//! return| per asset and source, sampled on the clock: a second without a
-//! new best bid or ask is a zero move), and never less than [`MIN_SHOCK_BPS`]. From
-//! the shock it times how long each follower (Kalshi's YES mid, Polymarket's
-//! YES mid) takes to move at least 1¢ the same way (price up = YES up), and
-//! gives up after [`TIMEOUT_NS`]. A follower that had already moved 1¢ that way
-//! in the second before the shock *moved first*.
+//! return| per asset and source, sampled on the clock: a second without a new
+//! best bid or ask is a zero move), and never less than [`MIN_SHOCK_BPS`].
+//!
+//! A shock is only confirmed once the move is large, so timing from the
+//! confirmation would credit any venue that reacted to the start of the move
+//! with "moving first". Times are measured from the move's **onset** instead:
+//! the first Binance update in that second that was already a third of the
+//! way there. Each follower (Kalshi's YES mid, Polymarket's YES mid; price up
+//! = YES up) gets a **signed** lag: the time from the onset to its first 1¢
+//! move that way, against its mid one second before the onset. Negative means
+//! it moved before Binance did (as this host sees both). No move within
+//! [`TIMEOUT_NS`] of the confirmation is no response.
 //!
 //! - Only shocks while Kalshi's mid is inside [0.10, 0.90] count: near 0 or 1
 //!   a 15-minute binary hardly moves.
@@ -31,6 +37,11 @@ pub const MIN_SHOCK_BPS: f64 = 3.0;
 pub const TIMEOUT_NS: i64 = 3_000_000_000;
 pub const COOLDOWN_NS: i64 = 5_000_000_000;
 const W_NS: i64 = 1_000_000_000;
+/// Followers keep enough history to look one second before an onset that
+/// can itself be up to a second before the confirmation.
+const FOLLOW_KEEP_NS: i64 = 2_500_000_000;
+/// The onset: the first update a third of the way to the confirmed move.
+const ONSET_FRACTION: f64 = 1.0 / 3.0;
 /// One-second samples before a source may fire.
 const WARMUP: u32 = 60;
 /// About five minutes of one-second samples.
@@ -39,21 +50,25 @@ const LAGS_KEPT: usize = 500;
 const STEP: f64 = 0.01 - 1e-9;
 const SENSITIVE: (f64, f64) = (0.10, 0.90);
 
-/// `(t_ns, value)` covering the last second, plus the one just before it.
+/// `(t_ns, value)` covering the last `keep`, plus the one just before it.
 #[derive(Debug, Default)]
 struct Trail(VecDeque<(i64, f64)>);
 
 impl Trail {
-    fn push(&mut self, t: i64, v: f64) {
+    fn push(&mut self, t: i64, v: f64, keep: i64) {
         self.0.push_back((t, v));
-        while self.0.len() > 1 && self.0[1].0 <= t - W_NS {
+        while self.0.len() > 1 && self.0[1].0 <= t - keep {
             self.0.pop_front();
         }
     }
 
-    /// The value one second ago (the last one at or before `t - 1 s`).
-    fn second_ago(&self, t: i64) -> Option<f64> {
-        self.0.front().filter(|(t0, _)| *t0 <= t - W_NS).map(|(_, v)| *v)
+    /// The value in force at `t` (the last one at or before it).
+    fn at(&self, t: i64) -> Option<f64> {
+        self.0.iter().take_while(|(ti, _)| *ti <= t).last().map(|(_, v)| *v)
+    }
+
+    fn after(&self, t: i64) -> impl Iterator<Item = &(i64, f64)> {
+        self.0.iter().filter(move |(ti, _)| *ti > t)
     }
 
     fn clear(&mut self) {
@@ -65,24 +80,24 @@ impl Trail {
 struct Stat {
     n: u64,
     responded: u64,
-    first: u64,
+    before: u64,
     lags: Rolling,
 }
 
 impl Default for Stat {
     fn default() -> Self {
-        Self { n: 0, responded: 0, first: 0, lags: Rolling::new(LAGS_KEPT) }
+        Self { n: 0, responded: 0, before: 0, lags: Rolling::new(LAGS_KEPT) }
     }
 }
 
 impl Stat {
-    fn add(&mut self, lag_ms: Option<f64>, first: bool) {
+    fn add(&mut self, lag_ms: Option<f64>) {
         self.n += 1;
-        if first {
-            self.first += 1;
-        }
         if let Some(l) = lag_ms {
             self.responded += 1;
+            if l < 0.0 {
+                self.before += 1;
+            }
             self.lags.push(l);
         }
     }
@@ -91,7 +106,8 @@ impl Stat {
         json!({
             "n": self.n,
             "responded": self.responded,
-            "moved_first": self.first,
+            "before_binance": self.before,
+            "lag_ms_p10": round_opt(self.lags.quantile(0.1), 0),
             "lag_ms_p50": round_opt(self.lags.quantile(0.5), 0),
             "lag_ms_p90": round_opt(self.lags.quantile(0.9), 0),
         })
@@ -101,20 +117,33 @@ impl Stat {
 #[derive(Debug)]
 struct Shock {
     t0: i64,
+    onset: i64,
     dir: f64,
     ret_bps: f64,
     thr_bps: f64,
     open: i64,
     k_mid0: f64,
+    /// Each follower's mid one second before the onset.
     base: [Option<f64>; 2],
-    first: [bool; 2],
+    /// Signed ns from the onset to the follower's first 1¢ move that way.
     lag: [Option<i64>; 2],
     against: [bool; 2],
 }
 
 impl Shock {
     fn done(&self) -> bool {
-        (0..2).all(|f| self.base[f].is_none() || self.first[f] || self.lag[f].is_some())
+        (0..2).all(|f| self.base[f].is_none() || self.lag[f].is_some())
+    }
+
+    /// A follower at `m` at time `t`: its response, or a move the other way.
+    fn follow(&mut self, f: usize, t: i64, m: f64) {
+        let Some(base) = self.base[f] else { return };
+        let moved = self.dir * (m - base);
+        if self.lag[f].is_none() && moved >= STEP {
+            self.lag[f] = Some(t - self.onset);
+        } else if moved <= -STEP {
+            self.against[f] = true;
+        }
     }
 }
 
@@ -218,8 +247,8 @@ impl LeadLag {
         }
         s.sec = Some(sec);
         s.last_mid = Some(mid);
-        s.trail.push(t, mid);
-        let (Some(ago), Some(ewma)) = (s.trail.second_ago(t), s.ewma_bps) else { return out };
+        s.trail.push(t, mid, W_NS);
+        let (Some(ago), Some(ewma)) = (s.trail.at(t - W_NS), s.ewma_bps) else { return out };
         let ret_bps = (mid / ago).ln() * 1e4;
         let thr_bps = (SHOCK_K * ewma).max(MIN_SHOCK_BPS);
         if s.samples < WARMUP
@@ -237,15 +266,20 @@ impl LeadLag {
             return out;
         }
         let dir = ret_bps.signum();
+        let onset = s
+            .trail
+            .after(t - W_NS)
+            .find(|(_, v)| dir * (v / ago).ln() * 1e4 >= ret_bps.abs() * ONSET_FRACTION)
+            .map_or(t, |(ti, _)| *ti);
         let mut shock = Shock {
             t0: t,
+            onset,
             dir,
             ret_bps,
             thr_bps,
             open,
             k_mid0: k_mid,
             base: [None; 2],
-            first: [false; 2],
             lag: [None; 2],
             against: [false; 2],
         };
@@ -253,9 +287,9 @@ impl LeadLag {
             if fol.open != Some(open) {
                 continue;
             }
-            shock.base[f] = fol.mid;
-            if let (Some(m), Some(ago)) = (fol.mid, fol.trail.second_ago(t)) {
-                shock.first[f] = dir * (m - ago) >= STEP;
+            shock.base[f] = fol.trail.at(onset - W_NS);
+            for &(ti, m) in fol.trail.after(onset - W_NS) {
+                shock.follow(f, ti, m);
             }
         }
         s.shocks += 1;
@@ -278,19 +312,11 @@ impl LeadLag {
         fol.open = Some(open);
         fol.mid = mid;
         if let Some(m) = mid {
-            fol.trail.push(t, m);
-        }
-        for s in &mut asset.sources {
-            let Some(sh) = s.pending.as_mut() else { continue };
-            if sh.open != open {
-                continue; // expire() ends it: the window rolled
-            }
-            let (Some(base), Some(m)) = (sh.base[f], mid) else { continue };
-            let moved = sh.dir * (m - base);
-            if sh.lag[f].is_none() && moved >= STEP {
-                sh.lag[f] = Some(t - sh.t0);
-            } else if moved <= -STEP {
-                sh.against[f] = true;
+            fol.trail.push(t, m, FOLLOW_KEEP_NS);
+            for s in &mut asset.sources {
+                if let Some(sh) = s.pending.as_mut().filter(|sh| sh.open == open) {
+                    sh.follow(f, t, m);
+                }
             }
         }
         self.expire(a, t)
@@ -312,8 +338,8 @@ impl LeadLag {
             let lag_ms = |f: usize| sh.lag[f].map(|l| round_dp(l as f64 / 1e6, 1));
             for f in 0..2 {
                 if sh.base[f].is_some() {
-                    s.stats[f].add(lag_ms(f), sh.first[f]);
-                    self.totals[src][f].add(lag_ms(f), sh.first[f]);
+                    s.stats[f].add(lag_ms(f));
+                    self.totals[src][f].add(lag_ms(f));
                 }
             }
             let mut r = json!({
@@ -321,16 +347,17 @@ impl LeadLag {
                 "asset": self.assets[a],
                 "source": SOURCES[src],
                 "t_ns": sh.t0,
+                "onset_ns": sh.onset,
+                "confirm_ms": round_dp((sh.t0 - sh.onset) as f64 / 1e6, 1),
                 "open_unix": sh.open,
                 "sec_into": round_dp(sh.t0 as f64 / 1e9 - sh.open as f64, 3),
                 "ret_bps": round_dp(sh.ret_bps, 2),
                 "threshold_bps": round_dp(sh.thr_bps, 2),
                 "kalshi_mid0": sh.k_mid0,
-                "poly_mid0": sh.base[1],
+                "kalshi_base": sh.base[0],
+                "poly_base": sh.base[1],
                 "kalshi_lag_ms": lag_ms(0),
                 "poly_lag_ms": lag_ms(1),
-                "kalshi_first": sh.first[0],
-                "poly_first": sh.first[1],
                 "kalshi_against": sh.against[0],
                 "poly_against": sh.against[1],
             });
@@ -383,6 +410,7 @@ impl LeadLag {
             "params": {
                 "shock_k": SHOCK_K,
                 "min_shock_bps": MIN_SHOCK_BPS,
+                "onset_fraction": ONSET_FRACTION,
                 "timeout_ms": TIMEOUT_NS / 1_000_000,
                 "cooldown_ms": COOLDOWN_NS / 1_000_000,
                 "step": 0.01,
@@ -414,33 +442,54 @@ mod tests {
     }
 
     #[test]
-    fn times_the_followers_after_a_shock() {
+    fn times_the_followers_from_the_onset() {
         let mut ll = warmed();
+        // The move starts at 120.2 s (+2.5 bp, under the 3 bp floor) and is
+        // confirmed at 120.5 s (+6 bp); the onset is the first third of it.
+        let onset = 120 * S + 200 * MS;
+        assert!(ll.on_ref(0, 1, onset, 100.035, None).is_empty());
         let t0 = 120 * S + 500 * MS;
-        // +20 bp in half a second: a shock up.
-        assert!(ll.on_ref(0, 1, t0, 100.2, Some(t0 / MS - 7)).is_empty());
-        // Polymarket follows after 200 ms; Kalshi after 420 ms.
-        assert!(ll.on_follow(0, 1, t0 + 180 * MS, 900, Some(0.495)).is_empty()); // half a cent: not yet
-        assert!(ll.on_follow(0, 1, t0 + 200 * MS, 900, Some(0.50)).is_empty());
-        let out = ll.on_follow(0, 0, t0 + 420 * MS, 900, Some(0.52));
+        assert!(ll.on_ref(0, 1, t0, 100.07, Some(t0 / MS - 7)).is_empty());
+        // Polymarket follows 300 ms after the onset; Kalshi 620 ms after it.
+        assert!(ll.on_follow(0, 1, t0, 900, Some(0.495)).is_empty()); // half a cent: not yet
+        assert!(ll.on_follow(0, 1, onset + 300 * MS, 900, Some(0.50)).is_empty());
+        let out = ll.on_follow(0, 0, onset + 620 * MS, 900, Some(0.52));
         assert_eq!(out.len(), 1);
         let r = &out[0];
         assert_eq!((r["asset"].as_str(), r["source"].as_str()), (Some("BTC"), Some("perp")));
-        assert_eq!((r["poly_lag_ms"].as_f64(), r["kalshi_lag_ms"].as_f64()), (Some(200.0), Some(420.0)));
-        assert_eq!(r["kalshi_first"], false);
+        assert_eq!((r["poly_lag_ms"].as_f64(), r["kalshi_lag_ms"].as_f64()), (Some(300.0), Some(620.0)));
+        assert_eq!(r["confirm_ms"].as_f64(), Some(300.0));
         let snap = ll.snapshot();
         let btc = &snap["assets"]["BTC"]["perp"];
         assert_eq!((btc["shocks"].as_u64(), btc["kalshi"]["responded"].as_u64()), (Some(1), Some(1)));
+        assert_eq!(btc["kalshi"]["before_binance"].as_u64(), Some(0));
         assert_eq!(btc["feed_lag_ms_p50"].as_f64(), Some(7.0));
-        assert_eq!(snap["totals"]["perp"]["poly"]["lag_ms_p50"].as_f64(), Some(200.0));
+        assert_eq!(snap["totals"]["perp"]["poly"]["lag_ms_p50"].as_f64(), Some(300.0));
+    }
+
+    #[test]
+    fn a_follower_that_moved_first_has_a_negative_lag() {
+        let mut ll = warmed();
+        // Kalshi moves up a cent 400 ms before Binance's onset.
+        ll.on_follow(0, 0, 120 * S + 100 * MS, 900, Some(0.51));
+        let t0 = 120 * S + 500 * MS;
+        assert!(ll.on_ref(0, 1, t0, 100.2, None).is_empty());
+        // A second shock inside the cooldown is ignored; then the first times out.
+        assert!(ll.on_ref(0, 1, t0 + 100 * MS, 100.5, None).is_empty());
+        let out = ll.tick(t0 + TIMEOUT_NS + 1);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0]["kalshi_lag_ms"].as_f64(), Some(-400.0));
+        assert!(out[0]["poly_lag_ms"].is_null());
+        assert_eq!(ll.snapshot()["totals"]["perp"]["kalshi"]["before_binance"], 1);
+        assert!(ll.tick(t0 + 2 * TIMEOUT_NS).is_empty());
     }
 
     #[test]
     fn quiet_seconds_count_as_zero_moves() {
         let mut ll = LeadLag::new(vec!["BTC".into()], Map::new());
         ll.on_ref(0, 0, 0, 100.0, None);
-        ll.on_ref(0, 0, S, 100.1, None); // +10 bp in the first second
-        ll.on_ref(0, 0, 2 * S, 100.1, None);
+        ll.on_ref(0, 0, S, 100.1, None);
+        ll.on_ref(0, 0, 2 * S, 100.1, None); // the +10 bp second is sampled here
         let busy = ll.snapshot()["assets"]["BTC"]["spot"]["typical_1s_bps"].as_f64().unwrap();
         // 90 s without a new best bid or ask: warm, and the typical move decays.
         ll.on_ref(0, 0, 92 * S, 100.1, None);
@@ -451,29 +500,13 @@ mod tests {
     }
 
     #[test]
-    fn times_out_marks_movers_first_and_cools_down() {
-        let mut ll = warmed();
-        // Kalshi moved up a cent in the second before the shock.
-        ll.on_follow(0, 0, 120 * S + 100 * MS, 900, Some(0.51));
-        let t0 = 120 * S + 500 * MS;
-        assert!(ll.on_ref(0, 1, t0, 100.2, None).is_empty());
-        // A second shock inside the cooldown is ignored; then the first times out.
-        assert!(ll.on_ref(0, 1, t0 + 100 * MS, 100.5, None).is_empty());
-        let out = ll.tick(t0 + TIMEOUT_NS + 1);
-        assert_eq!(out.len(), 1);
-        assert_eq!(out[0]["kalshi_first"], true);
-        assert!(out[0]["poly_lag_ms"].is_null());
-        assert!(ll.tick(t0 + 2 * TIMEOUT_NS).is_empty());
-    }
-
-    #[test]
     fn ignores_insensitive_books_and_ends_on_a_roll() {
         let mut ll = warmed();
         ll.on_follow(0, 0, 120 * S, 900, Some(0.95));
         assert!(ll.on_ref(0, 1, 120 * S + 500 * MS, 100.2, None).is_empty());
         assert_eq!(ll.snapshot()["assets"]["BTC"]["perp"]["insensitive"], 1);
         // Back in range, a shock down, then the window rolls before anyone moves.
-        ll.on_follow(0, 0, 126 * S, 900, Some(0.50));
+        ll.on_follow(0, 0, 123 * S, 900, Some(0.50));
         ll.on_ref(0, 1, 126 * S, 100.2, None);
         assert!(ll.on_ref(0, 1, 126 * S + 900 * MS, 99.9, None).is_empty());
         let out = ll.on_follow(0, 0, 127 * S, 1800, Some(0.50));
