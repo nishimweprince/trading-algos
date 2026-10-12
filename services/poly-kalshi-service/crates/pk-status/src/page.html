@@ -113,6 +113,10 @@ const esc = (v) => String(v ?? "–").replace(/[&<>"']/g, (c) => ({"&":"&amp;","
 const f = (v, d = 2) => (v === null || v === undefined) ? "–" : Number(v).toFixed(d);
 const kv = (rows) => rows.map(([k, v, cls]) => `<div class="kv"><span>${esc(k)}</span><span class="${cls || ""}">${esc(v)}</span></div>`).join("");
 const verdict = (v) => v === null || v === undefined ? ["pending", "muted"] : v ? ["pass", "good"] : ["FAIL", "bad"];
+// The fast path's hot thread busy-polls one core by design (PK_HOT_SPIN): CPU
+// beyond that is the work the feeds and the engine do.
+const spinPct = (live) => { const h = ((live && live.fast_path) || {}).hot_thread || {}; return h.spin ? 100 : 0; };
+const workCpu = (live) => { const c = ((live && live.host_load) || {}).cpu_pct; return c == null ? null : Math.max(0, c - spinPct(live)); };
 const mid = (q) => q && q.valid && q.bid !== null && q.ask !== null ? (q.bid + q.ask) / 2 : null;
 // Write an element only when its content changed: no flicker, and hovers,
 // selections and scroll positions survive every refresh.
@@ -207,8 +211,8 @@ async function tick() {
     if (live.recorder && live.recorder.disk_paused) issues.push("recorder paused: disk low");
     if (dataAge > 30) issues.push(`data ${dataAge}s old`);
     if (live.telegram && live.telegram.conflicts) issues.push("Telegram /kill not reaching this service: another process polls the same bot token");
-    const hostLoad = live.host_load || {};
-    if (hostLoad.cpu_pct > 85) issues.push(`trader CPU at ${f(hostLoad.cpu_pct, 0)}%: the host may be too small for the feeds`);
+    const work = workCpu(live);
+    if (work > 85) issues.push(`trader CPU at ${f(work, 0)}%${spinPct(live) ? " besides the fast path's busy-poll core" : ""}: the host may be too small for the feeds`);
   }
   const list = issues.length ? "<ul>" + issues.map((i) => `<li>${esc(i)}</li>`).join("") + "</ul>" : "";
   $("alerts").className = "alerts " + (closed ? "paused" : issues.length ? "bad" : "ok");
@@ -221,7 +225,7 @@ async function tick() {
   put("feeds", kv([feedRow("Kalshi", feeds.kalshi, age.k, "Kalshi closed"), feedRow("Polymarket", feeds.poly, age.p, "no markets while Kalshi is closed"),
     ["Kalshi seq gaps", feeds.kalshi ? feeds.kalshi.seq_gaps : "–"], ["recorder lines", live && live.recorder ? live.recorder.lines_written : "–"],
     ["disk free", live && live.recorder ? f(live.recorder.disk_free_gb, 1) + " GB" : "–"],
-    ["process CPU · load (cores)", hl.cpu_pct == null ? "–" : `${f(hl.cpu_pct, 0)}% · ${f(hl.load1, 2)} (${hl.cpus ?? "–"})`, hl.cpu_pct > 85 ? "bad" : hl.cpu_pct > 60 ? "warn" : ""],
+    ["process CPU · load (cores)", hl.cpu_pct == null ? "–" : (spinPct(live) ? `${f(workCpu(live), 0)}% work + 100% fast-path busy-poll (core ${((live.fast_path || {}).hot_thread || {}).core ?? "–"}) · ${f(hl.load1, 2)} (${hl.cpus ?? "–"})` : `${f(hl.cpu_pct, 0)}% · ${f(hl.load1, 2)} (${hl.cpus ?? "–"})`), workCpu(live) > 85 ? "bad" : workCpu(live) > 60 ? "warn" : ""],
     ["slow-consumer drops (Poly · Kalshi)", `${(feeds.poly || {}).slow_consumer ?? 0} · ${(feeds.kalshi || {}).slow_consumer ?? 0}`, ((feeds.poly || {}).slow_consumer || (feeds.kalshi || {}).slow_consumer) ? "warn" : ""]]));
   const gg = g.gates || {}, v = g.vwap || {};
   put("gates", kv([["entries (≤ cap)", `${g.in_band_n ?? 0} / ${g.gate_min_n ?? 300}`], ["avg / p90 fill", `${f(v.avg, 3)} / ${f(v.p90, 3)}`, verdict(gg.fill_price)[1]],
