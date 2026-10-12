@@ -1,0 +1,226 @@
+#pragma once
+// The logic thread. Sole consumer that parses the ingest ring:
+//   curve bands  -> admit / fire (precompute the canonical pool's keys, watch it)
+//   migrate tx   -> trigger (screen, size, build, sign, hand to exec)
+//   pool pushes  -> trigger (whichever completes the input set first, once)
+//   vault pushes -> marks -> exit FSM -> sells
+//   wallet txs   -> fills and the in-memory balance
+// Nothing here allocates after construction.
+#include <array>
+#include <cstdint>
+#include <string_view>
+
+#include "core/config.hpp"
+#include "core/key_map.hpp"
+#include "core/ring.hpp"
+#include "logic/exit_fsm.hpp"
+#include "logic/shared.hpp"
+#include "sol/amm.hpp"
+#include "sol/crypto.hpp"
+#include "sol/layouts.hpp"
+#include "sol/swap.hpp"
+#include "stream/update.hpp"
+
+namespace pd {
+
+constexpr size_t MAX_POSITIONS = 8;
+constexpr size_t B58_KEY_MAX = 48;
+
+struct B58Key {
+  char s[B58_KEY_MAX] = {0};
+  uint8_t len = 0;
+  void set(const Pubkey& k);
+  std::string_view sv() const { return {s, len}; }
+};
+
+struct CurveSlot {
+  Pubkey curve{}, mint{}, creator{}, token_program{};
+  B58Key mint_b58, pool_b58;
+  bool mint_known = false, resolving = false, fired = false, complete = false, migrated = false, traded = false;
+  bool mayhem = false, cashback = false, pump_suffix = false, blacklisted = false;
+  TransferFee fee = TransferFee::Unknown;
+  uint64_t mint_supply = 0;
+  double cost_sol = 0;
+  uint64_t admitted_ns = 0, fired_ns = 0, complete_ns = 0, migrated_ns = 0, last_update_ns = 0;
+  uint64_t fire_slot = 0;
+  Signature last_sig{};  // the tx that last wrote the curve (mint resolution fallback)
+  bool keys_ready = false;
+  SwapKeys keys;
+  // Pool-side inputs, from pushes (watched from fire).
+  bool pool_seen = false, base_seen = false, quote_seen = false;
+  Pool pool;
+  uint64_t base_amount = 0, quote_amount = 0;
+  // Migrate tx seen before the pool push: vaults known, waiting for the true virtual reserve.
+  bool awaiting_pool = false;
+  uint64_t await_since_ns = 0, await_recv_ns = 0;
+};
+
+struct Launch {
+  Pubkey mint{}, token_program{};
+  bool no_fee_proven = false;
+};
+
+struct WatchRef {
+  Pubkey curve{};  // zero when only a position needs it
+  uint8_t role = 0;
+  uint8_t users = 0;  // curve + positions referencing the key
+};
+
+enum class PosState : uint8_t { Empty, BuySent, Open, SellSent };
+
+struct Position {
+  PosState state = PosState::Empty;
+  Pubkey curve{}, mint{};
+  B58Key mint_b58;
+  SwapKeys keys;
+  // buy
+  Signature buy_sig{};
+  uint64_t buy_sent_ns = 0;
+  int64_t buy_sent_ms = 0;
+  uint64_t size_lamports = 0, max_quote = 0, expected_base = 0, reserved = 0;
+  uint64_t overhead = 0;  // tips + priority + signature fee of the buy
+  bool resolving = false;
+  // open
+  uint64_t base_amount = 0;
+  uint64_t base_bought = 0;
+  double entry_price = 0;
+  int64_t opened_ms = 0;
+  int64_t sol_spent = 0;     // lamports out on the buy (fees, tip, rent, swap)
+  int64_t sol_received = 0;  // lamports back from sells
+  ExitState exit;
+  // mark
+  uint64_t base_res = 0, quote_res = 0, virtual_quote = 0;
+  double last_price = 0;
+  bool marked = false;
+  // sell
+  Signature sell_sigs[8]{};
+  uint8_t n_sell_sigs = 0;
+  uint64_t sell_sent_ns = 0;
+  int sell_attempts = 0;
+  ExitTrigger sell_trigger = ExitTrigger::None;
+  uint64_t sell_base = 0;
+  bool sell_full = false;
+};
+
+/** An open position loaded from the database at boot. */
+struct RestoredPosition {
+  Pubkey curve{}, mint{}, creator{}, token_program{};
+  bool cashback = false, mayhem = false;
+  uint64_t base_amount = 0, base_bought = 0;
+  double entry_price = 0;
+  int64_t sol_spent = 0, sol_received = 0, opened_ms = 0;
+  bool tp0_done = false, tp1_done = false;
+  // Current pool state read at boot, so exits can price before the next swap.
+  uint64_t base_res = 0, quote_res = 0, virtual_quote = 0;
+};
+
+class Engine {
+ public:
+  Engine(const Config& cfg, Shared& sh, const Keypair& wallet, FrameRing* ring);
+
+  /** Logic-thread main loop (pinned by the caller). Returns when sh.stop is set. */
+  void run();
+
+  /** One raw SubscribeUpdate frame. Public for replay and tests. */
+  void on_frame(const uint8_t* data, size_t len, uint64_t recv_ns);
+  /** Timers, queues from exec/aux, expiry. Called whenever the ring is idle. */
+  void poll(uint64_t now_ns);
+
+  void set_wallet_lamports(uint64_t lamports, uint64_t slot);
+  bool restore_position(const RestoredPosition& r);
+  /** Tests: deterministic clocks. */
+  void set_clocks(int64_t (*wall)(), uint64_t (*mono)()) { wall_ms_ = wall; now_ns_ = mono; }
+
+  // Read-only views for tests and the status line.
+  const Position& position(size_t i) const { return positions_[i]; }
+  const CurveSlot* curve(const Pubkey& k) const { return curves_.find(k); }
+  uint64_t wallet_lamports() const { return wallet_lamports_; }
+  uint64_t reserved_lamports() const { return reserved_; }
+  bool killed() const { return kill_latched_; }
+
+ private:
+  // frame handlers
+  void on_curve(const AccountView& a);
+  void on_watched(const AccountView& a);
+  void on_migrate(const TxView& tx, uint64_t recv_ns);
+  void on_create(const TxView& tx);
+  void on_wallet_tx(const TxView& tx);
+  void on_slot(const SlotView& s);
+
+  // curve lifecycle
+  CurveSlot* admit(const Pubkey& key, const Curve& c, const AccountView& a);
+  void set_mint(CurveSlot& s, const Pubkey& mint, const Pubkey& token_program, TransferFee fee, uint64_t supply);
+  void fire(CurveSlot& s, uint64_t slot);
+  void prepare_keys(CurveSlot& s);
+  void drop_curve(const Pubkey& key);
+  void expire(uint64_t now_ns);
+
+  // watches
+  void watch(const Pubkey& k, const Pubkey& curve, uint8_t role);
+  void unwatch(const Pubkey& k);
+
+  // trading
+  enum class TriggerSrc : uint8_t { MigrateTx, PoolPush, PoolWaitTimeout };
+  void trigger(CurveSlot& s, uint64_t base_res, uint64_t quote_res, uint64_t virt, uint64_t recv_ns, TriggerSrc src);
+  /** Fire when the pool account and both vault balances are known. */
+  void try_trigger(CurveSlot& s, uint64_t recv_ns, TriggerSrc src);
+  int free_position() const;
+  int active_positions() const;
+  bool send_packet(Side side, uint8_t pos, uint8_t attempt, const IxList& ixs, uint64_t recv_ns, Signature& sig_out);
+  void mark(Position& p, uint64_t now_ns);
+  void maybe_exit(Position& p, int idx, uint64_t now_ns);
+  void send_sell(Position& p, int idx, ExitTrigger t, double fraction, uint64_t recv_ns);
+  void on_buy_result(int idx, bool ok, int64_t sol_delta, int64_t base_delta, uint64_t slot, const char* how);
+  void on_sell_result(int idx, const Signature& sig, bool ok, int64_t sol_delta, int64_t base_delta, uint64_t slot, const char* how);
+  void close_position(int idx, const char* reason);
+  void release_watches(const Position& p);
+  void latch_kill(const char* why);
+  TxParams tx_params(bool exit);
+
+  // shared snapshots
+  void refresh_amm();
+  void drain_queues(uint64_t now_ns);
+
+  // events
+  Event* ev(Ev type);
+  void emit();
+  void warn(const char* fmt, ...);
+
+  const Config& cfg_;
+  Shared& sh_;
+  const Keypair& wallet_;
+  FrameRing* ring_;
+  UserKeys user_;
+  B58Key user_b58_;
+
+  KeyMap<CurveSlot> curves_;
+  KeyMap<Pubkey> mint_index_;  // mint -> curve
+  KeyMap<Launch> launches_;    // curve -> mint (from create txs)
+  std::unique_ptr<Pubkey[]> launch_fifo_;
+  size_t launch_fifo_cap_ = 0, launch_fifo_head_ = 0, launch_fifo_size_ = 0;
+  KeyMap<WatchRef> watches_;
+  KeyMap<uint8_t> blacklist_mints_, blacklist_creators_;
+  std::array<Position, MAX_POSITIONS> positions_{};
+  int max_positions_;
+
+  UpdateView* view_;  // large; heap-allocated once
+  IxList* ixs_;
+  SignedTx* tx_;
+  AmmConfig amm_;
+  uint64_t amm_version_ = 0;
+
+  uint64_t wallet_lamports_ = 0, wallet_slot_ = 0, reserved_ = 0;
+  bool kill_latched_ = false;
+  uint64_t last_slot_ = 0, last_frame_ns_ = 0;
+  uint64_t unresolved_curves_ = 0;
+  uint64_t awaiting_pools_ = 0;
+  uint32_t fee_rr_ = 0, tip_rr_ = 0;
+  std::vector<Pubkey> sender_tips_, jito_tips_;
+  uint64_t next_expire_ns_ = 0, next_stats_ns_ = 0;
+  Event* pending_ev_ = nullptr;
+
+  int64_t (*wall_ms_)();
+  uint64_t (*now_ns_)();
+};
+
+}  // namespace pd
