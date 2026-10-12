@@ -54,6 +54,9 @@ pub fn build_engine(
     };
     cfg.limit_offset = settings.limit_offset;
     cfg.size_to_depth = settings.size_to_depth;
+    cfg.active_exit = trades && settings.active_exit;
+    cfg.size_at_limit = settings.size_at_limit;
+    cfg.shadow_latency_ns = (role != Role::Trade).then_some(settings.shadow_latency_ms * 1_000_000);
     cfg.age_outlier_ms = (trades && settings.age_outlier_ms > 0.0).then_some(settings.age_outlier_ms);
     cfg.emit_intents = trades && settings.order_path();
     let mut stamp = serde_json::Map::new();
@@ -61,12 +64,17 @@ pub fn build_engine(
     stamp.insert("build".into(), pk_svc::build::build_id().into());
     stamp.insert(
         "config".into(),
-        pk_svc::build::config_hash(
+        pk_svc::build::config_hash_with(
             &settings.params,
             settings.paper_latency_ms,
             settings.limit_offset,
             settings.size_to_depth,
             settings.order_size_pct,
+            &[("active_exit", settings.active_exit), ("size_at_limit", settings.size_at_limit)]
+                .iter()
+                .filter(|(_, on)| *on)
+                .map(|(name, _)| *name)
+                .collect::<Vec<_>>(),
         )
         .into(),
     );

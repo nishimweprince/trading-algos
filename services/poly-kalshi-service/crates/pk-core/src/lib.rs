@@ -3,6 +3,7 @@
 
 pub mod book;
 pub mod decision;
+pub mod exit;
 pub mod fees;
 pub mod journal;
 pub mod leadlag;

@@ -152,7 +152,7 @@ impl Runtime {
             } else if let Some(r) = &self.recorder {
                 r.lock().write(venue, recv_ns, &text);
             }
-            let (intents, hints) = {
+            let (intents, hints, exits) = {
                 let mut e = self.engine.lock();
                 let queue_us = (now_ns() - recv_ns) as f64 / 1e3;
                 let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -166,9 +166,9 @@ impl Runtime {
                 }
                 e.metrics.add("engine_us", picked.elapsed().as_secs_f64() * 1e6);
                 e.metrics.add("queue_us", queue_us.max(0.0));
-                (std::mem::take(&mut e.intents), std::mem::take(&mut e.hints))
+                (std::mem::take(&mut e.intents), std::mem::take(&mut e.hints), std::mem::take(&mut e.exits))
             };
-            if intents.is_empty() && hints.is_empty() {
+            if intents.is_empty() && hints.is_empty() && exits.is_empty() {
                 continue;
             }
             if let Some(tx) = self.exec_tx.lock().as_ref() {
@@ -177,6 +177,9 @@ impl Runtime {
                 }
                 for i in intents {
                     let _ = tx.send(ExecMsg::Intent(i, picked));
+                }
+                for x in exits {
+                    let _ = tx.send(ExecMsg::Exit(x, picked));
                 }
             }
         }

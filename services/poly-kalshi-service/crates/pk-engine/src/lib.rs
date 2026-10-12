@@ -32,17 +32,24 @@
 //! ledger: `live_fill` and `live_exit` (positions), `balance` (the wallet, and
 //! the sizing check when flat), `latency` (the paper venue's measured latency)
 //! and `sizing` (the size's seed).
+//!
+//! **Active exit** (`EngineConfig::active_exit`, [`pk_core::exit`]). A held
+//! leg is sold once Polymarket's bid reaches Kalshi's price: live, as an
+//! [`ExitIntent`] for the order path (its result comes back as `live_exit`);
+//! paper, at the bid at once. A position closed this way writes a `settle`
+//! record with `outcome: "exit"`, so results count it like any other.
 
 use std::collections::{HashMap, VecDeque};
 
 use pk_core::decision::{Action, Decision, StrategyParams, WINDOW_S, decide};
+use pk_core::exit::{EXIT_MIN_SHARES, kalshi_fair, should_exit};
 use pk_core::fees::taker_fee;
 use pk_core::journal::Sink;
 use pk_core::ledger::{Ledger, Position};
 use pk_core::metrics::Metrics;
 use pk_core::num::{lag_ms, px_key, round_dp, round_opt};
 use pk_core::risk::RiskState;
-use pk_core::shadow::{Shadow, quote_json};
+use pk_core::shadow::{SHADOW_SHARES, Shadow, quote_json};
 use pk_core::sizing::Sizer;
 use pk_core::window::{Window, secs_f64, window_open};
 use pk_core::{Book, BookSide, BookState, NS, Quote};
@@ -67,6 +74,8 @@ pub const MARKOUT_S: [i64; 3] = [1, 5, 30];
 pub const EXIT_S: [i64; 4] = [5, 30, 60, 120];
 pub const EXIT_GAP: f64 = 0.03;
 const HORIZONS: [i64; 5] = [1, 5, 30, 60, 120];
+/// A live exit signal is not repeated for this long (the order is in flight).
+pub const EXIT_RETRY_NS: i64 = 5 * NS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
@@ -157,6 +166,31 @@ pub struct OrderIntent {
     pub live: bool,
 }
 
+/// A held leg to sell now (the active exit): a FAK at the bid on the order path.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExitIntent {
+    pub asset: String,
+    pub open_unix: i64,
+    pub token: String,
+    pub side: String,
+    pub shares: f64,
+    pub bid: f64,
+    pub fair: f64,
+    pub decision_ns: i64,
+    pub fee_rate: f64,
+    pub fee_exponent: f64,
+}
+
+/// A shadow entry to price a latency after its decision.
+#[derive(Debug, Clone)]
+struct ShadowFill {
+    due_ns: i64,
+    key: (String, i64),
+    variant: String,
+    token: String,
+    limit: f64,
+}
+
 /// An asset's gap is nearing the threshold: sign an order for this leg ahead.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PresignHint {
@@ -200,6 +234,13 @@ pub struct EngineConfig {
     /// Apply `latency` control lines to the paper venue (the trader, and a
     /// replay that should reproduce it). Off: the configured latency holds.
     pub follow_tape_latency: bool,
+    /// Sell a held leg once Polymarket's bid reaches Kalshi's price.
+    pub active_exit: bool,
+    /// Size an entry at its limit price (what a FAK can spend), not the touch.
+    pub size_at_limit: bool,
+    /// Score shadow entries with a FAK priced this long after the decision
+    /// (`net_cents_real`). `None`: the touch only.
+    pub shadow_latency_ns: Option<i64>,
 }
 
 /// `Forward` is the trade: Kalshi signals, Polymarket executes. `Reverse`
@@ -228,6 +269,9 @@ impl EngineConfig {
             live: false,
             order_size_pct: 0.0,
             follow_tape_latency: false,
+            active_exit: false,
+            size_at_limit: false,
+            shadow_latency_ns: None,
         }
     }
 }
@@ -274,6 +318,12 @@ pub struct Engine {
     follow_tape_latency: bool,
     pub intents: Vec<OrderIntent>,
     pub hints: Vec<PresignHint>,
+    pub exits: Vec<ExitIntent>,
+    active_exit: bool,
+    size_at_limit: bool,
+    exit_until: HashMap<String, i64>,
+    shadow_latency_ns: Option<i64>,
+    shadow_fills: Vec<ShadowFill>,
     prev_p_ns: Option<i64>,
     last_reconnect_p_ns: Option<i64>,
 }
@@ -290,6 +340,8 @@ impl Engine {
     pub fn new(cfg: EngineConfig, ledger: Ledger, risk: RiskState, journal: Box<dyn Sink + Send>) -> Self {
         let n = cfg.assets.len();
         let notional = cfg.params.notional_usd;
+        let mut shadow = cfg.shadow;
+        shadow.score_real = cfg.shadow_latency_ns.is_some();
         Self {
             trade: matches!(cfg.role, Role::Full | Role::Trade),
             observe: matches!(cfg.role, Role::Full | Role::Observe),
@@ -311,7 +363,7 @@ impl Engine {
             markouts: Vec::new(),
             bbo_seen: 0,
             bbo_check_every: BBO_CHECK_EVERY,
-            shadow: cfg.shadow,
+            shadow,
             limit_offset: cfg.limit_offset,
             resolutions: HashMap::new(),
             recent: VecDeque::with_capacity(200),
@@ -330,6 +382,12 @@ impl Engine {
             sizer: Sizer::new(cfg.order_size_pct, notional),
             intents: Vec::new(),
             hints: Vec::new(),
+            exits: Vec::new(),
+            active_exit: cfg.active_exit,
+            size_at_limit: cfg.size_at_limit,
+            exit_until: HashMap::new(),
+            shadow_latency_ns: cfg.shadow_latency_ns,
+            shadow_fills: Vec::new(),
             prev_p_ns: None,
             last_reconnect_p_ns: None,
             assets: cfg.assets,
@@ -383,6 +441,9 @@ impl Engine {
         }
         if !self.markouts.is_empty() {
             self.resolve_markouts(recv_ns);
+        }
+        if !self.shadow_fills.is_empty() {
+            self.resolve_shadow_fills(recv_ns);
         }
         let touched = match venue {
             'p' => self.poly(text, recv_ns),
@@ -834,7 +895,7 @@ impl Engine {
                 let key = (window.asset.clone(), window.open_unix);
                 let lags = self.lags(&window);
                 let mut shadow = std::mem::take(&mut self.shadow);
-                shadow.evaluate(
+                let entered = shadow.evaluate(
                     &key,
                     (&k, &y, &n),
                     sec_into,
@@ -843,8 +904,23 @@ impl Engine {
                     (window.fee_rate, window.fee_exponent),
                     lags,
                 );
+                if let Some(latency) = self.shadow_latency_ns {
+                    for e in entered {
+                        self.shadow_fills.push(ShadowFill {
+                            due_ns: recv_ns + latency,
+                            key: key.clone(),
+                            variant: e.variant,
+                            token: if e.buy_yes { window.yes_token.clone() } else { window.no_token.clone() },
+                            limit: round_dp((e.entry_px + self.limit_offset).min(e.max_entry_px), 4),
+                        });
+                    }
+                    shadow.check_exits(&key, (y.bid, n.bid), kalshi_fair(&k, true), recv_ns);
+                }
                 self.shadow = shadow;
             }
+        }
+        if self.trade && self.active_exit {
+            self.maybe_exit(&window, &k, &y, &n, recv_ns);
         }
         if self.state[idx].traded {
             return;
@@ -881,6 +957,11 @@ impl Engine {
             d.insert("gap".into(), round_dp(decision.gap.unwrap_or(0.0), 4).into());
             self.state[idx].decision = Some(d);
             return;
+        }
+        if decision.action == Action::Enter && self.size_at_limit {
+            // A FAK spends up to shares × limit: size so that stays the notional.
+            let limit = self.limit_px(decision.entry_px.expect("an entry has a price"));
+            decision.contracts = ((self.params.notional_usd / limit).floor() as i64).max(1);
         }
         if decision.action == Action::Enter && self.size_to_depth {
             let entry = decision.entry_px.expect("an entry has a price");
@@ -986,7 +1067,10 @@ impl Engine {
             best_bid: book.and_then(Book::best_bid),
             best_ask: ask,
             limit_px: ask.map(|a| self.limit_px(a)),
-            contracts: ask.filter(|a| *a > 0.0).map(|a| (self.params.notional_usd / a).floor() as i64),
+            contracts: ask.filter(|a| *a > 0.0).map(|a| {
+                let px = if self.size_at_limit { self.limit_px(a) } else { a };
+                (self.params.notional_usd / px).floor() as i64
+            }),
         });
     }
 
@@ -1039,8 +1123,10 @@ impl Engine {
     fn submit(&mut self, w: &Window, d: &Decision, recv_ns: i64) -> Option<String> {
         let Some(venue) = self.venue else { return Some("mode_off".into()) };
         let entry = d.entry_px.expect("an entry has a price");
+        // The most the order can cost: at its limit when sized there.
+        let worst = if self.size_at_limit { self.limit_px(entry) } else { entry };
         let est =
-            d.contracts as f64 * entry + taker_fee(entry, d.contracts as f64, w.fee_rate, w.fee_exponent);
+            d.contracts as f64 * worst + taker_fee(worst, d.contracts as f64, w.fee_rate, w.fee_exponent);
         let blocked = self.risk.check(&self.ledger, est, recv_ns);
         if blocked == Some("insufficient_cash") {
             self.ledger.reject("insufficient_cash", &w.asset, round_dp(est, 2));
@@ -1101,6 +1187,111 @@ impl Engine {
             shadow: self.live,
         });
         None
+    }
+
+    /// The active exit for the window's open position, if Polymarket caught up.
+    fn maybe_exit(&mut self, w: &Window, k: &Quote, y: &Quote, n: &Quote, recv_ns: i64) {
+        let key = format!("{}:{}", w.asset, w.open_unix);
+        let Some(p) = self.ledger.positions.get(&key).filter(|p| p.is_open() && p.shares >= EXIT_MIN_SHARES)
+        else {
+            return;
+        };
+        let yes = p.side == "yes";
+        let (Some(bid), Some(fair)) = (if yes { y.bid } else { n.bid }, kalshi_fair(k, yes)) else { return };
+        let (shares, vwap, side) = (p.shares, p.vwap(), p.side.clone());
+        if !should_exit(bid, fair, vwap) || self.exit_until.get(&key).is_some_and(|u| recv_ns < *u) {
+            return;
+        }
+        self.exit_until.insert(key, recv_ns + EXIT_RETRY_NS);
+        self.count("exit_signals");
+        if self.live {
+            self.exits.push(ExitIntent {
+                asset: w.asset.clone(),
+                open_unix: w.open_unix,
+                token: if yes { w.yes_token.clone() } else { w.no_token.clone() },
+                side: side.clone(),
+                shares,
+                bid,
+                fair: round_dp(fair, 4),
+                decision_ns: recv_ns,
+                fee_rate: w.fee_rate,
+                fee_exponent: w.fee_exponent,
+            });
+            let record = json!({
+                "type": "exit_signal", "asset": w.asset, "open_unix": w.open_unix, "t_ns": recv_ns,
+                "side": side, "shares": shares, "bid": bid, "fair": round_dp(fair, 4),
+                "entry_vwap": round_dp(vwap, 4),
+            });
+            self.write(recv_ns, record, false);
+        } else {
+            let fee = taker_fee(bid, shares, w.fee_rate, w.fee_exponent);
+            self.close_position(&w.asset, w.open_unix, (shares, shares * bid, fee), "fair", None, recv_ns);
+        }
+    }
+
+    /// Sell `shares` of a position for `proceeds` less `fee`: an `exit` record,
+    /// and a `settle` record (`outcome: "exit"`) when nothing is left.
+    fn close_position(
+        &mut self,
+        asset: &str,
+        open: i64,
+        (shares, proceeds, fee): (f64, f64, f64),
+        reason: &str,
+        order_id: Option<Value>,
+        recv_ns: i64,
+    ) {
+        let before = self.ledger.positions.get(&format!("{asset}:{open}")).map(|p| (p.vwap(), p.entry_ns));
+        let Some(p) = self.ledger.close(asset, open, shares, proceeds, fee, recv_ns) else { return };
+        let (entry_vwap, entry_ns) = before.unwrap_or((0.0, recv_ns));
+        self.count("exits");
+        let record = json!({
+            "type": "exit", "asset": asset, "open_unix": open, "t_ns": recv_ns, "reason": reason,
+            "venue": if self.live { "live" } else { "paper" },
+            "side": p.side, "shares": shares, "proceeds": round_dp(proceeds, 4),
+            "exit_px": (shares > 0.0).then(|| round_dp(proceeds / shares, 4)),
+            "entry_vwap": round_dp(entry_vwap, 4),
+            "held_s": round_dp((recv_ns - entry_ns) as f64 / 1e9, 1),
+            "fee": round_dp(fee, 4), "remaining": p.shares, "pnl": round_opt(p.pnl, 4),
+            "order_id": order_id, "cash": round_dp(self.ledger.cash, 2),
+        });
+        self.write(recv_ns, record, true);
+        if p.is_open() {
+            return;
+        }
+        let record = json!({
+            "type": "settle", "asset": asset, "open_unix": open, "t_ns": recv_ns,
+            "side": p.side, "outcome": "exit", "shares": 0.0, "vwap": round_dp(entry_vwap, 4),
+            "payout": p.payout, "pnl": round_dp(p.pnl.unwrap_or(0.0), 4),
+            "cash": round_dp(self.ledger.cash, 2),
+        });
+        self.write(recv_ns, record, true);
+        if !self.live {
+            self.resize(self.ledger.cash, recv_ns, "settle");
+        }
+    }
+
+    /// Price the shadow entries whose latency has passed against the book now.
+    fn resolve_shadow_fills(&mut self, recv_ns: i64) {
+        if !self.shadow_fills.iter().any(|f| f.due_ns <= recv_ns) {
+            return;
+        }
+        let (due, keep): (Vec<ShadowFill>, Vec<ShadowFill>) =
+            std::mem::take(&mut self.shadow_fills).into_iter().partition(|f| f.due_ns <= recv_ns);
+        self.shadow_fills = keep;
+        for sf in due {
+            let (mut got, mut cost) = (0.0, 0.0);
+            if let Some(b) = self.books.get(&sf.token).filter(|b| b.snapshot_ns.is_some()) {
+                for (px, size) in b.asks_upto(sf.limit) {
+                    let take = size.min(SHADOW_SHARES - got);
+                    got += take;
+                    cost += take * px;
+                    if got >= SHADOW_SHARES - 1e-9 {
+                        break;
+                    }
+                }
+            }
+            self.shadow.set_fill(&sf.key, &sf.variant, (got, if got > 0.0 { cost / got } else { 0.0 }));
+        }
     }
 
     pub fn limit_px(&self, entry_px: f64) -> f64 {
@@ -1453,15 +1644,9 @@ impl Engine {
                 let (asset, open) = (s("asset"), v.get("open_unix").and_then(Value::as_i64).unwrap_or(0));
                 let (shares, proceeds, fee) =
                     (f("shares").unwrap_or(0.0), f("proceeds").unwrap_or(0.0), f("fee").unwrap_or(0.0));
-                let Some(p) = self.ledger.close(&asset, open, shares, proceeds, fee, recv_ns) else { return };
-                self.count("exits");
-                let record = json!({
-                    "type": "exit", "asset": asset, "open_unix": open, "t_ns": recv_ns,
-                    "side": p.side, "shares": shares, "proceeds": round_dp(proceeds, 4),
-                    "fee": round_dp(fee, 4), "remaining": p.shares, "pnl": round_opt(p.pnl, 4),
-                    "order_id": v.get("order_id"), "cash": round_dp(self.ledger.cash, 2),
-                });
-                self.write(recv_ns, record, true);
+                let reason = v.get("reason").and_then(Value::as_str).unwrap_or("flatten").to_owned();
+                let order_id = v.get("order_id").cloned();
+                self.close_position(&asset, open, (shares, proceeds, fee), &reason, order_id, recv_ns);
             }
             _ => {}
         }

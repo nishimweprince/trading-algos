@@ -32,6 +32,8 @@ pub struct LiveLimits {
     pub max_notional: Decimal,
     /// How far under the best bid a flatten sell may reach, in ticks.
     pub exit_ticks: u32,
+    /// How far under the bid the active exit's sell reaches, in ticks.
+    pub active_exit_ticks: u32,
     pub poll_every: Duration,
     pub poll_for: Duration,
 }
@@ -42,6 +44,7 @@ impl Default for LiveLimits {
             max_entry_px: Decimal::new(60, 2),
             max_notional: Decimal::from(50),
             exit_ticks: 2,
+            active_exit_ticks: 1,
             poll_every: Duration::from_millis(200),
             poll_for: Duration::from_secs(5),
         }
@@ -97,8 +100,13 @@ pub fn entry_spec(
 
 /// The flatten sell for `shares` held: FAK at `exit_ticks` under the best bid. Pure.
 pub fn exit_spec(token: &str, shares: Decimal, top: &Top, limits: &LiveLimits) -> Result<OrderSpec, Refused> {
+    exit_spec_ticks(token, shares, top, limits.exit_ticks)
+}
+
+/// A FAK sell of `shares` at `ticks` under the best bid. Pure.
+pub fn exit_spec_ticks(token: &str, shares: Decimal, top: &Top, ticks: u32) -> Result<OrderSpec, Refused> {
     let bid = top.best_bid.ok_or(Refused::NoBid)?;
-    let price = (bid - top.tick * Decimal::from(limits.exit_ticks)).max(top.tick);
+    let price = (bid - top.tick * Decimal::from(ticks)).max(top.tick);
     if price >= Decimal::ONE {
         return Err(Refused::BadPrice(price));
     }
@@ -185,8 +193,20 @@ impl<S: OrderSigner> LiveExec<S> {
     }
 
     pub async fn exit(&self, token: &str, shares: Decimal, top: &Top) -> Executed {
-        match exit_spec(token, shares, top, &self.limits) {
-            Ok(spec) => self.execute(&spec, Instant::now()).await,
+        self.exit_ticks(token, shares, top, self.limits.exit_ticks, Instant::now()).await
+    }
+
+    /// The active exit's sell: a FAK `ticks` under the bid.
+    pub async fn exit_ticks(
+        &self,
+        token: &str,
+        shares: Decimal,
+        top: &Top,
+        ticks: u32,
+        t_decision: Instant,
+    ) -> Executed {
+        match exit_spec_ticks(token, shares, top, ticks) {
+            Ok(spec) => self.execute(&spec, t_decision).await,
             Err(r) => Executed { refused: Some(r.to_string()), cost_basis: "none", ..Default::default() },
         }
     }

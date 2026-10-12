@@ -73,6 +73,12 @@ pub struct Settings {
     pub latency_min_samples: usize,
     pub limit_offset: f64,
     pub size_to_depth: bool,
+    /// Sell a held leg once Polymarket's bid reaches Kalshi's price (`pk_core::exit`).
+    pub active_exit: bool,
+    /// Size an entry at its limit, so a FAK never spends more than the notional.
+    pub size_at_limit: bool,
+    /// Shadow entries are also scored with a FAK priced this long after the decision.
+    pub shadow_latency_ms: i64,
     pub paper_start_cash_usd: f64,
     pub max_open_notional_usd: f64,
     pub daily_loss_limit_usd: f64,
@@ -279,7 +285,7 @@ impl Settings {
             order_size_pct > 0.0 || params.notional_usd <= max_open,
             "PK_NOTIONAL_USD cannot exceed PK_MAX_OPEN_NOTIONAL_USD"
         );
-        let paper_latency_ms: i64 = e.num("PK_PAPER_LATENCY_MS", 150)?;
+        let paper_latency_ms: i64 = e.num("PK_PAPER_LATENCY_MS", 250)?;
         anyhow::ensure!(
             (0..=5000).contains(&paper_latency_ms),
             "PK_PAPER_LATENCY_MS must be within 0..=5000"
@@ -296,7 +302,12 @@ impl Settings {
             "PK_PROBE_CADENCE_S must be 0 (off) or at least 5"
         );
         let limit_offset: f64 = e.num("PK_LIMIT_OFFSET", 0.0)?;
-        anyhow::ensure!((0.0..=0.05).contains(&limit_offset), "PK_LIMIT_OFFSET must be within 0..=0.05");
+        anyhow::ensure!((0.0..=0.15).contains(&limit_offset), "PK_LIMIT_OFFSET must be within 0..=0.15");
+        let shadow_latency_ms: i64 = e.num("PK_SHADOW_LATENCY_MS", 250)?;
+        anyhow::ensure!(
+            (0..=5000).contains(&shadow_latency_ms),
+            "PK_SHADOW_LATENCY_MS must be within 0..=5000"
+        );
 
         let port: u16 = e.num("PORT", 8050)?;
         let status_port: u16 = e.num("PK_STATUS_PORT", 8051)?;
@@ -401,6 +412,9 @@ impl Settings {
             latency_min_samples,
             limit_offset,
             size_to_depth: e.flag("PK_SIZE_TO_DEPTH", false)?,
+            active_exit: e.flag("PK_ACTIVE_EXIT", true)?,
+            size_at_limit: e.flag("PK_SIZE_AT_LIMIT", true)?,
+            shadow_latency_ms,
             paper_start_cash_usd: e.num("PK_PAPER_START_CASH_USD", 1000.0)?,
             max_open_notional_usd: max_open,
             daily_loss_limit_usd: daily_loss,

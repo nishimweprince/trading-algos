@@ -43,6 +43,18 @@ pub fn config_hash(
     size_to_depth: bool,
     order_size_pct: f64,
 ) -> String {
+    config_hash_with(params, latency_ms, limit_offset, size_to_depth, order_size_pct, &[])
+}
+
+/// [`config_hash`] plus the switches that are on (`active_exit`, `size_at_limit`).
+pub fn config_hash_with(
+    params: &StrategyParams,
+    latency_ms: i64,
+    limit_offset: f64,
+    size_to_depth: bool,
+    order_size_pct: f64,
+    on: &[&str],
+) -> String {
     let mut fields = serde_json::to_value(params).expect("params serialise");
     let obj = fields.as_object_mut().expect("object");
     obj.insert("paper_latency_ms".into(), latency_ms.into());
@@ -55,6 +67,9 @@ pub fn config_hash(
     }
     if size_to_depth {
         obj.insert("size_to_depth".into(), true.into());
+    }
+    for name in on {
+        obj.insert((*name).into(), true.into());
     }
     let sorted: std::collections::BTreeMap<_, _> = obj.iter().collect();
     let body = serde_json::to_string(&sorted).expect("json");

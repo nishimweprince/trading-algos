@@ -2,10 +2,19 @@
 
 The kpc convergence trade, rebuilt to measure its one untested repair. On 15-minute
 crypto up/down binaries, when Kalshi's YES mid and Polymarket's differ by at least
-0.15, buy the cheap Polymarket leg as a taker, at or below 0.60, and hold to
-settlement. Kalshi is the signal only.
+0.20, buy the cheap Polymarket leg as a taker, at or below 0.60, and sell it once
+Polymarket's bid catches up with Kalshi's price (the active exit), else hold to
+settlement. Kalshi is the signal only; Binance is recorded and compared
+(lead–lag panel) but never decides: from Dublin it arrives after both venues move.
 
-The threshold is 0.15 (results epoch 5, from 2026-10-07). It was 0.10 in epochs
+**Epoch 11 (2026-10-12).** From the 10-10/11 tape (652 shadow entries replayed
+through the books at 250 ms): threshold 0.20 (was 0.15), limit touch + 6¢ (was
++2¢), shares sized at the limit, the active exit (`pk_core::exit`), shadow
+variants also scored at a realistic fill (`net_cents_real`), and the paper
+latency learned from live taker orders only. Per decision the replay went from
+about +1.0¢ to +2.9¢; its fill rates are optimistic (no rival takers).
+
+The threshold was 0.15 in epochs 5–10 (from 2026-10-07). It was 0.10 in epochs
 3 and 4, chosen because at the manual's 0.20 there were almost no fills. On the
 Helix tape 0.15 beat 0.10 per day on price-side fills, in discovery and in the
 holdout (research/PREREG.md C2); the `t10` shadow variant keeps measuring 0.10.
@@ -133,6 +142,14 @@ Funds at another address (for example the deposit wallet while
   `venue: "live"` in the paper schema, so `pk readout` and the gates read live
   fills unchanged. The paper venue still simulates each order as a shadow
   (`paper_fill` records), which gives the live-vs-paper comparison.
+- **Active exit** (`PK_ACTIVE_EXIT`). While a position is open the engine checks
+  it on every update: once the held leg's best bid is within 1¢ of Kalshi's
+  price for that side (Kalshi spread ≤ 2¢) and above the entry, it writes an
+  `exit_signal` and the bridge sells with a FAK one tick under the bid. What sold
+  comes back as `live_exit` (`reason: "fair"`): an `exit` record, and a `settle`
+  record with `outcome: "exit"` when nothing is left. A signal is not repeated
+  for 5 s; under 1 share the remainder settles. The status page's Exits panel
+  compares each exit with holding to settlement.
 - **Compounding size.** The order size is `PK_ORDER_SIZE_PCT` of the balance (paper:
   ledger cash; live: the wallet's pUSD). It is held in memory and recomputed
   only at a reconciliation with no open position and no order in flight. Every

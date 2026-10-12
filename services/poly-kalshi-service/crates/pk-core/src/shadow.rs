@@ -5,9 +5,16 @@
 //! first-crossing-decides state per window and costs nothing once consumed.
 //!
 //! Records: `shadow` (one per variant per window at the roll) and
-//! `shadow_settle` (one per consumed variant when Polymarket resolves: net
-//! ¢/share at the touch after the fee). The live rule runs alongside as
-//! variant `live`, so every variant is compared on the same basis.
+//! `shadow_settle` (one per consumed variant when Polymarket resolves). The
+//! live rule runs alongside as variant `live`, so every variant is compared on
+//! the same basis. Two nets per entry:
+//! - `net_cents_touch`: at the touch, instantly, any size (the old basis; it
+//!   overstates what an order can get);
+//! - `net_cents_real`: a [`SHADOW_SHARES`]-share FAK at the touch + the live
+//!   limit offset against the book the engine sees a latency later
+//!   ([`Shadow::set_fill`]), then the active exit ([`crate::exit`]) or the
+//!   settlement, net of the taker fee on each leg. `filled` says whether the
+//!   order got anything; an unfilled entry has no real net.
 
 use std::collections::{HashMap, HashSet};
 
@@ -15,7 +22,8 @@ use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 
 use crate::book::Quote;
-use crate::decision::{Decision, StrategyParams, decide};
+use crate::decision::{Action, Decision, StrategyParams, decide};
+use crate::exit::should_exit;
 use crate::fees::taker_fee;
 use crate::num::round_dp;
 
@@ -121,6 +129,18 @@ pub fn parse_variants(text: &str, base: &StrategyParams) -> anyhow::Result<Vec<V
 
 pub type Key = (String, i64);
 
+/// The order a shadow entry is scored with (`net_cents_real`).
+pub const SHADOW_SHARES: f64 = 10.0;
+
+/// A variant that just entered: what the engine must price a latency later.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NewEntry {
+    pub variant: String,
+    pub buy_yes: bool,
+    pub entry_px: f64,
+    pub max_entry_px: f64,
+}
+
 #[derive(Debug)]
 struct Fired {
     record: Map<String, Value>,
@@ -129,11 +149,18 @@ struct Fired {
     action: &'static str,
     fee_rate: f64,
     fee_exponent: f64,
+    t_ns: i64,
+    /// `None` until priced; then the shares and vwap a FAK got (0 shares: none).
+    fill: Option<(f64, f64)>,
+    /// The bid the active exit sold at, and when.
+    exit: Option<(f64, i64)>,
 }
 
 #[derive(Debug, Default)]
 pub struct Shadow {
     pub variants: Vec<Variant>,
+    /// Add the realistic fill and exit fields to `shadow_settle`.
+    pub score_real: bool,
     fired: HashMap<Key, IndexMap<String, Fired>>,
     done: HashMap<Key, HashSet<String>>,
 }
@@ -157,7 +184,8 @@ impl Shadow {
     }
 
     /// Run every variant not yet consumed in this window. `depth(buy_yes, px)` is
-    /// the shares offered at or below `px` on that leg.
+    /// the shares offered at or below `px` on that leg. Returns the variants that
+    /// entered now, for the engine to price a latency later ([`Self::set_fill`]).
     #[allow(clippy::too_many_arguments)]
     pub fn evaluate(
         &mut self,
@@ -168,10 +196,11 @@ impl Shadow {
         depth: impl Fn(bool, f64) -> f64,
         fee: (f64, f64),
         lags: (Option<f64>, Option<f64>),
-    ) {
+    ) -> Vec<NewEntry> {
+        let mut entered = Vec::new();
         let done = self.done.entry(key.clone()).or_default();
         if done.len() == self.variants.len() {
-            return;
+            return entered;
         }
         let (k, y, n) = quotes;
         let utc_hour = ((key.1 as f64 + sec_into) as i64).div_euclid(3600).rem_euclid(24) as u32;
@@ -201,6 +230,14 @@ impl Shadow {
             record.insert("kalshi".into(), quote_json(k));
             record.insert("poly_yes".into(), quote_json(y));
             record.insert("poly_no".into(), quote_json(n));
+            if let (Some(px), Action::Enter) = (d.entry_px, d.action) {
+                entered.push(NewEntry {
+                    variant: v.name.clone(),
+                    buy_yes: d.buy_yes == Some(true),
+                    entry_px: px,
+                    max_entry_px: v.params.max_entry_px,
+                });
+            }
             self.fired.entry(key.clone()).or_default().insert(
                 v.name.clone(),
                 Fired {
@@ -210,8 +247,43 @@ impl Shadow {
                     action: d.action.as_str(),
                     fee_rate: fee.0,
                     fee_exponent: fee.1,
+                    t_ns: recv_ns,
+                    fill: None,
+                    exit: None,
                 },
             );
+        }
+        entered
+    }
+
+    /// What the variant's order got a latency after its entry: `(shares, vwap)`,
+    /// `shares == 0` when nothing rested at or below the limit.
+    pub fn set_fill(&mut self, key: &Key, variant: &str, fill: (f64, f64)) {
+        if let Some(f) = self.fired.get_mut(key).and_then(|m| m.get_mut(variant)) {
+            f.fill = Some(fill);
+        }
+    }
+
+    /// The active exit for the window's filled entries: `bids` is the YES and
+    /// NO best bid, `fair_yes` Kalshi's YES price while its book is tight.
+    pub fn check_exits(
+        &mut self,
+        key: &Key,
+        bids: (Option<f64>, Option<f64>),
+        fair_yes: Option<f64>,
+        t: i64,
+    ) {
+        let Some(fair_yes) = fair_yes else { return };
+        let Some(fired) = self.fired.get_mut(key) else { return };
+        for f in fired.values_mut() {
+            let Some((_, vwap)) = f.fill.filter(|(s, _)| *s > 0.0) else { continue };
+            if f.exit.is_some() {
+                continue;
+            }
+            let (bid, fair) = if f.side == "yes" { (bids.0, fair_yes) } else { (bids.1, 1.0 - fair_yes) };
+            if let Some(bid) = bid.filter(|b| should_exit(*b, fair, vwap)) {
+                f.exit = Some((bid, t));
+            }
         }
     }
 
@@ -249,8 +321,9 @@ impl Shadow {
             .filter_map(|(name, f)| {
                 let px = f.entry_px?;
                 let win = if f.side == outcome { 1.0 } else { 0.0 };
-                let net = 100.0 * (win - px - taker_fee(px, 1.0, f.fee_rate, f.fee_exponent));
-                Some(json!({
+                let fee = |p: f64| taker_fee(p, 1.0, f.fee_rate, f.fee_exponent);
+                let net = 100.0 * (win - px - fee(px));
+                let mut record = json!({
                     "type": "shadow_settle",
                     "asset": key.0,
                     "open_unix": key.1,
@@ -261,7 +334,22 @@ impl Shadow {
                     "outcome": outcome,
                     "win": win,
                     "net_cents_touch": round_dp(net, 3),
-                }))
+                });
+                if self.score_real && let Some(o) = record.as_object_mut() {
+                    let real = f.fill.filter(|(s, _)| *s > 0.0).map(|(_, vwap)| match f.exit {
+                        Some((bid, _)) => 100.0 * (bid - vwap - fee(vwap) - fee(bid)),
+                        None => 100.0 * (win - vwap - fee(vwap)),
+                    });
+                    o.insert("filled".into(), f.fill.map(|(s, _)| s > 0.0).into());
+                    o.insert("fill_shares".into(), f.fill.map(|(s, _)| round_dp(s, 2)).into());
+                    let vwap = f.fill.filter(|(s, _)| *s > 0.0).map(|(_, v)| round_dp(v, 4));
+                    o.insert("fill_vwap".into(), vwap.into());
+                    o.insert("exit_bid".into(), f.exit.map(|(b, _)| b).into());
+                    let held = f.exit.map(|(_, t)| round_dp((t - f.t_ns) as f64 / 1e9, 1));
+                    o.insert("held_s".into(), held.into());
+                    o.insert("net_cents_real".into(), real.map(|r| round_dp(r, 3)).into());
+                }
+                Some(record)
             })
             .collect()
     }
@@ -275,6 +363,37 @@ impl Shadow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn q(bid: f64, ask: f64) -> Quote {
+        Quote { valid: true, bid: Some(bid), ask: Some(ask) }
+    }
+
+    #[test]
+    fn scores_a_realistic_fill_and_the_active_exit() {
+        let base = StrategyParams { gap_threshold: 0.15, ..Default::default() };
+        let mut sh = Shadow::new(parse_variants(r#"[{"name":"t20","gap":0.20}]"#, &base).unwrap(), &base);
+        sh.score_real = true;
+        let key: Key = ("BTC".into(), 900);
+        // Kalshi 0.70/0.72 against Polymarket YES 0.44/0.46: both enter YES at 0.46.
+        let quotes = (&q(0.70, 0.72), &q(0.44, 0.46), &q(0.54, 0.56));
+        let new = sh.evaluate(&key, quotes, 100.0, 1, |_, _| 500.0, (0.07, 1.0), (None, None));
+        assert_eq!(new.len(), 2);
+        assert!(new.iter().all(|e| e.buy_yes && e.entry_px == 0.46));
+        sh.set_fill(&key, "live", (10.0, 0.47));
+        sh.set_fill(&key, "t20", (0.0, 0.0));
+        // Polymarket's bid reaches Kalshi's price: the live entry exits at 0.70.
+        sh.check_exits(&key, (Some(0.70), Some(0.28)), Some(0.71), 5_000_000_001);
+        let out = sh.settle(&key, "no");
+        let live = out.iter().find(|r| r["variant"] == "live").unwrap();
+        assert_eq!((live["filled"].as_bool(), live["exit_bid"].as_f64()), (Some(true), Some(0.7)));
+        assert_eq!(live["held_s"].as_f64(), Some(5.0));
+        let fee = |p: f64| 0.07 * p * (1.0 - p);
+        let want = 100.0 * (0.70 - 0.47 - fee(0.47) - fee(0.70));
+        assert!((live["net_cents_real"].as_f64().unwrap() - want).abs() < 1e-3);
+        let t20 = out.iter().find(|r| r["variant"] == "t20").unwrap();
+        assert_eq!(t20["filled"], false);
+        assert!(t20["net_cents_real"].is_null());
+    }
 
     #[test]
     fn default_variants_parse() {

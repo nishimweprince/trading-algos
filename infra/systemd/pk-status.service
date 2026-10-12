@@ -16,10 +16,11 @@ ExecStart=/home/pk/trading-algos/services/poly-kalshi-service/target/release/pk-
 Restart=always
 RestartSec=5
 # Never compete with the trader for CPU or memory: it reads the trader once per
-# 5 s and the journal from disk, whatever the number of viewers.
+# 5 s and the journal from disk, whatever the number of viewers. 512M: at 256M
+# it was OOM-killed (2026-10-12) once the journal held days of shadow records.
 Nice=10
 CPUWeight=20
-MemoryMax=256M
+MemoryMax=512M
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full

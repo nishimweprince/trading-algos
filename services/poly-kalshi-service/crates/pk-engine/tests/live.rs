@@ -36,11 +36,22 @@ struct Opts {
     pct: f64,
     role: Role,
     cash: f64,
+    active_exit: bool,
+    size_at_limit: bool,
+    limit_offset: f64,
 }
 
 impl Default for Opts {
     fn default() -> Self {
-        Self { live: false, pct: 0.0, role: Role::Full, cash: 100.0 }
+        Self {
+            live: false,
+            pct: 0.0,
+            role: Role::Full,
+            cash: 100.0,
+            active_exit: false,
+            size_at_limit: false,
+            limit_offset: 0.0,
+        }
     }
 }
 
@@ -52,6 +63,9 @@ fn engine(o: Opts) -> (Engine, Shared) {
     ec.live = o.live;
     ec.order_size_pct = o.pct;
     ec.follow_tape_latency = true;
+    ec.active_exit = o.active_exit;
+    ec.size_at_limit = o.size_at_limit;
+    ec.limit_offset = o.limit_offset;
     let sink = Shared::default();
     let risk =
         RiskState::new(RiskLimits { max_open_notional_usd: 1e9, daily_loss_limit_usd: 1e9, kill_file: None });
@@ -262,4 +276,73 @@ fn replay_gives_the_same_ledger() {
     assert_eq!(a.ledger.cash, b.ledger.cash);
     assert_eq!(a.ledger.positions, b.ledger.positions);
     assert_eq!(*sa.0.lock().unwrap(), *sb.0.lock().unwrap());
+}
+
+/// Polymarket's YES book catches up with Kalshi (0.70 / 0.72; Kalshi 0.70 / 0.72).
+fn poly_catches_up(e: &mut Engine, s: f64) {
+    let pc = json!({"event_type":"price_change","market":"0xc","price_changes":[
+        {"asset_id":"Y","price":"0.46","size":"0","side":"SELL"},
+        {"asset_id":"Y","price":"0.72","size":"100","side":"SELL"},
+        {"asset_id":"Y","price":"0.70","size":"100","side":"BUY"}]});
+    e.handle_line(at(s), 'p', &pc.to_string());
+}
+
+#[test]
+fn paper_active_exit_sells_at_kalshi_fair_and_sizes_at_the_limit() {
+    let opts = Opts { active_exit: true, size_at_limit: true, limit_offset: 0.02, ..Default::default() };
+    let (mut e, sink) = engine(opts);
+    setup(&mut e);
+    cross(&mut e, 30.0);
+    // $50 at the 0.48 limit, not the 0.46 touch: 104 shares, not 108.
+    assert_eq!(sink.of("decision")[0]["contracts"], 104);
+    tick(&mut e, 30.5);
+    assert_eq!(sink.of("fill")[0]["shares"], 104.0);
+    poly_catches_up(&mut e, 35.0);
+    let exit = &sink.of("exit")[0];
+    assert_eq!((exit["reason"].as_str(), exit["venue"].as_str()), (Some("fair"), Some("paper")));
+    assert_eq!((exit["exit_px"].as_f64(), exit["remaining"].as_f64()), (Some(0.7), Some(0.0)));
+    assert!((exit["held_s"].as_f64().unwrap() - 4.5).abs() < 0.2);
+    let settle = &sink.of("settle")[0];
+    assert_eq!(settle["outcome"], "exit");
+    assert!(settle["pnl"].as_f64().unwrap() > 0.0);
+    assert_eq!(e.ledger.open_positions().count(), 0);
+    // Polymarket's later resolution finds nothing left to settle.
+    let resolved = json!({"type":"resolution","venue":"poly","asset":"BTC","open_unix":OPEN,"outcome":"no"});
+    ctl(&mut e, 905.0, resolved);
+    assert_eq!(sink.of("settle").len(), 1);
+}
+
+#[test]
+fn live_active_exit_is_an_intent_and_its_result_closes() {
+    let (mut e, sink) = engine(Opts { live: true, cash: 0.0, active_exit: true, ..Default::default() });
+    setup(&mut e);
+    ctl(&mut e, 1.0, json!({"type":"balance","balance":100.0}));
+    cross(&mut e, 30.0);
+    e.intents.clear();
+    ctl(
+        &mut e,
+        30.6,
+        json!({"type":"live_fill","asset":"BTC","open_unix":OPEN,"side":"yes","token":"Y",
+               "order_id":"0xo","ordered":10.0,"shares":10.0,"cost":4.6,"entry_px":0.46,
+               "limit_px":0.46,"status":"matched","decision_ns":at(30.02)}),
+    );
+    poly_catches_up(&mut e, 35.0);
+    let exits = std::mem::take(&mut e.exits);
+    assert_eq!(exits.len(), 1);
+    let x = &exits[0];
+    assert_eq!((x.token.as_str(), x.shares, x.bid, x.fair), ("Y", 10.0, 0.7, 0.71));
+    assert_eq!(sink.of("exit_signal").len(), 1);
+    // Not repeated while the order is in flight.
+    poly_catches_up(&mut e, 36.0);
+    assert!(e.exits.is_empty());
+    ctl(
+        &mut e,
+        36.5,
+        json!({"type":"live_exit","asset":"BTC","open_unix":OPEN,"reason":"fair","shares":10.0,
+               "proceeds":6.9,"fee":0.15,"order_id":"0xs"}),
+    );
+    let exit = &sink.of("exit")[0];
+    assert_eq!((exit["reason"].as_str(), exit["venue"].as_str()), (Some("fair"), Some("live")));
+    assert_eq!(sink.of("settle")[0]["outcome"], "exit");
+    assert_eq!(e.ledger.open_positions().count(), 0);
 }

@@ -10,6 +10,11 @@
 //! **Days.** Entries, fills and no-fills count on the day of the decision;
 //! settled trades, wins and P&L on the day they settled (UTC), the day cash
 //! moved, which is the ledger's `realised_today` basis too.
+//!
+//! **Exits.** A position the active exit sold has a `settle` record with
+//! `outcome: "exit"`. Net ¢/share is the ledger's P&L over the shares filled,
+//! so exits, partial exits and both fees count; an exit is a win when its
+//! P&L is positive. `exits` compares each exit with holding to settlement.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -41,6 +46,93 @@ fn kalshi_implied(d: &Value, side: &str) -> Option<f64> {
     let (b, a) = (f(k, "bid")?, f(k, "ask")?);
     let mid = (b + a) / 2.0;
     Some(if side == "yes" { mid } else { 1.0 - mid })
+}
+
+/// Net ¢/share of a settled position over the shares the entry filled:
+/// payout − cost − fee for a plain settlement; the ledger's P&L (which counts
+/// the active exit's proceeds and fee) when the position was sold, wholly
+/// (`outcome: "exit"`) or in part (P&L off the plain formula by over 1¢).
+pub fn net_cents(settle: &Value, fill: &Value) -> f64 {
+    let shares = f(fill, "shares").filter(|s| *s > 0.0).unwrap_or(1.0);
+    let plain =
+        f(settle, "payout").unwrap_or(0.0) - f(fill, "cost").unwrap_or(0.0) - f(fill, "fee").unwrap_or(0.0);
+    let pnl = f(settle, "pnl").unwrap_or(plain);
+    let sold = s(settle, "outcome") == Some("exit") || (pnl - plain).abs() > 0.01;
+    100.0 * if sold { pnl } else { plain } / shares
+}
+
+/// A win: paid out at settlement, or sold at a profit by the active exit.
+pub fn won(settle: &Value) -> bool {
+    if s(settle, "outcome") == Some("exit") {
+        f(settle, "pnl").unwrap_or(0.0) > 0.0
+    } else {
+        f(settle, "payout").unwrap_or(0.0) > 0.0
+    }
+}
+
+/// Each exit against holding the same shares to settlement, ¢/share net of fees.
+pub fn exits_vs_hold(records: &[Value], limit: usize) -> Value {
+    let mut fills: IndexMap<Key, &Value> = IndexMap::new();
+    let mut outcomes: BTreeMap<Key, (Option<String>, Option<String>)> = BTreeMap::new();
+    let mut exits: Vec<&Value> = Vec::new();
+    for r in records {
+        match s(r, "type") {
+            Some("fill") if f(r, "shares").unwrap_or(0.0) > 0.0 => {
+                fills.insert(key(r), r);
+            }
+            Some("resolution") => {
+                let o = outcomes.entry(key(r)).or_default();
+                let out = s(r, "outcome").map(str::to_owned);
+                if s(r, "venue") == Some("poly") { o.0 = out } else { o.1 = out }
+            }
+            Some("exit") if s(r, "reason") == Some("fair") => exits.push(r),
+            _ => {}
+        }
+    }
+    let mut rows = Vec::new();
+    let (mut exit_c, mut hold_c, mut held) = (Vec::new(), Vec::new(), Vec::new());
+    for e in &exits {
+        let k = key(e);
+        let Some(fl) = fills.get(&k) else { continue };
+        let entry = f(e, "entry_vwap").or_else(|| f(fl, "vwap")).unwrap_or(0.0);
+        let shares = f(e, "shares").unwrap_or(0.0);
+        if shares <= 0.0 {
+            continue;
+        }
+        let entry_fee = f(fl, "fee").unwrap_or(0.0) / f(fl, "shares").unwrap_or(1.0);
+        let exit_px = f(e, "exit_px").unwrap_or(0.0);
+        let exit_cents = 100.0 * (exit_px - entry - entry_fee - f(e, "fee").unwrap_or(0.0) / shares);
+        let outcome = outcomes.get(&k).and_then(|o| o.0.clone().or_else(|| o.1.clone()));
+        let side = s(e, "side").unwrap_or_default();
+        let hold_cents =
+            outcome.as_deref().map(|o| 100.0 * ((if o == side { 1.0 } else { 0.0 }) - entry - entry_fee));
+        exit_c.push(exit_cents);
+        if let Some(h) = hold_cents {
+            hold_c.push(h);
+        }
+        if let Some(h) = f(e, "held_s") {
+            held.push(h);
+        }
+        rows.push(json!({
+            "asset": k.0, "open_unix": k.1, "t_ns": e.get("t_ns"), "side": side, "venue": e.get("venue"),
+            "shares": shares, "entry_vwap": entry, "exit_px": exit_px, "held_s": e.get("held_s"),
+            "exit_cents": pk_core::num::round_dp(exit_cents, 2),
+            "outcome": outcome, "hold_cents": hold_cents.map(|h| pk_core::num::round_dp(h, 2)),
+        }));
+    }
+    let both: Vec<(f64, f64)> = rows
+        .iter()
+        .filter_map(|r| Some((f(r, "exit_cents")?, f(r, "hold_cents")?)))
+        .collect();
+    json!({
+        "n": rows.len(),
+        "exit_cents_mean": opt(fmean(&exit_c)),
+        "hold_cents_mean": opt(fmean(&hold_c)),
+        "exit_minus_hold_cents": opt(fmean(&both.iter().map(|(e, h)| e - h).collect::<Vec<_>>())),
+        "compared": both.len(),
+        "held_s_median": opt(median(&held)),
+        "rows": rows.into_iter().rev().take(limit).collect::<Vec<_>>(),
+    })
 }
 
 struct Row {
@@ -237,15 +329,9 @@ pub fn paper_results(records: &[Value], trades_limit: usize) -> Value {
                 i(st, "t_ns").filter(|t| *t != 0).unwrap_or((k.1.unwrap_or(0) + WINDOW_S) * 1_000_000_000);
             let on = days.entry(utc_day_ns(t)).or_default();
             on.settled += 1;
-            on.wins += u64::from(f(st, "payout").unwrap_or(0.0) > 0.0);
+            on.wins += u64::from(won(st));
             on.pnl += f(st, "pnl").unwrap_or(0.0);
-            on.cents.push(
-                100.0
-                    * (f(st, "payout").unwrap_or(0.0)
-                        - f(fl, "cost").unwrap_or(0.0)
-                        - f(fl, "fee").unwrap_or(0.0))
-                    / f(fl, "shares").unwrap_or(1.0),
-            );
+            on.cents.push(net_cents(st, fl));
         }
     }
     let mut daily = Vec::new();
@@ -312,14 +398,10 @@ pub fn paper_results(records: &[Value], trades_limit: usize) -> Value {
         rows.push(Row {
             asset: k.0.clone().unwrap_or_default(),
             sec: f(d, "sec_into").filter(|v| *v != 0.0).unwrap_or(0.0),
-            win: if f(st, "payout").unwrap_or(0.0) > 0.0 { 1.0 } else { 0.0 },
+            win: if won(st) { 1.0 } else { 0.0 },
             vwap: f(fl, "vwap").unwrap_or(0.0),
             implied: kalshi_implied(d, side),
-            cents: 100.0
-                * (f(st, "payout").unwrap_or(0.0)
-                    - f(fl, "cost").unwrap_or(0.0)
-                    - f(fl, "fee").unwrap_or(0.0))
-                / f(fl, "shares").unwrap_or(1.0),
+            cents: net_cents(st, fl),
             pnl: f(st, "pnl").unwrap_or(0.0),
             fee: f(fl, "fee").unwrap_or(0.0),
             t: i(fl, "t_ns").unwrap_or(0),
@@ -363,7 +445,7 @@ pub fn paper_results(records: &[Value], trades_limit: usize) -> Value {
     let invalid: i64 =
         windows.iter().map(|w| w.get("reasons").and_then(|r| i(r, "invalid_leg")).unwrap_or(0)).sum();
     let all_rows: Vec<&Row> = rows.iter().collect();
-    json!({
+    let mut out = json!({
         "quality": quality(&rows),
         "drawdown": drawdown(&rows.iter().map(|r| r.pnl).collect::<Vec<_>>()),
         "funnel": {
@@ -390,5 +472,13 @@ pub fn paper_results(records: &[Value], trades_limit: usize) -> Value {
         "by_asset": by_asset,
         "by_sec": by_sec,
         "execution": execution,
-    })
+    });
+    // Only journals with active exits carry the comparison.
+    let exits = exits_vs_hold(records, trades_limit);
+    if exits.get("n").and_then(Value::as_u64).unwrap_or(0) > 0
+        && let Some(o) = out.as_object_mut()
+    {
+        o.insert("exits".into(), exits);
+    }
+    out
 }

@@ -7,7 +7,8 @@
 //! - `capacity_usd_per_entry`: median $ filled per entry, per asset (an asset
 //!   under $10 cannot carry live size, whatever its edge).
 //!
-//! Per entry, net ¢/share = payout/share − VWAP − fee/share. Day-t is the mean
+//! Per entry, net ¢/share = the ledger's P&L over the shares filled (payout or
+//! the active exit's proceeds, less the VWAP and both fees). Day-t is the mean
 //! of daily net ¢/share over its standard error.
 
 use std::collections::BTreeMap;
@@ -104,9 +105,7 @@ pub fn evaluate(records: &[Value], max_entry_px: f64) -> Value {
     let mut settled: Vec<(Key, &Value, &Value, f64)> = Vec::new();
     for (k, s_) in &settles {
         let Some(fl) = fills.get(k) else { continue };
-        let per_share = 100.0
-            * ((f(s_, "payout").unwrap_or(0.0) - f(fl, "cost").unwrap_or(0.0) - f(fl, "fee").unwrap_or(0.0))
-                / f(fl, "shares").unwrap_or(1.0));
+        let per_share = crate::results::net_cents(s_, fl);
         settled.push((k.clone(), fl, s_, per_share));
     }
     let mut bands: BTreeMap<String, Vec<f64>> = BTreeMap::new();

@@ -3,11 +3,17 @@
 //! - **Probe** (paper with `PK_ORDER_PROBE=on`): every paper entry is mirrored
 //!   by a probe on the same token at the same moment (`pk_exec::probe`:
 //!   post-only, under the best bid, cancelled at once), and probes also run on
-//!   a cadence between decisions. Each round trip feeds the latency estimate;
-//!   its changes go back to the engine as `latency` control lines, so the paper
-//!   venue simulates the latency this host actually has.
+//!   a cadence between decisions. They time the order path, but they do not
+//!   feed the paper venue's latency: a post-only order skips the venue's taker
+//!   hold, so it measured ~50 ms where a real FAK takes ~250 ms.
+//! - **Latency** comes from live entries only: every FAK that got an answer
+//!   (filled or killed) is one decision → acknowledgement round trip. Its
+//!   changes go back to the engine as `latency` control lines, so the paper
+//!   venue simulates the latency a taker actually has.
 //! - **Live** (`PK_EXECUTION_MODE=live`): an entry is a real FAK buy
-//!   (`pk_exec::live`). Its result goes back as a `live_fill` line. A
+//!   (`pk_exec::live`). Its result goes back as a `live_fill` line. An
+//!   [`ExitIntent`] (the active exit) is a FAK sell under the bid; what it sold
+//!   goes back as a `live_exit` line with `reason: "fair"`. A
 //!   reconciler reads the wallet every [`RECONCILE_EVERY`] and after every
 //!   fill or redemption (`balance` lines, which also drive percentage sizing
 //!   when flat), checks for stray orders and for positions that don't match
@@ -34,7 +40,7 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use pk_core::fees::taker_fee;
-use pk_engine::{OrderIntent, PresignHint};
+use pk_engine::{ExitIntent, OrderIntent, PresignHint};
 use pk_exec::presign::PresignCache;
 use pk_exec::{
     ClobExec, LatencyEstimator, LiveExec, LiveLimits, OrderSigner, OrderTiming, Probe, ProbeLimits,
@@ -59,6 +65,7 @@ const SHARE_DRIFT: f64 = 0.01;
 pub enum ExecMsg {
     Intent(OrderIntent, Instant),
     Hint(PresignHint),
+    Exit(ExitIntent, Instant),
 }
 
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
@@ -338,6 +345,10 @@ impl<S: OrderSigner> ExecBridge<S> {
                         let _ = probe_tx.send((i, t_decision));
                     }
                 }
+                ExecMsg::Exit(x, t_decision) => {
+                    let this = self.clone();
+                    tokio::spawn(async move { this.exit_position(&x, t_decision).await });
+                }
             }
         }
     }
@@ -399,9 +410,6 @@ impl<S: OrderSigner> ExecBridge<S> {
         }
         for t in &out.records {
             self.record(t, &i.asset, i.open_unix);
-            if t.ok && t.kind_is_post() {
-                self.observe_latency(t.decision_to_ack_us);
-            }
         }
     }
 
@@ -416,9 +424,10 @@ impl<S: OrderSigner> ExecBridge<S> {
         };
         for t in &ex.records {
             self.record(t, &i.asset, i.open_unix);
-        }
-        if let Some(us) = ex.decision_to_ack_us {
-            self.observe_latency(us);
+            // A taker's round trip, filled or killed: an HTTP answer came back.
+            if t.kind_is_post() && t.status > 0 {
+                self.observe_latency(t.decision_to_ack_us);
+            }
         }
         {
             let mut s = self.status.lock();
@@ -469,6 +478,32 @@ impl<S: OrderSigner> ExecBridge<S> {
                 (self.hooks.kill)("balance_rejects", &format!("{n} balance/allowance rejects in a row"));
             }
         }
+    }
+
+    /// The active exit: sell the held leg with a FAK under the bid, and hand
+    /// what it sold to the engine (`live_exit`, `reason: "fair"`).
+    async fn exit_position(&self, x: &ExitIntent, t_decision: Instant) {
+        let Some(live) = &self.live else { return };
+        let Some(top) = self.top(&x.token, Some(x.bid), None).await else { return };
+        let shares = Decimal::from_f64(x.shares).unwrap_or_default();
+        let ticks = live.exec.limits.active_exit_ticks;
+        let ex = live.exec.exit_ticks(&x.token, shares, &top, ticks, t_decision).await;
+        for t in &ex.records {
+            self.record(t, &x.asset, x.open_unix);
+        }
+        if let Some(e) = ex.error.clone().or(ex.refused.clone()) {
+            self.status.lock().last_error = Some(format!("exit: {e}"));
+        }
+        if ex.shares <= 0.0 {
+            return;
+        }
+        let px = ex.usd / ex.shares;
+        let fee = taker_fee(px, ex.shares, x.fee_rate, x.fee_exponent);
+        (self.hooks.control)(json!({
+            "type": "live_exit", "asset": x.asset, "open_unix": x.open_unix, "reason": "fair",
+            "shares": ex.shares, "proceeds": ex.usd, "fee": fee, "order_id": ex.order_id,
+        }));
+        self.status.lock().exits += 1;
     }
 
     // --- live: reconciliation ----------------------------------------------------------
@@ -681,9 +716,6 @@ impl<S: OrderSigner> ExecBridge<S> {
         let out = self.probe.run_once(&token, &top, Instant::now(), Trigger::Cadence).await;
         for t in &out.records {
             self.record(t, "", 0);
-            if t.ok && t.kind_is_post() {
-                self.observe_latency(t.decision_to_ack_us);
-            }
         }
     }
 
