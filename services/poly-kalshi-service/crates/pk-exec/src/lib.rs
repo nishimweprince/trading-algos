@@ -16,6 +16,7 @@
 
 pub mod auth;
 pub mod clob;
+pub mod fast;
 pub mod gamma;
 pub mod latency;
 pub mod live;
@@ -26,7 +27,8 @@ pub mod relayer;
 pub mod signing;
 pub mod transport;
 
-pub use clob::{ClobExec, OrderTiming, Top, Trigger};
+pub use clob::{ClobExec, OrderTiming, RawReply, Top, Trigger};
+pub use fast::{FastReply, FastSender, SendError};
 pub use latency::{LatencyEstimator, LatencyNow};
 pub use live::{Executed, LiveExec, LiveLimits};
 pub use probe::{Probe, ProbeLimits};

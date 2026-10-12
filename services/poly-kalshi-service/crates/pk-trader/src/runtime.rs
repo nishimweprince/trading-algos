@@ -1,9 +1,10 @@
 //! The trader's runtime: the engine thread, and the window, resolution and
 //! health loops.
 //!
-//! - **Engine thread**: the trade path. Per line: forward to the observer
-//!   pipe, apply to the engine, hand any order intent to the order path. Its
-//!   queue delay (`queue_us`) and work (`engine_us`) are measured.
+//! - **Engine thread**: the trade path. Per line: apply to the engine, hand any
+//!   order intent to the order path and any arm update to the fast path, then
+//!   forward the line to the observer pipe (after, so a decision never waits on
+//!   it). Its queue delay (`queue_us`) and work (`engine_us`) are measured.
 //! - **Windows** (every 2 s): the current window and, inside
 //!   `PK_DISCOVER_LEAD_SECONDS`, the next one are identified for every asset
 //!   and written to the tape as control lines before their ids are subscribed.
@@ -67,6 +68,9 @@ pub struct Runtime {
     pub journal_direct: Option<SharedJournal>,
     pub exec: Mutex<Option<Arc<ExecBridge>>>,
     pub exec_tx: Mutex<Option<mpsc::UnboundedSender<ExecMsg>>>,
+    /// The armed trigger and its hot thread (live with `PK_FAST_PATH`).
+    pub fast: Mutex<Option<Arc<crate::fast::FastPath>>>,
+    pub hot: Mutex<Option<Value>>,
     pub started_ns: i64,
     pub lines: AtomicU64,
     pub engine_errors: AtomicU64,
@@ -108,6 +112,8 @@ impl Runtime {
             journal_direct,
             exec: Mutex::new(None),
             exec_tx: Mutex::new(None),
+            fast: Mutex::new(None),
+            hot: Mutex::new(None),
             started_ns: now_ns(),
             lines: AtomicU64::new(0),
             engine_errors: AtomicU64::new(0),
@@ -147,12 +153,7 @@ impl Runtime {
         while let Ok(Line { recv_ns, venue, text }) = rx.recv() {
             let picked = Instant::now();
             self.lines.fetch_add(1, Ordering::Relaxed);
-            if let Some(link) = &self.link {
-                link.line(recv_ns, venue, &text);
-            } else if let Some(r) = &self.recorder {
-                r.lock().write(venue, recv_ns, &text);
-            }
-            let (intents, hints, exits) = {
+            let (intents, hints, exits, arms, halted) = {
                 let mut e = self.engine.lock();
                 let queue_us = (now_ns() - recv_ns) as f64 / 1e3;
                 let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -166,12 +167,23 @@ impl Runtime {
                 }
                 e.metrics.add("engine_us", picked.elapsed().as_secs_f64() * 1e6);
                 e.metrics.add("queue_us", queue_us.max(0.0));
-                (std::mem::take(&mut e.intents), std::mem::take(&mut e.hints), std::mem::take(&mut e.exits))
+                (
+                    std::mem::take(&mut e.intents),
+                    std::mem::take(&mut e.hints),
+                    std::mem::take(&mut e.exits),
+                    std::mem::take(&mut e.arms),
+                    e.risk.halted,
+                )
             };
-            if intents.is_empty() && hints.is_empty() && exits.is_empty() {
-                continue;
+            if let Some(fast) = self.fast.lock().as_ref() {
+                fast.set_halted(halted);
+                if !arms.is_empty() {
+                    fast.update(arms);
+                }
             }
-            if let Some(tx) = self.exec_tx.lock().as_ref() {
+            if !(intents.is_empty() && hints.is_empty() && exits.is_empty())
+                && let Some(tx) = self.exec_tx.lock().as_ref()
+            {
                 for h in hints {
                     let _ = tx.send(ExecMsg::Hint(h));
                 }
@@ -181,6 +193,11 @@ impl Runtime {
                 for x in exits {
                     let _ = tx.send(ExecMsg::Exit(x, picked));
                 }
+            }
+            if let Some(link) = &self.link {
+                link.line(recv_ns, venue, &text);
+            } else if let Some(r) = &self.recorder {
+                r.lock().write(venue, recv_ns, &text);
             }
         }
         tracing::info!("engine thread stopped");
@@ -504,6 +521,9 @@ impl Runtime {
 
     pub fn kill(&self, source: &str, reason: &str) -> bool {
         let fired = self.engine.lock().risk.kill(source, reason);
+        if let Some(fast) = self.fast.lock().as_ref() {
+            fast.set_halted(true);
+        }
         self.cancel_orders_for_halt();
         if fired {
             self.alerts.send(
@@ -643,6 +663,11 @@ impl Runtime {
             },
             "observer": self.link.as_ref().map(|l| l.stats()).unwrap_or(json!({"enabled": false})),
             "order_path": self.exec.lock().as_ref().map(|x| x.stats()).unwrap_or(json!({"enabled": false})),
+            "fast_path": self.fast.lock().as_ref().map(|f| {
+                let mut v = f.stats();
+                v["hot_thread"] = self.hot.lock().clone().unwrap_or(Value::Null);
+                v
+            }).unwrap_or(json!({"enabled": false})),
             "alerts": self.alerts.snapshot(),
             "kalshi_closed": self.kalshi_closed.load(Ordering::Relaxed),
             "engine": engine_status,

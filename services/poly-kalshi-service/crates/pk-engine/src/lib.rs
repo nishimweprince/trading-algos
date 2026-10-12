@@ -40,6 +40,7 @@
 //! record with `outcome: "exit"`, so results count it like any other.
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 
 use pk_core::decision::{Action, Decision, StrategyParams, WINDOW_S, decide};
 use pk_core::exit::{EXIT_MIN_SHARES, kalshi_fair, should_exit};
@@ -55,10 +56,12 @@ use pk_core::window::{Window, secs_f64, window_open};
 use pk_core::{Book, BookSide, BookState, NS, Quote};
 use serde_json::{Map, Value, json};
 
+pub mod fast;
 pub mod paper;
 pub mod parse;
 pub mod reverse;
 
+pub use fast::{Arm, ArmSide, ArmUpdate, Claim, FastFire, FastGate};
 pub use paper::{FillResult, PaperVenue};
 
 pub const SERIES_POINTS: usize = 2 * WINDOW_S as usize;
@@ -324,6 +327,10 @@ pub struct Engine {
     exit_until: HashMap<String, i64>,
     shadow_latency_ns: Option<i64>,
     shadow_fills: Vec<ShadowFill>,
+    /// The armed trigger (live trade engine only), and what it was last given per asset.
+    fast_gate: Option<Arc<dyn FastGate>>,
+    pub arms: Vec<ArmUpdate>,
+    armed: Vec<Option<Arm>>,
     prev_p_ns: Option<i64>,
     last_reconnect_p_ns: Option<i64>,
 }
@@ -388,6 +395,9 @@ impl Engine {
             exit_until: HashMap::new(),
             shadow_latency_ns: cfg.shadow_latency_ns,
             shadow_fills: Vec::new(),
+            fast_gate: None,
+            arms: Vec::new(),
+            armed: vec![None; n],
             prev_p_ns: None,
             last_reconnect_p_ns: None,
             assets: cfg.assets,
@@ -400,6 +410,13 @@ impl Engine {
 
     pub fn set_journal(&mut self, journal: Box<dyn Sink + Send>) {
         self.journal = journal;
+    }
+
+    /// Arm the fast path ([`fast`]): live trade engines only.
+    pub fn set_fast_gate(&mut self, gate: Arc<dyn FastGate>) {
+        if self.live && self.trade {
+            self.fast_gate = Some(gate);
+        }
     }
 
     pub(crate) fn count(&mut self, key: &str) {
@@ -925,8 +942,23 @@ impl Engine {
         if self.state[idx].traded {
             return;
         }
+        // The armed trigger may have sent this window's entry already.
+        let fast_fire = match &self.fast_gate {
+            Some(g) if self.trade => g.fired(&window.asset, window.open_unix),
+            _ => None,
+        };
         let lags = self.params.max_poly_lag_ms.map(|_| self.lags(&window));
-        let mut decision = decide(&k, &y, &n, &self.params, sec_into, false, None, lags);
+        let mut decision = match &fast_fire {
+            Some(f) => Decision {
+                action: Action::Enter,
+                reason: "",
+                gap: Some(f.gap),
+                buy_yes: Some(f.buy_yes),
+                entry_px: Some(f.entry_px),
+                contracts: f.contracts,
+            },
+            None => decide(&k, &y, &n, &self.params, sec_into, false, None, lags),
+        };
         self.state[idx].evals += 1;
         if self.observe {
             self.state[idx].count_reason(decision.label());
@@ -942,10 +974,12 @@ impl Engine {
         if !decision.consumes_window() {
             if self.emit_intents && self.trade {
                 self.maybe_hint(idx, &window, &decision, recv_ns);
+                self.maybe_arm(idx, &window, (&y, &n), &decision, recv_ns);
             }
             return;
         }
         self.state[idx].traded = true;
+        self.disarm(idx);
         if !self.trade {
             // The observer consumes the window as the trader did; the trader
             // writes the decision record and places the order.
@@ -958,12 +992,12 @@ impl Engine {
             self.state[idx].decision = Some(d);
             return;
         }
-        if decision.action == Action::Enter && self.size_at_limit {
+        if decision.action == Action::Enter && self.size_at_limit && fast_fire.is_none() {
             // A FAK spends up to shares × limit: size so that stays the notional.
             let limit = self.limit_px(decision.entry_px.expect("an entry has a price"));
             decision.contracts = ((self.params.notional_usd / limit).floor() as i64).max(1);
         }
-        if decision.action == Action::Enter && self.size_to_depth {
+        if decision.action == Action::Enter && self.size_to_depth && fast_fire.is_none() {
             let entry = decision.entry_px.expect("an entry has a price");
             let offered = self.depth(&window, decision.buy_yes == Some(true), self.limit_px(entry));
             let capped = decision.contracts.min(offered.floor() as i64).max(1);
@@ -1018,8 +1052,13 @@ impl Engine {
         {
             self.age_outlier(&window, &decision, age, recv_ns);
         }
+        if let Some(f) = &fast_fire {
+            record.insert("fast".into(), true.into());
+            record.insert("fast_t_ns".into(), f.t_ns.into());
+            record.insert("limit_px".into(), f.limit_px.into());
+        }
         if decision.action == Action::Enter {
-            let blocked = self.submit(&window, &decision, recv_ns);
+            let blocked = self.submit(&window, &decision, recv_ns, fast_fire.is_some());
             record.insert("blocked".into(), blocked.into());
         }
         self.state[idx].decision = Some(record.clone());
@@ -1120,7 +1159,10 @@ impl Engine {
         }
     }
 
-    fn submit(&mut self, w: &Window, d: &Decision, recv_ns: i64) -> Option<String> {
+    /// `fast`: the armed trigger already sent this entry; reserve and shadow it,
+    /// but do not send it again. The risk check applies to it as to any entry
+    /// (the trigger is only armed while it passes, and is disarmed on a halt).
+    fn submit(&mut self, w: &Window, d: &Decision, recv_ns: i64, fast: bool) -> Option<String> {
         let Some(venue) = self.venue else { return Some("mode_off".into()) };
         let entry = d.entry_px.expect("an entry has a price");
         // The most the order can cost: at its limit when sized there.
@@ -1157,7 +1199,22 @@ impl Engine {
             self.ledger.reserve(&format!("{}:{}", w.asset, w.open_unix), est);
             self.count("live_orders");
         }
-        if self.emit_intents {
+        // One order per window: claim it, unless the trigger already did.
+        let send = !fast
+            && match &self.fast_gate {
+                Some(g) => match g.claim(&w.asset, w.open_unix) {
+                    Claim::Engine => true,
+                    Claim::Fast(_) => {
+                        self.count("fast_raced");
+                        false
+                    }
+                },
+                None => true,
+            };
+        if fast {
+            self.count("fast_entries");
+        }
+        if self.emit_intents && send {
             let book = self.books.get(&token);
             self.intents.push(OrderIntent {
                 best_bid: book.and_then(Book::best_bid),
@@ -1291,6 +1348,76 @@ impl Engine {
                 }
             }
             self.shadow.set_fill(&sf.key, &sf.variant, (got, if got > 0.0 { cost / got } else { 0.0 }));
+        }
+    }
+
+    /// Arm the trigger for an asset whose gap nears the threshold, at the
+    /// Polymarket quotes now; disarm it otherwise. Armed only while the risk
+    /// check passes for the larger side; sent again only on a change.
+    fn maybe_arm(&mut self, idx: usize, w: &Window, (y, n): (&Quote, &Quote), d: &Decision, recv_ns: i64) {
+        if self.fast_gate.is_none() {
+            return;
+        }
+        let near = d.reason == "below_threshold"
+            && d.gap.is_some_and(|g| g.abs() >= self.params.gap_threshold * PRESIGN_FRACTION);
+        if !near || self.risk.halted {
+            self.disarm(idx);
+            return;
+        }
+        let side = |q: &Quote, token: &str| -> Option<ArmSide> {
+            let entry = q.ask.filter(|a| q.valid && *a > 0.0 && *a < 1.0 && *a <= self.params.max_entry_px)?;
+            let limit = self.limit_px(entry);
+            let px = if self.size_at_limit { limit } else { entry };
+            let contracts = (self.params.notional_usd / px).floor() as i64;
+            (contracts >= 1).then(|| ArmSide {
+                token: token.to_owned(),
+                entry_px: entry,
+                limit_px: limit,
+                contracts,
+                reserved: round_dp(
+                    contracts as f64 * px + taker_fee(px, contracts as f64, w.fee_rate, w.fee_exponent),
+                    4,
+                ),
+            })
+        };
+        let arm = Arm {
+            asset: w.asset.clone(),
+            open_unix: w.open_unix,
+            kalshi_ticker: w.kalshi_ticker.clone(),
+            condition_id: w.condition_id.clone(),
+            poly_yes: *y,
+            poly_no: *n,
+            params: self.params.clone(),
+            yes: side(y, &w.yes_token),
+            no: side(n, &w.no_token),
+            fee_rate: w.fee_rate,
+            fee_exponent: w.fee_exponent,
+        };
+        let worst = arm.yes.iter().chain(&arm.no).map(|s| s.reserved).fold(0.0, f64::max);
+        if worst <= 0.0 || self.risk.check(&self.ledger, worst, recv_ns).is_some() {
+            self.disarm(idx);
+            return;
+        }
+        if self.armed[idx].as_ref() == Some(&arm) {
+            return;
+        }
+        if self.armed[idx].as_ref().is_some_and(|a| a.kalshi_ticker != arm.kalshi_ticker) {
+            self.disarm(idx);
+        }
+        self.armed[idx] = Some(arm.clone());
+        self.arms.push(ArmUpdate::Arm(arm));
+    }
+
+    fn disarm(&mut self, idx: usize) {
+        if let Some(a) = self.armed.get_mut(idx).and_then(Option::take) {
+            self.arms.push(ArmUpdate::Disarm { kalshi_ticker: a.kalshi_ticker });
+        }
+    }
+
+    /// Disarm everything (a halt).
+    pub fn disarm_all(&mut self) {
+        for idx in 0..self.armed.len() {
+            self.disarm(idx);
         }
     }
 

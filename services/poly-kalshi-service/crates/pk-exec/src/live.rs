@@ -213,6 +213,12 @@ impl<S: OrderSigner> LiveExec<S> {
 
     async fn execute(&self, spec: &OrderSpec, t_decision: Instant) -> Executed {
         let (ack, timing) = self.exec.post(spec, t_decision, Trigger::Decision).await;
+        self.finish_post(spec, ack, timing).await
+    }
+
+    /// A post's result, from its acknowledgement or by polling the order: shared
+    /// by the normal path and the fast path's own connection.
+    pub async fn finish_post(&self, spec: &OrderSpec, ack: Option<PostAck>, timing: OrderTiming) -> Executed {
         let mut out = Executed {
             order_id: timing.order_id.clone(),
             status: timing.venue_status.clone(),

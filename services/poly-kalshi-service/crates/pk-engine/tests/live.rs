@@ -346,3 +346,103 @@ fn live_active_exit_is_an_intent_and_its_result_closes() {
     assert_eq!(sink.of("settle")[0]["outcome"], "exit");
     assert_eq!(e.ledger.open_positions().count(), 0);
 }
+
+#[derive(Default)]
+struct MockGate {
+    fire: Mutex<Option<pk_engine::FastFire>>,
+    fast_claimed: bool,
+    claims: Mutex<u32>,
+}
+
+impl pk_engine::FastGate for MockGate {
+    fn fired(&self, _asset: &str, _open: i64) -> Option<pk_engine::FastFire> {
+        self.fire.lock().unwrap().take()
+    }
+    fn claim(&self, asset: &str, open: i64) -> pk_engine::Claim {
+        *self.claims.lock().unwrap() += 1;
+        if self.fast_claimed {
+            let f = pk_engine::FastFire {
+                asset: asset.into(),
+                open_unix: open,
+                buy_yes: true,
+                entry_px: 0.46,
+                limit_px: 0.46,
+                contracts: 10,
+                gap: 0.25,
+                t_ns: 0,
+            };
+            pk_engine::Claim::Fast(f)
+        } else {
+            pk_engine::Claim::Engine
+        }
+    }
+}
+
+/// Kalshi to 0.57 / 0.59 (mid 0.58): a 0.13 gap, near the 0.15 threshold.
+fn near(e: &mut Engine, s: f64) {
+    let bid = json!({"type":"orderbook_delta","msg":{"market_ticker":"KXBTC15M-X",
+        "price_dollars":"0.5700","delta_fp":"10","side":"yes"}});
+    let drop_ask = json!({"type":"orderbook_delta","msg":{"market_ticker":"KXBTC15M-X",
+        "price_dollars":"0.5300","delta_fp":"-10","side":"no"}});
+    let ask = json!({"type":"orderbook_delta","msg":{"market_ticker":"KXBTC15M-X",
+        "price_dollars":"0.4100","delta_fp":"10","side":"no"}});
+    e.handle_line(at(s), 'k', &bid.to_string());
+    e.handle_line(at(s + 0.01), 'k', &drop_ask.to_string());
+    e.handle_line(at(s + 0.02), 'k', &ask.to_string());
+}
+
+fn gated(gate: Arc<MockGate>) -> (Engine, Shared) {
+    let (mut e, sink) = engine(Opts { live: true, pct: 5.0, cash: 0.0, ..Default::default() });
+    e.set_fast_gate(gate);
+    setup(&mut e);
+    ctl(&mut e, 1.0, json!({"type":"balance","balance":100.0}));
+    (e, sink)
+}
+
+#[test]
+fn the_engine_arms_near_the_threshold_and_records_a_fast_entry() {
+    let gate = Arc::new(MockGate::default());
+    let (mut e, sink) = gated(gate.clone());
+    near(&mut e, 25.0);
+    let arms = std::mem::take(&mut e.arms);
+    let arm = arms
+        .iter()
+        .find_map(|u| match u {
+            pk_engine::ArmUpdate::Arm(a) => Some(a.clone()),
+            _ => None,
+        })
+        .expect("armed");
+    let yes = arm.yes.as_ref().unwrap();
+    assert_eq!((yes.token.as_str(), yes.entry_px, yes.contracts), ("Y", 0.46, 10));
+    assert_eq!(arm.poly_yes.ask, Some(0.46));
+    // The trigger sent the entry on the next Kalshi frame; the engine records it.
+    *gate.fire.lock().unwrap() = Some(pk_engine::FastFire {
+        asset: "BTC".into(),
+        open_unix: OPEN,
+        buy_yes: true,
+        entry_px: 0.46,
+        limit_px: 0.46,
+        contracts: 10,
+        gap: 0.25,
+        t_ns: at(30.0),
+    });
+    cross(&mut e, 30.0);
+    let d = &sink.of("decision")[0];
+    assert_eq!(d["action"], "enter");
+    assert_eq!((d["fast"].as_bool(), d["contracts"].as_i64()), (Some(true), Some(10)));
+    assert!(e.intents.is_empty(), "a fast entry is not sent again");
+    assert_eq!(e.ledger.in_flight(), 1);
+    assert_eq!(*gate.claims.lock().unwrap(), 0);
+    assert!(e.arms.iter().any(|u| matches!(u, pk_engine::ArmUpdate::Disarm { .. })));
+}
+
+#[test]
+fn the_engine_does_not_send_a_window_the_trigger_claimed() {
+    let gate = Arc::new(MockGate { fast_claimed: true, ..Default::default() });
+    let (mut e, sink) = gated(gate.clone());
+    cross(&mut e, 30.0);
+    assert_eq!(sink.of("decision")[0]["action"], "enter");
+    assert!(e.intents.is_empty());
+    assert_eq!(*gate.claims.lock().unwrap(), 1);
+    assert_eq!(e.counters.get("fast_raced"), Some(&1));
+}

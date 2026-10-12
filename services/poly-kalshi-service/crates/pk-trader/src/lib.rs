@@ -13,6 +13,8 @@
 
 pub mod api;
 pub mod exec_bridge;
+pub mod fast;
+pub mod hot;
 pub mod ingest;
 pub mod link;
 pub mod observer;

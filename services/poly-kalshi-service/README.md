@@ -142,6 +142,18 @@ Funds at another address (for example the deposit wallet while
   `venue: "live"` in the paper schema, so `pk readout` and the gates read live
   fills unchanged. The paper venue still simulates each order as a shadow
   (`paper_fill` records), which gives the live-vs-paper comparison.
+- **Fast path** (`PK_FAST_PATH`, `pk_trader::fast`, `pk_trader::hot`). When an
+  asset's gap nears the threshold the engine arms it (its Polymarket quotes, the
+  rule's parameters, the entry per side); the order for each side is signed and
+  built as HTTP/1.1 bytes ahead, with its L2 headers re-signed every 2 s. The
+  Kalshi feed runs on a thread pinned to one core and busy-polling its socket;
+  each frame updates its own copy of the Kalshi book and runs `decide()` on the
+  armed quotes, and on an entry the bytes go out on a warm connection from that
+  thread. The engine claims nothing twice: the trigger and the engine claim a
+  window before sending, and the engine records the trigger's entry (`"fast":
+  true`) when it reaches the frame. The reply goes through the usual result
+  path. At start an empty signed `POST /order` checks that the venue accepts
+  the fast path's headers. The status page shows frame → wire p50/p99.
 - **Active exit** (`PK_ACTIVE_EXIT`). While a position is open the engine checks
   it on every update: once the held leg's best bid is within 1¢ of Kalshi's
   price for that side (Kalshi spread ≤ 2¢) and above the entry, it writes an

@@ -66,6 +66,18 @@ pub enum ExecMsg {
     Intent(OrderIntent, Instant),
     Hint(PresignHint),
     Exit(ExitIntent, Instant),
+    /// The armed trigger's entry got its reply on the fast path's connection.
+    FastResult(Box<FastResult>),
+}
+
+/// An entry the fast path sent, with the reply its connection read.
+pub struct FastResult {
+    pub intent: OrderIntent,
+    pub spec: pk_exec::OrderSpec,
+    pub reply: pk_exec::FastReply,
+    /// When the triggering Kalshi frame arrived.
+    pub t_frame: Instant,
+    pub frame_ns: i64,
 }
 
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
@@ -280,6 +292,21 @@ impl<S: OrderSigner> ExecBridge<S> {
         })
     }
 
+    /// The order path (the fast path signs with its signer).
+    pub fn clob(&self) -> &Arc<ClobExec<S>> {
+        &self.probe.exec
+    }
+
+    /// The live entry limits, when live.
+    pub fn live_limits(&self) -> Option<LiveLimits> {
+        self.live.as_ref().map(|l| l.exec.limits.clone())
+    }
+
+    /// A token's touch with its tick and minimum size (meta cached).
+    pub async fn top_for(&self, token: &str, bid: Option<f64>, ask: Option<f64>) -> Option<Top> {
+        self.top(token, bid, ask).await
+    }
+
     fn exec(&self) -> &Arc<ClobExec<S>> {
         &self.probe.exec
     }
@@ -348,6 +375,10 @@ impl<S: OrderSigner> ExecBridge<S> {
                 ExecMsg::Exit(x, t_decision) => {
                     let this = self.clone();
                     tokio::spawn(async move { this.exit_position(&x, t_decision).await });
+                }
+                ExecMsg::FastResult(r) => {
+                    let this = self.clone();
+                    tokio::spawn(async move { this.fast_result(*r).await });
                 }
             }
         }
@@ -422,6 +453,30 @@ impl<S: OrderSigner> ExecBridge<S> {
             Some(top) => live.exec.enter(&i.token, limit, Decimal::from(i.contracts), top, t_decision).await,
             None => pk_exec::Executed { refused: Some("no book meta".into()), ..Default::default() },
         };
+        self.after_entry(i, ex);
+    }
+
+    /// The fast path's entry: its reply read as a post's, then the same result
+    /// handling as any entry (polling an unreported match included).
+    async fn fast_result(&self, r: FastResult) {
+        let Some(live) = &self.live else { return };
+        let us = |a: Instant, b: Instant| b.saturating_duration_since(a).as_micros() as u64;
+        let raw = pk_exec::RawReply { status: r.reply.status, body: r.reply.body, error: r.reply.error };
+        let times = (
+            us(r.t_frame, r.reply.t_written),
+            us(r.t_frame, r.reply.t_reply),
+            us(r.reply.t_written, r.reply.t_reply),
+        );
+        let (ack, timing) = self.exec().raw_post(&r.spec, r.frame_ns.max(0) as u64, &raw, times);
+        let ex = live.exec.finish_post(&r.spec, ack, timing).await;
+        self.after_entry(&r.intent, ex);
+    }
+
+    /// An entry's records, latency, status, `live_fill` line and alerts.
+    fn after_entry(&self, i: &OrderIntent, ex: pk_exec::Executed) {
+        if self.live.is_none() {
+            return;
+        }
         for t in &ex.records {
             self.record(t, &i.asset, i.open_unix);
             // A taker's round trip, filled or killed: an HTTP answer came back.

@@ -41,6 +41,9 @@ futures-util = "0.3"
 rsa = { version = "0.9", features = ["sha2"] }
 rand = "0.8"
 rustls = { version = "0.23", features = ["ring"] }
+webpki-roots = "1"
+httparse = "1"
+core_affinity = "0.8"
 flate2 = "1"
 zstd = "0.13"
 fs2 = "0.4"

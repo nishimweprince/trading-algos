@@ -228,6 +228,11 @@ impl WarmHttp {
         Ok(resp)
     }
 
+    /// The base URL this connection serves (the fast path opens its own to it).
+    pub fn base_url(&self) -> String {
+        self.cfg.base.to_string()
+    }
+
     pub fn stats(&self) -> WarmStats {
         WarmStats {
             host: self.host.clone(),

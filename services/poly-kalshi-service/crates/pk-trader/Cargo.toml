@@ -36,6 +36,7 @@ pk-svc.workspace = true
 pk-feeds.workspace = true
 pk-exec.workspace = true
 pk-stats.workspace = true
+core_affinity.workspace = true
 
 [lints]
 workspace = true

@@ -79,6 +79,15 @@ pub struct Settings {
     pub size_at_limit: bool,
     /// Shadow entries are also scored with a FAK priced this long after the decision.
     pub shadow_latency_ms: i64,
+    /// The armed trigger (live only): Kalshi frame → pre-built order on the
+    /// Kalshi feed's own pinned thread (`pk_trader::fast`, `pk_trader::hot`).
+    pub fast_path: bool,
+    /// Warm HTTP/1.1 connections the fast path keeps to the CLOB.
+    pub fast_conns: usize,
+    /// The core the hot thread is pinned to (None: the last core).
+    pub hot_core: Option<usize>,
+    /// Busy-poll on the hot thread (one core at 100%) instead of sleeping in epoll.
+    pub hot_spin: bool,
     pub paper_start_cash_usd: f64,
     pub max_open_notional_usd: f64,
     pub daily_loss_limit_usd: f64,
@@ -415,6 +424,13 @@ impl Settings {
             active_exit: e.flag("PK_ACTIVE_EXIT", true)?,
             size_at_limit: e.flag("PK_SIZE_AT_LIMIT", true)?,
             shadow_latency_ms,
+            fast_path: e.flag("PK_FAST_PATH", false)?,
+            fast_conns: e.num::<usize>("PK_FAST_CONNS", 3)?.clamp(1, 16),
+            hot_core: match e.num::<i64>("PK_HOT_CORE", -1)? {
+                c if c >= 0 => Some(c as usize),
+                _ => None,
+            },
+            hot_spin: e.flag("PK_HOT_SPIN", true)?,
             paper_start_cash_usd: e.num("PK_PAPER_START_CASH_USD", 1000.0)?,
             max_open_notional_usd: max_open,
             daily_loss_limit_usd: daily_loss,

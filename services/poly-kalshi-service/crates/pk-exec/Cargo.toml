@@ -25,6 +25,9 @@ parking_lot.workspace = true
 secrecy.workspace = true
 url.workspace = true
 pk-stats.workspace = true
+rustls.workspace = true
+webpki-roots.workspace = true
+httparse.workspace = true
 
 [dev-dependencies]
 axum.workspace = true

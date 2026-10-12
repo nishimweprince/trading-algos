@@ -2,8 +2,12 @@
 //! sends real orders once its guards pass (see `pk_svc::config`). Live, an
 //! order path that does not start is fatal: the process exits non-zero so
 //! systemd's `OnFailure` alert fires, rather than trading blind.
+//!
+//! With `PK_FAST_PATH` (live), the Kalshi feed runs on the pinned hot thread
+//! (`pk_trader::hot`) and each of its frames goes through the armed trigger
+//! (`pk_trader::fast`) before it is queued for the engine.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use clap::Parser;
@@ -15,6 +19,8 @@ use pk_feeds::{Discovery, Emit, FeedKind, KalshiSigner, PolyShards, spawn_feed};
 use pk_svc::{Alerts, Notifier, Settings};
 use pk_tape::Recorder;
 use pk_trader::exec_bridge::{BridgeConfig, ExecBridge, Hooks, RedeemConfig};
+use pk_trader::fast::FastPath;
+use pk_trader::hot::HotThread;
 use pk_trader::ingest::Ingest;
 use pk_trader::link::{LinkSink, ObserverLink};
 use pk_trader::observer::SharedJournal;
@@ -104,9 +110,33 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
         let ingest = ingest.clone();
         Arc::new(move |venue, text| ingest.push(venue, text))
     };
+    // The fast path: the Kalshi feed on its own pinned thread, each frame
+    // checked by the armed trigger before it is queued.
+    let fast_slot: Arc<OnceLock<Arc<FastPath>>> = Arc::default();
+    let hot = if live && settings.fast_path {
+        Some(HotThread::start(settings.hot_core, settings.hot_spin)?)
+    } else {
+        None
+    };
+    let kalshi_emit: Emit = {
+        let (ingest, slot) = (ingest.clone(), fast_slot.clone());
+        Arc::new(move |venue, text: String| {
+            if let Some(fast) = slot.get() {
+                match venue {
+                    'k' => fast.on_kalshi(&text),
+                    'c' => fast.on_control(&text),
+                    _ => {}
+                }
+            }
+            ingest.push(venue, text)
+        })
+    };
     let pem = std::fs::read_to_string(&settings.kalshi_private_key_path)?;
     let signer = Arc::new(KalshiSigner::from_pem(&settings.kalshi_api_key_id, &pem)?);
-    let kalshi = spawn_feed(settings.kalshi_ws_url.clone(), FeedKind::Kalshi { signer }, emit.clone());
+    let kalshi = {
+        let _on_hot = hot.as_ref().map(|h| h.handle.enter());
+        spawn_feed(settings.kalshi_ws_url.clone(), FeedKind::Kalshi { signer }, kalshi_emit)
+    };
     let poly = PolyShards::spawn(&settings.poly_ws_url, emit, &settings.assets, settings.poly_sockets);
     let discovery = Discovery::new(&settings.poly_gamma_url, &settings.kalshi_rest_url);
 
@@ -201,7 +231,29 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
             Ok(bridge) => {
                 let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
                 *rt.exec.lock() = Some(bridge.clone());
-                *rt.exec_tx.lock() = Some(tx);
+                *rt.exec_tx.lock() = Some(tx.clone());
+                if let Some(h) = &hot {
+                    let rt_handle = tokio::runtime::Handle::current();
+                    match FastPath::new(bridge.clone(), settings.fast_conns, tx, rt_handle) {
+                        Ok(fast) => {
+                            rt.engine.lock().set_fast_gate(fast.clone());
+                            *rt.fast.lock() = Some(fast.clone());
+                            *rt.hot.lock() = Some(h.stats());
+                            tokio::spawn(fast.clone().refresh_loop());
+                            let _ = fast_slot.set(fast);
+                            tracing::info!(conns = settings.fast_conns, "fast_path_ready");
+                        }
+                        Err(e) => {
+                            tracing::error!(error = %format!("{e:#}"), "fast path did not start");
+                            rt.alerts.send(
+                                "fast_path",
+                                "poly-kalshi: the fast path did not start; the normal order path trades",
+                                vec![format!("{e:#}")],
+                                true,
+                            );
+                        }
+                    }
+                }
                 if live {
                     // Nothing of ours should rest; then read the wallet before trading.
                     bridge.cancel_all().await;

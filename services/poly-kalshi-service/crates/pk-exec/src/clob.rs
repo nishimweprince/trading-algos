@@ -67,6 +67,21 @@ pub struct OrderTiming {
     pub error: Option<String>,
     pub making: Option<String>,
     pub taking: Option<String>,
+    /// The fast path: the triggering Kalshi frame's arrival → the order's bytes
+    /// written to the socket, on this host's clock.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame_to_wire_us: Option<u64>,
+    /// `"fast"` when the armed trigger sent it, else absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<&'static str>,
+}
+
+/// What the fast path's own connection got back for a POST /order.
+#[derive(Clone, Debug)]
+pub struct RawReply {
+    pub status: u16,
+    pub body: Vec<u8>,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -227,23 +242,50 @@ impl<S: OrderSigner> ClobExec<S> {
         let mut timing = self.timing(Kind::Post, trigger, t_ns, Some(spec), presigned, sign_time);
         timing.decision_to_write_us = us(t_write - t_decision);
         let ack = self.finish(&mut timing, result, t_decision, t_write).await;
-        let ack: Option<PostAck> = ack.and_then(|b| match serde_json::from_slice::<PostAck>(&b) {
-            Ok(a) => Some(a),
-            Err(e) => {
-                timing.error.get_or_insert_with(|| format!("ack: {e}"));
+        let ack = apply_ack(&mut timing, ack.as_deref());
+        self.count_post(&timing);
+        (ack, timing)
+    }
+
+    /// A POST /order the fast path sent on its own connection: the same
+    /// `order_timing` record, acknowledgement and statistics as [`Self::post`].
+    /// Times are µs: frame → bytes written, frame → acknowledgement, written →
+    /// acknowledgement.
+    pub fn raw_post(
+        &self,
+        spec: &OrderSpec,
+        t_ns: u64,
+        reply: &RawReply,
+        (frame_to_wire_us, frame_to_ack_us, write_to_ack_us): (u64, u64, u64),
+    ) -> (Option<PostAck>, OrderTiming) {
+        let mut timing = self.timing(Kind::Post, Trigger::Decision, t_ns, Some(spec), true, Duration::ZERO);
+        timing.path = Some("fast");
+        timing.http = "HTTP/1.1".into();
+        timing.frame_to_wire_us = Some(frame_to_wire_us);
+        timing.decision_to_write_us = frame_to_wire_us;
+        timing.write_to_headers_us = write_to_ack_us;
+        timing.decision_to_ack_us = frame_to_ack_us;
+        timing.status = reply.status;
+        let body = match &reply.error {
+            Some(e) => {
+                timing.error = Some(format!("send: {e}"));
                 None
             }
-        });
-        if let Some(a) = &ack {
-            timing.ok = timing.ok && a.success;
-            timing.order_id = (!a.order_id.is_empty()).then(|| a.order_id.clone());
-            timing.venue_status = a.status.clone();
-            timing.making = a.making_amount.clone();
-            timing.taking = a.taking_amount.clone();
-            if let Some(msg) = a.error_msg.as_ref().filter(|m| !m.is_empty()) {
-                timing.error.get_or_insert_with(|| msg.clone());
+            None => {
+                timing.ok = reply.status == 200;
+                if !timing.ok {
+                    let n = reply.body.len().min(300);
+                    timing.error = Some(String::from_utf8_lossy(&reply.body[..n]).into_owned());
+                }
+                Some(reply.body.as_slice())
             }
-        }
+        };
+        let ack = apply_ack(&mut timing, body);
+        self.count_post(&timing);
+        (ack, timing)
+    }
+
+    fn count_post(&self, timing: &OrderTiming) {
         let mut stats = self.stats.lock();
         stats.posts += 1;
         if timing.ok {
@@ -253,7 +295,6 @@ impl<S: OrderSigner> ClobExec<S> {
         } else {
             stats.post_errors += 1;
         }
-        (ack, timing)
     }
 
     pub async fn cancel(&self, order_id: &str, trigger: Trigger) -> (Option<CancelAck>, OrderTiming) {
@@ -370,6 +411,8 @@ impl<S: OrderSigner> ClobExec<S> {
             error: None,
             making: None,
             taking: None,
+            frame_to_wire_us: None,
+            path: None,
         }
     }
 
@@ -428,6 +471,28 @@ impl<S: OrderSigner> ClobExec<S> {
             connection: self.http.stats(),
         }
     }
+}
+
+/// Read a POST /order acknowledgement into its timing record.
+fn apply_ack(timing: &mut OrderTiming, body: Option<&[u8]>) -> Option<PostAck> {
+    let ack = body.and_then(|b| match serde_json::from_slice::<PostAck>(b) {
+        Ok(a) => Some(a),
+        Err(e) => {
+            timing.error.get_or_insert_with(|| format!("ack: {e}"));
+            None
+        }
+    });
+    if let Some(a) = &ack {
+        timing.ok = timing.ok && a.success;
+        timing.order_id = (!a.order_id.is_empty()).then(|| a.order_id.clone());
+        timing.venue_status = a.status.clone();
+        timing.making = a.making_amount.clone();
+        timing.taking = a.taking_amount.clone();
+        if let Some(msg) = a.error_msg.as_ref().filter(|m| !m.is_empty()) {
+            timing.error.get_or_insert_with(|| msg.clone());
+        }
+    }
+    ack
 }
 
 const fn sign_time_zero() -> Duration {

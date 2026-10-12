@@ -199,6 +199,7 @@ pub fn pick(status: Option<&Value>) -> Option<Value> {
         "latency": engine.get("latency"),
         "observer": keep(st.get("observer"), &["enabled", "alive", "spawns", "dropped", "buffer_bytes", "fallback_writes", "behind_ms", "gaps", "engine_errors", "polybolt", "binance"]),
         "leadlag": st.get("leadlag"),
+        "fast_path": st.get("fast_path"),
         "host_load": st.get("host_load"),
         "telegram": keep(st.get("telegram"), &["handled", "errors", "conflicts"]),
         "ledger": engine.get("ledger"),
