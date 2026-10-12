@@ -1,0 +1,26 @@
+[Unit]
+Description=pump-desk live migration racer
+After=network-online.target chrony.service
+Wants=network-online.target
+# A crash loop must not hammer the chain: give up after 5 restarts in 5 minutes.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@ROOT@
+EnvironmentFile=@ROOT@/.env
+ExecStart=@ROOT@/build/pump-desk --config @ROOT@/pump-desk.toml
+# Hot threads pin themselves to cpus 1-3 (threads.*_cpu). With isolcpus=1-3 on the kernel
+# command line nothing else is scheduled there; aux/writer threads float on the rest.
+LimitMEMLOCK=infinity
+LimitNOFILE=65536
+AmbientCapabilities=CAP_SYS_NICE CAP_IPC_LOCK
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

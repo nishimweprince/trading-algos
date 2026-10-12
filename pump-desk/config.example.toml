@@ -1,0 +1,117 @@
+# pump-desk configuration. Every key is optional; the values below are the
+# defaults (the live pump-fun config.yaml of 2026-10-06 and the racer schema).
+# Secrets come from the environment, never this file:
+#   HELIUS_GRPC_URL, HELIUS_GRPC_TOKEN, HELIUS_HTTP_URL, WALLET_PRIVATE_KEY
+#   (optional) SENDER_URL, JITO_URL
+# THIS BOT TRADES LIVE. There is no dry-run.
+
+[stream]
+# endpoint = "https://laserstream-mainnet-fra.helius-rpc.com"   # else HELIUS_GRPC_URL
+band_values = 12              # stream curves with < 12 * 2^40 raw tokens left (~5.2 SOL to complete)
+ping_interval_ms = 10000
+reconnect_min_ms = 1000
+reconnect_max_ms = 30000
+gap_silence_ms = 3000
+gap_slot_jump = 12
+silence_reconnect_ms = 30000
+
+[rpc]
+# http_url = "https://mainnet.helius-rpc.com/?api-key=..."      # else HELIUS_HTTP_URL
+blockhash_refresh_ms = 2000
+amm_config_refresh_ms = 30000
+balance_refresh_ms = 30000
+timeout_ms = 5000
+
+[racer]
+admit_cost_sol = 5            # track curves this close to completing
+max_completion_cost_sol = 0.5 # fire (arm the buy) at or below this
+curve_fee_bps = 125
+track_window_minutes = 120
+complete_no_pool_sec = 120
+pool_push_wait_ms = 20        # migrate tx first: wait this long for the pool push (true virtual reserve)
+default_virtual_quote_lamports = 17584492770
+
+[screen]
+min_pool_sol = 25             # real SOL in the quote vault
+max_pool_sol = 100            # above: pumped inside the migrate slot
+max_buy_impact_pct = 3
+require_pump_suffix = true
+blacklist_mints = []
+blacklist_creators = []
+
+[entry]
+size_wallet_pct = 15          # of the available (unreserved) balance, compounding
+min_size_sol = 0.005
+max_size_sol = 0              # 0 = no cap
+slippage_pct = 30
+cu_limit = 250000
+
+[exits]
+tp0_enabled = false
+tp0_pct = 22
+tp0_sell_fraction = 0.5
+tp0_move_stop_to_pct = 8
+tp1_pct = 50
+tp1_sell_fraction = 1
+tp2_pct = 100
+trailing_arm_pct = 50         # = tp1: trailing effectively off
+trailing_gap_pct = 8
+trailing_gap_high_vol_pct = 6
+hard_stop_pct = 100           # 100 = no stop loss
+tp1_move_stop_to_pct = 20
+time_stop_minutes = 10
+dead_money_enabled = false
+dead_money_minutes = 3
+dead_money_max_mfe_pct = 5
+protective_slippage_tiers = [20, 90]
+take_profit_slippage_tiers = [8, 20, 90]
+exit_retry_ms = 1500
+max_exit_attempts = 6         # then the kill latches (entries stop; exits are yours)
+exit_priority_multiplier = 2
+cu_limit = 200000
+
+[risk]
+max_concurrent_positions = 2
+gas_headroom_sol = 0.003
+wallet_floor_sol = 0
+kill_file = "KILL"            # touch it to stop new entries; rm to resume
+buy_confirm_timeout_ms = 4000
+sent_resolve_ms = 90000
+
+[fees]
+cu_price_default = 1000000    # micro-lamports/CU until the first Helius estimate
+cu_price_floor = 100000
+cu_price_cap = 5000000
+refresh_ms = 3000
+
+[sender]
+url = "http://fra-sender.helius-rpc.com/fast"   # regional Sender is plain HTTP
+swqos_only = true
+tip_lamports = 5000           # swqos_only minimum; dual routing needs >= 1000000
+exit_tip_lamports = 5000
+connections = 2
+ping_ms = 15000
+# tip_accounts = [...]        # defaults: the 10 Helius Sender tip accounts
+
+[jito]
+enabled = false               # same signed bytes on a parallel socket; adds a Jito tip transfer
+url = "https://frankfurt.mainnet.block-engine.jito.wtf/api/v1/transactions"
+tip_lamports = 10000
+# tip_accounts = [...]        # defaults: the 8 Jito tip accounts
+
+[threads]
+ingest_cpu = 1
+logic_cpu = 2
+exec_cpu = 3
+aux_cpu = -1                  # -1 = unpinned
+fifo_priority = 0             # >0 = SCHED_FIFO (needs CAP_SYS_NICE)
+lock_memory = true
+
+[ring]
+slots = 2048
+slot_bytes = 65536
+
+[storage]
+db_path = "data/pump-desk.db"
+jsonl_path = "data/events.jsonl"
+capture_path = ""             # raw frame capture for replay; empty = off
