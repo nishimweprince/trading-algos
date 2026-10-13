@@ -4,11 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>leadlag status</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400..700&display=swap" rel="stylesheet">
 <style>
 :root {
   --bg: #f6f7f9; --panel: #ffffff; --ink: #14171c; --muted: #5d6673; --line: #e3e6ea;
   --ok: #1f8a4c; --warn: #b7791f; --bad: #c53030; --accent: #2f5bd3;
-  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 @media (prefers-color-scheme: dark) {
   :root { --bg: #0f1216; --panel: #171b21; --ink: #e6e9ee; --muted: #98a2b0; --line: #262c35;
@@ -16,7 +18,7 @@
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink);
-       font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+       font: 14px/1.45 "DM Sans", ui-sans-serif, system-ui, sans-serif; }
 main { max-width: 1180px; margin: 0 auto; padding: 20px 16px 48px; }
 header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; margin-bottom: 16px; }
 h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
@@ -30,21 +32,21 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: 
 .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
 .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
 .tile .k { color: var(--muted); font-size: 12px; }
-.tile .v { font: 600 20px/1.2 var(--mono); margin-top: 4px; }
-.tile .d { color: var(--muted); font-size: 12px; margin-top: 2px; font-family: var(--mono); }
+.tile .v { font: 600 20px/1.2 "DM Sans", ui-sans-serif, system-ui, sans-serif; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.tile .d { color: var(--muted); font-size: 12px; margin-top: 2px; }
 .ok-t { color: var(--ok); } .warn-t { color: var(--warn); } .bad-t { color: var(--bad); }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow-x: auto; }
 table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
 th, td { padding: 7px 10px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--line); }
 th { color: var(--muted); font-weight: 600; font-size: 12px; position: sticky; top: 0; background: var(--panel); }
 th:first-child, td:first-child { text-align: left; }
-td { font-family: var(--mono); font-size: 13px; }
+td { font-size: 13px; }
 tr:last-child td { border-bottom: none; }
-.role { font-size: 11px; color: var(--muted); margin-left: 6px; font-family: system-ui, sans-serif; }
+.role { font-size: 11px; color: var(--muted); margin-left: 6px; }
 .note { color: var(--muted); font-size: 12px; margin-top: 8px; }
 .road { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; }
 .road .tile .v { font-size: 14px; font-family: inherit; }
-.err { color: var(--bad); font-family: var(--mono); font-size: 12px; margin-top: 6px; word-break: break-all; }
+.err { color: var(--bad); font-size: 12px; margin-top: 6px; word-break: break-all; }
 footer { color: var(--muted); font-size: 12px; margin-top: 32px; }
 </style>
 </head>

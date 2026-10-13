@@ -60,7 +60,7 @@ _CSS = """
 @media (prefers-color-scheme: dark) {
   :root { --fg:#e8e8e8; --bg:#161616; --muted:#999; --line:#333; }
 }
-body { font: 14px/1.45 system-ui, sans-serif; color: var(--fg); background: var(--bg);
+body { font: 14px/1.45 "DM Sans", ui-sans-serif, system-ui, sans-serif; color: var(--fg); background: var(--bg);
        max-width: 1000px; margin: 2rem auto; padding: 0 16px; }
 table { border-collapse: collapse; margin: .5rem 0 1.5rem; font-variant-numeric: tabular-nums; }
 td, th { border-bottom: 1px solid var(--line); padding: 3px 10px; text-align: right; }
@@ -80,7 +80,11 @@ def render(result: RunResult, stats: dict) -> str:
     exits = [{"exit_reason": k, "trades": v} for k, v in stats.get("exit_reasons", {}).items()]
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Backtest {html.escape(result.run_id)}</title><style>{_CSS}</style></head><body>
+<title>Backtest {html.escape(result.run_id)}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400..700&display=swap" rel="stylesheet">
+<style>{_CSS}</style></head><body>
 <h1>Backtest {html.escape(result.run_id)}</h1>
 <p class=muted>{html.escape(meta["kind"])} · {html.escape(" → ".join(meta["range"]))} ·
 snapshot {html.escape(meta["snapshot_id"])} · exchangeInfo {html.escape(str(meta["exchange_info"]))}

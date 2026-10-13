@@ -396,6 +396,9 @@ const char kPage[] = R"page(<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>pump-desk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400..700&display=swap" rel="stylesheet">
 <style>
   :root {
     --paper: #e7efe6;
@@ -409,7 +412,7 @@ const char kPage[] = R"page(<!DOCTYPE html>
     margin: 0;
     background: var(--paper);
     color: var(--ink);
-    font-family: "Iowan Old Style", Palatino, "Palatino Linotype", Georgia, serif;
+    font-family: "DM Sans", ui-sans-serif, system-ui, sans-serif;
     font-size: 17px;
     line-height: 1.35;
   }

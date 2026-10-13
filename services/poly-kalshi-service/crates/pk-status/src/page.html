@@ -4,11 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>poly-kalshi status</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400..700&display=swap" rel="stylesheet">
 <style>
 :root { --bg:#f7f7f5; --panel:#ffffff; --ink:#1d1d1b; --muted:#6b6b66; --line:#e3e3de; --good:#1f7a4d; --bad:#b3261e; --warn:#9a6700; --kalshi:#2563c9; --poly:#c2560c; --shade:rgba(120,120,110,.10); }
 @media (prefers-color-scheme: dark) { :root { --bg:#141413; --panel:#1d1d1b; --ink:#ededea; --muted:#a3a39c; --line:#33332f; --good:#5cc58f; --bad:#f2847b; --warn:#e0b04a; --kalshi:#7aa7ff; --poly:#f39a52; --shade:rgba(200,200,190,.08); } }
 * { box-sizing:border-box; }
-body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 ui-sans-serif, system-ui, -apple-system, sans-serif; }
+body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 "DM Sans", ui-sans-serif, system-ui, sans-serif; }
+svg text { font-family: "DM Sans", ui-sans-serif, system-ui, sans-serif; }
 main { max-width:1320px; margin:0 auto; padding:16px; }
 h1 { font-size:18px; margin:0 0 4px; } h2 { font-size:14px; margin:0 0 8px; color:var(--muted); font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
 .sub { color:var(--muted); margin-bottom:16px; }
