@@ -80,6 +80,11 @@ struct Position {
   uint64_t size_lamports = 0, max_quote = 0, expected_base = 0, reserved = 0;
   uint64_t overhead = 0;  // tips + priority + signature fee of the buy
   bool resolving = false;
+  // Pool quote-vault writes by other txs after our buy was sent and before ours; -1 until ours is seen.
+  int64_t writes_ahead = -1;
+  int64_t writes_counting = 0;
+  // Slot of the frame that triggered the latest buy or sell (fill slot minus this = slots to land).
+  uint64_t order_slot = 0;
   // open
   uint64_t base_amount = 0;
   uint64_t base_bought = 0;
@@ -137,6 +142,7 @@ class Engine {
   uint64_t wallet_lamports() const { return wallet_lamports_; }
   uint64_t reserved_lamports() const { return reserved_; }
   bool killed() const { return kill_latched_; }
+  uint64_t last_slot() const { return last_slot_; }
 
  private:
   // frame handlers
@@ -170,8 +176,13 @@ class Engine {
   void mark(Position& p, uint64_t now_ns);
   void maybe_exit(Position& p, int idx, uint64_t now_ns);
   void send_sell(Position& p, int idx, ExitTrigger t, double fraction, uint64_t recv_ns);
-  void on_buy_result(int idx, bool ok, int64_t sol_delta, int64_t base_delta, uint64_t slot, const char* how);
-  void on_sell_result(int idx, const Signature& sig, bool ok, int64_t sol_delta, int64_t base_delta, uint64_t slot, const char* how);
+  /** tx_index and seen_ns come from a stream fill; -1 / 0 otherwise. */
+  void on_buy_result(int idx, bool ok, int64_t sol_delta, int64_t base_delta, uint64_t slot, const char* how,
+                     int64_t tx_index = -1, uint64_t seen_ns = 0);
+  void on_sell_result(int idx, const Signature& sig, bool ok, int64_t sol_delta, int64_t base_delta, uint64_t slot,
+                      const char* how, int64_t tx_index = -1, uint64_t seen_ns = 0);
+  /** Landing fields shared by buy and sell Fill events (i[5..7], d[2]). */
+  void fill_landing(Event* f, uint64_t order_slot, uint64_t slot, int64_t tx_index, uint64_t seen_ns);
   void close_position(int idx, const char* reason);
   void release_watches(const Position& p);
   void latch_kill(const char* why);
@@ -214,6 +225,11 @@ class Engine {
   uint64_t last_slot_ = 0, last_frame_ns_ = 0;
   uint64_t unresolved_curves_ = 0;
   uint64_t awaiting_pools_ = 0;
+  // Arrival of the inter-slot statuses per slot, for the fill timing split.
+  struct SlotTimes {
+    uint64_t slot = 0, first_shred_ns = 0, completed_ns = 0;
+  };
+  std::array<SlotTimes, 64> slot_times_{};
   uint32_t fee_rr_ = 0, tip_rr_ = 0;
   std::vector<Pubkey> sender_tips_, jito_tips_;
   uint64_t next_expire_ns_ = 0, next_stats_ns_ = 0;

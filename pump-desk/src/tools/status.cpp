@@ -20,6 +20,7 @@
 #include <cmath>
 #include <csignal>
 #include <cstdint>
+#include <iterator>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -258,7 +259,8 @@ std::string status_json(const std::string& path, int hours, int& http) {
                " (SELECT COUNT(*) FROM events WHERE type='position_close' AND ts>=?1),"
                " (SELECT COALESCE(SUM(i0 > 0), 0) FROM events WHERE type='position_close' AND ts>=?1),"
                " (SELECT COALESCE(SUM(i0), 0) FROM events WHERE type='position_close' AND ts>=?1),"
-               " (SELECT AVG(d1) FROM events WHERE type='position_close' AND ts>=?1)",
+               " (SELECT AVG(d1) FROM events WHERE type='position_close' AND ts>=?1),"
+               " (SELECT COUNT(*) FROM events WHERE type='send_ack' AND i1=429 AND ts>=?1)",
                counts, err)) {
     http = 500;
     Js j;
@@ -278,25 +280,42 @@ std::string status_json(const std::string& path, int hours, int& http) {
   const int64_t closed = col_i(counts.s, 6);
   const bool have_avg = sqlite3_column_type(counts.s, 9) != SQLITE_NULL;
 
-  std::vector<double> decide, buy_fill;
-  if (!load_sample(db.p,
-                   "SELECT i0 FROM events WHERE type='decision' AND text='buy' AND ts>=?1 "
-                   "ORDER BY ts DESC LIMIT 200",
-                   since, decide, err) ||
-      !load_sample(db.p,
-                   "SELECT i4 FROM events WHERE type='fill' AND i0=0 AND i1=1 AND ts>=?1 "
-                   "ORDER BY ts DESC LIMIT 200",
-                   since, buy_fill, err)) {
-    http = 500;
-    Js j;
-    j.b("ok", false);
-    j.str("error", err);
-    return j.done();
+  // Latency and landing samples: the latest 200 rows of each in the window.
+  // Landing fields exist only on fill rows with d5=1 (older rows have zeros there).
+  struct Sample {
+    const char* key;
+    const char* sql;
+    double scale;
+  };
+  static const Sample samples[] = {
+      {"decide_us", "SELECT i0 FROM events WHERE type='decision' AND text='buy' AND ts>=?1 ORDER BY ts DESC LIMIT 200", 1e-3},
+      {"buy_fill_ms", "SELECT i4 FROM events WHERE type='fill' AND i0=0 AND i1=1 AND ts>=?1 ORDER BY ts DESC LIMIT 200", 1e-6},
+      {"sender_ack_ms",
+       "SELECT i4 FROM events WHERE type='send_ack' AND i0=0 AND i1=200 AND ts>=?1 ORDER BY ts DESC LIMIT 200", 1e-6},
+      {"slots_to_land",
+       "SELECT i6 FROM events WHERE type='fill' AND i0=0 AND i1=1 AND d5=1 AND i6>=0 AND ts>=?1 ORDER BY ts DESC LIMIT 200", 1},
+      {"tx_index",
+       "SELECT i5 FROM events WHERE type='fill' AND i0=0 AND i1=1 AND d5=1 AND i5>=0 AND ts>=?1 ORDER BY ts DESC LIMIT 200", 1},
+      {"writes_ahead",
+       "SELECT d1 FROM events WHERE type='fill' AND i0=0 AND i1=1 AND d5=1 AND d1>=0 AND ts>=?1 ORDER BY ts DESC LIMIT 200", 1},
+      {"shred_to_seen_ms",
+       "SELECT i7 FROM events WHERE type='fill' AND i1=1 AND d5=1 AND i7!=0 AND ts>=?1 ORDER BY ts DESC LIMIT 200", 1e-6},
+  };
+  std::string sample_json[std::size(samples)];
+  for (size_t k = 0; k < std::size(samples); ++k) {
+    std::vector<double> v;
+    if (!load_sample(db.p, samples[k].sql, since, v, err)) {
+      http = 500;
+      Js j;
+      j.b("ok", false);
+      j.str("error", err);
+      return j.done();
+    }
+    int64_t n = 0;
+    double p50 = 0, p99 = 0;
+    percentiles(std::move(v), samples[k].scale, n, p50, p99);
+    sample_json[k] = pct_json(n, p50, p99);
   }
-  int64_t decide_n = 0, fill_n = 0;
-  double decide_p50 = 0, decide_p99 = 0, fill_p50 = 0, fill_p99 = 0;
-  percentiles(std::move(decide), 1e-3, decide_n, decide_p50, decide_p99);
-  percentiles(std::move(buy_fill), 1e-6, fill_n, fill_p50, fill_p99);
 
   Js window;
   window.n("fires", col_i(counts.s, 0));
@@ -310,8 +329,8 @@ std::string status_json(const std::string& path, int hours, int& http) {
   window.n("net_lamports", col_i(counts.s, 8));
   if (have_avg) window.f("avg_pnl_pct", col_d(counts.s, 9));
   else window.nul("avg_pnl_pct");
-  window.raw("decide_us", pct_json(decide_n, decide_p50, decide_p99));
-  window.raw("buy_fill_ms", pct_json(fill_n, fill_p50, fill_p99));
+  window.n("rate_limited", col_i(counts.s, 10));
+  for (size_t k = 0; k < std::size(samples); ++k) window.raw(samples[k].key, sample_json[k]);
 
   Stmt open;
   if (!prepare(db.p,
@@ -532,7 +551,8 @@ function lat(sample, unit) {
   if (!sample || !sample.n) return "n=0";
   const p50 = Number(sample.p50).toLocaleString(undefined, { maximumFractionDigits: 1 });
   const p99 = Number(sample.p99).toLocaleString(undefined, { maximumFractionDigits: 1 });
-  return "p50 " + p50 + " " + unit + ", p99 " + p99 + " (n=" + num(sample.n) + ")";
+  const u = unit ? " " + unit : "";
+  return "p50 " + p50 + u + ", p99 " + p99 + u + " (n=" + num(sample.n) + ")";
 }
 function setStream(text, bad) {
   const el = document.getElementById("stream");
@@ -595,7 +615,13 @@ function render(j) {
     ["Buys", num(w.buys || 0)],
     ["Sells", num(w.sells || 0)],
     ["Decide", lat(w.decide_us, "\u00b5s")],
-    ["Buy fill", lat(w.buy_fill_ms, "ms")]
+    ["Sender ack", lat(w.sender_ack_ms, "ms")],
+    ["Sender 429s", num(w.rate_limited || 0)],
+    ["Buy sent \u2192 seen", lat(w.buy_fill_ms, "ms")],
+    ["Slots to land", lat(w.slots_to_land, "")],
+    ["Block index", lat(w.tx_index, "")],
+    ["Pool writes ahead", lat(w.writes_ahead, "")],
+    ["First shred \u2192 seen", lat(w.shred_to_seen_ms, "ms")]
   ]);
   const pos = document.getElementById("positions");
   pos.replaceChildren();

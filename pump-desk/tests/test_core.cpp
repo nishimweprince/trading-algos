@@ -6,6 +6,9 @@
 #include "core/key_map.hpp"
 #include "core/pb.hpp"
 #include "core/ring.hpp"
+#include "exec/exec.hpp"
+#include "stream/request.hpp"
+#include "stream/update.hpp"
 #include "sol/constants.hpp"
 #include "sol/layouts.hpp"
 #include "test.hpp"
@@ -175,6 +178,58 @@ TEST(mint_transfer_fee_tlv) {
   CHECK(m.fee == TransferFee::Present);
 }
 
+TEST(classify_sender_responses) {
+  SendVerdict v = classify_response(200, R"({"jsonrpc":"2.0","result":"5abc","id":1})");
+  CHECK(v.ok && !v.definitive && !v.rate_limited);
+  v = classify_response(200, R"({"jsonrpc":"2.0","error":{"code":-32002},"id":1})");
+  CHECK(!v.ok && v.definitive && !v.rate_limited);
+  v = classify_response(429, "<html><body><h1>429 Too Many Requests</h1>");
+  CHECK(!v.ok && !v.definitive && v.rate_limited);
+  v = classify_response(400, "bad request");
+  CHECK(!v.ok && v.definitive && !v.rate_limited);
+  v = classify_response(503, "");
+  CHECK(!v.ok && !v.definitive && !v.rate_limited);
+  v = classify_response(0, "connection closed");
+  CHECK(!v.ok && !v.definitive && !v.rate_limited);
+}
+
+TEST(parse_tx_index_and_slot_status) {
+  // SubscribeUpdate { filters 1, transaction 4 { transaction 1 { signature 1, index 5 }, slot 2 } }
+  pb::Writer info;
+  info.bytes(1, std::string(64, 'x'));
+  info.u64(5, 7);
+  pb::Writer upd;
+  upd.message(1, info);
+  upd.u64(2, 42);
+  pb::Writer root;
+  root.bytes(1, "wallet");
+  root.message(4, upd);
+  UpdateView* v = new UpdateView;
+  CHECK(parse_update(reinterpret_cast<const uint8_t*>(root.out.data()), root.out.size(), *v));
+  CHECK(v->kind == UpdateView::Transaction);
+  CHECK_EQ(v->tx.index, int64_t(7));
+  CHECK_EQ(v->tx.slot, uint64_t(42));
+
+  pb::Writer sl;
+  sl.u64(1, 43);
+  sl.u64(3, 3);
+  pb::Writer r2;
+  r2.bytes(1, "heartbeat");
+  r2.message(3, sl);
+  CHECK(parse_update(reinterpret_cast<const uint8_t*>(r2.out.data()), r2.out.size(), *v));
+  CHECK(v->kind == UpdateView::Slot);
+  CHECK_EQ(v->slot.status, uint32_t(3));
+  delete v;
+}
+
+TEST(subscribe_requests_interslot_updates) {
+  SubscriptionSpec spec;
+  std::string req = encode_subscribe_request(spec);
+  // slots map entry "heartbeat" -> { filter_by_commitment 1: true, interslot_updates 2: true } = 08 01 10 01
+  const std::string want = std::string("heartbeat") + "\x12\x04\x08\x01\x10\x01";
+  CHECK(req.find(want) != std::string::npos);
+}
+
 TEST(config_example_parses_to_defaults) {
   Config d;
   Config c = load_config(std::string(PD_FIXTURE_DIR) + "/../../config.example.toml");
@@ -186,6 +241,10 @@ TEST(config_example_parses_to_defaults) {
   CHECK_EQ(c.sender.tip_accounts.size(), size_t(10));
   CHECK_EQ(c.racer.default_virtual_quote_lamports, uint64_t(17'584'492'770ULL));
   CHECK(!c.jito.enabled);
+  CHECK_EQ(c.sender.retry_429_ms, d.sender.retry_429_ms);
+  CHECK_EQ(c.sender.max_429_retries, d.sender.max_429_retries);
+  CHECK_EQ(c.fees.priority_level, d.fees.priority_level);
+  CHECK_EQ(c.entry.priority_multiplier, d.entry.priority_multiplier);
   bool threw = false;
   try {
     auto kv = parse_toml("[entry]\nsize_wallet_pctt = 3\n");

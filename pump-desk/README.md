@@ -63,6 +63,8 @@ Build only on the VM; grpc++ is not installed on the laptop.
 - **Stop entries:** `touch pump-desk/KILL`. Exits keep running. `rm` it to resume.
 - **Stop the process:** `sudo systemctl stop pump-desk`. Open and in-flight positions are persisted. On the next start they are restored from `data/pump-desk.db` after checking the wallet's token balance, and re-marked from the pool.
 - **Kill latch:** if an exit fails `max_exit_attempts` times, entries stop and that position is left for you to sell by hand.
+- **Sender 429s:** exec resends the same signed bytes on the other link after `sender.retry_429_ms` × try, up to `sender.max_429_retries`. A 429 is never a rejection, so it costs no exit attempt and can't trip the kill latch. A sell rejected at send time (no connection, a rejected request) waits `exits.exit_retry_ms` before the next attempt. Only an on-chain failure retries at once on the next slippage tier.
+- **Landing, not "fill ms":** sent → fill seen (~150 ms) is mostly chain and stream time. Judge routing and fee changes on the landing fields of each buy fill: slots to land (fill slot − processed tip at send), index in the block, pool quote-vault writes by other txs between our send and ours, and first shred / slot completed → seen (from LaserStream inter-slot statuses; n/a if the endpoint doesn't send them). They're in the `fills` view, the report, and the status page.
 - **Report:** `./build/pump-desk-report data/pump-desk.db [--since-hours 24]` shows net PnL including fees, tips and rent, exit reasons, landing and latency percentiles. Raw data is in the `events` table and the `decisions`, `orders`, `acks`, `fills` and `migrations` views, plus `data/events.jsonl`.
 - **Status page:** `sudo systemctl enable --now pump-desk-status` serves `http://127.0.0.1:8787`. The page polls `/api/status` every 10 seconds. The process only reads `data/pump-desk.db` and is left unpinned, so with the isolcpus line above it stays on the housekeeping core. Do not publish port 8787. Point cloudflared at that URL:
 
@@ -91,4 +93,5 @@ proto/       vendored LaserStream geyser.proto / solana-storage.proto (field ref
 - The gRPC ingest (`src/stream/ingest.cpp`) compiles only on the VM. Everything else builds and is tested locally.
 - Jito is built but off. Enable `jito.enabled` only after `pump-desk-report` shows the extra tip ix costs nothing measurable. The send itself is parallel.
 - Exits rely on vault pushes (every swap writes both vaults) plus a timer. No RPC polling on positions.
+- No shred-level feed. A Jito ShredStream proxy in FRA would see migrate txs and our fills from raw block data before replay. The report's first shred → seen and slot completed → seen numbers size the possible gain. It needs a Jito auth key and a separate process.
 - No `migrate` instruction and no creation sniping, by design: the migrate caller earns nothing (`pump-fun/reports/migrate-racer-verdict.md`).

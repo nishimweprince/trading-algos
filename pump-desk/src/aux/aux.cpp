@@ -79,7 +79,7 @@ void run_aux_fast(const Config& cfg, Shared& sh, const Pubkey& wallet, Logger& l
       }
       if (now >= next_fee) {
         next_fee = now + uint64_t(cfg.fees.refresh_ms) * 1'000'000ULL;
-        uint64_t est = rpc.priority_fee_estimate({prog::PUMP_SWAP, prog::WSOL});
+        uint64_t est = rpc.priority_fee_estimate({prog::PUMP_SWAP, prog::WSOL}, cfg.fees.priority_level.c_str());
         if (est) {
           est = std::max(cfg.fees.cu_price_floor, std::min(cfg.fees.cu_price_cap, est));
           sh.cu_price.store(est);

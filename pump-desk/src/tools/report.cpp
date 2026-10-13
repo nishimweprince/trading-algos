@@ -99,6 +99,19 @@ int main(int argc, char** argv) {
   percentiles("written -> sender ack", column("SELECT written_to_ack_ns FROM acks WHERE ts >= ?1"), 1e-6, "ms");
   percentiles("buy sent -> fill seen", column("SELECT sent_to_fill_ns FROM fills WHERE side='buy' AND ts >= ?1"), 1e-6, "ms");
   percentiles("sell sent -> fill seen", column("SELECT sent_to_fill_ns FROM fills WHERE side='sell' AND ts >= ?1"), 1e-6, "ms");
+
+  // Landing fields live on fill rows with d5=1; read events directly so an older database (old views) still works.
+  std::printf("\nLanding (buys):\n");
+  percentiles("slots to land", column("SELECT i6 FROM events WHERE type='fill' AND i0=0 AND i1=1 AND d5=1 AND i6>=0 AND ts >= ?1"), 1, "slots");
+  percentiles("index in block", column("SELECT i5 FROM events WHERE type='fill' AND i0=0 AND i1=1 AND d5=1 AND i5>=0 AND ts >= ?1"), 1, "");
+  percentiles("pool writes ahead after send", column("SELECT d1 FROM events WHERE type='fill' AND i0=0 AND i1=1 AND d5=1 AND d1>=0 AND ts >= ?1"), 1, "");
+  percentiles("first shred -> fill seen", column("SELECT i7 FROM events WHERE type='fill' AND i1=1 AND d5=1 AND i7!=0 AND ts >= ?1"), 1e-6, "ms");
+  percentiles("slot completed -> fill seen", column("SELECT d2 FROM events WHERE type='fill' AND i1=1 AND d5=1 AND d2!=0 AND ts >= ?1"), 1, "ms");
+  rows("\nSlots to land by tip / cu_price (n / avg slots / avg index):",
+       "SELECT o.i5 AS tip, o.i4 / 500000 * 500000 AS cu_price_bucket, COUNT(*), printf('%.2f', AVG(f.i6)), printf('%.1f', AVG(f.i5))"
+       " FROM events f JOIN events o ON o.type='order' AND o.sig=f.sig"
+       " WHERE f.type='fill' AND f.i0=0 AND f.i1=1 AND f.d5=1 AND f.i6>=0 AND f.ts >= ?1 GROUP BY 1, 2 ORDER BY 1, 2");
+  rows("\nSender 429s (n):", "SELECT COUNT(*) FROM events WHERE type='send_ack' AND i1=429 AND ts >= ?1");
   rows("\nSend errors (route / error / n):",
        "SELECT route, substr(error, 1, 60), COUNT(*) FROM acks WHERE ok=0 AND ts >= ?1 GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 10");
   sqlite3_close(db);

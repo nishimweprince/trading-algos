@@ -19,6 +19,7 @@ struct TxSpec {
   std::vector<std::string> filters;
   pd::Signature sig{};
   uint64_t slot = 1;
+  int64_t index = -1;  // Info.index (position in block); omitted when < 0
   std::vector<pd::Pubkey> keys;
   bool failed = false;
   uint64_t fee = 5000;
@@ -69,6 +70,7 @@ inline std::string tx_frame(const TxSpec& s) {
   info.bytes(1, sv(s.sig.data(), 64));
   info.message(3, txn);
   info.message(4, meta);
+  if (s.index >= 0) info.u64(5, uint64_t(s.index));
   pd::pb::Writer upd;
   upd.message(1, info);
   upd.u64(2, s.slot);
@@ -95,9 +97,11 @@ inline std::string account_frame(const std::string& filter, const pd::Pubkey& ke
   return root.out;
 }
 
-inline std::string slot_frame(uint64_t slot) {
+/** status: geyser.SlotStatus (0 processed, 3 first shred received, 4 completed). */
+inline std::string slot_frame(uint64_t slot, uint32_t status = 0) {
   pd::pb::Writer s;
   s.u64(1, slot);
+  if (status) s.u64(3, status);
   pd::pb::Writer root;
   root.bytes(1, "heartbeat");
   root.message(3, s);

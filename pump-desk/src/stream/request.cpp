@@ -48,10 +48,12 @@ std::string encode_subscribe_request(const SubscriptionSpec& spec) {
     for (const Pubkey& k : spec.watched) a.bytes(2, b58(k));  // account
     req.map_entry(1, "watch", a);
   }
-  // slots (2): heartbeat at the subscription commitment.
+  // slots (2): heartbeat at the subscription commitment, plus the inter-slot
+  // statuses (first shred, completed) that time how late a fill is seen.
   {
     pb::Writer s;
     s.boolean(1, true);
+    s.boolean(2, true);
     req.map_entry(2, "heartbeat", s);
   }
   // transactions (3)

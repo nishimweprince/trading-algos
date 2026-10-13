@@ -60,6 +60,7 @@ struct Config {
     double max_size_sol = 0;  // 0 = no cap
     double slippage_pct = 30;
     uint32_t cu_limit = 250000;
+    double priority_multiplier = 1;  // on the CU price for buys, like exits.exit_priority_multiplier
   } entry;
 
   struct Exits {
@@ -93,6 +94,7 @@ struct Config {
     uint64_t cu_price_floor = 100'000;
     uint64_t cu_price_cap = 5'000'000;
     int refresh_ms = 3000;
+    std::string priority_level = "VeryHigh";  // Helius getPriorityFeeEstimate level
   } fees;
 
   struct Sender {
@@ -102,6 +104,8 @@ struct Config {
     uint64_t exit_tip_lamports = 5000;
     int connections = 2;
     int ping_ms = 15000;
+    int retry_429_ms = 25;    // backoff before resending a 429'd tx, times the try number
+    int max_429_retries = 3;  // resends of the same bytes after a 429
     std::vector<std::string> tip_accounts;
   } sender;
 

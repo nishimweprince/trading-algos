@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <cstring>
 
 #include "core/base58.hpp"
 #include "core/base64.hpp"
@@ -17,6 +18,10 @@ namespace pd {
 namespace {
 
 constexpr uint8_t ROLE_POOL = 1, ROLE_BASE_VAULT = 2, ROLE_QUOTE_VAULT = 3;
+// geyser.SlotStatus
+constexpr uint32_t SLOT_PROCESSED = 0, SLOT_FIRST_SHRED_RECEIVED = 3, SLOT_COMPLETED = 4;
+
+uint64_t elapsed(uint64_t now, uint64_t t) { return now > t ? now - t : 0; }
 constexpr uint64_t RENT_ATA_2022 = 2'074'080;  // 170-byte Token-2022 ATA (ImmutableOwner)
 constexpr uint64_t RENT_ATA_SPL = 2'039'280;   // 165-byte token account
 constexpr uint64_t SIGNATURE_FEE = 5'000;
@@ -119,6 +124,15 @@ void Engine::on_frame(const uint8_t* data, size_t len, uint64_t recv_ns) {
 }
 
 void Engine::on_slot(const SlotView& s) {
+  // Inter-slot statuses only time the slot; last_slot_ stays the processed tip.
+  if (s.status == SLOT_FIRST_SHRED_RECEIVED || s.status == SLOT_COMPLETED) {
+    SlotTimes& t = slot_times_[s.slot & 63];
+    if (t.slot != s.slot) t = SlotTimes{s.slot, 0, 0};
+    uint64_t& at = s.status == SLOT_FIRST_SHRED_RECEIVED ? t.first_shred_ns : t.completed_ns;
+    if (!at) at = last_frame_ns_;
+    return;
+  }
+  if (s.status != SLOT_PROCESSED) return;
   if (s.slot > last_slot_) {
     if (last_slot_ && s.slot - last_slot_ > uint64_t(cfg_.stream.gap_slot_jump)) {
       Event* e = ev(Ev::Gap);
@@ -359,7 +373,15 @@ void Engine::on_watched(const AccountView& a) {
       if (p.state == PosState::Empty) continue;
       bool hit = false;
       if (p.keys.pool_base_vault == key) { p.base_res = amount; hit = true; }
-      if (p.keys.pool_quote_vault == key) { p.quote_res = amount; hit = true; }
+      if (p.keys.pool_quote_vault == key) {
+        p.quote_res = amount;
+        hit = true;
+        // Count other txs' writes to the pool between our buy send and our own write.
+        if (p.state == PosState::BuySent && p.writes_ahead < 0 && a.txn_signature.size() == 64) {
+          if (std::memcmp(a.txn_signature.data(), p.buy_sig.data(), 64) == 0) p.writes_ahead = p.writes_counting;
+          else ++p.writes_counting;
+        }
+      }
       if (hit) {
         mark(p, now);
         maybe_exit(p, int(i), now);
@@ -538,7 +560,7 @@ TxParams Engine::tx_params(bool exit) {
   p.cu_limit = exit ? cfg_.exits.cu_limit : cfg_.entry.cu_limit;
   uint64_t price = sh_.cu_price.load(std::memory_order_relaxed);
   if (!price) price = cfg_.fees.cu_price_default;
-  if (exit) price = uint64_t(double(price) * cfg_.exits.exit_priority_multiplier);
+  price = uint64_t(double(price) * (exit ? cfg_.exits.exit_priority_multiplier : cfg_.entry.priority_multiplier));
   p.cu_price = price;
   if (!sender_tips_.empty()) {
     p.tips[p.n_tips++] = Tip{sender_tips_[tip_rr_ % sender_tips_.size()], exit ? cfg_.sender.exit_tip_lamports : cfg_.sender.tip_lamports};
@@ -642,6 +664,7 @@ void Engine::trigger(CurveSlot& s, uint64_t base_res, uint64_t quote_res, uint64
         p.buy_sig = sig;
         p.buy_sent_ns = now_ns_();
         p.buy_sent_ms = wall_ms_();
+        p.order_slot = last_slot_;
         p.size_lamports = size;
         p.max_quote = q.max_quote;
         p.expected_base = q.base_out;
@@ -751,6 +774,7 @@ void Engine::send_sell(Position& p, int idx, ExitTrigger t, double fraction, uin
   ++p.n_sell_sigs;
   p.state = PosState::SellSent;
   p.sell_sent_ns = now_ns_();
+  p.order_slot = last_slot_;
   p.sell_trigger = t;
   p.sell_base = base_in;
   p.sell_full = full;
@@ -776,7 +800,21 @@ void Engine::send_sell(Position& p, int idx, ExitTrigger t, double fraction, uin
   emit();
 }
 
-void Engine::on_buy_result(int idx, bool ok, int64_t sol_delta, int64_t base_delta, uint64_t slot, const char* how) {
+void Engine::fill_landing(Event* f, uint64_t order_slot, uint64_t slot, int64_t tx_index, uint64_t seen_ns) {
+  f->i[5] = tx_index;
+  f->i[6] = seen_ns && order_slot && slot >= order_slot ? int64_t(slot - order_slot) : -1;
+  f->i[7] = 0;
+  f->d[2] = 0;
+  f->d[5] = 1;  // landing fields present (older fill rows have zeros here)
+  const SlotTimes& t = slot_times_[slot & 63];
+  if (seen_ns && t.slot == slot) {
+    if (t.first_shred_ns) f->i[7] = int64_t(seen_ns) - int64_t(t.first_shred_ns);
+    if (t.completed_ns) f->d[2] = double(int64_t(seen_ns) - int64_t(t.completed_ns)) / 1e6;
+  }
+}
+
+void Engine::on_buy_result(int idx, bool ok, int64_t sol_delta, int64_t base_delta, uint64_t slot, const char* how,
+                           int64_t tx_index, uint64_t seen_ns) {
   Position& p = positions_[size_t(idx)];
   if (p.state != PosState::BuySent) return;
   reserved_ = reserved_ > p.reserved ? reserved_ - p.reserved : 0;
@@ -791,6 +829,8 @@ void Engine::on_buy_result(int idx, bool ok, int64_t sol_delta, int64_t base_del
   f->i[2] = base_delta;
   f->i[3] = sol_delta;
   f->i[4] = int64_t(now_ns_() - p.buy_sent_ns);
+  fill_landing(f, p.order_slot, slot, tx_index, seen_ns);
+  f->d[1] = double(p.writes_ahead);
   std::snprintf(f->text, sizeof f->text, "%s", how);
 
   if (!ok || base_delta <= 0) {
@@ -833,8 +873,9 @@ void Engine::on_buy_result(int idx, bool ok, int64_t sol_delta, int64_t base_del
 }
 
 void Engine::on_sell_result(int idx, const Signature& sig, bool ok, int64_t sol_delta, int64_t base_delta, uint64_t slot,
-                            const char* how) {
+                            const char* how, int64_t tx_index, uint64_t seen_ns) {
   Position& p = positions_[size_t(idx)];
+  const bool send_rejected = std::strcmp(how, "send_rejected") == 0;
   if (p.state != PosState::SellSent && p.state != PosState::Open) return;
   Event* f = ev(Ev::Fill);
   f->slot = slot;
@@ -845,12 +886,20 @@ void Engine::on_sell_result(int idx, const Signature& sig, bool ok, int64_t sol_
   f->i[2] = base_delta;
   f->i[3] = sol_delta;
   f->i[4] = int64_t(now_ns_() - p.sell_sent_ns);
+  fill_landing(f, p.order_slot, slot, tx_index, seen_ns);
   f->d[0] = p.last_price;
+  f->d[1] = -1;
   std::snprintf(f->text, sizeof f->text, "%s %s", how, exit_trigger_name(p.sell_trigger));
   emit();
   if (!ok) {
     if (p.state != PosState::SellSent) return;  // a stale attempt; the live one is still pending
-    // Retry at once on the next slippage tier.
+    if (send_rejected) {
+      // Never reached the chain (no connection, rejected request): an instant resend
+      // meets the same wall. The exit timer resends after exit_retry_ms.
+      p.sell_sent_ns = now_ns_();
+      return;
+    }
+    // Failed on-chain: retry at once on the next slippage tier.
     if (++p.sell_attempts >= cfg_.exits.max_exit_attempts) {
       latch_kill("exit attempts exhausted");
       p.state = PosState::Open;
@@ -935,12 +984,13 @@ void Engine::on_wallet_tx(const TxView& tx) {
              int64_t(sum_tokens(tx.pre_tokens, tx.n_pre_tokens, p.mint_b58.sv(), user_b58_.sv()));
     };
     if (p.state == PosState::BuySent && std::memcmp(sig, p.buy_sig.data(), 64) == 0) {
-      on_buy_result(int(i), !tx.failed, sol_delta, base_delta(), tx.slot, "stream");
+      on_buy_result(int(i), !tx.failed, sol_delta, base_delta(), tx.slot, "stream", tx.index, last_frame_ns_);
       return;
     }
     for (uint8_t k = 0; k < std::min<uint8_t>(p.n_sell_sigs, 8); ++k) {
       if (std::memcmp(sig, p.sell_sigs[k].data(), 64) == 0) {
-        on_sell_result(int(i), p.sell_sigs[k], !tx.failed, sol_delta, base_delta(), tx.slot, "stream");
+        on_sell_result(int(i), p.sell_sigs[k], !tx.failed, sol_delta, base_delta(), tx.slot, "stream", tx.index,
+                       last_frame_ns_);
         return;
       }
     }
@@ -1002,6 +1052,7 @@ void Engine::drain_queues(uint64_t now) {
     e->i[4] = int64_t(r.t_ack_ns - r.t_written_ns);
     e->i[5] = int64_t(r.side);
     e->i[6] = r.definitive;
+    e->i[7] = r.rate_limited;
     std::snprintf(e->text, sizeof e->text, "%s", r.error);
     emit();
     // Only a definitive Sender rejection fails an order: a dropped connection may still
@@ -1049,7 +1100,7 @@ void Engine::poll(uint64_t now) {
     Position& p = positions_[i];
     switch (p.state) {
       case PosState::BuySent:
-        if (!p.resolving && now - p.buy_sent_ns > uint64_t(cfg_.risk.buy_confirm_timeout_ms) * 1'000'000ULL) {
+        if (!p.resolving && elapsed(now, p.buy_sent_ns) > uint64_t(cfg_.risk.buy_confirm_timeout_ms) * 1'000'000ULL) {
           AuxReq r;
           r.op = AuxOp::ResolveSig;
           r.sig = p.buy_sig;
@@ -1061,7 +1112,8 @@ void Engine::poll(uint64_t now) {
         }
         break;
       case PosState::SellSent:
-        if (now - p.sell_sent_ns > uint64_t(cfg_.exits.exit_retry_ms) * 1'000'000ULL) {
+        // elapsed(): a sell re-sent inside drain_queues() above is newer than `now`.
+        if (elapsed(now, p.sell_sent_ns) > uint64_t(cfg_.exits.exit_retry_ms) * 1'000'000ULL) {
           if (++p.sell_attempts >= cfg_.exits.max_exit_attempts) {
             latch_kill("exit unconfirmed after max attempts");
             p.state = PosState::Open;  // keep marking; no automatic resend while killed
@@ -1085,7 +1137,7 @@ void Engine::poll(uint64_t now) {
     awaiting_pools_ = 0;
     curves_.for_each([&](const Pubkey&, CurveSlot& s) {
       if (!s.awaiting_pool || s.traded) return;
-      if (now - s.await_since_ns < wait) { ++awaiting_pools_; return; }
+      if (elapsed(now, s.await_since_ns) < wait) { ++awaiting_pools_; return; }
       // No pool push in time: price off the default virtual reserve (0 on mayhem curves).
       s.awaiting_pool = false;
       uint64_t virt = s.mayhem ? 0 : cfg_.racer.default_virtual_quote_lamports;

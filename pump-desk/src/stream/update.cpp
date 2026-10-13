@@ -123,6 +123,7 @@ void parse_transaction(std::string_view s, TxView& tx) {
   // SubscribeUpdateTransaction { transaction 1 (Info), slot 2 }
   // Info { signature 1, is_vote 2, transaction 3, meta 4, index 5 }
   tx.slot = 0;
+  tx.index = -1;
   tx.signature = {};
   tx.failed = tx.has_meta = tx.logs_truncated = false;
   tx.fee = 0;
@@ -138,6 +139,7 @@ void parse_transaction(std::string_view s, TxView& tx) {
       while (in.next(f, wt)) {
         switch (f) {
           case 1: tx.signature = in.bytes(); break;
+          case 5: tx.index = int64_t(in.varint()); break;
           case 3: {
             // Transaction { signatures 1, message 2 }
             Reader t(in.bytes());

@@ -33,6 +33,7 @@ struct TokenBalanceView {
 
 struct TxView {
   uint64_t slot = 0;
+  int64_t index = -1;          // position in the block (Info.index); -1 when absent
   std::string_view signature;  // 64 bytes
   bool failed = false;         // meta.err present
   bool has_meta = false;

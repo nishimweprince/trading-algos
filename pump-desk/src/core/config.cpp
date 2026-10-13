@@ -139,6 +139,7 @@ Config load_config(const std::string& path) {
   G(screen, min_pool_sol); G(screen, max_pool_sol); G(screen, max_buy_impact_pct); G(screen, require_pump_suffix);
   G(screen, blacklist_mints); G(screen, blacklist_creators);
   G(entry, size_wallet_pct); G(entry, min_size_sol); G(entry, max_size_sol); G(entry, slippage_pct); G(entry, cu_limit);
+  G(entry, priority_multiplier);
   G(exits, tp0_enabled); G(exits, tp0_pct); G(exits, tp0_sell_fraction); G(exits, tp0_move_stop_to_pct);
   G(exits, tp1_pct); G(exits, tp1_sell_fraction); G(exits, tp2_pct); G(exits, trailing_arm_pct);
   G(exits, trailing_gap_pct); G(exits, trailing_gap_high_vol_pct); G(exits, hard_stop_pct);
@@ -149,8 +150,10 @@ Config load_config(const std::string& path) {
   G(risk, max_concurrent_positions); G(risk, gas_headroom_sol); G(risk, wallet_floor_sol); G(risk, kill_file);
   G(risk, buy_confirm_timeout_ms); G(risk, sent_resolve_ms);
   G(fees, cu_price_default); G(fees, cu_price_floor); G(fees, cu_price_cap); G(fees, refresh_ms);
+  G(fees, priority_level);
   G(sender, url); G(sender, swqos_only); G(sender, tip_lamports); G(sender, exit_tip_lamports);
   G(sender, connections); G(sender, ping_ms); G(sender, tip_accounts);
+  G(sender, retry_429_ms); G(sender, max_429_retries);
   G(jito, enabled); G(jito, url); G(jito, tip_lamports); G(jito, tip_accounts);
   G(threads, ingest_cpu); G(threads, logic_cpu); G(threads, exec_cpu); G(threads, aux_cpu);
   G(threads, fifo_priority); G(threads, lock_memory);
@@ -184,6 +187,14 @@ Config load_config(const std::string& path) {
     throw std::runtime_error("config: sender.tip_lamports must be >= 5000 with swqos_only");
   if (!c.sender.swqos_only && c.sender.tip_lamports < 1'000'000)
     throw std::runtime_error("config: sender.tip_lamports must be >= 1000000 without swqos_only");
+  if (c.entry.priority_multiplier <= 0) throw std::runtime_error("config: entry.priority_multiplier must be > 0");
+  if (c.sender.retry_429_ms < 0 || c.sender.max_429_retries < 0 || c.sender.max_429_retries > 255)
+    throw std::runtime_error("config: sender.retry_429_ms / max_429_retries");
+  {
+    const std::string& l = c.fees.priority_level;
+    if (l != "Min" && l != "Low" && l != "Medium" && l != "High" && l != "VeryHigh" && l != "UnsafeMax")
+      throw std::runtime_error("config: fees.priority_level must be Min|Low|Medium|High|VeryHigh|UnsafeMax");
+  }
   if (c.entry.size_wallet_pct <= 0 || c.entry.size_wallet_pct > 100) throw std::runtime_error("config: entry.size_wallet_pct");
   if (c.exits.protective_slippage_tiers.empty() || c.exits.take_profit_slippage_tiers.empty())
     throw std::runtime_error("config: exit slippage tiers must not be empty");

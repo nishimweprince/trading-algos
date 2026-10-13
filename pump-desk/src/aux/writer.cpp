@@ -119,11 +119,13 @@ std::string event_json(const Event& e) {
     case Ev::SendAck:
       j.str("sig", sig_or_empty(e.sig)).str("route", e.i[0] == 0 ? "sender" : "jito").i("http", e.i[1]).b("ok", e.i[2])
           .i("signed_to_written_ns", e.i[3]).i("written_to_ack_ns", e.i[4]).str("side", e.i[5] == 0 ? "buy" : "sell")
-          .b("definitive", e.i[6]).str("error", escape(e.text));
+          .b("definitive", e.i[6]).b("rate_limited", e.i[7]).str("error", escape(e.text));
       break;
     case Ev::Fill:
       j.str("side", e.i[0] == 0 ? "buy" : "sell").str("sig", sig_or_empty(e.sig)).str("mint", b58(e.a)).b("ok", e.i[1])
-          .i("base_delta", e.i[2]).i("sol_delta", e.i[3]).i("sent_to_fill_ns", e.i[4]).d("price", e.d[0]).str("via", escape(e.text));
+          .i("base_delta", e.i[2]).i("sol_delta", e.i[3]).i("sent_to_fill_ns", e.i[4]).d("price", e.d[0])
+          .i("tx_index", e.i[5]).i("slots_to_land", e.i[6]).i("shred_to_seen_ns", e.i[7]).d("writes_ahead", e.d[1])
+          .d("completed_to_seen_ms", e.d[2]).str("via", escape(e.text));
       break;
     case Ev::PositionOpen:
       j.str("mint", b58(e.a)).str("curve", b58(e.b)).str("coin_creator", key_or_empty(e.c)).str("buy_sig", sig_or_empty(e.sig))
@@ -187,10 +189,14 @@ void Writer::open() {
   CREATE VIEW IF NOT EXISTS orders AS SELECT ts, slot, CASE i0 WHEN 0 THEN 'buy' ELSE 'sell' END AS side, sig, a AS mint,
     i1 AS amount, i2 AS bound, i3 AS expected, i4 AS cu_price, i5 AS tip, i6 AS attempt, i7 AS recv_to_signed_ns,
     text AS reason FROM events WHERE type='order';
-  CREATE VIEW IF NOT EXISTS acks AS SELECT ts, sig, CASE i0 WHEN 0 THEN 'sender' ELSE 'jito' END AS route, i1 AS http,
-    i2 AS ok, i3 AS signed_to_written_ns, i4 AS written_to_ack_ns, text AS error FROM events WHERE type='send_ack';
-  CREATE VIEW IF NOT EXISTS fills AS SELECT ts, slot, CASE i0 WHEN 0 THEN 'buy' ELSE 'sell' END AS side, sig, a AS mint,
-    i1 AS ok, i2 AS base_delta, i3 AS sol_delta, i4 AS sent_to_fill_ns, d0 AS price, text AS via FROM events WHERE type='fill';
+  DROP VIEW IF EXISTS acks;
+  CREATE VIEW acks AS SELECT ts, sig, CASE i0 WHEN 0 THEN 'sender' ELSE 'jito' END AS route, i1 AS http,
+    i2 AS ok, i3 AS signed_to_written_ns, i4 AS written_to_ack_ns, i7 AS rate_limited, text AS error FROM events WHERE type='send_ack';
+  DROP VIEW IF EXISTS fills;
+  CREATE VIEW fills AS SELECT ts, slot, CASE i0 WHEN 0 THEN 'buy' ELSE 'sell' END AS side, sig, a AS mint,
+    i1 AS ok, i2 AS base_delta, i3 AS sol_delta, i4 AS sent_to_fill_ns, d0 AS price, text AS via,
+    d5 = 1 AS has_landing, i5 AS tx_index, i6 AS slots_to_land, i7 AS shred_to_seen_ns, d1 AS writes_ahead,
+    d2 AS completed_to_seen_ms FROM events WHERE type='fill';
   CREATE VIEW IF NOT EXISTS migrations AS SELECT ts, slot, sig, a AS mint, b AS caller, i0 AS landed, i1 AS tracked,
     i2 AS fired, i3 AS curve_buy_before, i4 AS pool_buy_after FROM events WHERE type='migrate';
   )");

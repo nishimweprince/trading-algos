@@ -45,6 +45,7 @@ min_size_sol = 0.005
 max_size_sol = 0              # 0 = no cap
 slippage_pct = 30
 cu_limit = 250000
+priority_multiplier = 1       # on the CU price for buys (exits use exit_priority_multiplier)
 
 [exits]
 tp0_enabled = false
@@ -83,6 +84,7 @@ cu_price_default = 1000000    # micro-lamports/CU until the first Helius estimat
 cu_price_floor = 100000
 cu_price_cap = 5000000
 refresh_ms = 3000
+priority_level = "VeryHigh"   # Helius getPriorityFeeEstimate level: Min|Low|Medium|High|VeryHigh|UnsafeMax
 
 [sender]
 url = "http://fra-sender.helius-rpc.com/fast"   # regional Sender is plain HTTP
@@ -91,6 +93,10 @@ tip_lamports = 5000           # swqos_only minimum; dual routing needs >= 100000
 exit_tip_lamports = 5000
 connections = 2
 ping_ms = 15000
+retry_429_ms = 25             # on HTTP 429, resend the same signed bytes after 25 ms x try (other link)
+max_429_retries = 3           # a 429 never counts as a rejection or an exit attempt
+# Routing A/B: swqos_only = false + tip_lamports >= 1000000 also sends via Jito.
+# Judge it on pump-desk-report "Slots to land by tip / cu_price", not on sent -> seen ms.
 # tip_accounts = [...]        # defaults: the 10 Helius Sender tip accounts
 
 [jito]

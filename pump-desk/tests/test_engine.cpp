@@ -381,6 +381,147 @@ TEST(engine_time_stop_and_exit_retries) {
   g_wall -= 11 * 60'000;
 }
 
+namespace {
+// A clock that moves on every read, so "sent after `now` was taken" happens.
+uint64_t ticking_mono() { return g_mono += 1000; }
+
+SendResult ack(const Signature& sig, Side side, uint8_t pos, int status, bool definitive, bool rate_limited) {
+  SendResult r;
+  r.side = side;
+  r.pos = pos;
+  r.route = Route::Sender;
+  r.http_status = status;
+  r.definitive = definitive;
+  r.rate_limited = rate_limited;
+  r.sig = sig;
+  return r;
+}
+
+void open_position(Rig& r) {
+  r.create();
+  r.band(1'000'000'000'000ULL);
+  r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
+  Packet pk;
+  CHECK(r.pop_packet(pk));
+  const Position& p = r.eng->position(0);
+  r.wallet_fill(p.buy_sig, 1'000'000'000, 840'000'000, 0, p.expected_base);
+  CHECK(p.state == PosState::Open);
+}
+}  // namespace
+
+TEST(engine_rate_limited_ack_keeps_state) {
+  Rig r;
+  r.create();
+  r.band(1'000'000'000'000ULL);
+  r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
+  Packet pk;
+  CHECK(r.pop_packet(pk));
+  const Position& p = r.eng->position(0);
+  CHECK(r.sh->send_results.push(ack(p.buy_sig, Side::Buy, 0, 429, false, true)));
+  r.eng->poll(g_mono);
+  CHECK(p.state == PosState::BuySent);  // a 429 is not a rejection
+  CHECK(!r.pop_packet(pk));
+  const auto es = r.events();
+  const Event* a = find(es, Ev::SendAck);
+  CHECK(a != nullptr);
+  if (a) CHECK_EQ(a->i[7], int64_t(1));
+
+  r.wallet_fill(p.buy_sig, 1'000'000'000, 840'000'000, 0, p.expected_base);
+  CHECK(p.state == PosState::Open);
+  g_wall += 11 * 60'000;  // time stop
+  r.eng->poll(g_mono);
+  Packet sell;
+  CHECK(r.pop_packet(sell));
+  CHECK(r.sh->send_results.push(ack(sell.sig, Side::Sell, 0, 429, false, true)));
+  r.eng->poll(g_mono);
+  CHECK(p.state == PosState::SellSent);
+  CHECK_EQ(p.sell_attempts, 0);
+  CHECK(!r.pop_packet(pk));
+  CHECK(!r.eng->killed());
+  g_wall -= 11 * 60'000;
+}
+
+// 2026-10-13: a definitive send rejection (e.g. "no sender connection") re-sent at
+// once, and a sell re-sent inside drain_queues() was newer than poll's `now`, so the
+// unsigned age underflowed and the exit timer re-sent it again: 6 attempts in ~1 ms.
+TEST(engine_rejected_sell_resends_once) {
+  Rig r;
+  open_position(r);
+  const Position& p = r.eng->position(0);
+  g_wall += 11 * 60'000;
+  r.eng->poll(g_mono);
+  Packet sell;
+  CHECK(r.pop_packet(sell));
+  r.events();
+  r.eng->set_clocks(&test_wall, &ticking_mono);
+  uint64_t now = g_mono;  // taken before the drain, as run() does
+  CHECK(r.sh->send_results.push(ack(sell.sig, Side::Sell, 0, 200, true, false)));
+  r.eng->poll(now);
+  Packet pk;
+  CHECK(!r.pop_packet(pk));  // waits for the exit timer
+  CHECK(p.state == PosState::SellSent);
+  CHECK_EQ(p.sell_attempts, 0);
+  g_mono += uint64_t(r.cfg.exits.exit_retry_ms + 1) * 1'000'000ULL;
+  r.eng->poll(g_mono);
+  int sent = 0;
+  while (r.pop_packet(pk)) {
+    ++sent;
+    CHECK_EQ(int(pk.attempt), 1);
+  }
+  CHECK_EQ(sent, 1);
+  CHECK_EQ(p.sell_attempts, 1);
+  CHECK(!r.eng->killed());
+  r.eng->set_clocks(&test_wall, &test_mono);
+  g_wall -= 11 * 60'000;
+}
+
+TEST(engine_fill_records_landing) {
+  Rig r;
+  r.feed(slot_frame(r.slot));  // processed tip = trigger slot
+  r.create();
+  r.band(1'000'000'000'000ULL);
+  r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
+  Packet pk;
+  CHECK(r.pop_packet(pk));
+  const Position& p = r.eng->position(0);
+  CHECK_EQ(p.order_slot, uint64_t(100));
+  uint64_t land = 102;
+  r.feed(slot_frame(land, 3));  // first shred of the landing slot
+  CHECK_EQ(r.eng->last_slot(), uint64_t(100));
+  g_mono += 40'000'000;
+  r.feed(slot_frame(land, 4));  // completed
+  // Two other swaps write the quote vault, then ours, then one more.
+  Signature other1 = make_sig(40), other2 = make_sig(41), other3 = make_sig(42);
+  r.feed(account_frame("watch", r.quote_vault, prog::TOKEN, token_account(67'500'000'000ULL), land, &other1));
+  r.feed(account_frame("watch", r.quote_vault, prog::TOKEN, token_account(67'600'000'000ULL), land, &other2));
+  r.feed(account_frame("watch", r.quote_vault, prog::TOKEN, token_account(67'700'000'000ULL), land, &p.buy_sig));
+  r.feed(account_frame("watch", r.quote_vault, prog::TOKEN, token_account(67'800'000'000ULL), land, &other3));
+  CHECK_EQ(p.writes_ahead, int64_t(2));
+  g_mono += 10'000'000;
+  r.events();
+  TxSpec t;
+  t.filters = {"wallet"};
+  t.sig = p.buy_sig;
+  t.slot = land;
+  t.index = 7;
+  t.keys = {r.kp.pubkey()};
+  t.pre = {1'000'000'000};
+  t.post = {840'000'000};
+  t.post_tokens = {{r.mint_s, r.user_s, r.t22_s, p.expected_base}};
+  r.feed(tx_frame(t));
+  CHECK(p.state == PosState::Open);
+  const auto es = r.events();
+  const Event* f = find(es, Ev::Fill);
+  CHECK(f != nullptr);
+  if (!f) return;
+  CHECK_EQ(f->i[5], int64_t(7));
+  CHECK_EQ(f->i[6], int64_t(2));
+  CHECK_EQ(f->i[7], int64_t(50'000'000));  // first shred -> seen
+  CHECK(std::fabs(f->d[2] - 10.0) < 1e-9);  // completed -> seen, ms
+  CHECK_EQ(f->d[1], 2.0);
+  CHECK_EQ(f->d[5], 1.0);
+}
+
 TEST(exit_fsm_matches_engine_ts) {
   Config c;
   Config::Exits x = c.exits;

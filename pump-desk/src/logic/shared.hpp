@@ -38,6 +38,7 @@ struct SendResult {
   Route route = Route::Sender;
   bool ok = false;
   bool definitive = false;  // a rejection that proves the tx was not accepted
+  bool rate_limited = false;  // HTTP 429; exec resends the same bytes itself
   int http_status = 0;
   Signature sig{};
   uint64_t t_signed_ns = 0, t_written_ns = 0, t_ack_ns = 0;
