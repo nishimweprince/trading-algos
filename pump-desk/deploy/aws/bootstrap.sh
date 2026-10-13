@@ -3,7 +3,7 @@
 # Run as the login user (sudo available) from the repo checkout:
 #   bash pump-desk/deploy/aws/bootstrap.sh
 # Installs build deps, tunes the kernel, builds Release with -O3 -march=native -flto,
-# runs the tests, and installs the systemd unit (not started).
+# runs the tests, and installs the systemd units (not started).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -40,9 +40,12 @@ ENV
 }
 chmod 600 "$ROOT/.env"
 sed -e "s#@ROOT@#$ROOT#g" -e "s#@USER@#$(id -un)#g" "$HERE/pump-desk.service" | sudo tee /etc/systemd/system/pump-desk.service >/dev/null
+sed -e "s#@ROOT@#$ROOT#g" -e "s#@USER@#$(id -un)#g" "$HERE/pump-desk-status.service" | sudo tee /etc/systemd/system/pump-desk-status.service >/dev/null
 sudo systemctl daemon-reload
 echo
 echo "Done. Next:"
 echo "  1. fill $ROOT/.env (chmod 600) and review $ROOT/pump-desk.toml"
 echo "  2. preflight:  set -a; . $ROOT/.env; set +a; $ROOT/build/pump-desk --config $ROOT/pump-desk.toml --preflight"
-echo "  3. isolate cores 1-3 (README §Cores), reboot, then: sudo systemctl enable --now pump-desk"
+echo "  3. isolate cores (README §Cores): isolcpus=1-3,5-7 nohz_full=1-3,5-7 rcu_nocbs=1-3,5-7"
+echo "     reboot, then: sudo systemctl enable --now pump-desk pump-desk-status"
+echo "  4. optional tunnel, from the housekeeping core: cloudflared tunnel --url http://127.0.0.1:8787"

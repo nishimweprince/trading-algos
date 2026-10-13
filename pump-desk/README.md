@@ -47,10 +47,14 @@ Regenerate fixtures after an SDK upgrade with `node pump-desk/tools/fixtures/gen
 Build only on the VM; grpc++ is not installed on the laptop.
 
 1. Launch Ubuntu 24.04 in **eu-central-1**: c7i.2xlarge or larger, 4+ physical cores. Use ENA and an elastic IP.
-2. Clone the repo, check out `feat/pump-desk-cpp`, then run `bash pump-desk/deploy/aws/bootstrap.sh`. It does: apt deps → sysctl → chrony on the AWS time source → Release build (`-O3 -march=native -flto`) → `pd_tests` → systemd unit.
+2. Clone the repo, check out `feat/pump-desk-cpp`, then run `bash pump-desk/deploy/aws/bootstrap.sh`. It does: apt deps → sysctl → chrony on the AWS time source → Release build (`-O3 -march=native -flto`) → `pd_tests` → systemd units for the trader and the status page.
 3. Fill `pump-desk/.env` (mode 600): `HELIUS_GRPC_URL` (LaserStream Frankfurt), `HELIUS_GRPC_TOKEN`, `HELIUS_HTTP_URL`, `WALLET_PRIVATE_KEY` (base58 or JSON array). Optional: `SENDER_URL`, `JITO_URL`.
 4. Review `pump-desk/pump-desk.toml`, which starts as a copy of `config.example.toml`.
-5. **Cores**: add `isolcpus=1-3 nohz_full=1-3 rcu_nocbs=1-3` to `GRUB_CMDLINE_LINUX_DEFAULT` in `/etc/default/grub`, run `sudo update-grub`, then reboot. Check `lscpu -e`: cpus 1–3 must be different physical cores. On c7i, cpu N and N+4 are siblings.
+5. **Cores**: 4 physical cores. On c7i, logical cpu N and N+4 are two threads of one physical core. Isolate the three hot cores and their siblings so the kernel, the writer, ssh, cloudflared, and the status page stay on the remaining core (cpus 0 and 4):
+
+   `isolcpus=1-3,5-7 nohz_full=1-3,5-7 rcu_nocbs=1-3,5-7`
+
+   Add that to `GRUB_CMDLINE_LINUX_DEFAULT` in `/etc/default/grub`, run `sudo update-grub`, then reboot. Check `lscpu -e`: cpus 1, 2, and 3 must be different physical cores from each other and from cpu 0.
 6. Preflight (no subscription, no trades): `set -a; . .env; set +a; ./build/pump-desk --config pump-desk.toml --preflight`
 7. Go live: `sudo systemctl enable --now pump-desk`, then `journalctl -u pump-desk -f`.
 
@@ -60,6 +64,11 @@ Build only on the VM; grpc++ is not installed on the laptop.
 - **Stop the process:** `sudo systemctl stop pump-desk`. Open and in-flight positions are persisted. On the next start they are restored from `data/pump-desk.db` after checking the wallet's token balance, and re-marked from the pool.
 - **Kill latch:** if an exit fails `max_exit_attempts` times, entries stop and that position is left for you to sell by hand.
 - **Report:** `./build/pump-desk-report data/pump-desk.db [--since-hours 24]` shows net PnL including fees, tips and rent, exit reasons, landing and latency percentiles. Raw data is in the `events` table and the `decisions`, `orders`, `acks`, `fills` and `migrations` views, plus `data/events.jsonl`.
+- **Status page:** `sudo systemctl enable --now pump-desk-status` serves `http://127.0.0.1:8787`. The page polls `/api/status` every 10 seconds. The process only reads `data/pump-desk.db` and is left unpinned, so with the isolcpus line above it stays on the housekeeping core. Do not publish port 8787. Point cloudflared at that URL:
+
+  `cloudflared tunnel --url http://127.0.0.1:8787`
+
+  A named Cloudflare tunnel uses the same origin when you want a stable hostname. Stream, frames, reconnects, parse errors, and drops come from the stats row (since process start). Fires, decisions, vetoes, fills, and PnL are the selected window, default 24 hours (`/api/status?hours=24`).
 - **Status line** every 10 s in the journal: stream state, frames, fires, triggers, vetoes, positions, wallet.
 
 ## Layout
@@ -72,7 +81,7 @@ src/logic    engine (tracker/trigger/screen/positions), tx parsing, exit FSM, sh
 src/exec     Sender/Jito sender
 src/net      TCP/TLS connections, HTTP/1.1 parser
 src/aux      RPC client, aux threads, writer
-src/tools    report
+src/tools    report, status page
 tests/       golden SDK bytes, engine round trips over synthetic frames, rings, parser, writer
 proto/       vendored LaserStream geyser.proto / solana-storage.proto (field reference; no protoc needed)
 ```

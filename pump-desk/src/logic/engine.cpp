@@ -1108,6 +1108,14 @@ void Engine::poll(uint64_t now) {
     e->i[5] = int64_t(reserved_);
     e->i[6] = int64_t(unresolved_curves_);
     e->i[7] = kill_latched_ || sh_.kill_file.load(std::memory_order_relaxed);
+    // In-memory counters have no event rows. pump-desk-status reads these slots
+    // off the latest stats row (d0 frames, d1 parse_errors, d2 reconnects,
+    // d3 events_dropped, d4 stream_up). One relaxed load each, every 10s.
+    e->d[0] = double(sh_.counters.frames.load(std::memory_order_relaxed));
+    e->d[1] = double(sh_.counters.parse_errors.load(std::memory_order_relaxed));
+    e->d[2] = double(sh_.counters.reconnects.load(std::memory_order_relaxed));
+    e->d[3] = double(sh_.counters.events_dropped.load(std::memory_order_relaxed));
+    e->d[4] = sh_.counters.stream_up.load(std::memory_order_relaxed) ? 1.0 : 0.0;
     emit();
   }
 }

@@ -35,3 +35,6 @@ services/**/data/
 
 # Plans
 .plans/
+
+# IDEs
+.vscode/
