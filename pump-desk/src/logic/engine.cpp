@@ -995,6 +995,41 @@ void Engine::on_wallet_tx(const TxView& tx) {
       }
     }
   }
+  if (!tx.failed) on_external_tx(tx, sol_delta);
+}
+
+void Engine::on_external_tx(const TxView& tx, int64_t sol_delta) {
+  // Not one of our orders, yet it moved a held position's tokens out of the wallet: someone
+  // else signed with this key (a wallet app, another bot). Follow the wallet instead of
+  // re-selling into an emptied or closed token account.
+  for (size_t i = 0; i < positions_.size(); ++i) {
+    Position& p = positions_[i];
+    if (p.state != PosState::Open && p.state != PosState::SellSent) continue;
+    int64_t delta = int64_t(sum_tokens(tx.post_tokens, tx.n_post_tokens, p.mint_b58.sv(), user_b58_.sv())) -
+                    int64_t(sum_tokens(tx.pre_tokens, tx.n_pre_tokens, p.mint_b58.sv(), user_b58_.sv()));
+    if (delta >= 0) continue;
+    uint64_t sold = uint64_t(-delta);
+    p.base_amount = p.base_amount > sold ? p.base_amount - sold : 0;
+    if (sol_delta > 0) p.sol_received += sol_delta;
+    warn("external sell %.8s: -%llu tokens, %+lld lamports, %llu left", p.mint_b58.s, (unsigned long long)sold,
+         (long long)sol_delta, (unsigned long long)p.base_amount);
+    if (p.base_amount == 0) {
+      close_position(int(i), "external_sell");
+      return;
+    }
+    // Partial: any in-flight sell was sized on the old balance; exits restart from Open.
+    p.state = PosState::Open;
+    p.sell_attempts = 0;
+    Event* u = ev(Ev::PositionUpdate);
+    u->slot = tx.slot;
+    u->a = p.mint;
+    u->i[0] = int64_t(p.base_amount);
+    u->i[1] = p.sol_received;
+    u->i[2] = p.exit.tp0_done;
+    u->i[3] = p.exit.tp1_done;
+    emit();
+    return;
+  }
 }
 
 void Engine::set_wallet_lamports(uint64_t lamports, uint64_t slot) {
@@ -1057,6 +1092,12 @@ void Engine::drain_queues(uint64_t now) {
     emit();
     // Only a definitive Sender rejection fails an order: a dropped connection may still
     // have delivered it (the confirm timeout resolves those), and Jito is a second path.
+    if (r.rate_limited && r.side == Side::Sell) {
+      // Exec resends these bytes after its 429 backoff; hold the exit timer off until then.
+      Position& p = positions_[r.pos];
+      if (p.state == PosState::SellSent && p.n_sell_sigs && p.sell_sigs[(p.n_sell_sigs - 1) % 8] == r.sig)
+        p.sell_sent_ns = now_ns_();
+    }
     if (r.ok || !r.definitive || r.route != Route::Sender) continue;
     Position& p = positions_[r.pos];
     if (r.side == Side::Buy && p.state == PosState::BuySent && p.buy_sig == r.sig) {

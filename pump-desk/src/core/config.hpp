@@ -104,8 +104,8 @@ struct Config {
     uint64_t exit_tip_lamports = 5000;
     int connections = 2;
     int ping_ms = 15000;
-    int retry_429_ms = 25;    // backoff before resending a 429'd tx, times the try number
-    int max_429_retries = 3;  // resends of the same bytes after a 429
+    int retry_429_ms = 1000;  // backoff before resending a 429'd tx, times the try number (Sender allows ~1 tx/s)
+    int max_429_retries = 2;  // resends of the same bytes after a 429
     std::vector<std::string> tip_accounts;
   } sender;
 

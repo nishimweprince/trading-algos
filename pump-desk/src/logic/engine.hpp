@@ -151,6 +151,7 @@ class Engine {
   void on_migrate(const TxView& tx, uint64_t recv_ns);
   void on_create(const TxView& tx);
   void on_wallet_tx(const TxView& tx);
+  void on_external_tx(const TxView& tx, int64_t sol_delta);
   void on_slot(const SlotView& s);
 
   // curve lifecycle

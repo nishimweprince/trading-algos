@@ -522,6 +522,81 @@ TEST(engine_fill_records_landing) {
   CHECK_EQ(f->d[5], 1.0);
 }
 
+// 2026-10-13: another signer on the bot's wallet sold each position seconds after the
+// buy and closed the token account; exits then failed (AccountNotInitialized) to the kill.
+TEST(engine_follows_external_sell) {
+  Rig r;
+  open_position(r);
+  const Position& p = r.eng->position(0);
+  uint64_t base = p.base_amount;
+  r.events();
+  // A close-account-style tx touching nothing we hold changes nothing.
+  r.wallet_fill(make_sig(50), 840'000'000, 842'000'000, 0, 0);
+  CHECK(p.state == PosState::Open);
+  CHECK_EQ(p.base_amount, base);
+  // Someone else sells a third.
+  r.wallet_fill(make_sig(51), 842'000'000, 892'000'000, base, base - base / 3);
+  CHECK(p.state == PosState::Open);
+  CHECK_EQ(p.base_amount, base - base / 3);
+  CHECK_EQ(p.sol_received, int64_t(50'000'000));
+  CHECK(find(r.events(), Ev::PositionUpdate) != nullptr);
+  // Then the rest: the position closes without a single sell of ours.
+  r.wallet_fill(make_sig(52), 892'000'000, 992'000'000, base - base / 3, 0);
+  CHECK(p.state == PosState::Empty);
+  const auto es = r.events();
+  const Event* c = find(es, Ev::PositionClose, "external_sell");
+  CHECK(c != nullptr);
+  if (c) CHECK_EQ(c->i[3], int64_t(150'000'000));
+  Packet pk;
+  CHECK(!r.pop_packet(pk));
+  CHECK(!r.eng->killed());
+}
+
+TEST(engine_external_sell_while_selling) {
+  Rig r;
+  open_position(r);
+  const Position& p = r.eng->position(0);
+  uint64_t base = p.base_amount;
+  g_wall += 11 * 60'000;  // time stop
+  r.eng->poll(g_mono);
+  Packet sell;
+  CHECK(r.pop_packet(sell));
+  CHECK(p.state == PosState::SellSent);
+  r.wallet_fill(make_sig(53), 840'000'000, 990'000'000, base, 0);
+  CHECK(p.state == PosState::Empty);
+  // Our own sell then fails on-chain: ignored, no retry, no kill.
+  r.wallet_fill(sell.sig, 990'000'000, 989'600'000, 0, 0, /*failed=*/true);
+  Packet pk;
+  CHECK(!r.pop_packet(pk));
+  CHECK(!r.eng->killed());
+  g_wall -= 11 * 60'000;
+}
+
+TEST(engine_sell_429_holds_exit_timer) {
+  Rig r;
+  open_position(r);
+  const Position& p = r.eng->position(0);
+  g_wall += 11 * 60'000;
+  r.eng->poll(g_mono);
+  Packet sell;
+  CHECK(r.pop_packet(sell));
+  const uint64_t ms = 1'000'000ULL;
+  g_mono += 1000 * ms;  // exec's first 429 resend is due about now
+  CHECK(r.sh->send_results.push(ack(sell.sig, Side::Sell, 0, 429, false, true)));
+  r.eng->poll(g_mono);
+  Packet pk;
+  CHECK(!r.pop_packet(pk));
+  g_mono += 1000 * ms;  // 2.0 s after the send, 1.0 s after the 429: timer was restarted
+  r.eng->poll(g_mono);
+  CHECK(!r.pop_packet(pk));
+  CHECK(p.state == PosState::SellSent);
+  g_mono += uint64_t(r.cfg.exits.exit_retry_ms) * ms;
+  r.eng->poll(g_mono);
+  CHECK(r.pop_packet(pk));
+  CHECK_EQ(int(pk.attempt), 1);
+  g_wall -= 11 * 60'000;
+}
+
 TEST(exit_fsm_matches_engine_ts) {
   Config c;
   Config::Exits x = c.exits;
