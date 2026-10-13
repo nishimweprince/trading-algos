@@ -1,0 +1,20 @@
+[Unit]
+Description=pump-desk status page
+After=pump-desk.service
+# The page is useful while the trader is down (it still reads the last database),
+# so a missing trader does not block this unit.
+Wants=pump-desk.service
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@ROOT@
+ExecStart=@ROOT@/build/pump-desk-status @ROOT@/data/pump-desk.db --port 8787
+# Unpinned on purpose. With isolcpus=1-3,5-7 the scheduler keeps this process,
+# cloudflared, and the trader's writer on the housekeeping core.
+Nice=10
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

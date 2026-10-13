@@ -131,7 +131,7 @@ CSS = """
 @media (prefers-color-scheme:dark){:root{--bg:#121214;--panel:#1b1b1e;--fg:#ececee;--muted:#9a9aa1;
 --line:#2c2c31;--accent:#6ea0ff;--good:#3ccf91;--bad:#ff6b5e;--warn:#f0b45a}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);
-font:14px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+font:14px/1.45 "DM Sans",ui-sans-serif,system-ui,sans-serif}
 main{max-width:1100px;margin:0 auto;padding:20px 16px 48px}
 header{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:baseline;margin-bottom:16px}
 h1{font-size:20px;margin:0}h2{font-size:15px;margin:28px 0 8px}
@@ -180,7 +180,11 @@ def _page(title: str, body: str, refresh: bool = False, extra: str = "") -> HTML
     return HTMLResponse(
         f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
         f'<meta name="viewport" content="width=device-width,initial-scale=1">{meta}'
-        f"<title>{html.escape(title)}</title><style>{CSS}</style></head><body><main>"
+        f"<title>{html.escape(title)}</title>"
+        f'<link rel="preconnect" href="https://fonts.googleapis.com">'
+        f'<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+        f'<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400..700&display=swap" rel="stylesheet">'
+        f"<style>{CSS}</style></head><body><main>"
         f'<nav><a href="/">Live</a><a href="/research">Research</a></nav>{body}</main>'
         f"{extra}</body></html>"
     )

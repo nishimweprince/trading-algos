@@ -139,7 +139,9 @@ std::string event_json(const Event& e) {
       break;
     case Ev::Stats:
       j.i("curves", e.i[0]).i("watches", e.i[1]).i("launches", e.i[2]).i("positions", e.i[3]).i("wallet", e.i[4])
-          .i("reserved", e.i[5]).i("unresolved", e.i[6]).b("killed", e.i[7]);
+          .i("reserved", e.i[5]).i("unresolved", e.i[6]).b("killed", e.i[7])
+          .i("frames", int64_t(e.d[0])).i("parse_errors", int64_t(e.d[1])).i("reconnects", int64_t(e.d[2]))
+          .i("events_dropped", int64_t(e.d[3])).b("stream_up", e.d[4] >= 0.5);
       break;
     default:
       j.str("text", escape(e.text));

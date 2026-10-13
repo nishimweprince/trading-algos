@@ -152,7 +152,7 @@ def _svg(ep: Episode, w: int = 960, h: int = 360) -> str:
 _CSS = """
 :root{--fg:#1d1d1f;--bg:#fff;--muted:#666;--up:#1a7f5a;--dn:#c0392b}
 @media (prefers-color-scheme:dark){:root{--fg:#e8e8e8;--bg:#161616;--muted:#999}}
-body{font:14px/1.4 system-ui,sans-serif;color:var(--fg);background:var(--bg);max-width:1000px;
+body{font:14px/1.4 "DM Sans",ui-sans-serif,system-ui,sans-serif;color:var(--fg);background:var(--bg);max-width:1000px;
 margin:2rem auto;padding:0 16px}
 .up{stroke:var(--up);fill:var(--up)}.dn{stroke:var(--dn);fill:var(--dn)}
 .sup{fill:#1a7f5a22}.res{fill:#c0392b22}.hot{fill:none;stroke:#e6a700;stroke-dasharray:4 3}
@@ -189,6 +189,9 @@ def write_episodes(episodes: list[Episode], out: Path) -> Path:
     page = (
         f'<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" '
         f'content="width=device-width,initial-scale=1"><title>Episodes</title>'
+        f'<link rel="preconnect" href="https://fonts.googleapis.com">'
+        f'<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+        f'<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400..700&display=swap" rel="stylesheet">'
         f"<style>{_CSS}</style></head><body><h1>Episodes ({len(episodes)})</h1>"
         f"<p class=muted>Dashed amber: the zone that broke. Vertical lines: breakout and "
         f"signal bars. Fill in labels.yaml next to this page.</p>{''.join(sections)}</body></html>"

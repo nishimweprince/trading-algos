@@ -54,8 +54,12 @@ target_link_libraries(pump-desk PRIVATE pdcore PkgConfig::GRPCPP)
 add_executable(pump-desk-report src/tools/report.cpp)
 target_link_libraries(pump-desk-report PRIVATE SQLite::SQLite3)
 
+# Read-only status page. SQLite only, so it builds without grpc++.
+add_executable(pump-desk-status src/tools/status.cpp)
+target_link_libraries(pump-desk-status PRIVATE SQLite::SQLite3)
+
 if(PD_LTO)
-  set_property(TARGET pdcore pump-desk pump-desk-report PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+  set_property(TARGET pdcore pump-desk pump-desk-report pump-desk-status PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
 endif()
 
 enable_testing()

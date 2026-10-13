@@ -16,6 +16,9 @@ DASHBOARD_HTML = """<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OFI Scalper</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400..700&display=swap" rel="stylesheet">
 <style>
 :root { --bg:#f7f7f5; --fg:#1d1d1b; --muted:#6b6b66; --card:#fff;
         --line:#e4e4df;
@@ -26,7 +29,7 @@ DASHBOARD_HTML = """<!doctype html>
           --good:#5cc27f; --bad:#ff8a80; --warn:#e0b050; } }
 * { box-sizing: border-box; }
 body { margin:0; padding:16px; background:var(--bg); color:var(--fg);
-       font:14px/1.45 ui-sans-serif, system-ui, sans-serif; }
+       font:14px/1.45 "DM Sans", ui-sans-serif, system-ui, sans-serif; }
 h1 { font-size:18px; margin:0 0 12px; }
 h2 { font-size:14px; margin:0 0 8px; color:var(--muted); font-weight:600; }
 .grid { display:grid; gap:12px; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); }

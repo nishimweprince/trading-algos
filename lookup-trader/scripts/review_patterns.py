@@ -196,9 +196,12 @@ def render(groups: dict[str, list[ReviewItem]], symbol: str, timeframe: str) -> 
     return f"""<!doctype html>
 <meta charset="utf-8">
 <title>Chart patterns — {html.escape(symbol)} {html.escape(timeframe)}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400..700&display=swap" rel="stylesheet">
 <style>
   body {{ background:#000; color:#e5e7eb;
-          font:14px/1.5 ui-sans-serif,system-ui,sans-serif; margin:24px; }}
+          font:14px/1.5 "DM Sans",ui-sans-serif,system-ui,sans-serif; margin:24px; }}
   h1 {{ font-size:18px; font-weight:600; }}
   h1 span {{ color:#9ca3af; font-weight:400; }}
   h2 {{ font-size:14px; font-weight:600; margin:28px 0 10px; }}

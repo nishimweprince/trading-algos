@@ -1,7 +1,7 @@
-"""The status page: one self-contained document, no external requests.
+"""The status page: one document. Charts are inline SVG.
 
-It reads ``/api/summary`` every 30 s and ``/api/history`` every minute, and
-draws its charts as inline SVG. Light and dark follow the viewer's system.
+It reads ``/api/summary`` every 30 s and ``/api/history`` every minute.
+The typeface is DM Sans. Light and dark follow the viewer's system.
 """
 
 from __future__ import annotations
@@ -15,6 +15,9 @@ STATUS_HTML = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <title>OFI Scalper Status</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400..700&display=swap" rel="stylesheet">
 <style>
 :root {
   --bg: #f6f6f3; --card: #ffffff; --fg: #1c1c1a; --muted: #6a6a64; --line: #e3e3dd;
@@ -28,7 +31,7 @@ STATUS_HTML = """<!doctype html>
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--fg);
-       font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+       font: 14px/1.5 "DM Sans", ui-sans-serif, system-ui, sans-serif; }
 header { padding: 20px 16px 8px; max-width: 1200px; margin: 0 auto; }
 header h1 { margin: 0; font-size: 20px; }
 header p { margin: 4px 0 0; color: var(--muted); }
@@ -68,7 +71,7 @@ ol.road .done .dot { background: var(--good); }
 ol.road .active .dot { background: var(--accent); }
 ol.road .blocked .dot { background: var(--warn); }
 pre { white-space: pre-wrap; background: var(--card); border: 1px solid var(--line); border-radius: 10px;
-      padding: 12px; font-size: 12px; }
+      padding: 12px; font-size: 12px; font-family: inherit; }
 svg { display: block; width: 100%; }
 footer { max-width: 1200px; margin: 0 auto; padding: 8px 16px 32px; color: var(--muted); font-size: 12px; }
 #err { color: var(--bad); }
