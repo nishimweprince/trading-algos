@@ -1,0 +1,24 @@
+[Unit]
+Description=Bar Portion Binance perpetual shadow market maker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bar-mm
+Group=bar-mm
+WorkingDirectory=/opt/trading-algos/services/bar-portion-mm-service
+EnvironmentFile=-/etc/bar-portion-mm.env
+ExecStart=/opt/trading-algos/services/bar-portion-mm-service/build/release/bar-mm shadow --symbol BTCUSDT --journal /data/bar-mm/btcusdt.jsonl --kill-file /data/bar-mm/KILL --port 8060
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/data/bar-mm
+LimitNOFILE=65536
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,8 @@
+/build/
+/data/
+/.env*
+!/config.example.env
+*.jsonl
+!tests/fixtures/*.jsonl
+*.log
+core
