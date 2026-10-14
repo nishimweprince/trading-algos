@@ -1,5 +1,6 @@
 #include "bpmm/allocation.hpp"
 #include "bpmm/book.hpp"
+#include "bpmm/dashboard.hpp"
 #include "bpmm/engine.hpp"
 #include "bpmm/journal.hpp"
 #include "bpmm/parser.hpp"
@@ -224,6 +225,76 @@ void test_spsc() {
   require(ring.try_pop(value) && value == 2 && ring.try_pop(value) && value == 3 && ring.empty(),
           "ring drains");
 }
+
+void test_dashboard() {
+  const auto price = [](const char* text) { return bpmm::Decimal::parse(text).raw; };
+  const auto qty = [](const char* text) { return bpmm::Decimal::parse(text).raw; };
+  bpmm::PnlTracker tracker;
+  tracker.apply(0, price("100"), qty("1"), 500);
+  require(tracker.position_raw() == qty("1") && tracker.realized_pnl_raw() == 0,
+          "entry accrues no realized pnl");
+  tracker.apply(0, price("102"), qty("1"), 0);
+  require(tracker.position_raw() == qty("2"), "adds extend the position");
+  tracker.apply(1, price("103"), qty("1"), 100);
+  require(tracker.position_raw() == qty("1"), "partial close reduces the position");
+  require(tracker.realized_pnl_raw() == price("2") - 100, "close lifts average entry and fees");
+  tracker.apply(1, price("104"), qty("1"), 50);
+  require(tracker.position_raw() == 0, "full close flattens the position");
+  require(tracker.realized_pnl_raw() == price("5") - 150, "full close banks the leg");
+  tracker.apply(1, price("100"), qty("2"), 0);
+  require(tracker.position_raw() == -qty("2"), "short sale opens a short");
+  require(tracker.realized_pnl_raw() == price("5") - 150, "short entry accrues nothing");
+  tracker.apply(0, price("96"), qty("1"), 25);
+  require(tracker.position_raw() == -qty("1"), "cover reduces the short");
+  require(tracker.realized_pnl_raw() == price("9") - 175, "short cover uses entry minus exit");
+  tracker.apply(0, price("95"), qty("2"), 10);
+  require(tracker.position_raw() == qty("1"), "overbuy flips to long");
+  require(tracker.realized_pnl_raw() == price("14") - 185, "flip banks the closed leg");
+  tracker.apply(1, price("97"), qty("1"), 5);
+  require(tracker.position_raw() == 0, "exit flattens the flipped long");
+  require(tracker.realized_pnl_raw() == price("16") - 190, "flipped entry resets to flip price");
+
+  const auto path = std::filesystem::temp_directory_path() / "bpmm-dashboard-test.jsonl";
+  {
+    std::ofstream out(path);
+    out << "S 1 100 0 0\n";
+    out << "T 2 3 4 5 6 1\n";
+    out << "F nonsense\n";
+    out << "K 0 59999 10000000000 10100000000 9900000000 10050000000 1\n";
+    out << "F 1000000000 1 0 10000000000 100000000 0\n";
+    out << "F 2000000000 2 1 10300000000 100000000 100\n";
+    out << "K 60000 119999 10050000000 10200000000 10000000000 10100000000 0\n";
+    out << "F 3000000000 3";
+  }
+  const auto activity = bpmm::read_journal_tail(path.string());
+  require(activity.fills.size() == 2, "tail reader keeps complete fills");
+  require(activity.fills[0].order_id == 1 && activity.fills[1].order_id == 2, "fills stay ordered");
+  require(activity.fills[0].position_raw == qty("1") &&
+              activity.fills[0].realized_pnl_raw == 0,
+          "first fill opens the tracked position");
+  require(activity.fills[1].position_raw == 0 &&
+              activity.fills[1].realized_pnl_raw == price("3") - 100,
+          "second fill closes with fee");
+  require(activity.candles.size() == 2, "tail reader keeps candles");
+  require(activity.candles[0].closed && !activity.candles[1].closed, "candle flags survive");
+  const bpmm::DashboardLimits caps{1024 * 1024, 1, 1};
+  const auto capped = bpmm::read_journal_tail(path.string(), caps);
+  require(capped.fills.size() == 1 && capped.fills[0].order_id == 2, "fill cap keeps newest");
+  require(capped.candles.size() == 1 && capped.candles[0].close_ms == 119999,
+          "candle cap keeps newest");
+  require(capped.fills[0].realized_pnl_raw == price("3") - 100,
+          "capped fills keep window cumulative pnl");
+  const auto missing = bpmm::read_journal_tail(path.string() + ".absent");
+  require(missing.fills.empty() && missing.candles.empty(), "missing journal yields empty");
+  const auto json = bpmm::activity_json(activity);
+  require(json.find("\"scale\":100000000") != std::string::npos, "activity states the scale");
+  require(json.find("\"id\":2") != std::string::npos, "activity carries fill ids");
+  require(json.find("\"r\":299999900") != std::string::npos, "activity carries cumulative pnl");
+  const std::string_view page(bpmm::dashboard_page());
+  require(page.find("DM Sans") != std::string_view::npos, "dashboard uses DM Sans");
+  require(page.find("/api/activity") != std::string_view::npos, "dashboard polls activity");
+  std::filesystem::remove(path);
+}
 }  // namespace
 
 int main() {
@@ -237,6 +308,7 @@ int main() {
     test_engine_gap_and_replay();
     test_parser_fuzz_smoke();
     test_spsc();
+    test_dashboard();
     std::cout << "passed " << tests << " assertions\n";
     return 0;
   } catch (const std::exception& error) {

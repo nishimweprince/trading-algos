@@ -22,6 +22,7 @@ add_library(bpmm_core
   src/engine.cpp
   src/binance.cpp
   src/status.cpp
+  src/dashboard.cpp
   src/allocation.cpp
   src/config.cpp
 )
