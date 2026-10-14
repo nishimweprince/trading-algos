@@ -115,26 +115,18 @@ func (c *cache) metrics(now time.Time) map[string]any {
 	}
 }
 
-// withoutEvents decodes the trader document and replaces each shadow run's
+// withoutEvents decodes the trader document and replaces the shadow run's
 // list of recent trades with its length.
 func withoutEvents(raw json.RawMessage) any {
 	doc, ok := decode(raw).(map[string]any)
 	if !ok {
 		return nil
 	}
-	strip := func(v any) {
-		if sh, ok := v.(map[string]any); ok {
-			if recent, ok := sh["recent"].([]any); ok {
-				sh["recent_trades_omitted"] = len(recent)
-			}
-			delete(sh, "recent")
+	if sh, ok := doc["shadow"].(map[string]any); ok {
+		if recent, ok := sh["recent"].([]any); ok {
+			sh["recent_trades_omitted"] = len(recent)
 		}
-	}
-	strip(doc["shadow"])
-	if runs, ok := doc["shadow_runs"].([]any); ok {
-		for _, r := range runs {
-			strip(r)
-		}
+		delete(sh, "recent")
 	}
 	return doc
 }

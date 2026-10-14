@@ -5,67 +5,26 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"reflect"
 	"sync/atomic"
 	"testing"
 
 	"github.com/nishimweprince/trading-algos/services/leadlag-go/internal/model"
-	"github.com/nishimweprince/trading-algos/services/leadlag-go/internal/research"
 )
 
 const ms = int64(1_000_000)
 
 var symbols = []string{"BTCUSDT", "SOLUSDT", "XRPUSDT"}
 
-func params() Params {
-	return Params{
-		Run: "test", Exploratory: true, Leaders: []string{"BTCUSDT"}, Followers: []string{"SOLUSDT", "XRPUSDT"},
-		Detector:  research.DetectorCfg{WMs: 500, Theta: 3, CooldownMs: 1000, HalfLifeMs: 60_000, WarmupMs: 10_000, MaxGapMs: 600_000},
-		LatencyMs: 10, HorizonMs: 1000, NotionalUSD: 25, TakerFeeBp: 5, MaxQuoteAgeMs: 1000,
-	}
-}
-
 func e8(v float64) int64 { return int64(math.Round(v * model.Scale)) }
 
-// feed builds the event stream: 20 s of balanced small leader flow (so the
-// detector's scale is warm), follower quotes every 100 ms, then at burstMs a
-// burst of large taker buys (sign +1) or sells (−1); after the burst the
-// followers' book moves by moveBp in the burst's direction.
+// feed collects events; quote adds a book update with 5 on each side.
 type feed struct {
 	evs []model.Event
 }
 
-func (f *feed) leader(tMs int64, qty float64, buy bool) {
-	f.evs = append(f.evs, model.Event{Sym: 0, Kind: model.KindTrade, RecvNs: tMs*ms + 2*ms, TradeMs: tMs, ExchMs: tMs,
-		Px: e8(60000), Qty: e8(qty), BuyerMaker: !buy})
-}
-
 func (f *feed) quote(sym uint16, tMs int64, bid, ask float64) {
-	f.evs = append(f.evs, model.Event{Sym: sym, Kind: model.KindQuote, RecvNs: tMs * ms, ExchMs: tMs, Bid: e8(bid), Ask: e8(ask)})
-}
-
-func scenario(sign int, moveBp float64, quotes bool) []model.Event {
-	f := &feed{}
-	const burst = 20_000
-	for t := int64(0); t < 23_000; t += 100 {
-		if t < burst || t > burst+300 {
-			f.leader(t, 0.01, (t/100)%2 == 0) // ~$600 alternating
-		}
-		if quotes || t < burst {
-			mid := 100.0
-			if t > burst+50 {
-				mid *= 1 + float64(sign)*moveBp/1e4
-			}
-			f.quote(1, t+1, mid-0.01, mid+0.01)
-			f.quote(2, t+2, mid/100-0.0001, mid/100+0.0001)
-		}
-	}
-	for k := int64(0); k < 5; k++ { // the burst: $600k of one-sided flow
-		f.leader(burst+k*10, 2, sign > 0)
-	}
-	// the stream must be in receive order, as the hub delivers it
-	sortByRecv(f.evs)
-	return f.evs
+	f.evs = append(f.evs, model.Event{Sym: sym, Kind: model.KindQuote, RecvNs: tMs * ms, ExchMs: tMs, Bid: e8(bid), Ask: e8(ask),
+		BidQty: e8(5), AskQty: e8(5)})
 }
 
 func sortByRecv(evs []model.Event) {
@@ -83,175 +42,28 @@ func run(e *Engine, evs []model.Event) {
 	}
 }
 
-func TestALeaderBurstOpensAndClosesTakerTradesInTheFollowers(t *testing.T) {
-	e := New(params(), symbols, nil, nil)
-	run(e, scenario(+1, 20, true))
-	if e.Signals != 1 {
-		t.Fatalf("signals = %d, want 1", e.Signals)
-	}
-	if e.Total.N != 2 || e.Open() != 0 {
-		t.Fatalf("trades = %d open = %d, want 2 and 0", e.Total.N, e.Open())
-	}
-	for _, tr := range e.Recent() {
-		if tr.Dir != 1 || tr.Leader != "BTCUSDT" || !tr.Exploratory || tr.Run != "test" {
-			t.Fatalf("trade %+v", tr)
-		}
-		// long: bought at the ask after the latency, sold at the bid after the horizon
-		if tr.EntryNs-tr.SignalNs < 10*ms || tr.ExitNs-tr.EntryNs < 1000*ms {
-			t.Fatalf("timing: entry %d ms after signal, exit %d ms after entry", (tr.EntryNs-tr.SignalNs)/ms, (tr.ExitNs-tr.EntryNs)/ms)
-		}
-		if tr.FeesBp != 10 || math.Abs(tr.NetBp-(tr.GrossBp-10)) > 1e-3 {
-			t.Fatalf("fees: %+v", tr)
-		}
-		if tr.GrossBp < 15 || tr.GrossBp > 20 { // 20 bp move less the half-spreads paid
-			t.Fatalf("gross %.3f bp, want 15-20", tr.GrossBp)
-		}
-		if math.Abs(tr.Qty*tr.EntryPx-25) > 1e-9 || math.Abs(tr.NetUSD-tr.NetBp/1e4*25) > 1e-5 {
-			t.Fatalf("sizing: %+v", tr)
-		}
-	}
-	if s := e.Total.Summarize(); s.N != 2 || s.HitRate != 1 {
-		t.Fatalf("summary %+v", s)
-	}
-}
-
-func TestASellBurstShortsAtTheBid(t *testing.T) {
-	e := New(params(), symbols, nil, nil)
-	run(e, scenario(-1, 20, true))
-	if e.Total.N != 2 {
-		t.Fatalf("trades = %d", e.Total.N)
-	}
-	for _, tr := range e.Recent() {
-		if tr.Dir != -1 || tr.GrossBp < 15 {
-			t.Fatalf("short trade %+v", tr)
-		}
-	}
-}
-
-func TestSkips(t *testing.T) {
-	// No follower quote after the burst: the last one is older than max_quote_age_ms at the entry.
-	p := params()
-	p.MaxQuoteAgeMs = 1
-	e := New(p, symbols, nil, nil)
-	run(e, scenario(+1, 20, false))
-	if e.Total.N != 0 || e.Skipped["stale_quote"] != 2 {
-		t.Fatalf("stale: trades %d skipped %v", e.Total.N, e.Skipped)
-	}
-
-	var halted atomic.Bool
-	halted.Store(true)
-	e = New(params(), symbols, &halted, nil)
-	run(e, scenario(+1, 20, true))
-	if e.Signals != 1 || e.Total.N != 0 || e.Skipped["halted"] != 1 {
-		t.Fatalf("halted: signals %d trades %d skipped %v", e.Signals, e.Total.N, e.Skipped)
-	}
-
-	// A follower with no quote at all.
-	p = params()
-	p.Followers = append(p.Followers, "DOGEUSDT")
-	e = New(p, append(append([]string(nil), symbols...), "DOGEUSDT"), nil, nil)
-	run(e, scenario(+1, 20, true))
-	if e.Total.N != 2 || e.Skipped["no_quote"] != 1 {
-		t.Fatalf("no quote: trades %d skipped %v", e.Total.N, e.Skipped)
-	}
-}
-
-func TestAPositionBlocksANewEntryUntilItCloses(t *testing.T) {
-	p := params()
-	p.HorizonMs = 3000 // the first positions are still open during the second burst
-	e := New(p, symbols, nil, nil)
-	evs := scenario(+1, 20, true)
-	// a second burst 1.0 s later: past the 1 s cooldown, while the first positions are still open
-	f := &feed{evs: evs}
-	for k := int64(0); k < 5; k++ {
-		f.leader(21_000+k*10, 3, true)
-	}
-	f.quote(1, 24_000, 100.19, 100.21) // after the 3 s exits
-	f.quote(2, 24_001, 1.0019, 1.0021)
-	sortByRecv(f.evs)
-	run(e, f.evs)
-	if e.Signals != 2 || e.Skipped["busy"] != 2 || e.Total.N != 2 || e.Open() != 0 {
-		t.Fatalf("signals %d trades %d skipped %v", e.Signals, e.Total.N, e.Skipped)
-	}
-}
-
-func TestSameEventsSameTrades(t *testing.T) {
-	evs := scenario(+1, 20, true)
-	var a, b []Trade
-	ea := New(params(), symbols, nil, func(t *Trade) { a = append(a, *t) })
-	eb := New(params(), symbols, nil, func(t *Trade) { b = append(b, *t) })
-	run(ea, evs)
-	run(eb, evs)
-	if len(a) != 2 || !reflect.DeepEqual(a, b) || !reflect.DeepEqual(ea.Total, eb.Total) {
-		t.Fatalf("replay differs:\n%+v\n%+v", a, b)
-	}
-}
-
-func TestLoadParams(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "shadow.json")
-	if err := os.WriteFile(path, []byte(`{"run":"explore-1","exploratory":true,"leaders":["BTCUSDT"],"followers":["SOLUSDT"],
-"detector":{"w_ms":500,"theta":3,"cooldown_ms":1000,"half_life_ms":1800000,"warmup_ms":1800000,"max_gap_ms":600000},
-"latency_ms":10,"horizon_ms":1000,"notional_usd":25,"taker_fee_bp":5,"max_quote_age_ms":1000}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	p, sum, err := LoadParams(path)
-	if err != nil || p.Run != "explore-1" || len(sum) != 64 || p.Detector != research.PrimaryDetector() {
-		t.Fatalf("p %+v sum %q err %v", p, sum, err)
-	}
-	bad := params()
-	bad.HorizonMs = 0
-	if bad.Validate() == nil {
-		t.Fatal("horizon 0 accepted")
-	}
-}
-
-func TestFlowParamsKeepTheExplore1Defaults(t *testing.T) {
-	p := params()
-	if p.TriggerKind() != "flow" || p.ExitMode() != "taker" {
-		t.Fatalf("trigger %s exit %s", p.TriggerKind(), p.ExitMode())
-	}
-	e := New(p, symbols, nil, nil)
-	run(e, scenario(+1, 20, true))
-	for _, tr := range e.Recent() {
-		if tr.ExitKind != "taker" || tr.FeesBp != 10 || tr.MarkoutsBp != nil || tr.GapBp != 0 {
-			t.Fatalf("flow trade %+v", tr)
-		}
-	}
-	bad := params()
-	bad.TopK = 2
-	if bad.Validate() == nil {
-		t.Fatal("top_k with the flow trigger accepted")
-	}
-	bad = params()
-	bad.MarkoutsMs = []int64{500, 2000}
-	if bad.Validate() == nil {
-		t.Fatal("a markout past the horizon accepted")
-	}
-}
-
 // Price trigger: BTC is the leader, SOL and XRP follow (1 bp spreads).
 func priceParams() Params {
 	return Params{
 		Run: "test-price", Exploratory: true, Leaders: []string{"BTCUSDT"}, Followers: []string{"SOLUSDT", "XRPUSDT"},
-		Trigger:   &TriggerCfg{Kind: "price", WindowMs: 1000, MinMoveBp: 4, CooldownMs: 5000, MinGapBp: 2},
+		Trigger:   &TriggerCfg{WindowMs: 1000, MinMoveBp: 4, CooldownMs: 5000, MinGapBp: 2},
 		TopK:      1,
-		LatencyMs: 10, HorizonMs: 2000, MarkoutsMs: []int64{100, 1000, 2000},
-		NotionalUSD: 25, TakerFeeBp: 5, MaxQuoteAgeMs: 1000,
+		LatencyMs: 10, HorizonMs: 2000, MarkoutsMs: []int64{100, 1000},
+		NotionalUSD: 25, TakerFeeBp: 4, MaxQuoteAgeMs: 1000,
+		Ticks: map[string]int64{"SOLUSDT": e8(0.005), "XRPUSDT": e8(0.00005)},
+		Quoter: &QuoterCfg{MaxSpreadBp: 4, CooldownMs: 5000, EntryTimeoutMs: 3000, ReverseBp: 2, MaxReprices: 1,
+			TargetGapFrac: 0.6, CloseGapBp: 0.5, StopMult: 1.5},
 	}
 }
 
 // priceFeed: quotes every 100 ms until endMs. BTC's mid is 60000 and jumps by
 // jumpBp at 20 s. SOL moves by solPreBp at 19.5 s (before the jump: it no
-// longer lags); XRP moves by xrpPostBp at 20.2 s (after the entry: it catches
-// up). xrpBidAfter, if > 0, lifts XRP's whole book from xrpBidAt so its bid
-// reaches that price.
+// longer lags); XRP moves by xrpPostBp at 20.2 s (after the signal: it catches
+// up).
 type priceFeed struct {
 	jumpBp, solPreBp, xrpPostBp float64
 	endMs                       int64
 	extraJumpAt                 int64 // > 0: BTC falls back at extraJumpAt−1000 and jumps again here
-	xrpBidAfter                 float64
-	xrpBidAt                    int64
 }
 
 func (pf priceFeed) events() []model.Event {
@@ -277,124 +89,203 @@ func (pf priceFeed) events() []model.Event {
 		if t >= 20_200 {
 			xrp *= 1 + pf.xrpPostBp/1e4
 		}
-		if pf.xrpBidAfter > 0 && t >= pf.xrpBidAt {
-			xrp = pf.xrpBidAfter + 0.00005
-		}
 		f.quote(2, t+2, xrp-0.00005, xrp+0.00005)
 	}
 	sortByRecv(f.evs)
 	return f.evs
 }
 
-func TestPriceTriggerOpensTheLaggingFollower(t *testing.T) {
-	e := New(priceParams(), symbols, nil, nil)
-	run(e, priceFeed{jumpBp: 6, solPreBp: 5, xrpPostBp: 10, endMs: 25_000}.events())
-	if e.Signals != 1 || e.Total.N != 1 || e.Open() != 0 {
-		t.Fatalf("signals %d trades %d open %d skipped %v", e.Signals, e.Total.N, e.Open(), e.Skipped)
+// runA runs p over evs and returns the engine and its finished attempts.
+func runA(p Params, evs []model.Event) (*Engine, []Attempt) {
+	var atts []Attempt
+	e := New(p, symbols, nil, nil)
+	e.SetAttemptSink(func(a *Attempt) { atts = append(atts, *a) })
+	run(e, evs)
+	return e, atts
+}
+
+func TestPriceTriggerPostsInTheLaggingFollower(t *testing.T) {
+	e, atts := runA(priceParams(), priceFeed{jumpBp: 6, solPreBp: 5, xrpPostBp: 10, endMs: 25_000}.events())
+	if e.Signals != 1 || len(atts) != 1 {
+		t.Fatalf("signals %d attempts %d skipped %v", e.Signals, len(atts), e.Skipped)
 	}
-	tr := e.Recent()[0]
-	if tr.Follower != "XRPUSDT" || tr.Dir != 1 || tr.ExitKind != "taker" {
-		t.Fatalf("trade %+v", tr)
+	a := atts[0]
+	if a.Follower != "XRPUSDT" || a.Dir != 1 || a.Leader != "BTCUSDT" {
+		t.Fatalf("attempt %+v", a)
 	}
-	if math.Abs(tr.LeaderMoveBp-6) > 0.1 || math.Abs(tr.GapBp-6) > 0.1 || math.Abs(tr.PreMoveBp) > 1e-6 {
-		t.Fatalf("move %.3f gap %.3f pre %.3f", tr.LeaderMoveBp, tr.GapBp, tr.PreMoveBp)
-	}
-	if tr.GrossBp < 8 || tr.GrossBp > 10 { // 10 bp move less the half-spreads
-		t.Fatalf("gross %.3f", tr.GrossBp)
-	}
-	// +100 ms samples the book before XRP's move lands (2 ms later); +1 s and +2 s see it.
-	if len(tr.MarkoutsBp) != 3 || tr.MarkoutsBp[0] != 0 || tr.MarkoutsBp[1] < 9 || tr.MarkoutsBp[2] < 9 {
-		t.Fatalf("markouts %v", tr.MarkoutsBp)
-	}
-	if s := e.Total.Summarize(); len(s.Markouts) != 3 {
-		t.Fatalf("summary markouts %v", s.Markouts)
+	if math.Abs(a.LeaderMoveBp-6) > 0.1 || math.Abs(a.GapBp-6) > 0.1 {
+		t.Fatalf("move %.3f gap %.3f", a.LeaderMoveBp, a.GapBp)
 	}
 
-	// top_k 2: SOL already moved 5 of the 6 bp (gap 1 < 2), so XRP still trades alone.
+	// top_k 2: SOL already moved 5 of the 6 bp (gap 1 < 2), so XRP is still alone.
 	p := priceParams()
 	p.TopK = 2
-	e = New(p, symbols, nil, nil)
-	run(e, priceFeed{jumpBp: 6, solPreBp: 5, xrpPostBp: 10, endMs: 25_000}.events())
-	if e.Total.N != 1 || e.Recent()[0].Follower != "XRPUSDT" {
-		t.Fatalf("top_k 2: trades %d", e.Total.N)
+	_, atts = runA(p, priceFeed{jumpBp: 6, solPreBp: 5, xrpPostBp: 10, endMs: 25_000}.events())
+	if len(atts) != 1 || atts[0].Follower != "XRPUSDT" {
+		t.Fatalf("top_k 2: attempts %+v", atts)
 	}
 	// Both lag: top_k 1 takes one, top_k 0 takes both.
 	p.TopK = 0
-	e = New(p, symbols, nil, nil)
-	run(e, priceFeed{jumpBp: 6, xrpPostBp: 10, endMs: 25_000}.events())
-	if e.Total.N != 2 {
-		t.Fatalf("top_k 0: trades %d", e.Total.N)
+	_, atts = runA(p, priceFeed{jumpBp: 6, xrpPostBp: 10, endMs: 25_000}.events())
+	if len(atts) != 2 {
+		t.Fatalf("top_k 0: attempts %d", len(atts))
 	}
 }
 
 func TestPriceTriggerThresholdAndCooldown(t *testing.T) {
-	e := New(priceParams(), symbols, nil, nil)
-	run(e, priceFeed{jumpBp: 3, endMs: 25_000}.events())
+	e, _ := runA(priceParams(), priceFeed{jumpBp: 3, endMs: 25_000}.events())
 	if e.Signals != 0 {
 		t.Fatalf("3 bp fired %d signals", e.Signals)
 	}
 	// Back down at 22 s and up again at 23 s: inside the 5 s cooldown.
-	e = New(priceParams(), symbols, nil, nil)
-	run(e, priceFeed{jumpBp: 6, endMs: 26_000, extraJumpAt: 23_000}.events())
+	e, _ = runA(priceParams(), priceFeed{jumpBp: 6, endMs: 26_000, extraJumpAt: 23_000}.events())
 	if e.Signals != 1 {
 		t.Fatalf("cooldown: %d signals", e.Signals)
 	}
 	// After the cooldown it fires again.
-	e = New(priceParams(), symbols, nil, nil)
-	run(e, priceFeed{jumpBp: 6, endMs: 30_000, extraJumpAt: 27_000}.events())
+	e, _ = runA(priceParams(), priceFeed{jumpBp: 6, endMs: 30_000, extraJumpAt: 27_000}.events())
 	if e.Signals != 2 {
 		t.Fatalf("after cooldown: %d signals", e.Signals)
 	}
 }
 
-func TestEntrySpreadFilter(t *testing.T) {
+func TestSkips(t *testing.T) {
+	// The followers' last quotes are ~100 ms old at the signal.
 	p := priceParams()
-	p.MaxEntrySpreadBp = 0.5 // the feed's spreads are 1 bp
-	e := New(p, symbols, nil, nil)
-	run(e, priceFeed{jumpBp: 6, xrpPostBp: 10, endMs: 25_000}.events())
-	if e.Signals != 1 || e.Total.N != 0 || e.Skipped["wide_spread"] != 1 || e.Open() != 0 {
-		t.Fatalf("trades %d skipped %v", e.Total.N, e.Skipped)
+	p.TopK, p.MaxQuoteAgeMs = 0, 1
+	e, atts := runA(p, priceFeed{jumpBp: 6, endMs: 25_000}.events())
+	if len(atts) != 0 || e.Skipped["stale_quote"] != 2 || e.Skipped["no_lagger"] != 1 {
+		t.Fatalf("stale: attempts %d skipped %v", len(atts), e.Skipped)
+	}
+	var halted atomic.Bool
+	halted.Store(true)
+	e = New(priceParams(), symbols, &halted, nil)
+	run(e, priceFeed{jumpBp: 6, endMs: 25_000}.events())
+	if e.Signals != 1 || e.Open() != 0 || e.Skipped["halted"] != 1 {
+		t.Fatalf("halted: signals %d open %d skipped %v", e.Signals, e.Open(), e.Skipped)
 	}
 }
 
-func TestMakerExit(t *testing.T) {
+func liqAt(evs []model.Event, tMs int64, buy bool, usd float64) []model.Event {
+	evs = append(evs, model.Event{Sym: 0, Kind: model.KindLiq, RecvNs: tMs*ms + 3*ms, ExchMs: tMs, TradeMs: tMs,
+		Px: e8(60000), Qty: e8(usd / 60000), BuyerMaker: !buy})
+	sortByRecv(evs)
+	return evs
+}
+
+func TestStrongMoveOrALiquidation(t *testing.T) {
 	p := priceParams()
-	p.Exit = &ExitCfg{Mode: "maker", MakerTimeoutMs: 1000, MakerFeeBp: 2}
-
-	// The book lifts through our resting ask after the horizon: a maker fill at the limit.
-	e := New(p, symbols, nil, nil)
-	run(e, priceFeed{jumpBp: 6, solPreBp: 5, xrpPostBp: 10, endMs: 25_000, xrpBidAfter: 1.0015, xrpBidAt: 22_500}.events())
-	if e.Total.N != 1 {
-		t.Fatalf("trades %d open %d", e.Total.N, e.Open())
+	p.Trigger.StrongMoveBp, p.Trigger.LiqWindowMs, p.Trigger.LiqMinUSD = 8, 1000, 50_000
+	// 6 bp alone does not reach 8 bp.
+	e, _ := runA(p, priceFeed{jumpBp: 6, xrpPostBp: 10, endMs: 25_000}.events())
+	if e.Signals != 0 {
+		t.Fatalf("6 bp fired without a liquidation: %d", e.Signals)
 	}
-	tr := e.Recent()[0]
-	if tr.ExitKind != "maker" || tr.FeesBp != 7 || math.Abs(tr.ExitPx-1.00105) > 1e-9 {
-		t.Fatalf("maker trade %+v", tr)
+	// With a same-direction liquidation 300 ms before: it fires.
+	e, atts := runA(p, liqAt(priceFeed{jumpBp: 6, xrpPostBp: 10, endMs: 25_000}.events(), 19_700, true, 60_000))
+	if e.Signals != 1 || len(atts) != 1 {
+		t.Fatalf("with liquidation: signals %d attempts %d", e.Signals, len(atts))
 	}
-	if s := e.ByExit[1].Summarize(); s.N != 1 {
-		t.Fatalf("by_exit maker %+v", s)
+	// Too small a liquidation does not count.
+	e, _ = runA(p, liqAt(priceFeed{jumpBp: 6, xrpPostBp: 10, endMs: 25_000}.events(), 19_700, true, 10_000))
+	if e.Signals != 0 {
+		t.Fatal("a small liquidation counted")
 	}
-
-	// A flat book never reaches the limit: a taker exit after the timeout.
-	e = New(p, symbols, nil, nil)
-	run(e, priceFeed{jumpBp: 6, solPreBp: 5, xrpPostBp: 10, endMs: 25_000}.events())
-	tr = e.Recent()[0]
-	if tr.ExitKind != "taker" || tr.FeesBp != 10 || (tr.ExitNs-tr.EntryNs)/ms < 3000 {
-		t.Fatalf("timeout trade %+v (held %d ms)", tr, (tr.ExitNs-tr.EntryNs)/ms)
+	// 10 bp needs no liquidation.
+	e, _ = runA(p, priceFeed{jumpBp: 10, xrpPostBp: 10, endMs: 25_000}.events())
+	if e.Signals != 1 {
+		t.Fatal("a strong move did not fire")
 	}
 }
 
-func TestPriceReplayIsDeterministic(t *testing.T) {
-	evs := priceFeed{jumpBp: 6, xrpPostBp: 10, endMs: 25_000}.events()
+func TestOppositeLiquidationSkips(t *testing.T) {
 	p := priceParams()
-	p.TopK = 0
-	var a, b []Trade
-	ea := New(p, symbols, nil, func(t *Trade) { a = append(a, *t) })
-	eb := New(p, symbols, nil, func(t *Trade) { b = append(b, *t) })
-	run(ea, evs)
-	run(eb, evs)
-	if len(a) != 2 || !reflect.DeepEqual(a, b) {
-		t.Fatalf("replay differs:\n%+v\n%+v", a, b)
+	p.Trigger.LiqWindowMs, p.Trigger.LiqMinUSD = 1000, 50_000
+	e, atts := runA(p, liqAt(priceFeed{jumpBp: 6, xrpPostBp: 10, endMs: 25_000}.events(), 19_700, false, 60_000))
+	if e.Signals != 1 || len(atts) != 0 || e.Skipped["liq_opposite"] != 1 {
+		t.Fatalf("signals %d attempts %d skipped %v", e.Signals, len(atts), e.Skipped)
+	}
+}
+
+func TestRollingBetaWaitsForItsWarmUp(t *testing.T) {
+	p := priceParams()
+	p.Trigger.Beta, p.Trigger.BetaWarmupMs = "rolling", 60_000
+	e, atts := runA(p, priceFeed{jumpBp: 6, xrpPostBp: 10, endMs: 25_000}.events())
+	if e.Signals != 1 || len(atts) != 0 || e.Skipped["beta_warmup"] != 2 || e.Skipped["no_lagger"] != 1 {
+		t.Fatalf("attempts %d skipped %v", len(atts), e.Skipped)
+	}
+}
+
+func TestRollingBetaScalesTheGap(t *testing.T) {
+	// The followers move 2× the leader every second for 10 minutes (β = 2),
+	// then BTC jumps 6 bp: XRP's gap is 12 bp, not 6.
+	f := &feed{}
+	btc, sol, xrp := 60000.0, 100.0, 1.0
+	const end = 609_000 // past the 3 s entry timeout and the markouts
+	for t := int64(0); t < end; t += 100 {
+		if t%1000 == 0 && t < 600_000 {
+			r := 1e-4
+			if (t/1000)%2 == 1 {
+				r = -1e-4
+			}
+			btc *= 1 + r
+			sol *= 1 + 2*r
+			xrp *= 1 + 2*r
+		}
+		b := btc
+		if t >= 602_000 {
+			b = btc * (1 + 6e-4)
+		}
+		f.quote(0, t, b-0.05, b+0.05)
+		f.quote(1, t+1, sol*(1-1e-5), sol*(1+1e-5))
+		f.quote(2, t+2, xrp*(1-1e-5), xrp*(1+1e-5))
+	}
+	sortByRecv(f.evs)
+	p := priceParams()
+	p.Trigger.Beta, p.Trigger.BetaHalfLifeMs, p.Trigger.BetaWarmupMs = "rolling", 60_000, 60_000
+	_, atts := runA(p, f.evs)
+	if len(atts) != 1 {
+		t.Fatalf("attempts %d", len(atts))
+	}
+	if a := atts[0]; math.Abs(a.Beta-2) > 0.05 || math.Abs(a.GapBp-12) > 0.5 {
+		t.Fatalf("beta %.3f gap %.3f", a.Beta, a.GapBp)
+	}
+}
+
+func TestLoadParams(t *testing.T) {
+	dir := t.TempDir()
+	b, err := json.Marshal(priceParams())
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "shadow.json")
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, sum, err := LoadParams(path)
+	if err != nil || p.Run != "test-price" || len(sum) != 64 {
+		t.Fatalf("p %+v sum %q err %v", p, sum, err)
+	}
+	// An unknown field (here explore-3's engine) is refused.
+	if err := os.WriteFile(path, append(b[:len(b)-1], []byte(`,"engine":"quoter"}`)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := LoadParams(path); err == nil {
+		t.Fatal("an unknown field was accepted")
+	}
+	for name, mut := range map[string]func(*Params){
+		"horizon 0":  func(p *Params) { p.HorizonMs = 0 },
+		"no trigger": func(p *Params) { p.Trigger = nil },
+		"no quoter":  func(p *Params) { p.Quoter = nil },
+		"no ticks":   func(p *Params) { p.Ticks = nil },
+		"beta":       func(p *Params) { p.Trigger.Beta = "two" },
+		"markouts":   func(p *Params) { p.MarkoutsMs = []int64{1000, 500} },
+	} {
+		bad := priceParams()
+		mut(&bad)
+		if bad.Validate() == nil {
+			t.Fatalf("%s accepted", name)
+		}
 	}
 }
 
@@ -429,6 +320,9 @@ func TestStatusMarshalsWithNonFiniteNumbers(t *testing.T) {
 		t.Fatalf("summary %+v", s)
 	}
 	if _, err := json.Marshal(s); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := json.Marshal(New(priceParams(), symbols, nil, nil).Status("x")); err != nil {
 		t.Fatal(err)
 	}
 }

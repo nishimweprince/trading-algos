@@ -236,7 +236,7 @@ function render(s) {
   });
   document.querySelector("#syms tbody").innerHTML = rows.join("") || `<tr><td colspan="12">no data yet</td></tr>`;
 
-  const runs = t.shadow_runs || (t.shadow ? [t.shadow] : []);
+  const runs = t.shadow ? [t.shadow] : [];
   $("explore").textContent = runs.length ? runs.map((r) => r.run).join(" · ") : "off";
   $("explore").className = "v " + (runs.length ? "ok-t" : "");
   $("shadow-runs").innerHTML = runs.map((sh) => renderRun(sh, now)).join("");

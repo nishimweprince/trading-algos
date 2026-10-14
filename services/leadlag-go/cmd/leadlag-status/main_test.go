@@ -12,9 +12,8 @@ import (
 func TestMetricsDownloadHasTheMetricsButNotTheEvents(t *testing.T) {
 	c := &cache{
 		trader: json.RawMessage(`{"mode":"shadow","hub":{"events":5184189,"engine_ns_60s":{"p99":27648}},
-			"shadow":{"run":"explore-1","signals":12,"total":{"n":3,"mean_net_bp":-4.1},
-			"by_follower":{"SOLUSDT":{"n":2}},"recent":[{"follower":"SOLUSDT"},{"follower":"XRPUSDT"},{"follower":"SOLUSDT"}]},
-			"shadow_runs":[{"run":"explore-2","recent":[{"follower":"SOLUSDT"}]},{"run":"explore-3a","recent":[]}]}`),
+			"shadow":{"run":"explore-4","signals":12,"total":{"n":3,"mean_net_bp":-4.1},
+			"by_follower":{"SOLUSDC":{"n":2}},"recent":[{"follower":"SOLUSDC"},{"follower":"XRPUSDC"},{"follower":"SOLUSDC"}]}}`),
 		observer: json.RawMessage(`{"tape":{"enabled":true},"symbols":[{"symbol":"BTCUSDT"}]}`),
 		probe:    json.RawMessage(`{"rest_warm_us":{"p50":10750}}`),
 		traderAt: time.Now(), obsAt: time.Now(),
@@ -29,9 +28,8 @@ func TestMetricsDownloadHasTheMetricsButNotTheEvents(t *testing.T) {
 	}
 	var doc struct {
 		Trader struct {
-			Hub    map[string]any   `json:"hub"`
-			Shadow map[string]any   `json:"shadow"`
-			Runs   []map[string]any `json:"shadow_runs"`
+			Hub    map[string]any `json:"hub"`
+			Shadow map[string]any `json:"shadow"`
 		} `json:"trader"`
 		Observer map[string]any `json:"observer"`
 		Probe    map[string]any `json:"probe"`
@@ -46,9 +44,6 @@ func TestMetricsDownloadHasTheMetricsButNotTheEvents(t *testing.T) {
 	}
 	if sh["recent_trades_omitted"] != float64(3) || sh["signals"] != float64(12) || sh["by_follower"] == nil || sh["total"] == nil {
 		t.Fatalf("shadow %v", sh)
-	}
-	if len(doc.Trader.Runs) != 2 || doc.Trader.Runs[0]["recent"] != nil || doc.Trader.Runs[0]["recent_trades_omitted"] != float64(1) {
-		t.Fatalf("shadow runs %v", doc.Trader.Runs)
 	}
 	if doc.Trader.Hub["events"] != float64(5184189) || doc.Observer["tape"] == nil || doc.Probe["rest_warm_us"] == nil || doc.Age["trader"] == nil {
 		t.Fatalf("metrics missing: %+v", doc)
