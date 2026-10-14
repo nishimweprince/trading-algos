@@ -288,6 +288,14 @@ int shadow(int argc, char** argv) {
   std::atomic<std::uint64_t> status_depth{0};
   std::atomic<std::uint64_t> status_trades{0};
   std::atomic<std::uint64_t> status_fills{0};
+  std::atomic<std::int64_t> status_realized{0};
+  std::atomic<std::int64_t> status_position{0};
+  std::atomic<std::int64_t> status_entry{0};
+  std::atomic<std::int64_t> status_mid{0};
+  std::atomic<std::uint64_t> status_intents{0};
+  std::atomic<std::uint64_t> status_rejects{0};
+  std::atomic<std::uint64_t> status_gaps{0};
+  std::atomic<std::uint64_t> status_candles{0};
   std::atomic<bool> feed_done{false};
   std::atomic<bool> decision_done{false};
   std::atomic<bool> pipeline_failed{false};
@@ -306,19 +314,27 @@ int shadow(int argc, char** argv) {
   auto record_queue = std::make_unique<bpmm::SpscRing<NormalRecord, 1024>>();
   bpmm::StatusServer status(port, [&] {
     return std::string{"{\"service_live\":true,\"ready\":"} +
-           (status_ready.load() ? "true" : "false") +
-           ",\"mode\":\"shadow\",\"halted\":" +
-           (status_halted.load() ? "true" : "false") +
+           (status_ready.load() ? "true" : "false") + ",\"mode\":\"shadow\",\"symbol\":\"" + symbol +
+           "\",\"halted\":" + (status_halted.load() ? "true" : "false") +
            ",\"depth_events\":" + std::to_string(status_depth.load()) +
            ",\"trade_events\":" + std::to_string(status_trades.load()) +
-           ",\"fills\":" + std::to_string(status_fills.load()) + "}\n";
-  });
+           ",\"fills\":" + std::to_string(status_fills.load()) +
+           ",\"realized_pnl_raw\":" + std::to_string(status_realized.load()) +
+           ",\"position_raw\":" + std::to_string(status_position.load()) +
+           ",\"entry_raw\":" + std::to_string(status_entry.load()) +
+           ",\"mid_raw\":" + std::to_string(status_mid.load()) +
+           ",\"intents\":" + std::to_string(status_intents.load()) +
+           ",\"risk_rejects\":" + std::to_string(status_rejects.load()) +
+           ",\"gaps\":" + std::to_string(status_gaps.load()) +
+           ",\"closed_candles\":" + std::to_string(status_candles.load()) + "}\n";
+  }, journal_path);
   std::string error;
   if (!status.start(error)) { std::cerr << "status server: " << error << '\n'; return 1; }
 
   std::thread recorder([&] {
     RawRecord raw;
     NormalRecord record;
+    auto last_flush = std::chrono::steady_clock::now();
     while (!decision_done.load(std::memory_order_acquire) ||
            !feed_done.load(std::memory_order_acquire) || !raw_queue->empty() ||
            !record_queue->empty()) {
@@ -342,6 +358,12 @@ int shadow(int argc, char** argv) {
         if (!written) fail_pipeline("normalized journal write failed");
       }
       if (!worked) std::this_thread::sleep_for(std::chrono::microseconds(100));
+      const auto now = std::chrono::steady_clock::now();
+      if (now - last_flush >= std::chrono::seconds(1)) {
+        journal.flush();
+        if (!journal.good()) fail_pipeline("journal flush failed");
+        last_flush = now;
+      }
     }
     journal.flush();
   });
@@ -392,6 +414,11 @@ int shadow(int argc, char** argv) {
           push_record(std::move(intent_record));
         }
         status_depth.store(engine.metrics().depth_events);
+        status_intents.store(engine.metrics().intents);
+        status_rejects.store(engine.metrics().risk_rejects);
+        status_gaps.store(engine.metrics().gaps);
+        const auto& book = engine.book();
+        status_mid.store((book.best_bid().price.raw + book.best_ask().price.raw) / 2);
       } else if (message.parsed.kind == bpmm::ParsedKind::trade) {
         NormalRecord record;
         record.kind = RecordKind::trade;
@@ -407,12 +434,16 @@ int shadow(int argc, char** argv) {
         engine.clear_fill_events();
         status_trades.store(engine.metrics().trade_events);
         status_fills.store(engine.metrics().fills);
+        status_realized.store(engine.metrics().realized_pnl_raw);
+        status_position.store(engine.position().quantity_raw);
+        status_entry.store(engine.position().average_entry.raw);
       } else if (message.parsed.kind == bpmm::ParsedKind::candle) {
         NormalRecord record;
         record.kind = RecordKind::candle;
         record.candle = message.parsed.candle;
         push_record(std::move(record));
         engine.on_candle(message.parsed.candle);
+        status_candles.store(engine.metrics().closed_candles);
       } else if (message.parsed.kind == bpmm::ParsedKind::mark_price) {
         NormalRecord record;
         record.kind = RecordKind::mark_price;
