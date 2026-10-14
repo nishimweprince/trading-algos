@@ -37,7 +37,7 @@
 //! paper, at the bid at once. A position closed this way writes a `settle`
 //! record with `outcome: "exit"`, so results count it like any other.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use pk_core::decision::{Action, Decision, StrategyParams, WINDOW_S, decide, net_edge_max_px};
@@ -321,6 +321,12 @@ pub struct Engine {
     order_shares: Option<i64>,
     /// The venue of the frame being applied ('k', 'p' or 'c').
     frame_venue: char,
+    /// Exit FAKs sent and not yet answered (`live_exit` / `exit_miss`), by window key.
+    exits_in_flight: HashSet<String>,
+    /// A wallet balance that disagreed with the ledger once; applied when the next read agrees.
+    unconfirmed_balance: Option<f64>,
+    /// A wallet read has been applied (the first one always is).
+    balance_seen: bool,
     /// The armed trigger (live trade engine only), and what it was last given per asset.
     fast_gate: Option<Arc<dyn FastGate>>,
     pub arms: Vec<ArmUpdate>,
@@ -387,6 +393,9 @@ impl Engine {
             exit_misses: HashMap::new(),
             order_shares: cfg.order_shares,
             frame_venue: 'c',
+            exits_in_flight: HashSet::new(),
+            unconfirmed_balance: None,
+            balance_seen: false,
             fast_gate: None,
             arms: Vec::new(),
             armed: vec![None; n],
@@ -1214,10 +1223,11 @@ impl Engine {
         if !should_exit(bid, fair, vwap) || self.exit_until.get(&key).is_some_and(|u| recv_ns < *u) {
             return;
         }
-        self.exit_until.insert(key, recv_ns + EXIT_RETRY_NS);
+        self.exit_until.insert(key.clone(), recv_ns + EXIT_RETRY_NS);
         self.count("exit_signals");
         let min_px = exit_floor(vwap, w.fee_rate, w.fee_exponent);
         if self.live {
+            self.exits_in_flight.insert(key);
             self.exits.push(ExitIntent {
                 asset: w.asset.clone(),
                 open_unix: w.open_unix,
@@ -1614,6 +1624,7 @@ impl Engine {
     }
 
     pub(crate) fn settle(&mut self, asset: &str, open_unix: i64, outcome: &str, recv_ns: i64) {
+        self.exits_in_flight.remove(&format!("{asset}:{open_unix}"));
         let Some(p) = self.ledger.settle(asset, open_unix, outcome, recv_ns) else { return };
         self.count("settled");
         let record = json!({
@@ -1642,7 +1653,7 @@ impl Engine {
     /// Recompute the order size if nothing is at risk.
     fn resize(&mut self, balance: f64, recv_ns: i64, source: &str) {
         let open = self.ledger.open_positions().count();
-        let in_flight = self.ledger.in_flight() + self.pending.len();
+        let in_flight = self.ledger.in_flight() + self.pending.len() + self.exits_in_flight.len();
         if let Some(notional) = self.sizer.reconcile(balance, open, in_flight, recv_ns) {
             self.apply_size(notional, balance, recv_ns, source);
         }
@@ -1695,6 +1706,33 @@ impl Engine {
             "balance" => {
                 let Some(balance) = f("balance").filter(|b| b.is_finite()) else { return };
                 let before = self.ledger.cash;
+                // The wallet and the ledger see an order's cash at different
+                // times: a read that holds an exit's proceeds or a redeemed payout
+                // before its result arrives (or misses one just credited) would
+                // count it twice. So drift waits while an order is in flight or a
+                // closed window awaits its resolution, and until two reads agree.
+                if (balance - before).abs() >= 0.005 && self.balance_seen {
+                    let now_s = recv_ns.div_euclid(NS);
+                    let busy = self.ledger.in_flight() > 0
+                        || !self.exits_in_flight.is_empty()
+                        || self.ledger.open_positions().any(|p| p.open_unix + WINDOW_S <= now_s);
+                    let agreed = self.unconfirmed_balance.is_some_and(|b| (b - balance).abs() < 0.005);
+                    if busy || !agreed {
+                        self.unconfirmed_balance = (!busy).then_some(balance);
+                        let record = json!({
+                            "type": "reconcile", "t_ns": recv_ns, "balance": round_dp(balance, 4),
+                            "ledger_cash": round_dp(before, 4), "drift": round_dp(balance - before, 4),
+                            "skipped": if busy { "in_flight" } else { "unconfirmed" },
+                            "open_positions": self.ledger.open_positions().count(),
+                            "in_flight": self.ledger.in_flight(),
+                        });
+                        self.count("reconcile_skipped");
+                        self.write(recv_ns, record, false);
+                        return;
+                    }
+                }
+                self.unconfirmed_balance = None;
+                self.balance_seen = true;
                 let drift = self.ledger.set_cash(balance, recv_ns);
                 if drift.abs() >= 0.005 {
                     let record = json!({
@@ -1722,6 +1760,7 @@ impl Engine {
                 let misses = self.exit_misses.entry(key.clone()).or_insert(0);
                 *misses += 1;
                 let misses = *misses;
+                self.exits_in_flight.remove(&key);
                 let until = match reason.as_str() {
                     _ if misses >= EXIT_MAX_ATTEMPTS => recv_ns + EXIT_RETRY_NS,
                     "balance" => recv_ns + EXIT_BALANCE_RETRY_NS,
@@ -1742,6 +1781,7 @@ impl Engine {
                     (f("shares").unwrap_or(0.0), f("proceeds").unwrap_or(0.0), f("fee").unwrap_or(0.0));
                 let reason = v.get("reason").and_then(Value::as_str).unwrap_or("flatten").to_owned();
                 let order_id = v.get("order_id").cloned();
+                self.exits_in_flight.remove(&format!("{asset}:{open}"));
                 self.close_position(&asset, open, (shares, proceeds, fee), &reason, order_id, recv_ns);
             }
             _ => {}

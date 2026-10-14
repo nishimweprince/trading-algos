@@ -197,13 +197,20 @@ fn live_entries_wait_for_the_venue() {
     assert_eq!((fill["venue"].as_str(), fill["shares"].as_f64()), (Some("live"), Some(10.0)));
     assert!((fill["fee"].as_f64().unwrap() - 10.0 * 0.07 * 0.46 * 0.54).abs() < 1e-4);
     assert_eq!(e.ledger.open_positions().count(), 1);
-    // While a position is open the wallet read reconciles cash but keeps the size.
+    // A drift is applied once two reads agree; the size stays while a position is open.
+    let ledger_cash = 100.0 - 4.6 - 0.17388;
     ctl(&mut e, 60.0, json!({"type":"balance","balance":95.0}));
+    assert!((e.ledger.cash - ledger_cash).abs() < 1e-3);
+    ctl(&mut e, 90.0, json!({"type":"balance","balance":95.0}));
+    assert_eq!(e.ledger.cash, 95.0);
     assert_eq!(e.params.notional_usd, 5.0);
-    // The seed read (0 → 100) and this one both drifted from the ledger.
-    let drifts: Vec<f64> = sink.of("reconcile").iter().map(|r| r["drift"].as_f64().unwrap()).collect();
-    assert_eq!(drifts.len(), 2);
-    assert!((drifts[1] - (95.0 - (100.0 - 4.6 - 0.17388))).abs() < 1e-3, "{drifts:?}");
+    // The seed read (0 → 100), the unconfirmed one and the applied one.
+    let rec = sink.of("reconcile");
+    let drifts: Vec<f64> = rec.iter().map(|r| r["drift"].as_f64().unwrap()).collect();
+    assert_eq!(drifts.len(), 3);
+    assert_eq!(rec[1]["skipped"], "unconfirmed");
+    assert!(rec[2].get("skipped").is_none());
+    assert!((drifts[2] - (95.0 - ledger_cash)).abs() < 1e-3, "{drifts:?}");
     ctl(
         &mut e,
         905.0,
@@ -390,6 +397,42 @@ fn a_missed_live_exit_rearms_at_once_or_after_a_balance_second() {
     assert!(e.exits.is_empty());
     poly_catches_up(&mut e, 42.2);
     assert_eq!(e.exits.len(), 1);
+}
+
+#[test]
+fn a_wallet_read_during_an_exit_is_not_counted_twice() {
+    let (mut e, sink) = engine(Opts { live: true, cash: 0.0, active_exit: true, ..Default::default() });
+    setup(&mut e);
+    ctl(&mut e, 1.0, json!({"type":"balance","balance":100.0}));
+    cross(&mut e, 30.0);
+    ctl(
+        &mut e,
+        30.6,
+        json!({"type":"live_fill","asset":"BTC","open_unix":OPEN,"side":"yes","token":"Y",
+               "order_id":"0xo","ordered":10.0,"shares":10.0,"cost":4.6,"entry_px":0.46,
+               "limit_px":0.46,"status":"matched","decision_ns":at(30.02)}),
+    );
+    poly_catches_up(&mut e, 35.0);
+    assert_eq!(std::mem::take(&mut e.exits).len(), 1);
+    let after_exit = e.ledger.cash + 6.9 - 0.15;
+    // The wallet already holds the sale's proceeds; its result has not arrived.
+    ctl(&mut e, 36.0, json!({"type":"balance","balance":after_exit}));
+    assert_eq!(sink.of("reconcile").last().unwrap()["skipped"], "in_flight");
+    ctl(
+        &mut e,
+        36.5,
+        json!({"type":"live_exit","asset":"BTC","open_unix":OPEN,"reason":"fair","shares":10.0,
+               "proceeds":6.9,"fee":0.15,"order_id":"0xs"}),
+    );
+    assert!((e.ledger.cash - after_exit).abs() < 1e-9);
+    // The wallet catching up later is no drift at all.
+    ctl(&mut e, 66.0, json!({"type":"balance","balance":after_exit}));
+    assert_eq!(sink.of("reconcile").len(), 2, "the seed and the skipped read only");
+    // A read that misses the proceeds just credited, once, changes nothing.
+    ctl(&mut e, 96.0, json!({"type":"balance","balance":after_exit - 6.75}));
+    assert!((e.ledger.cash - after_exit).abs() < 1e-9);
+    ctl(&mut e, 126.0, json!({"type":"balance","balance":after_exit}));
+    assert!((e.ledger.cash - after_exit).abs() < 1e-9);
 }
 
 #[test]
