@@ -12,6 +12,18 @@ Readiness requires a verified book, one closed candle, and no halt. Startup
 connects the WebSocket before requesting the REST snapshot so depth updates are
 buffered by the socket while the snapshot is fetched.
 
+## Dashboard
+
+Open `http://127.0.0.1:8060/` on the host for the operator dashboard. It is
+loopback-only by design; from elsewhere use an SSH forward
+(`ssh -L 8060:127.0.0.1:8060 <host>`) or a tunnel such as
+`cloudflared tunnel --url http://127.0.0.1:8060`. The page polls
+`/api/summary` and `/api/activity` every five seconds. Curves and fills come
+from the current journal file only, so rotate-aware history needs the archived
+journals; headline counters cover the process lifetime. If the page shows
+`HALTED`, follow the kill and feed-gap sections below before trusting any quote
+state.
+
 ## Kill and recovery
 
 Create the configured kill file to stop new intents and cancel all simulated

@@ -45,10 +45,14 @@ evaluation windows and reports mean slope, MSE, and directional accuracy. The
 `--train` and `--evaluate` options exist for fixture tests; research reports use
 the defaults.
 
-The status server binds only to `127.0.0.1`: `/health/live`, `/health/ready`,
-and `/metrics` return the allowlisted shadow status JSON. A kill file cancels
-all shadow quotes and survives restart. Remove it to allow the process to
-acknowledge the halt after the book is verified again.
+The status server binds only to `127.0.0.1`. `/` serves the operator
+dashboard (PnL, position, price/BP charts, recent fills), backed by
+`/api/summary` and `/api/activity`; `/health/live`, `/health/ready`, and
+`/metrics` return the same allowlisted shadow status JSON. The dashboard reads
+the current journal file and atomic counters only, so page loads never touch
+the decision thread. A kill file cancels all shadow quotes and survives
+restart. Remove it to allow the process to acknowledge the halt after the book
+is verified again.
 
 `--mode live`, or any value other than `shadow`, exits before opening a network
 connection. The service contains no API-key configuration and makes only public
