@@ -18,6 +18,12 @@ import (
 //     when the traded quantity exceeds the quantity ahead, or at once when a
 //     trade prints strictly through our price. A fill is always complete
 //     ($25 orders).
+//   - Only trades executed after the order reached the book count. aggTrade
+//     is published late (E − T p90 ≈ 150 ms), so a trade can arrive after
+//     our order joined although it executed before; its quantity is already
+//     out of the displayed size we joined behind. A trade whose exchange time
+//     T is before liveNs, at millisecond resolution, is ignored (a trade in
+//     the joining millisecond counts as before: the conservative side).
 //   - If the touch moves behind our price with no trade, our order is the
 //     best price: the quantity ahead becomes 0.
 //   - A price behind the touch has an unknown queue (+Inf) until the touch
@@ -113,7 +119,7 @@ func (o *order) timers(now int64, q *quote) int {
 		}
 	}
 	if o.nextPx != 0 && now >= o.nextNs {
-		o.px, o.nextPx, o.nextNs, o.live = o.nextPx, 0, 0, false
+		o.px, o.liveNs, o.nextPx, o.nextNs, o.live = o.nextPx, o.nextNs, 0, 0, false
 		if !o.join(q) {
 			*o = order{}
 			return ordRejected
@@ -144,9 +150,9 @@ func (o *order) onQuote(q *quote) {
 	}
 }
 
-// onTrade reports whether the trade fills the order.
-func (o *order) onTrade(px, qty int64, takerSign int64) bool {
-	if !o.live {
+// onTrade reports whether the trade (exchange time tradeMs) fills the order.
+func (o *order) onTrade(px, qty, takerSign, tradeMs int64) bool {
+	if !o.live || tradeMs*1_000_000 < o.liveNs {
 		return false
 	}
 	if o.side > 0 {

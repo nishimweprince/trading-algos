@@ -218,10 +218,10 @@ func (e *Engine) quoterEvent(ev *model.Event) {
 			s.exit.onQuote(qt)
 			e.qFollow(f, s, now)
 		case model.KindTrade:
-			if s.entry.onTrade(ev.Px, ev.Qty, ev.TakerSign()) {
+			if s.entry.onTrade(ev.Px, ev.Qty, ev.TakerSign(), ev.TradeMs) {
 				e.qFill(f, s, &s.entry, now)
 			}
-			if s.exit.onTrade(ev.Px, ev.Qty, ev.TakerSign()) {
+			if s.exit.onTrade(ev.Px, ev.Qty, ev.TakerSign(), ev.TradeMs) {
 				e.qFill(f, s, &s.exit, now)
 			}
 		}
