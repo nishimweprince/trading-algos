@@ -3,3 +3,6 @@ data/
 .env
 pump-desk.toml
 *.capture
+research/data/*.partial.jsonl
+research/data/*.tmp
+research/data/*.json.gz

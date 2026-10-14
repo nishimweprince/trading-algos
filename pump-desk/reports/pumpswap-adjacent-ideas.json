@@ -1,0 +1,209 @@
+{
+  "config": {
+    "size_sol": 0.5,
+    "fee_bps": 125.0,
+    "tx_cost_sol": 0.0011,
+    "train_fraction": 0.67,
+    "minimum_trades": 30
+  },
+  "universe": {
+    "all_paths": 744,
+    "truncated_paths": 76,
+    "normal_paths": 575,
+    "mayhem_paths": 169,
+    "self_pump": 274,
+    "train": 385,
+    "test": 190,
+    "callers": 229,
+    "top_callers": [
+      [
+        "9C4nRvhhVquCKATjDCx5FKvNS9PNgNqgyWy9AcoDjYv5",
+        261
+      ],
+      [
+        "Gygj9QQby4j2jryqyqBHvLP7ctv2SaANgh4sCb69BUpA",
+        61
+      ],
+      [
+        "3dL83TFwgc7zzRvscDnLoK99sEVvU39f81VpdqWj4NtS",
+        45
+      ],
+      [
+        "7dL5UMwdE5ncphgN5XQc2L2bZ9Nbszm51HM8WKWnVVuX",
+        26
+      ],
+      [
+        "fA4AnX8kwXgjA4shPDJvAmduzWA3iBn2AkJBdeBpNBE",
+        19
+      ],
+      [
+        "LfEcaUf77iEhnz6gFpLqYgDb5Uk6Ekc5n69wu7Qa9Uw",
+        18
+      ],
+      [
+        "7Ud5vgBFoRNx9RSSNDDyk1ojawbXN2RcjiKDDajC6PAW",
+        15
+      ],
+      [
+        "D8pP1hegfQrND1tpMv1pQJZYyzwnHsiFa9AVLc2Lzoxy",
+        14
+      ],
+      [
+        "41wQXsA8KhKxzESSe3qbZWgAGkic8aBbSngBwPCnfQJQ",
+        10
+      ],
+      [
+        "2g2DaDN9VW5vbR3eq2AcaprsakbeiVXP6PoTbp6hRxqd",
+        8
+      ]
+    ]
+  },
+  "searched_candidates": 28960,
+  "family_results": [
+    {
+      "family": "breakout",
+      "entry": "breakout;max_single_buy_sol=30;breakout_pct=20;max_wait_ms=5000",
+      "exit": "h=60s,tp=10,sl=none",
+      "train": {
+        "n": 31,
+        "win_pct": 90.3225806451613,
+        "mean_pct": 8.968218120588979,
+        "median_pct": 8.866665786434446,
+        "se_pct": 2.4589229665520413,
+        "p05_pct": -15.710541498453825,
+        "total_sol": 1.3900738086912918,
+        "take_profit_pct": 87.09677419354838
+      },
+      "test": {
+        "n": 4,
+        "win_pct": 50.0,
+        "mean_pct": -4.203636763003194,
+        "median_pct": -1.003886189401011,
+        "se_pct": 10.996366827042948,
+        "p05_pct": -31.60903106214804,
+        "total_sol": -0.0840727352600639,
+        "take_profit_pct": 50.0
+      },
+      "bootstrap_ci": [
+        -21.763804700903577,
+        13.356531174897189
+      ]
+    },
+    {
+      "family": "dip_rebound",
+      "entry": "dip_rebound;max_wait_ms=40000;drawdown_pct=30;rebound_pct=5",
+      "exit": "h=60s,tp=10,sl=none",
+      "train": {
+        "n": 33,
+        "win_pct": 84.84848484848484,
+        "mean_pct": 4.2510202288240935,
+        "median_pct": 9.45705705878672,
+        "se_pct": 3.0054222126117525,
+        "p05_pct": -48.160443234497976,
+        "total_sol": 0.7014183377559756,
+        "take_profit_pct": 84.84848484848484
+      },
+      "test": {
+        "n": 3,
+        "win_pct": 66.66666666666667,
+        "mean_pct": -1.2530970215545,
+        "median_pct": 7.903270424181883,
+        "se_pct": 11.364522891258758,
+        "p05_pct": -23.847324789573868,
+        "total_sol": -0.0187964553233175,
+        "take_profit_pct": 66.66666666666667
+      },
+      "bootstrap_ci": [
+        -23.84732478957387,
+        12.184763300728484
+      ]
+    },
+    {
+      "family": "post_self_pump",
+      "entry": "post_self_pump;delay_ms=400",
+      "exit": "h=60s,tp=20,sl=10",
+      "train": {
+        "n": 166,
+        "win_pct": 5.421686746987952,
+        "mean_pct": -1.218657163091657,
+        "median_pct": -1.038645478856722,
+        "se_pct": 0.20687646878345722,
+        "p05_pct": -2.4924208262991487,
+        "total_sol": -1.0114854453660755,
+        "take_profit_pct": 0.0
+      },
+      "test": {
+        "n": 108,
+        "win_pct": 2.7777777777777777,
+        "mean_pct": -3.553797303155602,
+        "median_pct": -1.0366194010048644,
+        "se_pct": 0.796632438596328,
+        "p05_pct": -31.028147217843618,
+        "total_sol": -1.919050543704026,
+        "take_profit_pct": 0.0
+      },
+      "bootstrap_ci": [
+        -5.229810538720551,
+        -2.1418373893467564
+      ]
+    },
+    {
+      "family": "delay_momentum",
+      "entry": "delay_momentum;delay_ms=1000;min_return_pct=0;min_flow_sol=10",
+      "exit": "h=40s,tp=10,sl=none",
+      "train": {
+        "n": 285,
+        "win_pct": 23.157894736842106,
+        "mean_pct": -1.5810885700336448,
+        "median_pct": -1.6645466458173128,
+        "se_pct": 0.5891885107089261,
+        "p05_pct": -18.5453302677565,
+        "total_sol": -2.253051212297947,
+        "take_profit_pct": 18.596491228070175
+      },
+      "test": {
+        "n": 144,
+        "win_pct": 9.722222222222221,
+        "mean_pct": -4.111327844399779,
+        "median_pct": -1.741690664243941,
+        "se_pct": 1.007190313877894,
+        "p05_pct": -22.879955461292326,
+        "total_sol": -2.9601560479678426,
+        "take_profit_pct": 7.638888888888889
+      },
+      "bootstrap_ci": [
+        -6.400522470901628,
+        -2.385848843081737
+      ]
+    }
+  ],
+  "overall_winner": {
+    "entry": "breakout;max_single_buy_sol=30;breakout_pct=20;max_wait_ms=5000",
+    "exit": "h=60s,tp=10,sl=none",
+    "train": {
+      "n": 31,
+      "win_pct": 90.3225806451613,
+      "mean_pct": 8.968218120588979,
+      "median_pct": 8.866665786434446,
+      "se_pct": 2.4589229665520413,
+      "p05_pct": -15.710541498453825,
+      "total_sol": 1.3900738086912918,
+      "take_profit_pct": 87.09677419354838
+    },
+    "test": {
+      "n": 4,
+      "win_pct": 50.0,
+      "mean_pct": -4.203636763003194,
+      "median_pct": -1.003886189401011,
+      "se_pct": 10.996366827042948,
+      "p05_pct": -31.60903106214804,
+      "total_sol": -0.0840727352600639,
+      "take_profit_pct": 50.0
+    },
+    "bootstrap_ci": [
+      -21.763804700903577,
+      13.356531174897189
+    ]
+  },
+  "verdict": "No long-only post-migration rule survived out of sample with a positive 95% bootstrap interval. Keep migration trading shelved; retain the replay pipeline for new hypotheses."
+}

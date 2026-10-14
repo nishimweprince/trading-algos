@@ -1,5 +1,10 @@
 # pump-desk
 
+> **Status (2026-10-14): migration sniping is shelved.** The live VM is
+> kill-latched and must remain so. A roughly 19-hour replay found no capturable
+> first-position edge. New hypotheses belong in [`research/`](research/README.md)
+> and must survive a chronological holdout before any live work resumes.
+
 A C++ rewrite of `pump-fun/` that trades the **migration racer** strategy live. It watches pump.fun bonding curves that are nearly complete. When one graduates, it buys first position on the new canonical PumpSwap pool and exits it with a configurable rule set.
 
 > **Live only.** There is no dry-run or paper mode; every trigger sends a real transaction from `WALLET_PRIVATE_KEY`. The racer's own replay of the current exit set was −4.7 %/trade (CI −11.9..+2.5, `pump-fun/config.yaml`), so the first trades are the measurement. Start with a small wallet.
