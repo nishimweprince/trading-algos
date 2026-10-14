@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # Check the live shadow journal against a replay of the tape.
 #   sudo systemctl start leadlag-research@shadow-verify.service
-# The trader sends every completed shadow trade (and every explore-3a entry
-# attempt) to the observer, which appends it to /data/leadlag/shadow/<day>.jsonl.
+# The trader sends every completed shadow trade (and every entry attempt) to
+# the observer, which appends it to /data/leadlag/shadow/<day>.jsonl.
 # Shadow decisions depend only on the taped events and their receive times, so
 # replaying the tape with the same params (only the runs that used them) must
-# reproduce the same records. LL_SHADOW_PARAMS may list several params files
-# (comma-separated, one per run); the tape is replayed once with all of them.
+# reproduce the same records. LL_SHADOW_PARAMS names the one params file.
 # Writes replay.jsonl and replay.txt next to the journal and fails on a mismatch.
 # A run in progress has its newest records still in the open tape file: live
 # records emitted after the tape's end count as pending, not mismatches.
@@ -20,7 +19,7 @@ mkdir -p "$out"
 python3 - "$out" "$params" <<'PY'
 import glob, json, sys
 out, params = sys.argv[1], sys.argv[2]
-runs = [json.load(open(p))["run"] for p in params.split(",") if p.strip()]
+runs = [json.load(open(params))["run"]]
 def key(t):
     if t.get("kind") == "attempt":
         return ("attempt", t["follower"], t["post_recv_ns"], t["end_reason"], t["filled"])

@@ -1,19 +1,12 @@
-// Package shadow is the shadow-trading engine: leader events open simulated
-// taker positions in the followers, filled against the live bookTicker, and
-// close them after a fixed horizon. Nothing is sent to an exchange.
+// Package shadow is the shadow trader (explore-4, research/PREREG.md Part 5):
+// a leader's price move signals post-only entries in the followers that lag
+// it, filled against the live book by a queue-position model, and passive
+// exits. Nothing is sent to an exchange.
 //
-// Two triggers exist. "flow" (explore-1, PREREG Part 2) is the pre-registered
-// taker-flow detector and opens every follower. "price" (explore-2, PREREG
-// Part 3) fires when a leader's mid moves at least min_move_bp within
-// window_ms, and opens the top_k followers that lag the leader most. The exit
-// is a taker cross, or ("maker") a limit at our own touch that fills only when
-// the book trades through it, crossing as a taker after maker_timeout_ms, or
-// ("gap", explore-3c/3d) that maker exit started as soon as the follower's
-// β-residual gap to the leader closes, with a stop (beta.go).
-//
-// The "quoter" engine (explore-3a/3b, quoter.go) enters passively instead:
-// post-only orders at the follower's touch with a queue-position fill model
-// (queue.go).
+// The trigger fires when a leader's mid moves at least min_move_bp within
+// window_ms; the top_k followers that lag the leader most by β-adjusted gap
+// get an entry order (quoter.go). Orders are simulated post-only limits with a
+// conservative queue model (queue.go).
 //
 // The engine runs inside the hub (under its lock) like the record engine: it
 // never blocks, never touches the disk and keeps its state in fixed slices.
@@ -23,6 +16,7 @@
 package shadow
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -33,25 +27,23 @@ import (
 	"sync/atomic"
 
 	"github.com/nishimweprince/trading-algos/services/leadlag-go/internal/model"
-	"github.com/nishimweprince/trading-algos/services/leadlag-go/internal/research"
 )
 
-// TriggerCfg selects the signal. Absent (nil) means the flow detector.
+// TriggerCfg is the price trigger.
 type TriggerCfg struct {
-	Kind       string  `json:"kind"`        // "flow" | "price"
-	WindowMs   int64   `json:"window_ms"`   // price: the look-back of the leader move
-	MinMoveBp  float64 `json:"min_move_bp"` // price: |leader mid move| that fires
-	CooldownMs int64   `json:"cooldown_ms"` // price: per leader
-	MinGapBp   float64 `json:"min_gap_bp"`  // price: a follower must lag the leader by at least this much
-	// Beta: "one" (the default, explore-2: gap = leader move − follower move)
-	// or "rolling": gap = β·leader move − follower move, with β an EWMA
+	WindowMs   int64   `json:"window_ms"`   // the look-back of the leader move
+	MinMoveBp  float64 `json:"min_move_bp"` // |leader mid move| that fires
+	CooldownMs int64   `json:"cooldown_ms"` // per leader
+	MinGapBp   float64 `json:"min_gap_bp"`  // a follower must lag the leader by at least this much
+	// Beta: "one" (the default: gap = leader move − follower move) or
+	// "rolling": gap = β·leader move − follower move, with β an EWMA
 	// regression of the follower's 1 s mid returns on the leader's (beta.go).
 	Beta           string `json:"beta,omitempty"`
 	BetaHalfLifeMs int64  `json:"beta_half_life_ms,omitempty"` // default 30 min
 	BetaWarmupMs   int64  `json:"beta_warmup_ms,omitempty"`    // default 30 min
 	// StrongMoveBp > 0: the move must reach it, or reach min_move_bp with a
 	// same-direction leader liquidation (forceOrder) of at least liq_min_usd
-	// within liq_window_ms (explore-3c).
+	// within liq_window_ms.
 	StrongMoveBp float64 `json:"strong_move_bp,omitempty"`
 	// LiqWindowMs > 0: a leader liquidation of at least liq_min_usd against
 	// the move within the window skips the signal (liq_opposite).
@@ -59,74 +51,31 @@ type TriggerCfg struct {
 	LiqMinUSD   float64 `json:"liq_min_usd,omitempty"`
 }
 
-func (t *TriggerCfg) rollingBeta() bool { return t != nil && t.Beta == "rolling" }
-
-// ExitCfg selects the exit. Absent (nil) means a taker exit.
-type ExitCfg struct {
-	Mode           string  `json:"mode"` // "taker" | "maker" | "gap"
-	MakerTimeoutMs int64   `json:"maker_timeout_ms"`
-	MakerFeeBp     float64 `json:"maker_fee_bp"`
-	// gap: start the maker exit when the residual gap is at most CloseGapBp;
-	// exit as a taker when the follower moves StopMult × the entry gap
-	// against the position (0: no stop).
-	CloseGapBp float64 `json:"close_gap_bp,omitempty"`
-	StopMult   float64 `json:"stop_mult,omitempty"`
-}
+func (t *TriggerCfg) rollingBeta() bool { return t.Beta == "rolling" }
 
 // MaxMarkouts bounds markouts_ms (the slot keeps them in a fixed array).
 const MaxMarkouts = 8
 
-// Params fix one shadow run (research/PREREG.md Part 2 for explore-1, Part 3 for explore-2).
+// Params fix the shadow run (research/PREREG.md Part 5).
 type Params struct {
-	Run         string               `json:"run"`
-	Exploratory bool                 `json:"exploratory"`
-	Leaders     []string             `json:"leaders"`
-	Followers   []string             `json:"followers"`
-	Detector    research.DetectorCfg `json:"detector"`
-	Trigger     *TriggerCfg          `json:"trigger,omitempty"`
-	// TopK: price trigger only; 0 opens every qualifying follower.
+	Run         string      `json:"run"`
+	Exploratory bool        `json:"exploratory"`
+	Leaders     []string    `json:"leaders"`
+	Followers   []string    `json:"followers"`
+	Trigger     *TriggerCfg `json:"trigger"`
+	// TopK: how many lagging followers a signal posts in; 0: every one.
 	TopK int `json:"top_k,omitempty"`
-	// LatencyMs: the earliest fill after a signal's receipt (order to exchange).
+	// LatencyMs: decision to exchange, for every post, reprice and cancel.
 	LatencyMs int64 `json:"latency_ms"`
-	// HorizonMs: the exit, measured from the entry fill.
-	HorizonMs        int64    `json:"horizon_ms"`
-	Exit             *ExitCfg `json:"exit,omitempty"`
-	MarkoutsMs       []int64  `json:"markouts_ms,omitempty"`
-	NotionalUSD      float64  `json:"notional_usd"`
-	TakerFeeBp       float64  `json:"taker_fee_bp"`
-	MaxQuoteAgeMs    int64    `json:"max_quote_age_ms"`
-	MaxEntrySpreadBp float64  `json:"max_entry_spread_bp,omitempty"`
-	// Engine: "taker" (the default: taker entry) or "quoter" (passive entry, quoter.go).
-	Engine string `json:"engine,omitempty"`
-	// Ticks: each follower's tick size, E8 (llfetch ticks). Required by the quoter.
-	Ticks  map[string]int64 `json:"ticks,omitempty"`
-	Quoter *QuoterCfg       `json:"quoter,omitempty"`
-}
-
-func (p *Params) priceTrigger() bool { return p.Trigger != nil && p.Trigger.Kind == "price" }
-func (p *Params) gapExit() bool      { return p.Exit != nil && p.Exit.Mode == "gap" }
-
-// makerExit: the exit rests a limit at our own touch first ("maker", "gap").
-func (p *Params) makerExit() bool {
-	return p.Exit != nil && (p.Exit.Mode == "maker" || p.Exit.Mode == "gap")
-}
-func (p *Params) quoter() bool { return p.Engine == "quoter" }
-
-// TriggerKind and ExitMode name the run's trigger and exit.
-func (p *Params) TriggerKind() string {
-	if p.priceTrigger() {
-		return "price"
-	}
-	return "flow"
-}
-func (p *Params) ExitMode() string {
-	if p.quoter() {
-		return "quoter-" + p.Quoter.Arm
-	}
-	if p.Exit != nil && p.Exit.Mode != "" {
-		return p.Exit.Mode
-	}
-	return "taker"
+	// HorizonMs: the exit starts this long after the entry fill.
+	HorizonMs     int64   `json:"horizon_ms"`
+	MarkoutsMs    []int64 `json:"markouts_ms,omitempty"`
+	NotionalUSD   float64 `json:"notional_usd"`
+	TakerFeeBp    float64 `json:"taker_fee_bp"`
+	MaxQuoteAgeMs int64   `json:"max_quote_age_ms"`
+	// Ticks: each follower's tick size, E8 (llfetch ticks).
+	Ticks  map[string]int64 `json:"ticks"`
+	Quoter *QuoterCfg       `json:"quoter"`
 }
 
 // Validate checks that the parameters describe a runnable experiment.
@@ -140,88 +89,53 @@ func (p *Params) Validate() error {
 		return errors.New("shadow: latency_ms >= 0 and horizon_ms > 0 are required")
 	case p.NotionalUSD <= 0 || p.TakerFeeBp < 0 || p.MaxQuoteAgeMs <= 0:
 		return errors.New("shadow: notional_usd > 0, taker_fee_bp >= 0 and max_quote_age_ms > 0 are required")
-	case p.MaxEntrySpreadBp < 0 || p.TopK < 0:
-		return errors.New("shadow: max_entry_spread_bp and top_k must be >= 0")
+	case p.TopK < 0:
+		return errors.New("shadow: top_k must be >= 0")
+	case p.Trigger == nil || p.Quoter == nil:
+		return errors.New("shadow: trigger and quoter params are required")
 	}
-	if t := p.Trigger; t != nil {
-		switch t.Kind {
-		case "flow":
-		case "price":
-			if t.WindowMs <= 0 || t.MinMoveBp <= 0 || t.CooldownMs < 0 {
-				return errors.New("shadow: price trigger needs window_ms > 0, min_move_bp > 0, cooldown_ms >= 0")
-			}
-			switch t.Beta {
-			case "", "one", "rolling":
-			default:
-				return fmt.Errorf("shadow: trigger beta %q (want one or rolling)", t.Beta)
-			}
-			if t.BetaHalfLifeMs < 0 || t.BetaWarmupMs < 0 || t.LiqWindowMs < 0 || t.LiqMinUSD < 0 {
-				return errors.New("shadow: beta_half_life_ms, beta_warmup_ms, liq_window_ms and liq_min_usd must be >= 0")
-			}
-			if t.StrongMoveBp != 0 && (t.StrongMoveBp < t.MinMoveBp || t.LiqWindowMs <= 0) {
-				return errors.New("shadow: strong_move_bp needs strong_move_bp >= min_move_bp and liq_window_ms > 0")
-			}
-		default:
-			return fmt.Errorf("shadow: trigger kind %q (want flow or price)", t.Kind)
-		}
+	t := p.Trigger
+	if t.WindowMs <= 0 || t.MinMoveBp <= 0 || t.CooldownMs < 0 {
+		return errors.New("shadow: trigger needs window_ms > 0, min_move_bp > 0, cooldown_ms >= 0")
 	}
-	switch p.Engine {
-	case "", "taker":
-		if p.Quoter != nil {
-			return errors.New("shadow: quoter params need engine quoter")
-		}
-	case "quoter":
-		if !p.priceTrigger() || p.Quoter == nil || p.Exit != nil {
-			return errors.New("shadow: engine quoter needs the price trigger and quoter params, and no exit params")
-		}
-		if err := p.Quoter.validate(p); err != nil {
-			return err
-		}
+	switch t.Beta {
+	case "", "one", "rolling":
 	default:
-		return fmt.Errorf("shadow: engine %q (want taker or quoter)", p.Engine)
+		return fmt.Errorf("shadow: trigger beta %q (want one or rolling)", t.Beta)
 	}
-	if !p.priceTrigger() {
-		if p.Detector.WMs <= 0 || p.Detector.Theta <= 0 || p.Detector.HalfLifeMs <= 0 {
-			return errors.New("shadow: detector w_ms, theta and half_life_ms must be > 0")
-		}
-		if p.TopK != 0 {
-			return errors.New("shadow: top_k needs the price trigger")
-		}
+	if t.BetaHalfLifeMs < 0 || t.BetaWarmupMs < 0 || t.LiqWindowMs < 0 || t.LiqMinUSD < 0 {
+		return errors.New("shadow: beta_half_life_ms, beta_warmup_ms, liq_window_ms and liq_min_usd must be >= 0")
 	}
-	if x := p.Exit; x != nil {
-		switch x.Mode {
-		case "taker":
-		case "maker", "gap":
-			if x.MakerTimeoutMs <= 0 {
-				return errors.New("shadow: maker exit needs maker_timeout_ms > 0")
-			}
-			if x.Mode == "gap" && (!p.priceTrigger() || x.CloseGapBp < 0 || x.StopMult < 0) {
-				return errors.New("shadow: gap exit needs the price trigger, close_gap_bp >= 0 and stop_mult >= 0")
-			}
-		default:
-			return fmt.Errorf("shadow: exit mode %q (want taker, maker or gap)", x.Mode)
-		}
+	if t.StrongMoveBp != 0 && (t.StrongMoveBp < t.MinMoveBp || t.LiqWindowMs <= 0) {
+		return errors.New("shadow: strong_move_bp needs strong_move_bp >= min_move_bp and liq_window_ms > 0")
+	}
+	if err := p.Quoter.validate(p); err != nil {
+		return err
 	}
 	if len(p.MarkoutsMs) > MaxMarkouts {
 		return fmt.Errorf("shadow: at most %d markouts_ms", MaxMarkouts)
 	}
 	for i, m := range p.MarkoutsMs {
-		// The quoter keeps measuring after the exit, so its markouts may outlast the horizon.
-		if m <= 0 || (m > p.HorizonMs && !p.quoter()) || (i > 0 && m <= p.MarkoutsMs[i-1]) {
-			return errors.New("shadow: markouts_ms must be ascending, > 0 and <= horizon_ms")
+		// Markouts keep measuring after the exit, so they may outlast the horizon.
+		if m <= 0 || (i > 0 && m <= p.MarkoutsMs[i-1]) {
+			return errors.New("shadow: markouts_ms must be ascending and > 0")
 		}
 	}
 	return nil
 }
 
-// LoadParams reads and validates a params file; it also returns the file's sha256.
+// LoadParams reads and validates a params file; it also returns the file's
+// sha256. Unknown fields are an error, so a params file written for an older
+// engine fails instead of running with half its settings.
 func LoadParams(path string) (Params, string, error) {
 	var p Params
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return p, "", err
 	}
-	if err := json.Unmarshal(b, &p); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&p); err != nil {
 		return p, "", fmt.Errorf("shadow: %s: %w", path, err)
 	}
 	if err := p.Validate(); err != nil {
@@ -233,15 +147,14 @@ func LoadParams(path string) (Params, string, error) {
 
 // Trade is one completed shadow round trip.
 type Trade struct {
-	// Kind: empty for the taker engine (as explore-1/2 journals), "trade" for the quoter.
-	Kind        string  `json:"kind,omitempty"`
+	Kind        string  `json:"kind"` // "trade"
 	Run         string  `json:"run"`
 	Exploratory bool    `json:"exploratory"`
 	Leader      string  `json:"leader"`
 	Follower    string  `json:"follower"`
 	Dir         int8    `json:"dir"`         // +1 long, −1 short
-	Z           float64 `json:"z"`           // flow: z at the crossing; price: the signed leader move in bp
-	LeaderTMs   int64   `json:"leader_t_ms"` // flow: leader trade time that crossed θ; price: leader quote time
+	Z           float64 `json:"z"`           // the signed leader move in bp
+	LeaderTMs   int64   `json:"leader_t_ms"` // the leader quote's exchange time
 	SignalNs    int64   `json:"signal_recv_ns"`
 	EntryNs     int64   `json:"entry_recv_ns"`
 	ExitNs      int64   `json:"exit_recv_ns"`
@@ -256,27 +169,27 @@ type Trade struct {
 	NetUSD      float64 `json:"net_usd"`
 	ExitKind    string  `json:"exit_kind"` // "taker" | "maker"
 	// ExitReason: why the exit started: timeout (the horizon), gap_closed,
-	// target (quoter: the resting target filled), stop.
+	// target (the resting target filled), stop, stop_soft (the soft stop moved
+	// the exit to the touch).
 	ExitReason string `json:"exit_reason,omitempty"`
-	// Price trigger: |leader move| over the window, the follower's own signed
-	// move over it, and the gap (leader − follower), all in bp.
+	// |leader move| over the window, the follower's own signed move over it,
+	// and the gap (leader − follower), all in bp.
 	LeaderMoveBp float64 `json:"leader_move_bp,omitempty"`
 	PreMoveBp    float64 `json:"pre_move_bp,omitempty"`
 	GapBp        float64 `json:"gap_bp,omitempty"`
-	// MarkoutsBp: the follower mid at each markouts_ms after entry, signed, bp
-	// from the entry mid (taker engine) or from the entry fill price (quoter).
+	// MarkoutsBp: the follower mid at each markouts_ms after the entry fill,
+	// signed, bp from the fill price.
 	MarkoutsBp []float64 `json:"markouts_bp,omitempty"`
 	// Beta: the β used for the gap (rolling β only).
-	Beta float64 `json:"beta,omitempty"`
-	// Quoter only.
-	Arm        string  `json:"arm,omitempty"`        // "A" | "B"
+	Beta       float64 `json:"beta,omitempty"`
 	EntryKind  string  `json:"entry_kind,omitempty"` // "maker"
+	EntryImb   float64 `json:"entry_imb"`            // our side's L1 share when the entry was posted
 	QueueAhead float64 `json:"queue_ahead,omitempty"`
 	FillWaitMs float64 `json:"fill_wait_ms,omitempty"` // post → entry fill
 	// ExitMarkoutsBp: the mid at each markouts_ms after the exit, bp from the
 	// exit price, signed for the exit order (positive: the exit was not picked off).
 	ExitMarkoutsBp []float64 `json:"exit_markouts_bp,omitempty"`
-	// RecNs: when the record was emitted (quoter: after the last markout).
+	// RecNs: when the record was emitted (after the last markout).
 	RecNs int64 `json:"rec_ns,omitempty"`
 }
 
@@ -342,7 +255,13 @@ func (a *Agg) Summarize() Summary {
 	return s
 }
 
+// round rounds v to d decimals. NaN and ±Inf become 0: every float in the
+// status document and the journal goes through here, and encoding/json
+// refuses non-finite numbers (one froze /v1/status on 2026-10-10).
 func round(v float64, d int) float64 {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0
+	}
 	p := math.Pow(10, float64(d))
 	return math.Round(v*p) / p
 }
@@ -407,44 +326,15 @@ func (h *hist) last() (float64, bool) {
 	return h.mid[(h.head+h.n-1)%histCap], true
 }
 
-type slot struct {
-	state    uint8 // idle, pending, open, exiting
-	dueNs    int64 // pending: earliest fill; open: exit time; exiting: maker timeout
-	leader   int   // index into leaders
-	dir      int8
-	z        float64
-	leaderT  int64
-	signalNs int64
-	entryNs  int64
-	entryPx  float64
-	entryMid float64
-	spreadBp float64
-	qty      float64
-	limit    float64 // exiting: our resting exit price
-	move     float64 // price trigger: |leader move|, follower pre-move, gap (bp)
-	preMove  float64
-	gap      float64
-	base     gapBase // gap exit: the mids the residual is measured from
-	reason   string  // exit_reason once the exit has started
-	nMarks   int
-	marks    [MaxMarkouts]float64
-}
-
-const (
-	idle = iota
-	pending
-	open
-	exiting
-)
-
 // RingSize is how many recent trades the status page shows.
 const RingSize = 50
 
-// moveBuckets label the by_move groups: |leader move| in bp (price) or |z| (flow).
-var (
-	priceBuckets = []float64{4, 8, 15}
-	flowBuckets  = []float64{4, 6, 10}
-)
+// RollN is the rolling window the status reads the kill-rule numbers from:
+// the latest RollN trades' mean net bp and taker-exit share.
+const RollN = 200
+
+// moveBuckets label the by_move groups: |leader move| in bp.
+var moveBuckets = []float64{4, 8, 15}
 
 // Engine is the shadow engine for one run's symbol list.
 type Engine struct {
@@ -456,12 +346,9 @@ type Engine struct {
 	followerOf []int // symbol index → follower index, −1
 	leaders    []string
 	followers  []string
-	det        []*research.Detector
 	quotes     []quote // per follower
-	slots      []slot  // per follower
-	active     int     // slots not idle
+	active     int     // followers with an entry or a position
 
-	// price trigger
 	lhist    []hist // per leader
 	fhist    []hist // per follower
 	above    []bool
@@ -473,9 +360,7 @@ type Engine struct {
 	betas    *betaSet   // rolling β; nil with beta "one"
 	liqNs    [][2]int64 // per leader: last qualifying liquidation receive time, [sell, buy]
 
-	q *quoterState // engine quoter only
-
-	buckets []float64
+	q *quoterState
 
 	Signals   uint64
 	Skipped   map[string]uint64
@@ -483,11 +368,19 @@ type Engine struct {
 	ByFollow  []Agg
 	ByLeader  []Agg
 	ByExit    [2]Agg // taker, maker
-	ByMove    []Agg  // len(buckets)+1
+	ByMove    []Agg  // len(moveBuckets)+1
 	ByReason  [len(exitReasons)]Agg
 	Ring      [RingSize]Trade
 	RingNext  int
 	RingCount int
+
+	roll      [RollN]float64 // the latest trades' net bp
+	rollTaker [RollN]bool
+	rollNext  int
+	rollCount int
+	// Crosses counts taker exits by exit reason (stop: the hard stop;
+	// timeout: the horizon's grace ran out).
+	Crosses [len(exitReasons)]uint64
 }
 
 // New builds an engine for symbols (the hub's index order). Leaders and
@@ -503,28 +396,20 @@ func New(p Params, symbols []string, halted *atomic.Bool, sink func(*Trade)) *En
 	for _, s := range p.Followers {
 		isFollower[s] = true
 	}
-	price := p.priceTrigger()
 	for i, s := range symbols {
 		e.leaderOf[i], e.followerOf[i] = -1, -1
 		switch {
 		case isLeader[s]:
 			e.leaderOf[i] = len(e.leaders)
 			e.leaders = append(e.leaders, s)
-			if price {
-				e.lhist = append(e.lhist, newHist())
-			} else {
-				e.det = append(e.det, research.NewDetector(p.Detector))
-			}
+			e.lhist = append(e.lhist, newHist())
 		case isFollower[s]:
 			e.followerOf[i] = len(e.followers)
 			e.followers = append(e.followers, s)
-			if price {
-				e.fhist = append(e.fhist, newHist())
-			}
+			e.fhist = append(e.fhist, newHist())
 		}
 	}
 	e.quotes = make([]quote, len(e.followers))
-	e.slots = make([]slot, len(e.followers))
 	e.ByFollow = make([]Agg, len(e.followers))
 	e.ByLeader = make([]Agg, len(e.leaders))
 	e.above = make([]bool, len(e.leaders))
@@ -535,31 +420,25 @@ func New(p Params, symbols []string, halted *atomic.Bool, sink func(*Trade)) *En
 	e.cand = make([]int, 0, len(e.followers))
 	e.candGap = make([]float64, len(e.followers))
 	e.candPre = make([]float64, len(e.followers))
-	e.buckets = flowBuckets
-	if price {
-		e.buckets = priceBuckets
-	}
-	e.ByMove = make([]Agg, len(e.buckets)+1)
+	e.ByMove = make([]Agg, len(moveBuckets)+1)
 	e.candBase = make([]gapBase, len(e.followers))
 	e.liqNs = make([][2]int64, len(e.leaders))
 	for i := range e.liqNs {
 		e.liqNs[i] = [2]int64{math.MinInt64 / 2, math.MinInt64 / 2}
 	}
-	if price && p.Trigger.rollingBeta() {
+	if p.Trigger.rollingBeta() {
 		e.betas = newBetaSet(len(e.leaders), len(e.followers), p.Trigger.BetaHalfLifeMs, p.Trigger.BetaWarmupMs)
 	}
 	for _, k := range []string{"halted", "busy", "no_quote", "stale_quote", "crossed", "wide_spread", "no_lagger",
 		"beta_warmup", "liq_opposite"} {
 		e.Skipped[k] = 0 // preallocated: OnEvent never grows the map
 	}
-	if p.quoter() {
-		e.q = newQuoterState(e)
-	}
+	e.q = newQuoterState(e)
 	return e
 }
 
 // exitReasons index ByReason.
-var exitReasons = [...]string{"timeout", "gap_closed", "target", "stop"}
+var exitReasons = [...]string{"timeout", "gap_closed", "target", "stop", "stop_soft"}
 
 func reasonIndex(r string) int {
 	for i, x := range exitReasons {
@@ -579,77 +458,10 @@ func (e *Engine) Leaders() []string   { return e.leaders }
 
 // OnEvent implements live.Engine.
 func (e *Engine) OnEvent(ev *model.Event) {
-	now := ev.RecvNs
 	if e.betas != nil {
-		e.betas.tick(now, e.lhist, e.fhist)
+		e.betas.tick(ev.RecvNs, e.lhist, e.fhist)
 	}
-	if e.q != nil {
-		e.quoterEvent(ev)
-		return
-	}
-	// Timers first: a fill uses the book as it was before this event arrived.
-	if e.active > 0 {
-		e.runTimers(now)
-	}
-	if f := e.followerOf[ev.Sym]; f >= 0 {
-		switch ev.Kind {
-		case model.KindQuote:
-			e.quotes[f] = quote{bid: ev.Bid, ask: ev.Ask, bidQty: ev.BidQty, askQty: ev.AskQty, recvNs: now}
-			if e.fhist != nil && ev.Bid > 0 && ev.Ask > ev.Bid {
-				e.fhist[f].push(now, float64(ev.Bid+ev.Ask)/2/model.Scale)
-			}
-			if s := &e.slots[f]; s.state == exiting {
-				bid, ask := float64(ev.Bid)/model.Scale, float64(ev.Ask)/model.Scale
-				if (s.dir > 0 && bid >= s.limit) || (s.dir < 0 && ask > 0 && ask <= s.limit) {
-					e.closeSlot(f, s, now, s.limit, true)
-				}
-			}
-		case model.KindTrade:
-			if s := &e.slots[f]; s.state == exiting {
-				px := float64(ev.Px) / model.Scale
-				if (s.dir > 0 && px > s.limit) || (s.dir < 0 && px < s.limit) {
-					e.closeSlot(f, s, now, s.limit, true)
-				}
-			}
-		}
-		return
-	}
-	l := e.leaderOf[ev.Sym]
-	if l < 0 {
-		return
-	}
-	if e.p.priceTrigger() {
-		switch {
-		case ev.Kind == model.KindLiq:
-			e.onLeaderLiq(l, now, ev)
-		case ev.Kind == model.KindQuote && ev.Bid > 0 && ev.Ask > ev.Bid:
-			e.onLeaderQuote(l, now, ev.ExchMs, float64(ev.Bid+ev.Ask)/2/model.Scale)
-		}
-		return
-	}
-	if ev.Kind != model.KindTrade {
-		return
-	}
-	notional := float64(ev.Px) / model.Scale * float64(ev.Qty) / model.Scale
-	sig, fired := e.det[l].OnTrade(ev.TradeMs, float64(ev.TakerSign())*notional)
-	if !fired {
-		return
-	}
-	e.Signals++
-	if e.halted != nil && e.halted.Load() {
-		e.Skipped["halted"]++
-		return
-	}
-	due := now + e.p.LatencyMs*1_000_000
-	for f := range e.slots {
-		s := &e.slots[f]
-		if s.state != idle {
-			e.Skipped["busy"]++
-			continue
-		}
-		*s = slot{state: pending, dueNs: due, leader: l, dir: sig.Dir, z: sig.Z, leaderT: sig.T, signalNs: now}
-		e.active++
-	}
+	e.quoterEvent(ev)
 }
 
 // onLeaderLiq records a leader liquidation of at least liq_min_usd.
@@ -763,44 +575,6 @@ func (e *Engine) laggers(l int, now int64, move float64, free func(f int) bool) 
 	return dir
 }
 
-// onLeaderQuote opens taker positions in the top_k laggers when the price trigger fires.
-func (e *Engine) onLeaderQuote(l int, now, exchMs int64, mid float64) {
-	move, fire := e.trigger(l, now, mid)
-	if !fire {
-		return
-	}
-	e.Signals++
-	if e.halted != nil && e.halted.Load() {
-		e.Skipped["halted"]++
-		return
-	}
-	if e.p.Trigger.LiqWindowMs > 0 && e.liqWithin(l, now, -sign(move)) {
-		e.Skipped["liq_opposite"]++
-		return
-	}
-	dir := e.laggers(l, now, move, func(f int) bool {
-		if e.slots[f].state != idle {
-			e.Skipped["busy"]++
-			return false
-		}
-		return true
-	})
-	if len(e.cand) == 0 {
-		e.Skipped["no_lagger"]++
-		return
-	}
-	k := len(e.cand)
-	if e.p.TopK > 0 && k > e.p.TopK {
-		k = e.p.TopK
-	}
-	due := now + e.p.LatencyMs*1_000_000
-	for _, f := range e.cand[:k] {
-		e.slots[f] = slot{state: pending, dueNs: due, leader: l, dir: dir, z: round(move, 3), leaderT: exchMs, signalNs: now,
-			move: math.Abs(move), preMove: e.candPre[f], gap: e.candGap[f], base: e.candBase[f]}
-		e.active++
-	}
-}
-
 func sign(v float64) int8 {
 	if v < 0 {
 		return -1
@@ -808,149 +582,8 @@ func sign(v float64) int8 {
 	return 1
 }
 
-func (e *Engine) runTimers(now int64) {
-	maxAge := e.p.MaxQuoteAgeMs * 1_000_000
-	for f := range e.slots {
-		s := &e.slots[f]
-		if s.state == idle {
-			continue
-		}
-		q := e.quotes[f]
-		if s.state == open && s.nMarks < len(e.p.MarkoutsMs) {
-			for s.nMarks < len(e.p.MarkoutsMs) && now >= s.entryNs+e.p.MarkoutsMs[s.nMarks]*1_000_000 {
-				mid := float64(q.bid+q.ask) / 2 / model.Scale
-				s.marks[s.nMarks] = float64(s.dir) * (mid - s.entryMid) / s.entryMid * 1e4
-				s.nMarks++
-			}
-		}
-		if s.state == open && e.p.gapExit() {
-			if r, ok := e.residual(f, s); ok {
-				if r <= e.p.Exit.CloseGapBp {
-					s.reason = "gap_closed"
-					s.dueNs = now // rest the maker exit now
-				} else if x := e.p.Exit.StopMult; x > 0 && q.bid > 0 && q.ask > q.bid &&
-					float64(s.dir)*(q.mid()-s.entryMid)/s.entryMid*1e4 <= -x*s.gap {
-					s.reason = "stop"
-					e.takerExit(f, s, now, q)
-					continue
-				}
-			}
-		}
-		if now < s.dueNs {
-			continue
-		}
-		switch s.state {
-		case pending:
-			reason := ""
-			switch {
-			case q.recvNs == 0:
-				reason = "no_quote"
-			case now-q.recvNs > maxAge:
-				reason = "stale_quote"
-			case q.bid <= 0 || q.ask <= q.bid:
-				reason = "crossed"
-			}
-			bid, ask := float64(q.bid)/model.Scale, float64(q.ask)/model.Scale
-			spreadBp := (ask - bid) / ((ask + bid) / 2) * 1e4
-			if reason == "" && e.p.MaxEntrySpreadBp > 0 && spreadBp > e.p.MaxEntrySpreadBp {
-				reason = "wide_spread"
-			}
-			if reason != "" {
-				e.Skipped[reason]++
-				s.state = idle
-				e.active--
-				continue
-			}
-			px := ask
-			if s.dir < 0 {
-				px = bid
-			}
-			s.state, s.entryNs, s.entryPx, s.entryMid = open, now, px, (ask+bid)/2
-			s.spreadBp = spreadBp
-			s.qty = e.p.NotionalUSD / px
-			s.dueNs = now + e.p.HorizonMs*1_000_000
-		case open:
-			if e.p.makerExit() && q.bid > 0 && q.ask > q.bid {
-				// Rest a limit at our own touch: a long sells at the ask, a short buys at the bid.
-				s.limit = float64(q.ask) / model.Scale
-				if s.dir < 0 {
-					s.limit = float64(q.bid) / model.Scale
-				}
-				s.state = exiting
-				s.dueNs = now + e.p.Exit.MakerTimeoutMs*1_000_000
-				continue
-			}
-			e.takerExit(f, s, now, q)
-		case exiting:
-			e.takerExit(f, s, now, q)
-		}
-	}
-}
-
-// takerExit closes at the opposite touch of the latest quote, even if it is
-// old: the position must close.
-func (e *Engine) takerExit(f int, s *slot, now int64, q quote) {
-	px := float64(q.bid) / model.Scale
-	if s.dir < 0 {
-		px = float64(q.ask) / model.Scale
-	}
-	e.closeSlot(f, s, now, px, false)
-}
-
-func (e *Engine) closeSlot(f int, s *slot, now int64, exitPx float64, maker bool) {
-	e.close(f, s, now, exitPx, maker)
-	s.state = idle
-	e.active--
-}
-
-// residual is the β-adjusted gap still open: dir × (β·leader move − follower
-// move), both measured from the signal window's start.
-func (e *Engine) residual(f int, s *slot) (float64, bool) {
-	lc, ok1 := e.lhist[s.leader].last()
-	fc, ok2 := e.fhist[f].last()
-	if !ok1 || !ok2 || s.base.leader <= 0 || s.base.follower <= 0 {
-		return 0, false
-	}
-	return s.base.residual(s.dir, lc, fc), true
-}
-
-func (e *Engine) close(f int, s *slot, now int64, exitPx float64, maker bool) {
-	gross := float64(s.dir) * (exitPx - s.entryPx) / s.entryPx * 1e4
-	fees, kind := 2*e.p.TakerFeeBp, "taker"
-	if maker {
-		fees, kind = e.p.TakerFeeBp+e.p.Exit.MakerFeeBp, "maker"
-	}
-	net := gross - fees
-	var marks []float64
-	if s.nMarks > 0 {
-		marks = make([]float64, s.nMarks) // allocates once per trade, like the journal's marshalling
-		for i := range marks {
-			marks[i] = round(s.marks[i], 4)
-		}
-	}
-	t := &Trade{
-		Run: e.p.Run, Exploratory: e.p.Exploratory, Leader: e.leaders[s.leader], Follower: e.followers[f],
-		Dir: s.dir, Z: round(s.z, 3), LeaderTMs: s.leaderT, SignalNs: s.signalNs, EntryNs: s.entryNs, ExitNs: now,
-		EntryPx: s.entryPx, ExitPx: exitPx, SpreadBp: round(s.spreadBp, 3), Qty: s.qty, NotionalUSD: e.p.NotionalUSD,
-		GrossBp: round(gross, 4), FeesBp: fees, NetBp: round(net, 4), NetUSD: round(net/1e4*e.p.NotionalUSD, 6),
-		ExitKind: kind, LeaderMoveBp: round(s.move, 3), PreMoveBp: round(s.preMove, 3), GapBp: round(s.gap, 3),
-		MarkoutsBp: marks, ExitReason: reasonOr(s.reason),
-	}
-	if e.betas != nil {
-		t.Beta = round(s.base.beta, 4)
-	}
-	e.record(t, s.leader, f, maker, s.move, s.z)
-}
-
-func reasonOr(r string) string {
-	if r == "" {
-		return "timeout"
-	}
-	return r
-}
-
 // record adds a finished trade to the ring and the aggregates and sends it to the sink.
-func (e *Engine) record(tr *Trade, leader, f int, maker bool, move, z float64) {
+func (e *Engine) record(tr *Trade, leader, f int, maker bool, move float64) {
 	t := &e.Ring[e.RingNext]
 	*t = *tr
 	e.RingNext = (e.RingNext + 1) % RingSize
@@ -968,12 +601,16 @@ func (e *Engine) record(tr *Trade, leader, f int, maker bool, move, z float64) {
 		e.ByExit[0].add(t)
 	}
 	e.ByReason[reasonIndex(t.ExitReason)].add(t)
-	size := math.Abs(z)
-	if e.p.priceTrigger() {
-		size = move
+	e.roll[e.rollNext], e.rollTaker[e.rollNext] = t.NetBp, !maker
+	e.rollNext = (e.rollNext + 1) % RollN
+	if e.rollCount < RollN {
+		e.rollCount++
+	}
+	if !maker {
+		e.Crosses[reasonIndex(t.ExitReason)]++
 	}
 	b := 0
-	for b < len(e.buckets) && size >= e.buckets[b] {
+	for b < len(moveBuckets) && move >= moveBuckets[b] {
 		b++
 	}
 	e.ByMove[b].add(t)
@@ -982,7 +619,7 @@ func (e *Engine) record(tr *Trade, leader, f int, maker bool, move, z float64) {
 	}
 }
 
-// Open reports how many followers have a pending, open or exiting position.
+// Open reports how many followers have an entry order or a position.
 func (e *Engine) Open() int { return e.active }
 
 // Recent returns the ring's trades, newest first (call under the hub lock).
@@ -995,21 +632,14 @@ func (e *Engine) Recent() []Trade {
 }
 
 // moveLabels names the by_move buckets.
-func (e *Engine) moveLabels() []string {
-	unit := "|z| "
-	if e.p.priceTrigger() {
-		unit = "move bp "
-	}
-	out := make([]string, 0, len(e.buckets)+1)
+func moveLabels() []string {
+	out := make([]string, 0, len(moveBuckets)+1)
 	lo := 0.0
-	if !e.p.priceTrigger() {
-		lo = e.p.Detector.Theta
-	}
-	for _, b := range e.buckets {
-		out = append(out, fmt.Sprintf("%s%g–%g", unit, lo, b))
+	for _, b := range moveBuckets {
+		out = append(out, fmt.Sprintf("move bp %g–%g", lo, b))
 		lo = b
 	}
-	return append(out, fmt.Sprintf("%s%g+", unit, lo))
+	return append(out, fmt.Sprintf("move bp %g+", lo))
 }
 
 // Status is the engine's state for the status page (call under the hub lock).
@@ -1023,7 +653,7 @@ func (e *Engine) Status(paramsSHA string) map[string]any {
 		byL[name] = e.ByLeader[i].Summarize()
 	}
 	byM := make([]map[string]any, 0, len(e.ByMove))
-	for i, label := range e.moveLabels() {
+	for i, label := range moveLabels() {
 		byM = append(byM, map[string]any{"bucket": label, "summary": e.ByMove[i].Summarize()})
 	}
 	skipped := make(map[string]uint64, len(e.Skipped))
@@ -1040,17 +670,34 @@ func (e *Engine) Status(paramsSHA string) map[string]any {
 	if e.Total.N > 0 {
 		takerFrac = round(float64(e.ByExit[0].N)/float64(e.Total.N), 4)
 	}
+	crosses := map[string]uint64{}
+	for i, r := range exitReasons {
+		if e.Crosses[i] > 0 {
+			crosses[r] = e.Crosses[i]
+		}
+	}
+	var rollSum float64
+	var rollTakers int
+	for i := 0; i < e.rollCount; i++ {
+		rollSum += e.roll[i]
+		if e.rollTaker[i] {
+			rollTakers++
+		}
+	}
+	rolling := map[string]any{"n": e.rollCount, "window": RollN}
+	if e.rollCount > 0 {
+		rolling["mean_net_bp"] = round(rollSum/float64(e.rollCount), 3)
+		rolling["taker_frac"] = round(float64(rollTakers)/float64(e.rollCount), 4)
+	}
 	doc := map[string]any{
 		"run": e.p.Run, "exploratory": e.p.Exploratory, "params_sha256": paramsSHA, "params": e.p,
-		"trigger": e.p.TriggerKind(), "exit_mode": e.p.ExitMode(), "markouts_ms": e.p.MarkoutsMs,
-		"signals": e.Signals, "open": e.active, "skipped": skipped,
+		"markouts_ms": e.p.MarkoutsMs,
+		"signals":     e.Signals, "open": e.active, "skipped": skipped,
 		"total": e.Total.Summarize(), "by_follower": byF, "by_leader": byL,
 		"by_exit":        map[string]Summary{"taker": e.ByExit[0].Summarize(), "maker": e.ByExit[1].Summarize()},
-		"by_exit_reason": byR, "taker_exit_frac": takerFrac,
+		"by_exit_reason": byR, "taker_exit_frac": takerFrac, "taker_crosses": crosses, "rolling": rolling,
 		"by_move": byM, "recent": e.Recent(),
 	}
-	if e.q != nil {
-		e.q.status(doc)
-	}
+	e.q.status(doc)
 	return doc
 }

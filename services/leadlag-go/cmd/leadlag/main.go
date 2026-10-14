@@ -1,13 +1,13 @@
 // Command leadlag is the trader process. It keeps the /market (aggTrade, and
 // the leaders' forceOrder) and /public (bookTicker) connections up, sends every
 // frame to the observer for taping, and runs the record engine. In shadow mode
-// (LL_MODE=shadow) it also runs one shadow engine per params file in
-// LL_SHADOW_PARAMS (comma-separated): simulated fills on the live book, no orders.
+// (LL_MODE=shadow) it also runs the shadow trader with the one params file in
+// LL_SHADOW_PARAMS: simulated fills on the live book, no orders.
 //
 // Live:    leadlag                          (configuration from LL_* env, see deploy/env/.env.example)
 // Parity:  leadlag --replay /data/leadlag/tape/2026-10-08
-// Trades:  leadlag --replay <dir> --shadow-params a.json,b.json --shadow-trades trades.jsonl
-// Placebo: leadlag --replay <dir> --shadow-params a.json --shadow-all --leader-shift 1h --shadow-trades control.jsonl
+// Trades:  leadlag --replay <dir> --shadow-params shadow.json --shadow-trades trades.jsonl
+// Placebo: leadlag --replay <dir> --shadow-params shadow.json --shadow-all --leader-shift 1h --shadow-trades control.jsonl
 package main
 
 import (
@@ -48,7 +48,7 @@ type config struct {
 	AdminAddr    string
 	RingMB       int
 	WaitObserver time.Duration
-	ShadowParams []string
+	ShadowParams string
 }
 
 func loadConfig() config {
@@ -61,20 +61,20 @@ func loadConfig() config {
 		AdminAddr:    env("LL_ADMIN_ADDR", "127.0.0.1:8060"),
 		RingMB:       atoi(env("LL_RING_MB", "64")),
 		WaitObserver: dur(env("LL_WAIT_OBSERVER", "30s")),
-		ShadowParams: paths(env("LL_SHADOW_PARAMS", "")),
+		ShadowParams: strings.TrimSpace(env("LL_SHADOW_PARAMS", "")),
 	}
 }
 
 func main() {
 	replay := flag.String("replay", "", "replay tape files under this directory (or one file) and print each run's digest")
-	shadowParams := flag.String("shadow-params", "", "with --replay: run a shadow engine per params file (comma-separated)")
+	shadowParams := flag.String("shadow-params", "", "with --replay: run the shadow trader with this params file")
 	shadowTrades := flag.String("shadow-trades", "", "with --replay --shadow-params: write the shadow records here (JSON lines)")
-	shadowAll := flag.Bool("shadow-all", false, "with --shadow-params: run the shadow engines on every run, not only the runs that used these params")
-	leaderShift := flag.Duration("leader-shift", 0, "with --shadow-params: placebo control, the leaders' events reach the shadow engines this much later (e.g. 1h)")
+	shadowAll := flag.Bool("shadow-all", false, "with --shadow-params: run the shadow trader on every run, not only the runs that used these params")
+	leaderShift := flag.Duration("leader-shift", 0, "with --shadow-params: placebo control, the leaders' events reach the shadow trader this much later (e.g. 1h)")
 	flag.Parse()
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	if *replay != "" {
-		if err := runReplay(*replay, paths(*shadowParams), *shadowTrades, *shadowAll, *leaderShift); err != nil {
+		if err := runReplay(*replay, strings.TrimSpace(*shadowParams), *shadowTrades, *shadowAll, *leaderShift); err != nil {
 			fmt.Fprintln(os.Stderr, "leadlag:", err)
 			os.Exit(1)
 		}
@@ -85,8 +85,8 @@ func main() {
 		log.Error("LL_MODE must be record or shadow", "mode", cfg.Mode)
 		os.Exit(2)
 	}
-	if cfg.Mode == "shadow" && len(cfg.ShadowParams) == 0 {
-		log.Error("LL_MODE=shadow needs LL_SHADOW_PARAMS")
+	if cfg.Mode == "shadow" && (cfg.ShadowParams == "" || strings.Contains(cfg.ShadowParams, ",")) {
+		log.Error("LL_MODE=shadow needs exactly one params file in LL_SHADOW_PARAMS", "LL_SHADOW_PARAMS", cfg.ShadowParams)
 		os.Exit(2)
 	}
 	if err := run(cfg, log); err != nil {
@@ -101,40 +101,28 @@ func run(cfg config, log *slog.Logger) error {
 	symbols := append(append([]string(nil), cfg.Leaders...), cfg.Followers...)
 	host, _ := os.Hostname()
 	started := time.Now()
-	var halted atomic.Bool // stops new shadow entries in every run; no effect in record mode
-	var runs []shadowRun
+	var halted atomic.Bool // stops new shadow entries; no effect in record mode
+	var sr *shadowRun      // nil in record mode
 	if cfg.Mode == "shadow" {
-		seen := map[string]bool{}
-		for _, path := range cfg.ShadowParams {
-			params, sum, err := shadow.LoadParams(path)
-			if err != nil {
-				return err
-			}
-			if seen[params.Run] {
-				return fmt.Errorf("two shadow params files use run label %s", params.Run)
-			}
-			seen[params.Run] = true
-			for _, s := range append(append([]string(nil), params.Leaders...), params.Followers...) {
-				if !contains(symbols, s) {
-					return fmt.Errorf("shadow params %s name %s, which LL_LEADERS/LL_FOLLOWERS do not record", path, s)
-				}
-			}
-			runs = append(runs, shadowRun{params: params, sha: sum})
+		params, sum, err := shadow.LoadParams(cfg.ShadowParams)
+		if err != nil {
+			return err
 		}
-		if err := checkTicks(ctx, runs, log); err != nil {
+		for _, s := range append(append([]string(nil), params.Leaders...), params.Followers...) {
+			if !contains(symbols, s) {
+				return fmt.Errorf("shadow params %s name %s, which LL_LEADERS/LL_FOLLOWERS do not record", cfg.ShadowParams, s)
+			}
+		}
+		sr = &shadowRun{params: params, sha: sum}
+		if err := checkTicks(ctx, sr, log); err != nil {
 			return err
 		}
 	}
-	var shas []string
-	for _, r := range runs {
-		shas = append(shas, r.sha)
-	}
 	hello := ipc.Hello{
 		PID: os.Getpid(), Mode: cfg.Mode, Build: version, Symbols: symbols, StartNs: started.UnixNano(), Hostname: host,
-		ParamsSHA256s: shas,
 	}
-	if len(shas) > 0 {
-		hello.ParamsSHA256 = shas[0]
+	if sr != nil {
+		hello.ParamsSHA256, hello.ParamsSHA256s = sr.sha, []string{sr.sha}
 	}
 	prod := ipc.NewProducer(cfg.ObserverSock, cfg.RingMB<<20, hello, log)
 	rec := live.NewRecordEngine(len(symbols))
@@ -142,19 +130,21 @@ func run(cfg config, log *slog.Logger) error {
 	// Completed trades and quoter attempts go to the observer's journal through
 	// the ring (the trader never writes to disk). Marshalling allocates, once per record.
 	journal := func(atNs int64, v any) {
-		if b, err := json.Marshal(v); err == nil {
-			prod.Journal(atNs, b)
+		b, err := json.Marshal(v)
+		if err != nil {
+			log.Error("journal record not marshalled", "err", err)
+			return
 		}
+		prod.Journal(atNs, b)
 	}
-	for i := range runs {
-		r := &runs[i]
-		r.eng = shadow.New(r.params, symbols, &halted, func(t *shadow.Trade) { journal(t.ExitNs, t) })
-		r.eng.SetAttemptSink(func(a *shadow.Attempt) { journal(a.RecNs, a) })
-		engs = append(engs, r.eng)
-		p := r.params
-		log.Info("shadow engine", "run", p.Run, "exploratory", p.Exploratory, "params_sha256", r.sha,
-			"engine", p.Engine, "trigger", p.TriggerKind(), "exit", p.ExitMode(), "top_k", p.TopK,
-			"latency_ms", p.LatencyMs, "horizon_ms", p.HorizonMs, "notional_usd", p.NotionalUSD)
+	if sr != nil {
+		sr.eng = shadow.New(sr.params, symbols, &halted, func(t *shadow.Trade) { journal(t.ExitNs, t) })
+		sr.eng.SetAttemptSink(func(a *shadow.Attempt) { journal(a.RecNs, a) })
+		engs = append(engs, sr.eng)
+		p := sr.params
+		log.Info("shadow engine", "run", p.Run, "exploratory", p.Exploratory, "params_sha256", sr.sha,
+			"followers", p.Followers, "top_k", p.TopK, "latency_ms", p.LatencyMs, "horizon_ms", p.HorizonMs,
+			"notional_usd", p.NotionalUSD)
 	}
 	hub := live.NewHub(symbols, engs, prod)
 
@@ -177,7 +167,7 @@ func run(cfg config, log *slog.Logger) error {
 		aggStreams = append(aggStreams, strings.ToLower(s)+"@aggTrade")
 		bookStreams = append(bookStreams, strings.ToLower(s)+"@bookTicker")
 	}
-	for _, s := range cfg.Leaders { // liquidations: explore-3's trigger filters
+	for _, s := range cfg.Leaders { // liquidations: the trigger's filters
 		aggStreams = append(aggStreams, strings.ToLower(s)+"@forceOrder")
 	}
 	feeds := []*ws.Feed{
@@ -194,7 +184,7 @@ func run(cfg config, log *slog.Logger) error {
 		go func() { defer wg.Done(); f.Run(feedCtx) }()
 	}
 
-	st := &statusPublisher{cfg: cfg, hub: hub, eng: rec, runs: runs, prod: prod, feeds: feeds, symbols: symbols, started: started}
+	st := &statusPublisher{log: log, cfg: cfg, hub: hub, eng: rec, shadow: sr, prod: prod, feeds: feeds, symbols: symbols, started: started}
 	wg.Add(1)
 	go func() { defer wg.Done(); st.run(feedCtx) }()
 
@@ -247,7 +237,7 @@ func adminMux(st *statusPublisher, halted *atomic.Bool) *http.ServeMux {
 	return mux
 }
 
-// shadowRun is one shadow engine and its params file's sha256.
+// shadowRun is the shadow trader and its params file's sha256.
 type shadowRun struct {
 	params shadow.Params
 	sha    string
@@ -257,10 +247,11 @@ type shadowRun struct {
 // statusPublisher rebuilds the status JSON every 2 s off the hot path; the
 // admin handler only serves the latest bytes.
 type statusPublisher struct {
+	log     *slog.Logger
 	cfg     config
 	hub     *live.Hub
 	eng     *live.RecordEngine
-	runs    []shadowRun // none in record mode
+	shadow  *shadowRun // nil in record mode
 	prod    *ipc.Producer
 	feeds   []*ws.Feed
 	symbols []string
@@ -268,6 +259,7 @@ type statusPublisher struct {
 	latest  atomic.Pointer[[]byte]
 
 	window []windowPoint // ~60 s of cumulative snapshots for windowed latency
+	errAt  time.Time     // the last logged marshal error (logged at most once a minute)
 }
 
 type windowPoint struct{ engine, loop stats.Hist }
@@ -301,11 +293,11 @@ func (p *statusPublisher) run(ctx context.Context) {
 func (p *statusPublisher) publish(samples []metrics.Sample) {
 	s := p.hub.Snapshot()
 	var engState []live.SymState
-	var shadowDocs []map[string]any
+	var shadowDoc map[string]any
 	p.hub.WithLock(func() {
 		engState = append(engState, p.eng.Last...)
-		for _, r := range p.runs {
-			shadowDocs = append(shadowDocs, r.eng.Status(r.sha))
+		if p.shadow != nil {
+			shadowDoc = p.shadow.eng.Status(p.shadow.sha)
 		}
 	})
 	p.window = append(p.window, windowPoint{s.EngineNs, s.LoopNs})
@@ -358,14 +350,20 @@ func (p *statusPublisher) publish(samples []metrics.Sample) {
 		},
 		"symbols": syms,
 	}
-	if len(shadowDocs) > 0 {
-		doc["shadow"] = shadowDocs[0] // the first run, for older readers
-		doc["shadow_runs"] = shadowDocs
+	if shadowDoc != nil {
+		doc["shadow"] = shadowDoc
 	}
 	b, err := json.Marshal(doc)
-	if err == nil {
-		p.latest.Store(&b)
+	if err != nil {
+		// Serve the error rather than the last good document, so the page
+		// shows the problem instead of quietly going stale.
+		if now := time.Now(); now.Sub(p.errAt) >= time.Minute {
+			p.errAt = now
+			p.log.Error("status not marshalled", "err", err)
+		}
+		b, _ = json.Marshal(map[string]any{"now_ns": time.Now().UnixNano(), "build": version, "status_error": err.Error()})
 	}
+	p.latest.Store(&b)
 }
 
 // gcPauses digests the runtime's cumulative GC pause histogram (µs).
@@ -399,12 +397,12 @@ func gcPauses(h *metrics.Float64Histogram) map[string]float64 {
 	return out
 }
 
-// runReplay replays tape files. With params files, a shadow engine per file
-// runs on the trader runs whose hello lists that file's sha256 (every run with
+// runReplay replays tape files. With a params file, the shadow trader runs on
+// the trader runs whose hello lists that file's sha256 (every run with
 // shadowAll), so a replay of the whole tape reproduces the live shadow
-// records. leaderShift > 0 delays the leaders' events for the shadow engines
+// records. leaderShift > 0 delays the leaders' events for the shadow trader
 // only (the +1 h placebo control).
-func runReplay(path string, shadowParams []string, shadowTrades string, shadowAll bool, leaderShift time.Duration) error {
+func runReplay(path string, shadowParams string, shadowTrades string, shadowAll bool, leaderShift time.Duration) error {
 	files := []string{path}
 	if fi, err := os.Stat(path); err != nil {
 		return err
@@ -413,21 +411,17 @@ func runReplay(path string, shadowParams []string, shadowTrades string, shadowAl
 			return err
 		}
 	}
-	type replayRun struct {
-		params shadow.Params
-		sha    string
-	}
-	var runs []replayRun
-	for _, path := range shadowParams {
-		params, sum, err := shadow.LoadParams(path)
+	var sr *shadowRun
+	if shadowParams != "" {
+		params, sum, err := shadow.LoadParams(shadowParams)
 		if err != nil {
 			return err
 		}
-		runs = append(runs, replayRun{params, sum})
+		sr = &shadowRun{params: params, sha: sum}
 		fmt.Printf("shadow run %s params %s\n", params.Run, sum)
 	}
 	var out *json.Encoder
-	if shadowTrades != "" && len(runs) > 0 {
+	if shadowTrades != "" && sr != nil {
 		f, err := os.Create(shadowTrades)
 		if err != nil {
 			return err
@@ -440,39 +434,28 @@ func runReplay(path string, shadowParams []string, shadowTrades string, shadowAl
 			_ = out.Encode(v)
 		}
 	}
-	engines := map[int][]*shadow.Engine{} // segment index → its shadow engines
+	engines := map[int]*shadow.Engine{} // segment index → its shadow trader
 	delays := map[int]*live.Delay{}
 	segIdx := -1
 	newEngine := func(h ipc.Hello) live.Engine {
 		segIdx++
 		rec := live.NewRecordEngine(len(h.Symbols))
-		var shs live.Engines
-		for _, r := range runs {
-			if !shadowAll && !h.UsedParams(r.sha) {
-				continue
-			}
-			sh := shadow.New(r.params, h.Symbols, nil, func(t *shadow.Trade) { write(t) })
-			sh.SetAttemptSink(func(a *shadow.Attempt) { write(a) })
-			engines[segIdx] = append(engines[segIdx], sh)
-			shs = append(shs, sh)
-		}
-		if len(shs) == 0 {
+		if sr == nil || (!shadowAll && !h.UsedParams(sr.sha)) {
 			return rec
 		}
+		sh := shadow.New(sr.params, h.Symbols, nil, func(t *shadow.Trade) { write(t) })
+		sh.SetAttemptSink(func(a *shadow.Attempt) { write(a) })
+		engines[segIdx] = sh
 		if leaderShift > 0 {
 			delayed := make([]bool, len(h.Symbols))
 			for i, s := range h.Symbols {
-				for _, r := range runs {
-					if contains(r.params.Leaders, s) {
-						delayed[i] = true
-					}
-				}
+				delayed[i] = contains(sr.params.Leaders, s)
 			}
-			d := live.NewDelay(shs, delayed, int64(leaderShift))
+			d := live.NewDelay(live.Engines{sh}, delayed, int64(leaderShift))
 			delays[segIdx] = d
 			return live.Engines{rec, d}
 		}
-		return append(live.Engines{rec}, shs...)
+		return live.Engines{rec, sh}
 	}
 	segs, err := live.Replay(files, newEngine)
 	for i, s := range segs {
@@ -481,13 +464,13 @@ func runReplay(path string, shadowParams []string, shadowTrades string, shadowAl
 		if s.OpenTail {
 			fmt.Printf("  open tail: the run continues past the tape (last receive %s)\n", time.Unix(0, s.LastNs).UTC().Format(time.RFC3339Nano))
 		}
-		if len(engines[i]) > 0 {
+		if engines[i] != nil {
 			fmt.Printf("  tape_end_ns %d\n", s.LastNs)
 		}
 		if d := delays[i]; d != nil {
 			fmt.Printf("  leader shift %s: %d leader events past the tape's end not replayed\n", leaderShift, d.Pending())
 		}
-		for _, sh := range engines[i] {
+		if sh := engines[i]; sh != nil {
 			t := sh.Total.Summarize()
 			fmt.Printf("  shadow %s signals %d trades %d mean net %.3f bp hit %.3f t %.2f net $%.4f (maker exits %d)\n",
 				sh.Run(), sh.Signals, t.N, t.MeanNet, t.HitRate, t.TStat, t.NetUSD, sh.ByExit[1].N)
@@ -522,17 +505,10 @@ func list(s string) []string {
 	return out
 }
 
-// checkTicks compares the quoter runs' tick sizes with exchangeInfo (cached in
+// checkTicks compares the run's tick sizes with exchangeInfo (cached in
 // LL_SYMBOLS_CACHE). A wrong tick would misplace every order, so a mismatch
 // stops the start; an unreachable exchangeInfo only warns.
-func checkTicks(ctx context.Context, runs []shadowRun, log *slog.Logger) error {
-	need := false
-	for _, r := range runs {
-		need = need || len(r.params.Ticks) > 0
-	}
-	if !need {
-		return nil
-	}
+func checkTicks(ctx context.Context, r *shadowRun, log *slog.Logger) error {
 	tctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	tbl, err := symbols.Load(tctx, &http.Client{Timeout: 10 * time.Second}, env("LL_SYMBOLS_CACHE", "/data/leadlag/exchangeinfo.json"), 24*time.Hour)
@@ -540,25 +516,12 @@ func checkTicks(ctx context.Context, runs []shadowRun, log *slog.Logger) error {
 		log.Warn("tick sizes not checked: no exchangeInfo", "err", err)
 		return nil
 	}
-	for _, r := range runs {
-		for sym, tick := range r.params.Ticks {
-			if i, ok := tbl.Get(sym); !ok || i.Tick != tick {
-				return fmt.Errorf("shadow run %s: ticks[%s] = %d, exchangeInfo has %d (regenerate with llfetch ticks)", r.params.Run, sym, tick, i.Tick)
-			}
+	for sym, tick := range r.params.Ticks {
+		if i, ok := tbl.Get(sym); !ok || i.Tick != tick {
+			return fmt.Errorf("shadow run %s: ticks[%s] = %d, exchangeInfo has %d (regenerate with llfetch ticks)", r.params.Run, sym, tick, i.Tick)
 		}
 	}
 	return nil
-}
-
-// paths splits a comma-separated list of file paths.
-func paths(s string) []string {
-	var out []string
-	for _, p := range strings.Split(s, ",") {
-		if p = strings.TrimSpace(p); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
 }
 
 func atoi(s string) int {

@@ -20,16 +20,11 @@ import (
 	"github.com/nishimweprince/trading-algos/services/leadlag-go/internal/observe"
 )
 
-const takerRun = `{"run":"t-taker","exploratory":true,"leaders":["BTCUSDT"],"followers":["SOLUSDT"],
-"trigger":{"kind":"price","window_ms":1000,"min_move_bp":4,"cooldown_ms":5000,"min_gap_bp":2},
-"latency_ms":5,"horizon_ms":2000,"exit":{"mode":"gap","maker_timeout_ms":500,"maker_fee_bp":2,"close_gap_bp":0.5},
-"notional_usd":25,"taker_fee_bp":5,"max_quote_age_ms":1000}`
-
-const quoterRun = `{"run":"t-quoter","exploratory":true,"engine":"quoter","leaders":["BTCUSDT"],"followers":["SOLUSDC"],
-"trigger":{"kind":"price","window_ms":1000,"min_move_bp":4,"cooldown_ms":5000,"min_gap_bp":2},
+const quoterRun = `{"run":"t-quoter","exploratory":true,"leaders":["BTCUSDT"],"followers":["SOLUSDC"],
+"trigger":{"window_ms":1000,"min_move_bp":4,"cooldown_ms":5000,"min_gap_bp":2},
 "latency_ms":5,"horizon_ms":3000,"markouts_ms":[500],"notional_usd":25,"taker_fee_bp":4,"max_quote_age_ms":1000,
 "ticks":{"SOLUSDC":1000000},
-"quoter":{"arm":"A","maker_fee_bp":0,"cooldown_ms":5000,"entry_timeout_ms":2000,"reverse_bp":2,"max_reprices":1,"target_gap_frac":0.6,"close_gap_bp":0.5,"stop_mult":1.5}}`
+"quoter":{"maker_fee_bp":0,"cooldown_ms":5000,"entry_timeout_ms":2000,"reverse_bp":2,"max_reprices":1,"target_gap_frac":0.6,"close_gap_bp":0.5,"stop_mult":1.5}}`
 
 func writeParams(t *testing.T, dir, name, body string) (string, string) {
 	p := filepath.Join(dir, name)
@@ -41,10 +36,10 @@ func writeParams(t *testing.T, dir, name, body string) (string, string) {
 }
 
 // tapeScenario tapes 30 s through a live hub and the observer: BTC jumps
-// 6 bp at 20 s; SOLUSDT and SOLUSDC lag, then catch up at 21 s; a sell trade
-// at 20.3 s fills the quoter's bid and a buy at 21 s its target. The hello
-// lists both params files.
-func tapeScenario(t *testing.T, dir string, shas []string) string {
+// 6 bp at 20 s; SOLUSDC lags, then catches up at 21 s; a sell trade at 20.3 s
+// fills the quoter's bid and a buy at 21 s its target. The hello lists the
+// params file.
+func tapeScenario(t *testing.T, dir string, sha string) string {
 	sock, tapeDir := filepath.Join(dir, "o.sock"), filepath.Join(dir, "tape")
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
 	ln, err := net.Listen("unix", sock)
@@ -54,9 +49,9 @@ func tapeScenario(t *testing.T, dir string, shas []string) string {
 	obs := observe.New(observe.Config{TapeDir: tapeDir, Log: quiet})
 	octx, ostop := context.WithCancel(context.Background())
 	go obs.Serve(octx, ln)
-	symbols := []string{"BTCUSDT", "SOLUSDT", "SOLUSDC"}
+	symbols := []string{"BTCUSDT", "SOLUSDC"}
 	prod := ipc.NewProducer(sock, 1<<22, ipc.Hello{PID: 7, Mode: "shadow", Symbols: symbols, StartNs: 1,
-		ParamsSHA256: shas[0], ParamsSHA256s: shas}, quiet)
+		ParamsSHA256: sha, ParamsSHA256s: []string{sha}}, quiet)
 	pctx, pstop := context.WithCancel(context.Background())
 	pdone := make(chan struct{})
 	go func() { prod.Run(pctx); close(pdone) }()
@@ -82,7 +77,6 @@ func tapeScenario(t *testing.T, dir string, shas []string) string {
 		if ms >= 21_000 {
 			sol = 100.08
 		}
-		book(ms+1, "SOLUSDT", sol-0.01, sol+0.01)
 		book(ms+2, "SOLUSDC", sol-0.01, sol+0.01)
 		if ms == 20_300 {
 			e := base/1e6 + ms
@@ -124,43 +118,60 @@ func readRecords(t *testing.T, path string) map[string][]map[string]any {
 	return out
 }
 
-func TestReplayRunsSeveralShadowEnginesAndTheControl(t *testing.T) {
+func TestReplayRunsTheShadowTraderAndTheControl(t *testing.T) {
 	dir := t.TempDir()
-	tp, tsum := writeParams(t, dir, "taker.json", takerRun)
 	qp, qsum := writeParams(t, dir, "quoter.json", quoterRun)
-	tapeDir := tapeScenario(t, dir, []string{tsum, qsum})
+	tapeDir := tapeScenario(t, dir, qsum)
 	out := filepath.Join(dir, "replay.jsonl")
-	if err := runReplay(tapeDir, []string{tp, qp}, out, false, 0); err != nil {
+	if err := runReplay(tapeDir, qp, out, false, 0); err != nil {
 		t.Fatal(err)
 	}
 	recs := readRecords(t, out)
-	taker, trades, atts := recs["t-taker/"], recs["t-quoter/trade"], recs["t-quoter/attempt"]
-	if len(taker) != 1 || len(trades) != 1 || len(atts) != 1 {
-		t.Fatalf("records: taker %d quoter trades %d attempts %d", len(taker), len(trades), len(atts))
+	trades, atts := recs["t-quoter/trade"], recs["t-quoter/attempt"]
+	if len(trades) != 1 || len(atts) != 1 {
+		t.Fatalf("records: trades %d attempts %d", len(trades), len(atts))
 	}
-	if taker[0]["exit_reason"] != "gap_closed" || trades[0]["exit_reason"] != "target" || atts[0]["filled"] != true {
-		t.Fatalf("taker %v\nquoter %v\nattempt %v", taker[0], trades[0], atts[0])
+	if trades[0]["exit_reason"] != "target" || atts[0]["filled"] != true {
+		t.Fatalf("trade %v\nattempt %v", trades[0], atts[0])
 	}
 	// A params file the tape's runs did not use replays nothing without --shadow-all.
-	other, _ := writeParams(t, dir, "other.json", takerRun[:len(takerRun)-1]+` ,"max_entry_spread_bp":9}`)
-	if err := runReplay(tapeDir, []string{other}, out, false, 0); err != nil {
+	other, _ := writeParams(t, dir, "other.json", quoterRun[:len(quoterRun)-1]+` ,"top_k":2}`)
+	if err := runReplay(tapeDir, other, out, false, 0); err != nil {
 		t.Fatal(err)
 	}
 	if n := len(readRecords(t, out)); n != 0 {
 		t.Fatalf("unused params replayed %d groups", n)
 	}
+	if err := runReplay(tapeDir, other, out, true, 0); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(readRecords(t, out)["t-quoter/trade"]); n != 1 {
+		t.Fatalf("--shadow-all replayed %d trades", n)
+	}
 	// The +1 h placebo: the leader's jump now lands after the tape, so no signal fires.
-	if err := runReplay(tapeDir, []string{tp, qp}, out, false, time.Hour); err != nil {
+	if err := runReplay(tapeDir, qp, out, false, time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	if n := len(readRecords(t, out)); n != 0 {
 		t.Fatalf("control produced %d groups of records", n)
 	}
-	// A 9 s shift keeps the jump on the tape (at 29 s), after the followers caught up: no lagger.
-	if err := runReplay(tapeDir, []string{tp}, out, false, 9*time.Second); err != nil {
+	// A 9 s shift keeps the jump on the tape (at 29 s), after the follower caught up: no lagger.
+	if err := runReplay(tapeDir, qp, out, false, 9*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	if n := len(readRecords(t, out)["t-taker/"]); n != 0 {
-		t.Fatalf("shifted control traded %d times", n)
+	if n := len(readRecords(t, out)["t-quoter/attempt"]); n != 0 {
+		t.Fatalf("shifted control posted %d entries", n)
+	}
+}
+
+// A params file written for an older engine is refused, not half applied.
+func TestOldParamsAreRefused(t *testing.T) {
+	dir := t.TempDir()
+	old, _ := writeParams(t, dir, "old.json", `{"run":"explore-3a","exploratory":true,"engine":"quoter","leaders":["BTCUSDT"],"followers":["SOLUSDC"],
+"trigger":{"kind":"price","window_ms":1000,"min_move_bp":4,"cooldown_ms":5000,"min_gap_bp":2},
+"latency_ms":5,"horizon_ms":3000,"notional_usd":25,"taker_fee_bp":4,"max_quote_age_ms":1000,"ticks":{"SOLUSDC":1000000},
+"quoter":{"arm":"A","maker_fee_bp":0,"cooldown_ms":5000,"entry_timeout_ms":2000}}`)
+	if err := runReplay(dir, old, "", false, 0); err == nil {
+		t.Fatal("an explore-3 params file was accepted")
 	}
 }
