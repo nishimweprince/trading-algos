@@ -19,6 +19,13 @@ import (
 // target_gap_frac × gap), moves it to the touch when the residual gap is at
 // most close_gap_bp, and is flattened as a taker after horizon_ms or when the
 // follower moves stop_mult × gap against it.
+//
+// Queue imbalance (explore-4): our side's share of the follower's L1 size,
+// bid/(bid+ask) for a long and ask/(bid+ask) for a short. A thin queue on our
+// side is the one about to be swept, and a fill there is adversely selected
+// (the microprice sits on the other side of mid). An entry needs a share of at
+// least min_entry_imb, and a working entry is cancelled once it falls under
+// cancel_imb.
 type QuoterCfg struct {
 	MakerFeeBp float64 `json:"maker_fee_bp"`
 	// MaxSpreadBp > 0: no new entry while the follower's spread is wider.
@@ -32,6 +39,10 @@ type QuoterCfg struct {
 	TargetGapFrac  float64 `json:"target_gap_frac,omitempty"`
 	CloseGapBp     float64 `json:"close_gap_bp,omitempty"`
 	StopMult       float64 `json:"stop_mult,omitempty"`
+
+	// MinEntryImb, CancelImb: queue-imbalance gate and cancel, 0: off.
+	MinEntryImb float64 `json:"min_entry_imb,omitempty"`
+	CancelImb   float64 `json:"cancel_imb,omitempty"`
 }
 
 func (c *QuoterCfg) validate(p *Params) error {
@@ -45,6 +56,10 @@ func (c *QuoterCfg) validate(p *Params) error {
 	}
 	if c.EntryTimeoutMs <= 0 || c.ReverseBp < 0 || c.MaxReprices < 0 || c.TargetGapFrac < 0 || c.CloseGapBp < 0 || c.StopMult < 0 {
 		return errors.New("shadow: quoter needs entry_timeout_ms > 0 and reverse_bp, max_reprices, target_gap_frac, close_gap_bp, stop_mult >= 0")
+	}
+	if c.MinEntryImb < 0 || c.MinEntryImb > 1 || c.CancelImb < 0 || c.CancelImb > 1 ||
+		(c.MinEntryImb > 0 && c.CancelImb >= c.MinEntryImb) {
+		return errors.New("shadow: quoter min_entry_imb and cancel_imb must be in [0, 1], cancel_imb < min_entry_imb")
 	}
 	return nil
 }
@@ -66,16 +81,17 @@ type Attempt struct {
 	GapBp        float64   `json:"gap_bp"`
 	Beta         float64   `json:"beta,omitempty"`
 	SpreadBp     float64   `json:"spread_bp"`
+	EntryImb     float64   `json:"entry_imb"`   // our side's L1 share at the post
 	QueueAhead   float64   `json:"queue_ahead"` // when it joined the book (−1: never did)
 	Filled       bool      `json:"filled"`
 	FillWaitMs   float64   `json:"fill_wait_ms,omitempty"`
-	EndReason    string    `json:"end_reason"` // filled, timeout, gap_closed, reversal, chased, rejected
+	EndReason    string    `json:"end_reason"` // filled, timeout, gap_closed, reversal, chased, rejected, imbalance
 	MarkoutsBp   []float64 `json:"markouts_bp,omitempty"`
 	RecNs        int64     `json:"rec_ns"`
 }
 
 // attemptEnds name Attempt.EndReason (and index the status counts).
-var attemptEnds = [...]string{"filled", "timeout", "gap_closed", "reversal", "chased", "rejected"}
+var attemptEnds = [...]string{"filled", "timeout", "gap_closed", "reversal", "chased", "rejected", "imbalance"}
 
 // marks samples signed markouts on the markouts_ms grid from fromNs.
 type marks struct {
@@ -125,6 +141,7 @@ type qslot struct {
 	leaderT  int64
 	base     gapBase
 	spreadBp float64
+	imb      float64 // our side's L1 share at the post
 
 	entry    order
 	exit     order
@@ -188,7 +205,7 @@ func newQuoterState(e *Engine) *quoterState {
 		q.slots[i].attempt = -1
 		q.slots[i].leader = -1
 	}
-	for _, k := range []string{"cooldown", "rejected"} {
+	for _, k := range []string{"cooldown", "rejected", "imbalance"} {
 		e.Skipped[k] = 0
 	}
 	return q
@@ -287,6 +304,10 @@ func (e *Engine) qSignal(l int, now, exchMs int64, move float64) {
 			e.Skipped["wide_spread"]++
 			continue
 		}
+		if c := e.q.cfg.MinEntryImb; c > 0 && sideShare(q, dir) < c {
+			e.Skipped["imbalance"]++
+			continue
+		}
 		e.cand[n] = f
 		n++
 	}
@@ -315,13 +336,14 @@ func (e *Engine) qSignal(l int, now, exchMs int64, move float64) {
 		}
 		*s = qslot{state: qEntry, dir: dir, leader: l, signalNs: now, sigMid: lMid, move: math.Abs(move),
 			preMove: e.candPre[f], gap: e.candGap[f], z: round(move, 3), leaderT: exchMs, base: e.candBase[f],
-			spreadBp: spreadBp(q), postNs: now, attempt: -1}
+			spreadBp: spreadBp(q), imb: sideShare(q, dir), postNs: now, attempt: -1}
 		s.entry.post(dir, px, now, e.q.latNs)
 		e.active++
 		if len(e.q.attempts) < maxPending {
 			a := Attempt{Kind: "attempt", Run: e.p.Run, Exploratory: e.p.Exploratory, Leader: e.leaders[l],
 				Follower: e.followers[f], Dir: dir, SignalNs: now, PostNs: now, PostPx: float64(px) / model.Scale,
-				LeaderMoveBp: round(math.Abs(move), 3), GapBp: round(s.gap, 3), SpreadBp: round(s.spreadBp, 3), QueueAhead: -1}
+				LeaderMoveBp: round(math.Abs(move), 3), GapBp: round(s.gap, 3), SpreadBp: round(s.spreadBp, 3),
+				EntryImb: round(s.imb, 4), QueueAhead: -1}
 			if e.betas != nil {
 				a.Beta = round(s.base.beta, 4)
 			}
@@ -336,6 +358,19 @@ func (e *Engine) qSignal(l int, now, exchMs int64, move float64) {
 
 func spreadBp(q *quote) float64 {
 	return float64(q.ask-q.bid) / (float64(q.ask+q.bid) / 2) * 1e4
+}
+
+// sideShare is the L1 size on the side a dir order joins (bid for a long) as
+// a share of both sides; 0.5 with no sizes.
+func sideShare(q *quote, dir int8) float64 {
+	tot := q.bidQty + q.askQty
+	if tot <= 0 {
+		return 0.5
+	}
+	if dir > 0 {
+		return float64(q.bidQty) / float64(tot)
+	}
+	return float64(q.askQty) / float64(tot)
 }
 
 // qReversals cancels entries of leader l once it gives back reverse_bp.
@@ -512,6 +547,8 @@ func (e *Engine) qTimers(now int64) {
 				e.qCancelEntry(f, s, now, "timeout")
 			} else if r, ok := e.qResidual(f, s); ok && r <= q.cfg.CloseGapBp {
 				e.qCancelEntry(f, s, now, "gap_closed")
+			} else if c := q.cfg.CancelImb; c > 0 && qt.bid > 0 && sideShare(qt, s.dir) < c {
+				e.qCancelEntry(f, s, now, "imbalance")
 			}
 		case qOpen:
 			if !s.exit.active() { // the exit was rejected (it would have crossed): rest it at the touch
@@ -568,7 +605,7 @@ func (e *Engine) qClose(f int, s *qslot, now int64, exitPx float64, maker bool, 
 		NotionalUSD: e.p.NotionalUSD, GrossBp: round(gross, 4), FeesBp: fees, NetBp: round(net, 4),
 		NetUSD: round(net/1e4*e.p.NotionalUSD, 6), ExitKind: kind, ExitReason: reason,
 		LeaderMoveBp: round(s.move, 3), PreMoveBp: round(s.preMove, 3), GapBp: round(s.gap, 3),
-		EntryKind: "maker", QueueAhead: round(s.entryAh, 6),
+		EntryKind: "maker", EntryImb: round(s.imb, 4), QueueAhead: round(s.entryAh, 6),
 		FillWaitMs: round(float64(s.fillNs-s.postNs)/1e6, 3)}
 	if e.betas != nil {
 		t.Beta = round(s.base.beta, 4)

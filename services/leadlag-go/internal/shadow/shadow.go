@@ -182,6 +182,7 @@ type Trade struct {
 	// Beta: the β used for the gap (rolling β only).
 	Beta       float64 `json:"beta,omitempty"`
 	EntryKind  string  `json:"entry_kind,omitempty"` // "maker"
+	EntryImb   float64 `json:"entry_imb"`            // our side's L1 share when the entry was posted
 	QueueAhead float64 `json:"queue_ahead,omitempty"`
 	FillWaitMs float64 `json:"fill_wait_ms,omitempty"` // post → entry fill
 	// ExitMarkoutsBp: the mid at each markouts_ms after the exit, bp from the

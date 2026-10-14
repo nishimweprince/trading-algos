@@ -16,5 +16,6 @@
   "ticks": {"SOLUSDC": 1000000, "XRPUSDC": 10000, "DOGEUSDC": 1000, "SUIUSDC": 10000, "BNBUSDC": 1000000, "ZECUSDC": 1000000, "NEARUSDC": 100000},
   "quoter": {"maker_fee_bp": 0, "max_spread_bp": 4, "cooldown_ms": 5000,
              "entry_timeout_ms": 30000, "reverse_bp": 2, "max_reprices": 1,
-             "target_gap_frac": 0.6, "close_gap_bp": 0.5, "stop_mult": 1.5}
+             "target_gap_frac": 0.6, "close_gap_bp": 0.5, "stop_mult": 1.5,
+             "min_entry_imb": 0.5, "cancel_imb": 0.25}
 }

@@ -24,12 +24,14 @@ func quoterParams() Params {
 }
 
 // qfeed scripts BTC (sym 0) and SOLUSDC (sym 1): quotes every 100 ms to endMs.
-// btc(t) and sol(t) give the mids; SOL's book is mid ± 0.01 with 5 on each side.
+// btc(t) and sol(t) give the mids; SOL's book is mid ± 0.01 with 5 on each
+// side, or solQty(t) when set.
 type qfeed struct {
-	endMs int64
-	btc   func(t int64) float64
-	sol   func(t int64) float64
-	evs   []model.Event
+	endMs  int64
+	btc    func(t int64) float64
+	sol    func(t int64) float64
+	solQty func(t int64) (bid, ask float64)
+	evs    []model.Event
 }
 
 func (q *qfeed) build() []model.Event {
@@ -37,7 +39,11 @@ func (q *qfeed) build() []model.Event {
 		b := q.btc(t)
 		q.evs = append(q.evs, model.Event{Sym: 0, Kind: model.KindQuote, RecvNs: t * ms, ExchMs: t, Bid: e8(b - 0.05), Ask: e8(b + 0.05), BidQty: e8(1), AskQty: e8(1)})
 		s := q.sol(t)
-		q.evs = append(q.evs, model.Event{Sym: 1, Kind: model.KindQuote, RecvNs: t*ms + ms, ExchMs: t, Bid: e8(s - 0.01), Ask: e8(s + 0.01), BidQty: e8(5), AskQty: e8(5)})
+		bq, aq := 5.0, 5.0
+		if q.solQty != nil {
+			bq, aq = q.solQty(t)
+		}
+		q.evs = append(q.evs, model.Event{Sym: 1, Kind: model.KindQuote, RecvNs: t*ms + ms, ExchMs: t, Bid: e8(s - 0.01), Ask: e8(s + 0.01), BidQty: e8(bq), AskQty: e8(aq)})
 	}
 	sortByRecv(q.evs)
 	return q.evs
@@ -184,6 +190,38 @@ func TestQuoterTimeoutFlattens(t *testing.T) {
 	}
 }
 
+func TestQuoterImbalanceGateSkipsAThinSide(t *testing.T) {
+	p := quoterParams()
+	p.Quoter.MinEntryImb, p.Quoter.CancelImb = 0.5, 0.25
+	// Our bid side holds 2 of 8 at the signal: share 0.25 < 0.5.
+	q := &qfeed{endMs: 25_000, btc: btcJump, sol: step(99_999, 100, 100), solQty: func(int64) (float64, float64) { return 2, 6 }}
+	e, _, atts := runQ(p, q.build())
+	if e.Signals != 1 || len(atts) != 0 || e.Skipped["imbalance"] != 1 {
+		t.Fatalf("signals %d attempts %d skipped %v", e.Signals, len(atts), e.Skipped)
+	}
+	// A short would join the heavy ask side: the gate is per direction.
+	if got := sideShare(&quote{bidQty: e8(2), askQty: e8(6)}, -1); got != 0.75 {
+		t.Fatalf("ask share %v", got)
+	}
+}
+
+func TestQuoterCancelsWhenItsSideThins(t *testing.T) {
+	p := quoterParams()
+	p.Quoter.MinEntryImb, p.Quoter.CancelImb = 0.5, 0.25
+	// Balanced at the signal, then at 20.5 s our bid side drops to 1 of 6.
+	qty := func(t int64) (float64, float64) {
+		if t >= 20_500 {
+			return 1, 5
+		}
+		return 5, 5
+	}
+	q := &qfeed{endMs: 25_000, btc: btcJump, sol: step(99_999, 100, 100), solQty: qty}
+	_, trades, atts := runQ(p, q.build())
+	if len(trades) != 0 || len(atts) != 1 || atts[0].EndReason != "imbalance" || atts[0].EntryImb != 0.5 {
+		t.Fatalf("trades %d attempts %+v", len(trades), atts)
+	}
+}
+
 func TestQuoterReplayIsDeterministic(t *testing.T) {
 	q := &qfeed{endMs: 28_000, btc: btcJump, sol: step(21_000, 100, 100.05)}
 	q.build()
@@ -205,6 +243,16 @@ func TestQuoterParams(t *testing.T) {
 	bad.Quoter.EntryTimeoutMs = 0
 	if bad.Validate() == nil {
 		t.Fatal("entry_timeout_ms 0 accepted")
+	}
+	bad = quoterParams()
+	bad.Quoter.MinEntryImb, bad.Quoter.CancelImb = 0.4, 0.4
+	if bad.Validate() == nil {
+		t.Fatal("cancel_imb >= min_entry_imb accepted")
+	}
+	bad = quoterParams()
+	bad.Quoter.MinEntryImb = 1.5
+	if bad.Validate() == nil {
+		t.Fatal("min_entry_imb > 1 accepted")
 	}
 }
 
