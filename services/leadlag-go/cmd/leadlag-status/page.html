@@ -188,6 +188,7 @@ function render(s) {
   const problems = [];
   const fresh = (at) => at && now - at < 20e9;
   if (!fresh(s.trader_at_ns)) problems.push("trader status unavailable");
+  if (t.status_error) problems.push("trader status error: " + t.status_error);
   if (!fresh(s.observer_at_ns)) problems.push("observer stats unavailable");
   const feeds = t.feeds || {};
   for (const [name, f] of Object.entries(feeds)) if (!f.up) problems.push(`${name} feed down`);

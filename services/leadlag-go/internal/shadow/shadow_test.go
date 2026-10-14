@@ -1,6 +1,7 @@
 package shadow
 
 import (
+	"encoding/json"
 	"math"
 	"os"
 	"path/filepath"
@@ -416,5 +417,18 @@ func TestHistAt(t *testing.T) {
 	}
 	if h.n != 2 {
 		t.Fatalf("n = %d", h.n)
+	}
+}
+
+// A non-finite number anywhere in the aggregates must not break the status JSON.
+func TestStatusMarshalsWithNonFiniteNumbers(t *testing.T) {
+	a := Agg{N: 2, SumNet: math.Inf(1), SumNet2: math.NaN(), SumGros: math.Inf(-1), NetUSD: math.NaN(), NMark: 1}
+	a.SumMark[0] = math.NaN()
+	s := a.Summarize()
+	if s.MeanNet != 0 || s.MeanGross != 0 || s.NetUSD != 0 || s.Markouts[0] != 0 {
+		t.Fatalf("summary %+v", s)
+	}
+	if _, err := json.Marshal(s); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -342,7 +342,13 @@ func (a *Agg) Summarize() Summary {
 	return s
 }
 
+// round rounds v to d decimals. NaN and ±Inf become 0: every float in the
+// status document and the journal goes through here, and encoding/json
+// refuses non-finite numbers (one froze /v1/status on 2026-10-10).
 func round(v float64, d int) float64 {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0
+	}
 	p := math.Pow(10, float64(d))
 	return math.Round(v*p) / p
 }

@@ -142,9 +142,12 @@ func run(cfg config, log *slog.Logger) error {
 	// Completed trades and quoter attempts go to the observer's journal through
 	// the ring (the trader never writes to disk). Marshalling allocates, once per record.
 	journal := func(atNs int64, v any) {
-		if b, err := json.Marshal(v); err == nil {
-			prod.Journal(atNs, b)
+		b, err := json.Marshal(v)
+		if err != nil {
+			log.Error("journal record not marshalled", "err", err)
+			return
 		}
+		prod.Journal(atNs, b)
 	}
 	for i := range runs {
 		r := &runs[i]
@@ -194,7 +197,7 @@ func run(cfg config, log *slog.Logger) error {
 		go func() { defer wg.Done(); f.Run(feedCtx) }()
 	}
 
-	st := &statusPublisher{cfg: cfg, hub: hub, eng: rec, runs: runs, prod: prod, feeds: feeds, symbols: symbols, started: started}
+	st := &statusPublisher{log: log, cfg: cfg, hub: hub, eng: rec, runs: runs, prod: prod, feeds: feeds, symbols: symbols, started: started}
 	wg.Add(1)
 	go func() { defer wg.Done(); st.run(feedCtx) }()
 
@@ -257,6 +260,7 @@ type shadowRun struct {
 // statusPublisher rebuilds the status JSON every 2 s off the hot path; the
 // admin handler only serves the latest bytes.
 type statusPublisher struct {
+	log     *slog.Logger
 	cfg     config
 	hub     *live.Hub
 	eng     *live.RecordEngine
@@ -268,6 +272,7 @@ type statusPublisher struct {
 	latest  atomic.Pointer[[]byte]
 
 	window []windowPoint // ~60 s of cumulative snapshots for windowed latency
+	errAt  time.Time     // the last logged marshal error (logged at most once a minute)
 }
 
 type windowPoint struct{ engine, loop stats.Hist }
@@ -363,9 +368,16 @@ func (p *statusPublisher) publish(samples []metrics.Sample) {
 		doc["shadow_runs"] = shadowDocs
 	}
 	b, err := json.Marshal(doc)
-	if err == nil {
-		p.latest.Store(&b)
+	if err != nil {
+		// Serve the error rather than the last good document, so the page
+		// shows the problem instead of quietly going stale.
+		if now := time.Now(); now.Sub(p.errAt) >= time.Minute {
+			p.errAt = now
+			p.log.Error("status not marshalled", "err", err)
+		}
+		b, _ = json.Marshal(map[string]any{"now_ns": time.Now().UnixNano(), "build": version, "status_error": err.Error()})
 	}
+	p.latest.Store(&b)
 }
 
 // gcPauses digests the runtime's cumulative GC pause histogram (µs).
