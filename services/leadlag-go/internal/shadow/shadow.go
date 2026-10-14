@@ -329,6 +329,10 @@ func (h *hist) last() (float64, bool) {
 // RingSize is how many recent trades the status page shows.
 const RingSize = 50
 
+// RollN is the rolling window the status reads the kill-rule numbers from:
+// the latest RollN trades' mean net bp and taker-exit share.
+const RollN = 200
+
 // moveBuckets label the by_move groups: |leader move| in bp.
 var moveBuckets = []float64{4, 8, 15}
 
@@ -369,6 +373,14 @@ type Engine struct {
 	Ring      [RingSize]Trade
 	RingNext  int
 	RingCount int
+
+	roll      [RollN]float64 // the latest trades' net bp
+	rollTaker [RollN]bool
+	rollNext  int
+	rollCount int
+	// Crosses counts taker exits by exit reason (stop: the hard stop;
+	// timeout: the horizon's grace ran out).
+	Crosses [len(exitReasons)]uint64
 }
 
 // New builds an engine for symbols (the hub's index order). Leaders and
@@ -589,6 +601,14 @@ func (e *Engine) record(tr *Trade, leader, f int, maker bool, move float64) {
 		e.ByExit[0].add(t)
 	}
 	e.ByReason[reasonIndex(t.ExitReason)].add(t)
+	e.roll[e.rollNext], e.rollTaker[e.rollNext] = t.NetBp, !maker
+	e.rollNext = (e.rollNext + 1) % RollN
+	if e.rollCount < RollN {
+		e.rollCount++
+	}
+	if !maker {
+		e.Crosses[reasonIndex(t.ExitReason)]++
+	}
 	b := 0
 	for b < len(moveBuckets) && move >= moveBuckets[b] {
 		b++
@@ -650,13 +670,32 @@ func (e *Engine) Status(paramsSHA string) map[string]any {
 	if e.Total.N > 0 {
 		takerFrac = round(float64(e.ByExit[0].N)/float64(e.Total.N), 4)
 	}
+	crosses := map[string]uint64{}
+	for i, r := range exitReasons {
+		if e.Crosses[i] > 0 {
+			crosses[r] = e.Crosses[i]
+		}
+	}
+	var rollSum float64
+	var rollTakers int
+	for i := 0; i < e.rollCount; i++ {
+		rollSum += e.roll[i]
+		if e.rollTaker[i] {
+			rollTakers++
+		}
+	}
+	rolling := map[string]any{"n": e.rollCount, "window": RollN}
+	if e.rollCount > 0 {
+		rolling["mean_net_bp"] = round(rollSum/float64(e.rollCount), 3)
+		rolling["taker_frac"] = round(float64(rollTakers)/float64(e.rollCount), 4)
+	}
 	doc := map[string]any{
 		"run": e.p.Run, "exploratory": e.p.Exploratory, "params_sha256": paramsSHA, "params": e.p,
 		"markouts_ms": e.p.MarkoutsMs,
 		"signals":     e.Signals, "open": e.active, "skipped": skipped,
 		"total": e.Total.Summarize(), "by_follower": byF, "by_leader": byL,
 		"by_exit":        map[string]Summary{"taker": e.ByExit[0].Summarize(), "maker": e.ByExit[1].Summarize()},
-		"by_exit_reason": byR, "taker_exit_frac": takerFrac,
+		"by_exit_reason": byR, "taker_exit_frac": takerFrac, "taker_crosses": crosses, "rolling": rolling,
 		"by_move": byM, "recent": e.Recent(),
 	}
 	e.q.status(doc)

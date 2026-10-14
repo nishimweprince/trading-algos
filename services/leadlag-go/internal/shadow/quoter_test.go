@@ -263,12 +263,17 @@ func TestQuoterSoftStopRestsAtTheTouchAndFollowsIt(t *testing.T) {
 
 func TestQuoterHardStopCrosses(t *testing.T) {
 	q := &qfeed{endMs: 25_000, btc: btcJump, sol: step(21_000, 100, 99.85)} // −14 bp
-	_, trades, _ := runQ(ladderParams(), filledLong(q))
+	e, trades, _ := runQ(ladderParams(), filledLong(q))
 	if len(trades) != 1 {
 		t.Fatalf("trades %d", len(trades))
 	}
 	if tr := trades[0]; tr.ExitReason != "stop" || tr.ExitKind != "taker" || tr.FeesBp != 4 || tr.ExitPx != 99.84 {
 		t.Fatalf("trade %+v", tr)
+	}
+	st := e.Status("x")
+	roll := st["rolling"].(map[string]any)
+	if st["taker_crosses"].(map[string]uint64)["stop"] != 1 || roll["n"] != 1 || roll["taker_frac"] != 1.0 {
+		t.Fatalf("status crosses %v rolling %v", st["taker_crosses"], roll)
 	}
 }
 
