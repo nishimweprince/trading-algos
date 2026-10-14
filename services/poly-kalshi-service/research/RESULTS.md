@@ -216,3 +216,30 @@ These come with new shadow variants and `research.readout --exclude-assets`.
   stay comparable and A1 reads both legs again from here.
 - Redeployed `poly-kalshi-service` and `pk-status` on Dublin; `/health/ready`
   reports all 7 windows identified on both feeds.
+
+## 2026-10-14: the outside review, epoch 14
+
+An outside review of the epoch 10–13 export assumed orders went to Kalshi (Kalshi's
+fees, order groups, queue), so most of its venue advice did not apply. Three of its
+points held against the code and the host:
+
+- **The exit floor ignored the exit fee.** `entry + entry fee + 1¢` nets
+  `1¢ − exit fee` at the floor, about −0.7¢/share near 0.50. Fixed: the floor now
+  covers both fees and a cent.
+- **The limit could spend the edge.** `min_edge` checked Kalshi's price against the
+  ask, but the order could pay ask + 6¢. `PK_MIN_NET_EDGE=0.03` caps the limit. On
+  epoch 13's ten live entries it would have changed none: Kalshi's price sat 16–41¢
+  above the ask, so the cap (0.32–0.85) never fell below ask + 6¢.
+- **Cash drifted in pairs.** Seven `reconcile` drifts on 2026-10-14 came as ±$9.64
+  (the wallet still lacking a sale's proceeds just after `live_exit`) and ±$10.32
+  (the wallet already holding a payout before the resolution arrived). Each reset the
+  ledger to the early read and the next one reset it back. A drift now waits while an
+  order is in flight or a closed window is unresolved, and until two reads agree.
+
+**Latency, measured on the host (epoch 13).** Live FAK entries: decision →
+acknowledgement p50 225 ms (n 5 timed; all 10 entries 196–340 ms), 7 of 10 killed for
+no match. Post-only probes on the same warm connection: p50 43 ms (n 300). Signing is
+0.13 ms and pre-signed; nearly all of the time is write → headers, i.e. the venue
+holding a marketable order. A host move or faster code cannot recover it.
+
+Shadow variants and the paper twin were removed at the owner's request (PREREG part 6).

@@ -7,6 +7,28 @@ Polymarket's bid catches up with Kalshi's price (the active exit), else hold to
 settlement. Kalshi is the signal only; Binance is recorded and compared
 (lead–lag panel) but never decides: from Dublin it arrives after both venues move.
 
+**Epoch 14 (2026-10-14).** Execution economics, and live code only:
+- **Exits net a cent after both fees.** The floor was entry + entry fee + 1¢,
+  so a sale there lost the exit's own fee (≈ −0.7¢/share near 0.50). It is now
+  the lowest price whose proceeds after the exit fee cover the entry, its fee
+  and a cent (`pk_core::exit::exit_floor`).
+- **The limit never spends the edge** (`PK_MIN_NET_EDGE`, live 0.03). The
+  limit is touch + `PK_LIMIT_OFFSET`, capped where buying and selling at
+  Kalshi's price leaves less than 3¢ after both fees; an ask above the cap is
+  no entry. On epoch 13's ten live entries the cap would have bound none (the
+  0.20 gap and `PK_MIN_EDGE` keep Kalshi's price 16-41¢ over the ask): it is a
+  rail for thin edges, not a change to today's fills.
+- **Cash is not counted twice.** The wallet and the ledger see an exit's
+  proceeds or a redemption at different times, and each reconciliation reset
+  cash to whichever read came first (epoch 13: ±$9.64 and ±$10.32 pairs). A
+  drift now waits while an order is in flight or a closed window awaits its
+  resolution, and is applied once two reads agree (`reconcile` with
+  `skipped`).
+- **No shadow variants and no paper twin.** The owner removed them. They ran
+  only in the observer, so the order path is unchanged; the observer does
+  less. Live entries took ~225 ms decision → acknowledgement against ~43 ms
+  for post-only probes on the same connection: the taker delay is the venue's.
+
 **Epoch 13 (2026-10-14).** The epoch-12 review (−$24.31 live over 43 trades,
 while the touch edge across all crossings was +9.8¢) found three mechanical
 leaks, now closed:
@@ -22,8 +44,6 @@ leaks, now closed:
 - **Fixed size.** Every entry is 10 shares (`PK_ORDER_SHARES`). The 5-share
   minimum no longer refuses the dearer entries, which left mostly cheap tails.
 
-The shadow's exit is now a FAK a latency later too, and the variants `ktrig`,
-`edge05`, `edge15` and `kspread03` measure the next steps.
 
 **Epoch 11 (2026-10-12).** From the 10-10/11 tape (652 shadow entries replayed
 through the books at 250 ms): threshold 0.20 (was 0.15), limit touch + 6¢ (was
@@ -72,7 +92,7 @@ Telegram `/kill` and `/status` run on a bot of its own (`PK_TELEGRAM_BOT_TOKEN`)
 
 | Crate | |
 |---|---|
-| `pk-core` | books, fees, `decide()`, windows, ledger, risk, shadow variants, journal records |
+| `pk-core` | books, fees, `decide()`, windows, ledger, risk, journal records |
 | `pk-engine` | the line-driven engine (roles `full`, `trade`, `observe`; forward and reverse) |
 | `pk-feeds` | Kalshi (RSA-PSS) and Polymarket (sharded) websockets, PolyBolt, window discovery |
 | `pk-exec` | the Polymarket CLOB V2 order path: warm HTTP/2, L2 auth, EIP-712 signing, pre-signing, the probe |
@@ -158,8 +178,7 @@ Funds at another address (for example the deposit wallet while
   polling the order until it is no longer live) goes back as a `live_fill`
   control line. The engine opens the position and writes a `fill` record with
   `venue: "live"` in the paper schema, so `pk readout` and the gates read live
-  fills unchanged. The paper venue still simulates each order as a shadow
-  (`paper_fill` records), which gives the live-vs-paper comparison.
+  fills unchanged. The paper venue simulates nothing in live.
 - **Fast path** (`PK_FAST_PATH`, `pk_trader::fast`, `pk_trader::hot`). When an
   asset's gap nears the threshold the engine arms it (its Polymarket quotes, the
   rule's parameters, the entry per side); the order for each side is signed and
@@ -176,7 +195,7 @@ Funds at another address (for example the deposit wallet while
   it on every update: once the held leg's best bid is within 1¢ of Kalshi's
   price for that side (Kalshi spread ≤ 2¢) and above the entry, it writes an
   `exit_signal` and the bridge sells with a FAK `PK_ACTIVE_EXIT_TICKS` (3) under
-  the bid, never under entry + fee + 1¢. What sold
+  the bid, never where both taker fees leave under 1¢ a share. What sold
   comes back as `live_exit` (`reason: "fair"`): an `exit` record, and a `settle`
   record with `outcome: "exit"` when nothing is left. When nothing sold, the
   bridge sends `exit_miss`. A killed or refused FAK re-arms at the next update,
@@ -231,7 +250,7 @@ control lines (windows,      │   (receive tasks)                             �
                                                                              └ ObserverLink: a non-blocking pipe
                               observer process (pk-observer, a child of the trader)
                                ├ the tape (hourly zstd files and manifests, its own thread)
-                               ├ Engine(role=observe): shadow variants, markouts, series,
+                               ├ Engine(role=observe): markouts, series,
                                │   uncensored gap, window/resolution records, BBO checks, feed lags
                                ├ the journal (its only writer, in the trader's line order)
                                ├ PolyBolt reference prices (venue b, optional)
@@ -260,11 +279,11 @@ restores the one-process layout.
   - A crossing above the cap consumes the window.
   - No exit, ever.
 - **Stale and wide books** (the review's step 3): `PK_MAX_POLY_LAG_MS` and
-  `PK_MAX_POLY_SPREAD` guard the live rule (off by default; the `plag250` and
-  `pspread01` shadow variants measure them). The epoch-13 gates are
-  `PK_MAX_KALSHI_SPREAD`, `PK_MIN_EDGE` (Kalshi's price of the side minus the
-  ask) and `PK_MIN_ENTRY_PX`. A spread, lag or edge gate that fails does not
-  consume the window. A Polymarket book older than
+  `PK_MAX_POLY_SPREAD` guard the live rule (off by default). The epoch-13
+  gates are `PK_MAX_KALSHI_SPREAD`, `PK_MIN_EDGE` (Kalshi's price of the side
+  minus the ask) and `PK_MIN_ENTRY_PX`; epoch 14 adds `PK_MIN_NET_EDGE` (the
+  same after both taker fees, which also caps the limit). A spread, lag or
+  edge gate that fails does not consume the window. A Polymarket book older than
   `PK_AGE_OUTLIER_MS` at a decision is journalled as an `age_outlier` with its
   cause: venue silence, a shard reconnect, or frame lag.
 - **Paper fill** (`pk-engine::paper`):
@@ -310,7 +329,7 @@ pk acceptance --hours 24
 - `replay run` re-runs the tape through the live engine. It writes a journal and a per-second `grid.parquet`; `--reverse` replays the reverse direction (Polymarket signals, Kalshi executes).
 - `replay compare` must show 100% agreement with live on the same tape. A tape recorded with the order path on carries the measured latency as `latency` lines: pass `--tape-latency` to follow them as the trader did (`--latency-ms` holds until the first one); without it `--latency-ms` holds throughout.
 - `nulls` is the manual's null battery. Expect `signal` ≈ +5 pp and `random_same_rule` ≈ 0 pp. Its random arms use a seeded generator of their own, not numpy's.
-- `readout` reports the gates below, the shadow-variant table, markouts and capacity. `--exclude-assets` reads the journal as if those assets were never traded, next to the full read (PREREG part 4, A1).
+- `readout` reports the gates below, markouts, exits and capacity. `--exclude-assets` reads the journal as if those assets were never traded, next to the full read, net ¢ over the shares each settled position filled (PREREG parts 4 A1, 6 B1).
 - `fills` decides once and fills many times (latency × limit offset × size) from each entry's ask ladder.
 
 The research documents (`research/PREREG.md`, `research/RESULTS.md`) name the

@@ -189,3 +189,27 @@ the config hash when on.
 "Moving poly-kalshi to AWS"), the results epoch is bumped at the switch, because fills
 depend on latency. Each test then counts the two epochs separately and reports both; it
 passes only if the pooled day-t is ≥ 2 and the sign matches in each.
+
+---
+
+# Part 6: epoch 14, live only (registered 2026-10-14, before deploy)
+
+**What has been read.** The export `pk-export-aws-euw1-dev-20261014T124537Z` (epochs
+10–13), an outside review of it, and the 2026-10-14 journal on the host: 65 live
+settlements across epochs 10–13 (+$3.71); BNB −$18.80 over 13 and XRP −$25.81 over 8,
+pooled across configurations. The hypothesis below comes from that read, so none of it
+can test it. The count starts at epoch 14's deploy.
+
+**Shadows ended.** Epoch 14 removes the shadow variants and the paper twin (owner's
+decision), so the open shadow tests end unread: part 3 P3 (`kext`) and P5 (`usnight`),
+part 4 A2 (`cap50`), A3 (`t20_cap50`), A4 (`pspread01`) and A5 (`plag250`). What they
+had accumulated by epoch 13 stays in the journals and is not a result.
+
+- **B1. Without BNB and XRP.** `pk readout --epoch 14 --exclude-assets BNB,XRP`
+  against the full read: settled live P&L and net ¢/share over the shares filled, per
+  day. Test on ≥ 300 settled live entries from this deploy; the daily difference's
+  day-t ≥ 2 sends it to the owner, with the per-asset counts. Nothing changes
+  automatically: BNB and XRP keep trading live at full size meanwhile.
+
+Read alongside, not tested: the share of exits sold at the new floor, and the share of
+entries whose limit the net-edge cap pulled below touch + offset.
