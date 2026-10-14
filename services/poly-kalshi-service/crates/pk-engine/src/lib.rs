@@ -40,7 +40,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
-use pk_core::decision::{Action, Decision, StrategyParams, WINDOW_S, decide};
+use pk_core::decision::{Action, Decision, StrategyParams, WINDOW_S, decide, net_edge_max_px};
 use pk_core::exit::{EXIT_MIN_SHARES, exit_floor, kalshi_fair, should_exit};
 use pk_core::fees::taker_fee;
 use pk_core::journal::Sink;
@@ -912,8 +912,9 @@ impl Engine {
                 buy_yes: Some(f.buy_yes),
                 entry_px: Some(f.entry_px),
                 contracts: f.contracts,
+                max_px: Some(f.limit_px),
             },
-            None => decide(&k, &y, &n, &self.params, sec_into, false, None, lags),
+            None => decide(&k, &y, &n, &self.params, sec_into, false, None, lags, (window.fee_rate, window.fee_exponent)),
         };
         self.state[idx].evals += 1;
         if self.observe {
@@ -929,7 +930,7 @@ impl Engine {
         }
         if !decision.consumes_window() {
             if self.emit_intents && self.trade {
-                self.maybe_hint(idx, &window, &decision, recv_ns);
+                self.maybe_hint(idx, &window, y.mid(), &decision, recv_ns);
                 self.maybe_arm(idx, &window, (&y, &n), &decision, recv_ns);
             }
             return;
@@ -949,11 +950,12 @@ impl Engine {
             return;
         }
         if decision.action == Action::Enter && fast_fire.is_none() {
-            decision.contracts = self.contracts_for(decision.entry_px.expect("an entry has a price")).max(1);
+            decision.contracts =
+                self.contracts_for(decision.entry_px.expect("an entry has a price"), decision.max_px).max(1);
         }
         if decision.action == Action::Enter && self.size_to_depth && fast_fire.is_none() {
             let entry = decision.entry_px.expect("an entry has a price");
-            let offered = self.depth(&window, decision.buy_yes == Some(true), self.limit_px(entry));
+            let offered = self.depth(&window, decision.buy_yes == Some(true), self.limit_px(entry, decision.max_px));
             let capped = decision.contracts.min(offered.floor() as i64).max(1);
             if capped < decision.contracts {
                 decision.contracts = capped;
@@ -1042,7 +1044,7 @@ impl Engine {
         self.write(recv_ns, record, false);
     }
 
-    fn maybe_hint(&mut self, idx: usize, w: &Window, d: &Decision, recv_ns: i64) {
+    fn maybe_hint(&mut self, idx: usize, w: &Window, y_mid: Option<f64>, d: &Decision, recv_ns: i64) {
         let Some(gap) = d.gap else { return };
         if d.reason != "below_threshold" || gap.abs() < self.params.gap_threshold * PRESIGN_FRACTION {
             return;
@@ -1054,13 +1056,14 @@ impl Engine {
         let token = if gap > 0.0 { &w.yes_token } else { &w.no_token };
         let book = self.books.get(token);
         let ask = book.and_then(Book::best_ask);
+        let max_px = self.cross_max_px(w, y_mid, gap > 0.0);
         self.hints.push(PresignHint {
             asset: w.asset.clone(),
             token: token.clone(),
             best_bid: book.and_then(Book::best_bid),
             best_ask: ask,
-            limit_px: ask.map(|a| self.limit_px(a)),
-            contracts: ask.filter(|a| *a > 0.0).map(|a| self.contracts_for(a)),
+            limit_px: ask.map(|a| self.limit_px(a, max_px)),
+            contracts: ask.filter(|a| *a > 0.0).map(|a| self.contracts_for(a, max_px)),
         });
     }
 
@@ -1117,7 +1120,7 @@ impl Engine {
         let Some(venue) = self.venue else { return Some("mode_off".into()) };
         let entry = d.entry_px.expect("an entry has a price");
         // The most the order can cost: at its limit when sized there.
-        let worst = if self.size_at_limit { self.limit_px(entry) } else { entry };
+        let worst = if self.size_at_limit { self.limit_px(entry, d.max_px) } else { entry };
         let est =
             d.contracts as f64 * worst + taker_fee(worst, d.contracts as f64, w.fee_rate, w.fee_exponent);
         let blocked = self.risk.check(&self.ledger, est, recv_ns);
@@ -1175,7 +1178,7 @@ impl Engine {
                 token: token.clone(),
                 side,
                 entry_px: entry,
-                limit_px: self.limit_px(entry),
+                limit_px: self.limit_px(entry, d.max_px),
                 contracts: d.contracts,
                 decision_ns: recv_ns,
                 condition_id: w.condition_id.clone(),
@@ -1294,11 +1297,15 @@ impl Engine {
             self.disarm(idx);
             return;
         }
-        let side = |q: &Quote, token: &str| -> Option<ArmSide> {
+        let side = |q: &Quote, token: &str, buy_yes: bool| -> Option<ArmSide> {
             let entry = q.ask.filter(|a| q.valid && *a > 0.0 && *a < 1.0 && *a <= self.params.max_entry_px)?;
-            let limit = self.limit_px(entry);
+            let max_px = self.cross_max_px(w, y.mid(), buy_yes);
+            if max_px.is_some_and(|m| entry > m + 1e-9) {
+                return None;
+            }
+            let limit = self.limit_px(entry, max_px);
             let px = if self.size_at_limit { limit } else { entry };
-            let contracts = self.contracts_for(entry);
+            let contracts = self.contracts_for(entry, max_px);
             (contracts >= 1).then(|| ArmSide {
                 token: token.to_owned(),
                 entry_px: entry,
@@ -1318,8 +1325,8 @@ impl Engine {
             poly_yes: *y,
             poly_no: *n,
             params: self.params.clone(),
-            yes: side(y, &w.yes_token),
-            no: side(n, &w.no_token),
+            yes: side(y, &w.yes_token, true),
+            no: side(n, &w.no_token, false),
             fee_rate: w.fee_rate,
             fee_exponent: w.fee_exponent,
         };
@@ -1353,16 +1360,29 @@ impl Engine {
 
     /// Shares for an entry at `entry_px`: `order_shares` when set, else the
     /// notional at the limit (`size_at_limit`: what a FAK can spend) or the touch.
-    pub fn contracts_for(&self, entry_px: f64) -> i64 {
+    pub fn contracts_for(&self, entry_px: f64, max_px: Option<f64>) -> i64 {
         if let Some(n) = self.order_shares {
             return n;
         }
-        let px = if self.size_at_limit { self.limit_px(entry_px) } else { entry_px };
+        let px = if self.size_at_limit { self.limit_px(entry_px, max_px) } else { entry_px };
         (self.params.notional_usd / px).floor() as i64
     }
 
-    pub fn limit_px(&self, entry_px: f64) -> f64 {
-        round_dp((entry_px + self.limit_offset).min(self.params.max_entry_px), 4)
+    /// The order's limit: the touch plus the offset, never above the cap nor
+    /// the decision's net-edge price (`max_px`), never below the touch.
+    pub fn limit_px(&self, entry_px: f64, max_px: Option<f64>) -> f64 {
+        let limit = (entry_px + self.limit_offset).min(self.params.max_entry_px);
+        round_dp(max_px.map_or(limit, |m| limit.min(m)).max(entry_px), 4)
+    }
+
+    /// The net-edge price of a crossing at the least Kalshi move that fires it
+    /// (Polymarket's YES mid `y_mid` plus the threshold): what an order signed
+    /// ahead of the crossing may pay. `None` without `min_net_edge`.
+    fn cross_max_px(&self, w: &Window, y_mid: Option<f64>, buy_yes: bool) -> Option<f64> {
+        let m = self.params.min_net_edge?;
+        let y_mid = y_mid?;
+        let fair = if buy_yes { y_mid } else { 1.0 - y_mid } + self.params.gap_threshold;
+        Some(net_edge_max_px(fair.min(0.99), m, w.fee_rate, w.fee_exponent))
     }
 
     fn resolve_pending(&mut self, recv_ns: i64) {
@@ -1386,7 +1406,7 @@ impl Engine {
         let entry = d.entry_px.expect("an entry has a price");
         let empty = Book::default();
         let book = self.books.get(&order.token).unwrap_or(&empty);
-        let limit = self.limit_px(entry);
+        let limit = self.limit_px(entry, d.max_px);
         let depth = book.depth_upto(limit);
         let result = venue.fill(book, limit, d.contracts, w.fee_rate, w.fee_exponent);
         let touch_fee = taker_fee(entry, d.contracts as f64, w.fee_rate, w.fee_exponent);
@@ -1849,7 +1869,7 @@ impl Engine {
                     gap = Some(round_dp(km - ym, 4));
                 }
                 // What the rule would do with the books as they stand.
-                let d = decide(&k, &y, &n, &self.params, sec, false, None, None);
+                let d = decide(&k, &y, &n, &self.params, sec, false, None, None, (w.fee_rate, w.fee_exponent));
                 preview = json!({
                     "action": d.action.as_str(),
                     "reason": d.reason,

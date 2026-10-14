@@ -207,7 +207,8 @@ pub fn scan_window(
             let kq = k.quote(kat[j].0, kat[j].1);
             let yq = y.quote(yat[j].0, yat[j].1);
             let nq = n.quote(nat[j].0, nat[j].1);
-            let d = decide(&kq, &yq, &nq, p, sec[j], false, None, None);
+            let fee = (pk_core::fees::DEFAULT_RATE, pk_core::fees::DEFAULT_EXPONENT);
+            let d = decide(&kq, &yq, &nq, p, sec[j], false, None, None, fee);
             if !d.consumes_window() {
                 continue;
             }

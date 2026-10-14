@@ -27,6 +27,9 @@ pub struct Strategy {
     latency_ms: i64,
     #[arg(long, default_value_t = 0.0)]
     limit_offset: f64,
+    /// Cap the order's price so both taker fees leave this much (PK_MIN_NET_EDGE).
+    #[arg(long)]
+    min_net_edge: Option<f64>,
     /// Per-venue delay, e.g. k=9,p=-4 (PLAN 3.1).
     #[arg(long, default_value = "")]
     shift_ms: String,
@@ -45,6 +48,7 @@ impl Strategy {
                 notional_usd: self.notional,
                 entry_early_s: self.early,
                 entry_late_s: self.late,
+                min_net_edge: self.min_net_edge,
                 ..Default::default()
             },
             assets: self

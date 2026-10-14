@@ -50,6 +50,7 @@ pub fn reverse_decide(k: &Quote, y: &Quote, p: &StrategyParams, sec_into: f64, t
         buy_yes: None,
         entry_px: None,
         contracts: 0,
+        max_px: None,
     };
     if traded {
         return none("traded", None);
@@ -84,6 +85,7 @@ pub fn reverse_decide(k: &Quote, y: &Quote, p: &StrategyParams, sec_into: f64, t
         buy_yes: Some(buy_yes),
         entry_px: Some(entry),
         contracts: 0,
+        max_px: None,
     };
     if entry > p.max_entry_px {
         return skip("above_cap");
@@ -102,6 +104,7 @@ pub fn reverse_decide(k: &Quote, y: &Quote, p: &StrategyParams, sec_into: f64, t
         buy_yes: Some(buy_yes),
         entry_px: Some(entry),
         contracts,
+        max_px: None,
     }
 }
 
@@ -150,7 +153,7 @@ impl Engine {
         let buy_yes = d.buy_yes == Some(true);
         if d.action == Action::Enter && self.size_to_depth {
             let offered =
-                self.k_depth(&window.kalshi_ticker, buy_yes, self.limit_px(d.entry_px.unwrap_or(0.0)));
+                self.k_depth(&window.kalshi_ticker, buy_yes, self.limit_px(d.entry_px.unwrap_or(0.0), None));
             let capped = d.contracts.min(offered.floor() as i64).max(1);
             if capped < d.contracts {
                 d.contracts = capped;
@@ -219,7 +222,7 @@ impl Engine {
     pub(crate) fn fill_reverse(&mut self, order: Pending, recv_ns: i64) {
         let (d, w) = (&order.decision, &order.window);
         let entry = d.entry_px.expect("an entry has a price");
-        let limit = self.limit_px(entry);
+        let limit = self.limit_px(entry, None);
         let buy_yes = order.side == "yes";
         let (levels, best) = match self.books.get(&order.token).filter(|b| b.snapshot_ns.is_some()) {
             Some(book) if buy_yes => (book.asks_upto(limit).collect::<Vec<_>>(), book.best_ask()),

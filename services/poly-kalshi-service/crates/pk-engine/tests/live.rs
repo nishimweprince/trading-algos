@@ -40,6 +40,7 @@ struct Opts {
     size_at_limit: bool,
     limit_offset: f64,
     order_shares: Option<i64>,
+    min_net_edge: Option<f64>,
 }
 
 impl Default for Opts {
@@ -53,12 +54,14 @@ impl Default for Opts {
             size_at_limit: false,
             limit_offset: 0.0,
             order_shares: None,
+            min_net_edge: None,
         }
     }
 }
 
 fn engine(o: Opts) -> (Engine, Shared) {
-    let params = StrategyParams { gap_threshold: 0.15, notional_usd: 50.0, ..Default::default() };
+    let params =
+        StrategyParams { gap_threshold: 0.15, notional_usd: 50.0, min_net_edge: o.min_net_edge, ..Default::default() };
     let mut ec = EngineConfig::new(params, vec!["BTC".into()]);
     ec.venue = Some(PaperVenue::new(150));
     ec.role = o.role;
@@ -390,13 +393,31 @@ fn a_missed_live_exit_rearms_at_once_or_after_a_balance_second() {
 }
 
 #[test]
+fn net_edge_caps_the_limit_and_refuses_a_dear_ask() {
+    // Kalshi's YES is 0.71 after the cross; both fees leave 20c only up to 0.47.
+    let opts = Opts { limit_offset: 0.06, min_net_edge: Some(0.20), ..Default::default() };
+    let (mut e, sink) = engine(opts);
+    setup(&mut e);
+    cross(&mut e, 30.0);
+    tick(&mut e, 30.5);
+    assert_eq!(sink.of("fill")[0]["limit_px"], 0.47);
+    // 25c is more than a 0.46 ask leaves: no entry, and the window stays open.
+    let (mut e, sink) = engine(Opts { limit_offset: 0.06, min_net_edge: Some(0.25), ..Default::default() });
+    setup(&mut e);
+    cross(&mut e, 30.0);
+    tick(&mut e, 30.5);
+    assert!(sink.of("fill").is_empty());
+    assert!(!e.state[0].traded);
+}
+
+#[test]
 fn fixed_shares_size_every_entry() {
     let opts = Opts { order_shares: Some(10), size_at_limit: true, limit_offset: 0.06, ..Default::default() };
     let (mut e, sink) = engine(opts);
     setup(&mut e);
     cross(&mut e, 30.0);
     assert_eq!(sink.of("decision")[0]["contracts"], 10);
-    assert_eq!(e.contracts_for(0.05), 10);
+    assert_eq!(e.contracts_for(0.05, None), 10);
     tick(&mut e, 30.5);
     assert_eq!(sink.of("fill")[0]["ordered"], 10);
 }

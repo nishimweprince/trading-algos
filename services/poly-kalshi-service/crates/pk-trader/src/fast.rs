@@ -223,7 +223,8 @@ impl FastPath {
             let Some(a) = arms.get(ticker) else { return };
             let sec_into = frame_ns as f64 / 1e9 - a.arm.open_unix as f64;
             let arm = &a.arm;
-            let d = decide(&quote, &arm.poly_yes, &arm.poly_no, &arm.params, sec_into, false, None, None);
+            let fee = (arm.fee_rate, arm.fee_exponent);
+            let d = decide(&quote, &arm.poly_yes, &arm.poly_no, &arm.params, sec_into, false, None, None, fee);
             self.check_ns.lock().record(t_frame.elapsed().as_nanos() as u64);
             if d.action != Action::Enter {
                 return;

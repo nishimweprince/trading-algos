@@ -263,6 +263,7 @@ impl Settings {
             max_kalshi_spread: e.opt_num("PK_MAX_KALSHI_SPREAD")?,
             min_edge: e.opt_num("PK_MIN_EDGE")?,
             min_entry_px: e.opt_num("PK_MIN_ENTRY_PX")?,
+            min_net_edge: e.opt_num("PK_MIN_NET_EDGE")?,
             ..Default::default()
         };
         for (key, v) in [
@@ -270,6 +271,7 @@ impl Settings {
             ("PK_MAX_KALSHI_SPREAD", params.max_kalshi_spread),
             ("PK_MIN_EDGE", params.min_edge),
             ("PK_MIN_ENTRY_PX", params.min_entry_px),
+            ("PK_MIN_NET_EDGE", params.min_net_edge),
         ] {
             anyhow::ensure!(v.is_none_or(|v| 0.0 < v && v < 1.0), "{key} must be in (0, 1)");
         }
@@ -608,6 +610,8 @@ mod tests {
         assert_eq!(with("PK_MAX_KALSHI_SPREAD", "0.02").unwrap().params.max_kalshi_spread, Some(0.02));
         assert_eq!(with("PK_MIN_ENTRY_PX", "0.20").unwrap().params.min_entry_px, Some(0.20));
         assert!(with("PK_MIN_EDGE", "1.5").is_err());
+        assert_eq!(with("PK_MIN_NET_EDGE", "0.03").unwrap().params.min_net_edge, Some(0.03));
+        assert!(with("PK_MIN_NET_EDGE", "0").is_err());
         assert!(with("PK_MAX_KALSHI_SPREAD", "0").is_err());
         assert_eq!(with("PK_ORDER_SHARES", "10").unwrap().order_shares, Some(10));
         assert!(with("PK_ORDER_SHARES", "4").is_err());
