@@ -277,24 +277,24 @@ running.
 - Treat a shared host as a **recorder and status page**. Keep the M4 L* and the M5 shadow (G5) on the
   measured AWS host, or amend PREREG for this host before computing any statistic from it.
 
-**Shadow mode (exploratory, `research/PREREG.md` Part 2):**
+**Shadow mode (one trader, `research/PREREG.md` Part 5):**
 
 ```sh
-sudo install -o ll -g ll -m 600 deploy/env/shadow.example.json /home/ll/leadlag/shadow.json   # set latency_ms from the probe
-# in /home/ll/leadlag/.env: LL_MODE=shadow and LL_SHADOW_PARAMS=/home/ll/leadlag/shadow.json
+sudo install -o ll -g ll -m 600 deploy/env/shadow-explore-4.example.json /home/ll/leadlag/shadow.json
+# in /home/ll/leadlag/.env: LL_MODE=shadow and LL_SHADOW_PARAMS=/home/ll/leadlag/shadow.json (one file)
 sudo systemctl restart leadlag-observer leadlag leadlag-status
 journalctl -u leadlag -n 5 --no-pager | grep "shadow engine"          # run, params sha256, latency
 ```
 
-- Signals start after the detector's 30-minute warm-up.
+- Entries start after the rolling β's 30-minute warm-up.
 - Every completed trade goes through the ring to the observer, which appends it to
   `/data/leadlag/shadow/<UTC day>.jsonl` (`LL_JOURNAL_DIR`). The trader still never writes to disk.
-- The page shows one Shadow panel per run: totals, per-follower results and the last trades, labelled
-  exploratory. Quoter runs also show attempts, the fill rate and fill-versus-miss markouts.
+- The page shows the trader's panel: totals, the latest 200 trades, taker share and crosses, entries
+  and fill rate, filled-versus-unfilled markouts, per-follower results and the last trades.
 - `curl -XPOST localhost:8060/v1/halt` stops new entries; open positions still close at their horizon.
-- `sudo systemctl start leadlag-research@shadow-verify.service` replays the tape once with every params
-  file in `LL_SHADOW_PARAMS`, each only for the trader runs whose hello lists its sha256. It fails if any
-  run's replayed records differ from the journal.
+- `sudo systemctl start leadlag-research@shadow-verify.service` replays the tape with the params file
+  in `LL_SHADOW_PARAMS`, only for the trader runs whose hello lists its sha256. It fails if the replayed
+  records differ from the journal.
 - A halt isn't on the tape, so check a halted run's journal by hand.
 
 **Start a new epoch** (a new run label, e.g. `explore-2`, PREREG Part 3). The trader keeps its stats in
@@ -309,47 +309,53 @@ sudo systemctl stop leadlag-status leadlag leadlag-observer
 old=$(sudo python3 -c 'import json; print(json.load(open("/home/ll/leadlag/shadow.json"))["run"])')
 sudo -u ll mkdir -p /data/leadlag/shadow/$old && sudo -u ll sh -c "mv /data/leadlag/shadow/*.jsonl /data/leadlag/shadow/$old/"
 sudo -u ll cp /home/ll/leadlag/shadow.json /home/ll/leadlag/shadow-$old.json
-sudo install -o ll -g ll -m 600 deploy/env/shadow-explore-2.example.json /home/ll/leadlag/shadow.json
+sudo install -o ll -g ll -m 600 deploy/env/shadow-explore-4.example.json /home/ll/leadlag/shadow.json
 sudo systemctl start leadlag-observer leadlag leadlag-status
-journalctl -u leadlag -n 5 --no-pager | grep "shadow engine"          # run, trigger, exit, params sha256
+journalctl -u leadlag -n 5 --no-pager | grep "shadow engine"          # run, params sha256
 ```
 
-**Add the explore-3 runs** (PREREG Part 4, next to explore-2). Each run needs its own params file and run
-label. All of them go in `LL_SHADOW_PARAMS`, comma-separated.
+**Switch to explore-4 (one trader, PREREG Part 5).** This replaces explore-2 and explore-3a–3d, which
+share one trader and one set of daily journal files. The build refuses their params files (unknown
+fields) and more than one file in `LL_SHADOW_PARAMS`, so do every step before the restart.
 
 ```sh
-# 1. Fees first: the runs assume 0 bp maker / 4 bp taker on USDC-M (a promotion). Read-only key in .env.
+# 0. On the host, update the checkout to the merged PR and build/install it ("Without push.sh"; the
+#    one-shot token pull above). Don't restart yet.
+# 1. Stop, then archive the explore-2/3 journals and params. Their records share the daily files, so
+#    they go to one directory; llresearch and shadow-verify read it with --journal <dir> --run <label>.
+sudo systemctl stop leadlag-status leadlag leadlag-observer
+sudo -u ll mkdir -p /data/leadlag/shadow/explore-3
+sudo -u ll sh -c 'mv /data/leadlag/shadow/[0-9]*.jsonl /data/leadlag/shadow/explore-3/'
+sudo -u ll mkdir -p /home/ll/leadlag/params-explore-3
+sudo -u ll sh -c 'mv /home/ll/leadlag/shadow*.json /home/ll/leadlag/params-explore-3/'
+# 2. Fees: the run assumes 0 bp maker / 4 bp taker on USDC-M (a promotion). Read-only key in .env.
 sudo -u ll sh -c 'set -a; . /home/ll/leadlag/.env; /home/ll/leadlag/current/llprobe fees \
-  --symbols SOLUSDC,XRPUSDC,DOGEUSDC,SUIUSDC,BNBUSDC,ZECUSDC,NEARUSDC,SOLUSDT --out /home/ll/leadlag/fees.json'
-#    Append the output to PREREG Part 4 as 4.2a; if it differs, set maker_fee_bp/taker_fee_bp in the
-#    3a/3b/3c files to it before the start (4.2).
-# 2. Which USDC-M followers are listed, and their tick sizes for the quoter files.
-/home/ll/leadlag/current/llfetch candidates --quote USDC --onboarded-before "" --n 40
-/home/ll/leadlag/current/llfetch ticks --symbols SOLUSDC,XRPUSDC,DOGEUSDC,SUIUSDC,BNBUSDC,ZECUSDC,NEARUSDC
-# 3. Install the params (paste the ticks into 3a and 3b; the trader refuses mismatching ticks).
-for r in 3a 3b 3c 3d; do sudo install -o ll -g ll -m 600 deploy/env/shadow-explore-$r.example.json /home/ll/leadlag/shadow-explore-$r.json; done
-# 4. In .env: add the USDC symbols to LL_FOLLOWERS, and list all params files in LL_SHADOW_PARAMS
-#    (explore-2's shadow.json first). Then restart.
-sudo systemctl restart leadlag-observer leadlag leadlag-status
-journalctl -u leadlag -n 10 --no-pager | grep "shadow engine"         # one line per run
+  --symbols SOLUSDC,XRPUSDC,DOGEUSDC,SUIUSDC,BNBUSDC,ZECUSDC,NEARUSDC --out /home/ll/leadlag/fees.json'
+#    Record the output as PREREG 5.4a. If the rates differ, set maker_fee_bp / taker_fee_bp in the
+#    installed file (step 3) to them and record the new sha256.
+# 3. Install the params, unchanged (sha256 dec31791…, PREREG 5.3).
+sudo install -o ll -g ll -m 600 deploy/env/shadow-explore-4.example.json /home/ll/leadlag/shadow.json
+sha256sum /home/ll/leadlag/shadow.json
+# 4. In /home/ll/leadlag/.env: LL_MODE=shadow and LL_SHADOW_PARAMS=/home/ll/leadlag/shadow.json (one
+#    file, no commas). LL_FOLLOWERS stays as it is (the USDT followers keep being taped).
+sudo systemctl start leadlag-observer leadlag leadlag-status
+journalctl -u leadlag -n 10 --no-pager | grep "shadow engine"         # exactly one line: run explore-4
+curl -s localhost:8060/v1/status | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("status_error") or d["shadow"]["run"])'
 ```
 
-- **Tape budget:** each added symbol costs ~0.2–0.3 GB/day of tape, so seven USDC followers add
-  ~1.5–2 GB/day. The leaders' `forceOrder` streams are negligible. Check `LL_DISK_MAX_PCT` headroom
-  first.
-- **Start-up:** the quoter runs (3a, 3c) skip followers for the first 30 min (rolling β warm-up,
-  `beta_warmup`).
-- **Journal records:** the quoter's trades appear in the journal about 30 s after their exit, once
-  their markouts are in (`rec_ns`). Arm A also writes one `kind: "attempt"` record per entry order.
-- **Kill criteria:** `llresearch shadow --journal /data/leadlag/shadow --run explore-3a --quoter`
-  reports the day-block CI, f and the PREREG 4.7 verdict. Add `--maker-fee 2 --taker-fee 5` to
+- **Start-up:** followers are skipped for the first 30 min (rolling β warm-up, `beta_warmup`).
+- **Journal records:** trades appear about 30 s after their exit, once their markouts are in
+  (`rec_ns`). Every entry order also writes a `kind: "attempt"` record.
+- **Verdict:** `llresearch shadow --journal /data/leadlag/shadow --run explore-4 --part 5` reports the
+  day-block CI, the taker share and the PREREG 5.6 verdict. Add `--maker-fee 2 --taker-fee 5` to
   re-price at USDT-M rates.
-- **+1 h placebo:**
-  `leadlag --replay /data/leadlag/tape --shadow-params /home/ll/leadlag/shadow-explore-3a.json --shadow-all --leader-shift 1h --shadow-trades /data/leadlag/shadow/control-3a.jsonl`.
+- **Old runs:** `llresearch shadow --journal /data/leadlag/shadow/explore-3 --run explore-3a --quoter`.
+  Their params no longer load in this build, so they can't be replayed from HEAD; check out
+  `b3b9f98` for that.
+- **+1 h placebo (at the verdict):**
+  `leadlag --replay /data/leadlag/tape --shadow-params /home/ll/leadlag/shadow.json --shadow-all --leader-shift 1h --shadow-trades /data/leadlag/shadow/control-explore-4.jsonl`.
 
-`shadow-verify` reads a run's archived journals from `<journal dir>/<run>/`. To re-check an old run
-(the unit's `.env` always names the current params), run the job directly:
-`sudo -u ll LL_SHADOW_PARAMS=/home/ll/leadlag/shadow-explore-1.json nice -n 19 bash /home/ll/leadlag/jobs/shadow-verify.sh`.
+`shadow-verify` reads the live journals and a run's archived ones from `<journal dir>/<run>/`.
 
 **First numbers on the ofi VM (2026-10-08, 14 symbols, ofi research running):**
 

@@ -411,3 +411,108 @@ A run that survives is a reason to:
 - then test with real $25 post-only orders.
 
 It is not a reason to trade.
+
+## Part 5: one trader, `explore-4` (written 2026-10-14, before any explore-4 trade)
+
+### 5.1 Why
+
+From 2026-10-09 to 2026-10-14, explore-2 and explore-3a–3d ran side by side. Every run is net negative at its own
+fee basis (status snapshot of 2026-10-14, build b3b9f98):
+
+| Run | Round trips | Mean net bp | t | Taker-exit share |
+|---|---:|---:|---:|---:|
+| explore-3a (quoter A) | 831 | −2.87 | −11.7 | 43% |
+| explore-3b (quoter B) | 244,817 | −2.51 | −228 | 26% |
+| explore-3c | 351 | −5.93 | −9.8 | 52% |
+| explore-3d | 2,318 | −8.37 | −57 | 58% |
+| explore-2 | 2,112 | −8.64 | −33.7 | 63% |
+
+explore-3a decomposes into three leaks:
+- **Taker exits.** Its 472 maker exits average +2.52 bp net; its 359 taker exits average −9.95 bp.
+  301 of those are stops (−10.6 bp on average): the 1.5 × gap stop turns every failed prediction into
+  a 4 bp fee plus the spread, right after an adverse move.
+- **Adverse selection.** Filled attempts mark out at +0.6 / +0.1 / −0.5 / −0.1 bp (1 / 5 / 10 / 30 s
+  from the post). Unfilled ones mark out at +2.3 / +2.8 / +2.8 / +2.1 bp: the fills are the bad half.
+- **Fill model.** Part of that gap may be the simulator. aggTrade is published ~150 ms late (Part 1
+  §1.2), and the §4.4 queue model counted a late-published trade even when it had executed before our
+  order reached the book.
+
+3b says a lower taker share alone is not enough (26% and still −2.5 bp). So explore-4 changes the
+three leaks together and keeps everything else as 3a. It is **one run** in **one trader**: the other
+engines (taker entry, flow trigger, arm B) are deleted from the code, and there are no more parallel
+epochs.
+
+explore-4 is exploratory: its changes come from looking at explore-3. It counts toward no gate, is
+never pooled with an earlier run, and does not replace M3/M4.
+
+### 5.2 What changes from explore-3a
+
+1. **Fill model (all orders).** §4.4 holds, plus: a trade counts toward our queue or fill only if its
+   exchange time T is at or after the order reached the book (`T × 10⁶ ≥ live_ns`, at millisecond
+   resolution, so a trade in the joining millisecond counts as before). A reprice restarts that
+   clock. The local clock is Amazon Time Sync, measured at about −0.004 ms from Binance's.
+2. **Entry gate on the queue (microprice).** Our side's share of the follower's L1 size is
+   bid ÷ (bid + ask) for a long, ask ÷ (bid + ask) for a short. An entry needs a share ≥ 0.5
+   (`min_entry_imb`): the microprice is at mid or on our side. A working entry is cancelled once its
+   share falls under 0.25 (`cancel_imb`, end reason `imbalance`).
+3. **Exit ladder.**
+   - The 1.5 × gap stop becomes a **soft stop**: the exit moves to our own touch (reason
+     `stop_soft`) instead of crossing.
+   - A **hard stop** of 12 bp adverse (`hard_stop_bp`) crosses as a taker (reason `stop`).
+   - At the 30 s **horizon** the exit moves to the touch (reason `timeout`) and crosses only 10 s
+     later (`exit_grace_ms`).
+   - An exit at the touch follows it as it moves away (the queue is lost on each reprice).
+
+Unchanged from 3a: leaders BTCUSDT and ETHUSDT; the seven USDC followers; the price trigger (4 bp in
+1 s, 5 s cooldown); the rolling β-gap ≥ 2 bp; the opposite-liquidation skip; top 3 by gap ÷ spread;
+spread ≤ 4 bp; the entry cancels (one reprice, then `chased`; 2 bp reversal; residual ≤ 0.5 bp;
+30 s); the target at max(1 tick, 0.6 × gap); $25; 5 ms latency; markouts at 1 / 5 / 10 / 30 s; fees
+0 bp maker / 4 bp taker.
+
+Not changed, and why:
+- The 1 s `max_quote_age_ms` stays. bookTicker pushes only on a change, so an old quote on a quiet
+  book is still the current book; feed liveness is the feed's `up` state.
+- No follower is dropped. None is distinguishable from the others yet.
+- No parameter was tuned on the tape. The four new values (0.5, 0.25, 12 bp, 10 s) are set from the
+  explore-3a numbers and first principles, not fitted.
+
+### 5.3 Params
+
+`deploy/env/shadow-explore-4.example.json`, installed unchanged as `/home/ll/leadlag/shadow.json`.
+sha256 `dec317919995e9d47395e7ac02a0e1f30e6623f2e6f0a84da5a42e041bd5704e`. The trader logs the sha256
+at start; a different one is a different run.
+
+### 5.4 Fees (checked at the start)
+
+The 0 bp maker rate is still unverified: Part 4's 4.2a was never recorded. `llprobe fees` is run at
+the deploy and its output appended here as 5.4a **before** the first explore-4 trade. If the account's
+USDC-M rates differ, `maker_fee_bp` / `taker_fee_bp` are set to them; that is the only allowed change,
+and the new sha256 is recorded in 5.4a.
+
+### 5.5 Recorded and reported
+
+As §4.6, plus:
+- every attempt and trade records `entry_imb`, our side's share at the post;
+- exit reasons now include `stop_soft`;
+- the status page shows the latest 200 trades' mean net and taker share, taker crosses by reason
+  (hard stop, grace ran out), the filled − unfilled 5 s markout, and imbalance skips and cancels.
+
+Control: the +1 h placebo of §4.6, run once at the verdict.
+
+Comparison with explore-3a is descriptive only. 3a ran on the old fill model, so it is not a
+like-for-like control.
+
+### 5.6 Verdict (`llresearch shadow --run explore-4 --part 5`)
+
+The primary metric is the mean net bp per round trip at the account's fee rates, with its 95%
+day-block bootstrap CI (round trips pooled by UTC day of the exit). In order:
+1. **Kill** at any time once n ≥ 200, if the taker-exit share is > 25%.
+2. Before **≥ 7 days and ≥ 400 round trips**: continue.
+3. **Kill** if the CI's upper end is < 0.
+4. **Pass** if the CI's lower end is > 0.
+5. Otherwise **extend** once, by 7 days, and apply 3–4 again. Still undecided at 14 days: **stop**,
+   inconclusive.
+
+A pass is a reason to test the same rules with real $25 post-only orders on a fill-calibration
+budget. It is not a reason to trade size. A kill means the passive-quoting hypothesis on these
+followers is rejected: no further parameter search on it.

@@ -4,7 +4,7 @@
 //	llresearch screen     --from 2025-10-01 --to 2026-01-31 --followers @screen-candidates.txt --out reports/screen
 //	llresearch freeze     --screen reports/screen/screen.json --out research/prereg.json
 //	llresearch eventstudy --prereg research/prereg.json --probe probe.json --out reports/g1
-//	llresearch shadow     --journal /data/leadlag/shadow --run explore-3a   (PREREG Part 4 kill criteria)
+//	llresearch shadow     --journal /data/leadlag/shadow --run explore-4 --part 5   (PREREG Part 5 verdict; --part 4: Part 4 kill criteria)
 package main
 
 import (

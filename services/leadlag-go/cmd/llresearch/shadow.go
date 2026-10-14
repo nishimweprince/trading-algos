@@ -25,7 +25,7 @@ type shadowTrade struct {
 	EntryKind string  `json:"entry_kind"`
 }
 
-// ShadowReport is one run's PREREG Part 4 §4.7 numbers.
+// ShadowReport is one run's verdict numbers (PREREG Part 4 §4.7 or Part 5 §5.6).
 type ShadowReport struct {
 	Run        string           `json:"run"`
 	Trades     int              `json:"round_trips"`
@@ -41,7 +41,8 @@ type ShadowReport struct {
 
 // runShadow reads a run's journal (live <day>.jsonl files and the archived
 // <run>/ ones), pools net bp by UTC day of the exit, and applies the kill
-// criteria. --maker-fee/--taker-fee re-price every round trip from its gross
+// criteria of PREREG Part 4 (explore-3) or, with --part 5, the verdict of Part 5
+// (explore-4). --maker-fee/--taker-fee re-price every round trip from its gross
 // (e.g. USDT-M 2/5 bp if the USDC-M promotion ends).
 func runShadow(args []string) error {
 	fs := flag.NewFlagSet("shadow", flag.ExitOnError)
@@ -49,11 +50,15 @@ func runShadow(args []string) error {
 	run := fs.String("run", "", "run label")
 	maker := fs.Float64("maker-fee", math.NaN(), "re-price at this maker fee (bp); default: the journal's fees")
 	taker := fs.Float64("taker-fee", math.NaN(), "re-price at this taker fee (bp)")
-	quoter := fs.Bool("quoter", false, "apply the quoter-only criterion (f > 0.4)")
+	quoter := fs.Bool("quoter", false, "Part 4: apply the quoter-only criterion (f > 0.4)")
+	part := fs.Int("part", 4, "PREREG part whose verdict to apply: 4 (explore-3) or 5 (explore-4)")
 	boot := fs.Int("boot", 2000, "bootstrap replicates")
 	fs.Parse(args)
 	if *run == "" {
 		return fmt.Errorf("--run is required")
+	}
+	if *part != 4 && *part != 5 {
+		return fmt.Errorf("--part must be 4 or 5")
 	}
 	files, _ := filepath.Glob(filepath.Join(*dir, "[0-9]*.jsonl"))
 	more, _ := filepath.Glob(filepath.Join(*dir, *run, "[0-9]*.jsonl"))
@@ -68,6 +73,9 @@ func runShadow(args []string) error {
 		trades = append(trades, ts...)
 	}
 	rep := shadowReport(*run, trades, *maker, *taker, *quoter, *boot)
+	if *part == 5 {
+		rep.Verdict = part5Verdict(rep)
+	}
 	b, _ := json.MarshalIndent(rep, "", "  ")
 	fmt.Println(string(b))
 	return nil
@@ -162,4 +170,26 @@ func shadowReport(run string, trades []shadowTrade, makerFee, takerFee float64, 
 		rep.Verdict = "continue"
 	}
 	return rep
+}
+
+// part5Verdict is PREREG Part 5 §5.6: a kill on the taker share at any time
+// from 200 round trips; otherwise the day-block 95% CI decides at >= 7 days
+// and >= 400 round trips, with one 7-day extension when it spans 0.
+func part5Verdict(rep ShadowReport) string {
+	span := rep.LastExit.Sub(rep.FirstExit)
+	const week = 7 * 24 * time.Hour
+	switch {
+	case rep.Trades >= 200 && rep.TakerFrac > 0.25:
+		return "kill: taker-exit share > 25% at >= 200 round trips"
+	case span < week || rep.Trades < 400:
+		return "continue"
+	case rep.Net.Hi < 0:
+		return "kill: 95% CI upper < 0 bp"
+	case rep.Net.Lo > 0:
+		return "pass: 95% CI lower > 0 bp"
+	case span >= 2*week:
+		return "stop: inconclusive after the one 7-day extension"
+	default:
+		return "extend: the CI spans 0; one 7-day extension, then decide"
+	}
 }
