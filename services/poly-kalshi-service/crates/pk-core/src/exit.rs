@@ -1,4 +1,4 @@
-//! The active exit, pure: the live engine and the shadow share it.
+//! The active exit, pure: the live engine and the paper venue share it.
 //!
 //! A held leg is sold (a taker FAK at the bid) once Polymarket has caught up
 //! with Kalshi: its best bid is within [`EXIT_MARGIN`] of the Kalshi-implied
@@ -26,11 +26,15 @@ pub fn kalshi_fair(k: &Quote, yes: bool) -> Option<f64> {
     Some(if yes { mid } else { 1.0 - mid })
 }
 
-/// The lowest price an exit sells at: the entry, its taker fee per share and a
-/// cent, rounded up to the cent. The live exit and the shadow share it.
+/// The lowest price an exit sells at: the lowest cent whose proceeds after the
+/// exit's own taker fee still cover the entry, its taker fee and a cent.
 pub fn exit_floor(vwap: f64, fee_rate: f64, fee_exponent: f64) -> f64 {
-    let raw = vwap + taker_fee(vwap, 1.0, fee_rate, fee_exponent) + 0.01;
-    ((raw - 1e-9) * 100.0).ceil() / 100.0
+    let need = vwap + taker_fee(vwap, 1.0, fee_rate, fee_exponent) + 0.01;
+    let mut cents = ((need - 1e-9) * 100.0).ceil();
+    while cents < 99.0 && cents / 100.0 - taker_fee(cents / 100.0, 1.0, fee_rate, fee_exponent) < need - 1e-9 {
+        cents += 1.0;
+    }
+    cents / 100.0
 }
 
 /// Sell now: the bid has reached Kalshi's price and is above the entry.
@@ -52,6 +56,19 @@ mod tests {
         assert!((kalshi_fair(&q(0.60, 0.62), false).unwrap() - 0.39).abs() < 1e-12);
         assert_eq!(kalshi_fair(&q(0.55, 0.60), true), None);
         assert_eq!(kalshi_fair(&Quote::INVALID, true), None);
+    }
+
+    #[test]
+    fn floor_nets_a_cent_after_both_fees() {
+        for vwap in [0.20, 0.31, 0.50, 0.80] {
+            let floor = exit_floor(vwap, 0.07, 1.0);
+            let net = floor - taker_fee(floor, 1.0, 0.07, 1.0) - vwap - taker_fee(vwap, 1.0, 0.07, 1.0);
+            assert!(net >= 0.01 - 1e-9, "vwap {vwap}: floor {floor} nets {net}");
+            let lower = floor - 0.01;
+            let net_lower = lower - taker_fee(lower, 1.0, 0.07, 1.0) - vwap - taker_fee(vwap, 1.0, 0.07, 1.0);
+            assert!(net_lower < 0.01 - 1e-9, "vwap {vwap}: {floor} is not the lowest");
+        }
+        assert_eq!(exit_floor(0.50, 0.07, 1.0), 0.55); // 0.50 + 1.75¢ + 1¢, plus ~1.7¢ to sell
     }
 
     #[test]
