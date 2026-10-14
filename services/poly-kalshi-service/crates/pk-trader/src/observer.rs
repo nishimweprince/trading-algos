@@ -2,7 +2,7 @@
 //!
 //! It owns the tape (`pk_tape::Recorder`), the journal (the only writer: the
 //! trader's `decision`, `fill`, `settle` and `order_timing` records come over
-//! the pipe, in order), `Engine(Observe)` (shadow variants, markouts, series,
+//! the pipe, in order), `Engine(Observe)` (markouts, series,
 //! the uncensored gap, `window` and `resolution` records, BBO checks, feed
 //! latency) and PolyBolt. It runs a loopback API that `pk-status` reads.
 //!

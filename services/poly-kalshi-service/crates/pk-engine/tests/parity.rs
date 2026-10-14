@@ -8,7 +8,6 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use pk_core::journal::{Sink, VecSink};
-use pk_core::shadow::{DEFAULT_VARIANTS, Shadow, parse_variants};
 use pk_core::{Ledger, RiskLimits, RiskState, StrategyParams};
 use pk_engine::{Engine, EngineConfig, PaperVenue, Role};
 use serde_json::{Map, Value, json};
@@ -93,10 +92,6 @@ fn engine(c: &Cfg, role: Role, sink: Box<dyn Sink + Send>) -> Engine {
     let mut ec = EngineConfig::new(c.params.clone(), ["BTC", "ETH", "SOL", "XRP"].map(String::from).to_vec());
     ec.role = role;
     ec.venue = Some(PaperVenue::new(c.latency_ms));
-    // The goldens predate epoch 13's variants: the first 17 are the ones they hold.
-    let mut variants = parse_variants(DEFAULT_VARIANTS, &c.params).unwrap();
-    variants.truncate(17);
-    ec.shadow = Shadow::new(variants, &c.params);
     ec.limit_offset = c.limit_offset;
     ec.size_to_depth = c.size_to_depth;
     let risk = RiskState::new(RiskLimits {
@@ -158,7 +153,9 @@ fn check(name: &str) {
     let theirs: Vec<Value> = std::fs::read_to_string(golden(&format!("{name}.jsonl")))
         .unwrap()
         .lines()
-        .map(|l| serde_json::from_str(l).unwrap())
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        // The shadow variants were removed (epoch 14); every other record still matches.
+        .filter(|r| !matches!(r["type"].as_str(), Some("shadow" | "shadow_settle")))
         .collect();
     let mut problems = Vec::new();
     if ours.len() != theirs.len() {

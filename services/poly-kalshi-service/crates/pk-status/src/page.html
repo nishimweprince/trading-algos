@@ -95,7 +95,6 @@ h3.section { font-size:12px; text-transform:uppercase; letter-spacing:.08em; col
 
 <h3 class="section">History</h3>
 <div class="card" style="margin-bottom:12px"><h2>Paper equity (cumulative P&amp;L, settled trades)</h2><div id="curve" class="muted">no settled trades yet</div></div>
-<div class="card" style="margin-bottom:12px"><h2>Shadow variants · decided live, never ordered · net at the touch, and real: a FAK a latency later, then the active exit</h2><table id="shadow"></table></div>
 <div class="card" style="margin-bottom:12px"><h2>Exits · sold when Polymarket's bid reached Kalshi's price, against holding to settlement</h2><table id="exits"></table></div>
 <div class="card" style="margin-bottom:12px"><h2>Markouts · cheap leg mid after the order, ¢/share vs price paid (limit for a no-fill)</h2><table id="markouts"></table></div>
 <div class="card" style="margin-bottom:12px"><h2>Daily paper results (UTC) · entries by decision day, settled &amp; P&amp;L by settle day</h2><table id="daily"></table></div>
@@ -283,18 +282,6 @@ async function tick() {
     (Object.keys(rows).length ? Object.entries(rows).map(([k, r]) => `<tr><td>${esc(k)}</td><td>${r.n}</td><td>${r.win_rate == null ? "–" : f(r.win_rate * 100, 1)}</td>
       <td>${r.kalshi_implied == null ? "–" : f(r.kalshi_implied * 100, 1)}</td><td>${r.avg_price == null ? "–" : f(r.avg_price * 100, 1)}</td>
       <td class="${r.net_cents == null ? "" : r.net_cents < 0 ? "bad" : "good"}">${f(r.net_cents)}</td><td class="${r.pnl < 0 ? "bad" : "good"}">${f(r.pnl)}</td></tr>`).join("") : '<tr><td class="muted">no settled trades yet</td></tr>');
-  const SH = res.shadow || {};
-  put("shadow", "<tr><th>variant</th><th>windows</th><th>crossings</th><th>settled entries</th><th>win %</th><th>avg paid ¢</th><th>net ¢/sh (touch)</th><th>± s.e.</th><th title='distinct window starts the entries came from; the assets move together inside a window'>windows</th><th title='standard error with entries clustered by window: the honest one'>± s.e. by window</th><th title='05:00-10:59 UTC'>US night n · net</th><th>US day n · net</th>" +
-    "<th title='share of priced entries a 10-share FAK at the live limit filled, a latency after the decision'>fill @ latency</th><th title='per filled share: the active exit or settlement, both fees, clustered by window'>net ¢/sh (real) ± s.e.</th><th title='share of fills the active exit sold before settlement'>exit %</th><th>median hold</th></tr>" +
-    (Object.keys(SH).length ? Object.entries(SH).map(([k, r]) => `<tr><td>${k === "live" ? "<b>live</b>" : esc(k)}</td><td>${r.windows}</td><td>${r.crossings}</td><td>${r.n}</td>
-      <td>${r.win_rate == null ? "–" : f(r.win_rate * 100, 1)}</td><td>${r.avg_px == null ? "–" : f(r.avg_px * 100, 1)}</td>
-      <td class="${r.net_cents == null ? "" : r.net_cents < 0 ? "bad" : "good"}">${f(r.net_cents)}</td><td class="muted">${f(r.se_cents)}</td>
-      <td>${r.entry_windows ?? "–"}</td><td class="muted">${f(r.se_cluster_cents)}</td>
-      ${[r.us_night, r.us_day].map((x) => `<td>${(x || {}).n ?? 0} · <span class="${x && x.net_cents != null ? (x.net_cents < 0 ? "bad" : "good") : ""}">${f((x || {}).net_cents)}</span></td>`).join("")}
-      <td>${r.fill_rate == null ? "–" : f(r.fill_rate * 100, 0) + "%"} <span class="muted">(${r.priced ?? 0})</span></td>
-      <td class="${r.net_cents_real == null ? "" : r.net_cents_real < 0 ? "bad" : "good"}"><b>${f(r.net_cents_real)}</b> <span class="muted">± ${f(r.se_cluster_cents_real)}</span></td>
-      <td>${r.exit_rate == null ? "–" : f(r.exit_rate * 100, 0) + "%"}</td><td>${r.held_s_median == null ? "–" : f(r.held_s_median, 0) + " s"}</td></tr>`).join("")
-      : '<tr><td class="muted">no shadow records yet (PK_SHADOW_VARIANTS)</td></tr>'));
   const EX = res.exits || {};
   put("exits", `<tr><td colspan="9" style="text-align:left">${EX.n ? `${EX.n} exits · median hold ${f(EX.held_s_median, 0)} s · exit <b class="${(EX.exit_cents_mean ?? 0) < 0 ? "bad" : "good"}">${f(EX.exit_cents_mean)}¢/sh</b> vs hold ${f(EX.hold_cents_mean)}¢/sh · exit − hold <b class="${(EX.exit_minus_hold_cents ?? 0) < 0 ? "bad" : "good"}">${f(EX.exit_minus_hold_cents)}¢/sh</b> over ${EX.compared} settled` : '<span class="muted">no active exits yet (PK_ACTIVE_EXIT)</span>'}</td></tr>` +
     (EX.rows && EX.rows.length ? "<tr><th>asset</th><th>side</th><th>shares</th><th>entry</th><th>exit</th><th>held</th><th>exit ¢/sh</th><th>outcome</th><th>hold ¢/sh</th></tr>" +

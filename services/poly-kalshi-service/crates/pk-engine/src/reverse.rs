@@ -17,7 +17,7 @@
 use pk_core::decision::{Action, Decision, StrategyParams, WINDOW_S};
 use pk_core::ledger::Position;
 use pk_core::num::{key_px, round_dp};
-use pk_core::shadow::quote_json;
+use pk_core::quote_json;
 use pk_core::window::secs_f64;
 use pk_core::{Book, Quote};
 use serde_json::{Map, Value, json};
@@ -212,7 +212,6 @@ impl Engine {
             side: if d.buy_yes == Some(true) { "yes" } else { "no" },
             decision: *d,
             decision_ns: recv_ns,
-            shadow: false,
         });
         None
     }

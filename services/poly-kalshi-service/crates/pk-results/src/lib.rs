@@ -5,9 +5,7 @@
 
 pub mod gates;
 pub mod results;
-pub mod shadow_table;
 pub mod stats;
 
 pub use gates::evaluate;
 pub use results::{open_trade_etas, paper_results};
-pub use shadow_table::shadow_table;

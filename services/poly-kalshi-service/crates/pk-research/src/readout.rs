@@ -8,21 +8,21 @@
 //! with the settlement QA (windows per asset per day, 96 for a full day; how
 //! often the venues resolved a window differently), and:
 //!
-//! - `shadow`: per variant the windows, crossings, settled entries, win rate,
-//!   average price and net ¢/share at the touch with its s.e.;
 //! - `markouts`: the cheap leg 1, 5 and 30 s after fills and no-fills;
 //! - `capacity_usd_at_limit_median`: median $ offered at the limit per asset;
 //! - `exits`: net ¢/share per exit rule against holding, on the same orders.
 //!   An exit sells at the held leg's best bid, taker fee on both legs; where
 //!   there was no bid, or the gap never closed, the order is held;
-//! - `assets` (with `--exclude-assets`): the read with and without them.
+//! - `assets` (with `--exclude-assets`): the read with and without them, net
+//!   ¢/share over the shares each settled position filled (an exit's `settle`
+//!   record has none left).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use pk_core::fees::{DEFAULT_EXPONENT, DEFAULT_RATE, taker_fee};
 use pk_core::num::round_dp;
 use pk_engine::EXIT_S;
-use pk_results::{evaluate, paper_results, shadow_table};
+use pk_results::{evaluate, paper_results};
 use serde_json::{Value, json};
 
 fn fee(p: f64) -> f64 {
@@ -100,15 +100,18 @@ pub fn without_assets(records: &[Value], excluded: &BTreeSet<String>) -> Vec<Val
 
 pub fn asset_comparison(records: &[Value], excluded: &BTreeSet<String>) -> Value {
     let read = |rows: &[Value]| {
+        let key = |r: &Value| (r["asset"].as_str().unwrap_or_default().to_owned(), r["open_unix"].as_i64());
+        let mut filled: HashMap<(String, Option<i64>), f64> = HashMap::new();
+        for r in rows.iter().filter(|r| r["type"] == "fill") {
+            *filled.entry(key(r)).or_default() += r["shares"].as_f64().unwrap_or(0.0);
+        }
         let settles: Vec<&Value> = rows.iter().filter(|r| r["type"] == "settle").collect();
-        let shares: f64 = settles.iter().map(|r| r["shares"].as_f64().unwrap_or(0.0)).sum();
+        let shares: f64 = settles.iter().map(|r| filled.get(&key(r)).copied().unwrap_or(0.0)).sum();
         let pnl: f64 = settles.iter().map(|r| r["pnl"].as_f64().unwrap_or(0.0)).sum();
-        let live = shadow_table(rows).get("live").cloned().unwrap_or(json!({}));
         json!({
             "settled": settles.len(),
             "pnl": round_dp(pnl, 2),
             "net_cents_per_share": (shares != 0.0).then(|| round_dp(100.0 * pnl / shares, 2)),
-            "shadow_live": {"n": live.get("n"), "net_cents": live.get("net_cents"), "se_cluster_cents": live.get("se_cluster_cents")},
         })
     };
     json!({"excluded": excluded, "all": read(records), "without": read(&without_assets(records, excluded))})
@@ -140,7 +143,6 @@ pub fn readout(all: Vec<Value>, cap: f64, epoch: Option<&str>, exclude: &BTreeSe
         })
         .unwrap_or_default();
     result["windows_not_96"] = Value::Object(short);
-    result["shadow"] = shadow_table(&records);
     result["markouts"] = paper_results(&records, 50)["execution"]["markouts"].clone();
     result["exits"] = exit_table(&records);
     let mut depth: BTreeMap<String, Vec<f64>> = BTreeMap::new();

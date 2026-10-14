@@ -172,9 +172,9 @@ fn live_run() -> (Engine, Shared) {
     assert_eq!((i.token.as_str(), i.contracts, i.condition_id.as_str()), ("Y", 10, "0xc"));
     assert_eq!(e.ledger.in_flight(), 1);
     tick(&mut e, 30.5);
-    // The paper venue only shadows a real order.
+    // A real order is not simulated: its result arrives as `live_fill`.
     assert!(sink.of("fill").is_empty());
-    assert_eq!(sink.of("paper_fill").len(), 1);
+    assert!(sink.of("paper_fill").is_empty());
     assert!(e.ledger.positions.is_empty());
     ctl(
         &mut e,

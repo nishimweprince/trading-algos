@@ -21,7 +21,6 @@ use std::path::{Path, PathBuf};
 
 use pk_core::journal::{JsonlDaily, Sink};
 use pk_core::metrics::Metrics;
-use pk_core::shadow::{Shadow, parse_variants};
 use pk_core::{Ledger, NS, RiskLimits, RiskState, StrategyParams, WINDOW_S};
 use pk_engine::{Engine, EngineConfig, PaperVenue, Role};
 use pk_tape::TapeLine;
@@ -182,7 +181,6 @@ pub struct ReplayConfig {
     pub assets: Vec<String>,
     pub latency_ms: i64,
     pub start_cash: f64,
-    pub shadow: String,
     pub limit_offset: f64,
     /// Follow the tape's `latency` lines (what the trader used) after the
     /// configured latency, instead of holding the configured one.
@@ -193,7 +191,6 @@ pub fn build_engine(cfg: &ReplayConfig, journal: Box<dyn Sink + Send>) -> anyhow
     let mut ec = EngineConfig::new(cfg.params.clone(), cfg.assets.clone());
     ec.role = Role::Full;
     ec.venue = Some(PaperVenue::new(cfg.latency_ms));
-    ec.shadow = Shadow::new(parse_variants(&cfg.shadow, &cfg.params)?, &cfg.params);
     ec.limit_offset = cfg.limit_offset;
     ec.follow_tape_latency = cfg.tape_latency;
     let risk = RiskState::new(RiskLimits {

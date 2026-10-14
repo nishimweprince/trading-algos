@@ -22,7 +22,6 @@ use indexmap::IndexMap;
 use pk_core::WINDOW_S;
 use serde_json::{Map, Value, json};
 
-use crate::shadow_table::shadow_table;
 use crate::stats::{Key, f, fmean, i, key, median, opt, s, truthy, utc_day_ns};
 
 pub const CURVE_POINTS: usize = 400;
@@ -465,7 +464,6 @@ pub fn paper_results(records: &[Value], trades_limit: usize) -> Value {
         },
         "daily": daily,
         "daily_basis": "entries by decision day; settled, wins and P&L by settle day (UTC)",
-        "shadow": shadow_table(records),
         "curve": curve,
         "trades": trades.into_iter().rev().take(trades_limit).map(|t| t.1).collect::<Vec<_>>(),
         "signal": group(&all_rows),

@@ -12,6 +12,7 @@
 use std::collections::BTreeMap;
 
 use serde::Serialize;
+use serde_json::{Value, json};
 
 use crate::num::{key_px, px_key, round_size};
 
@@ -194,6 +195,11 @@ impl Book {
         }
         self.asks_upto(limit).map(|(_, s)| s).sum()
     }
+}
+
+/// A quote as a journal field: `{valid, bid, ask}`.
+pub fn quote_json(q: &Quote) -> Value {
+    json!({"valid": q.valid, "bid": q.bid, "ask": q.ask})
 }
 
 #[cfg(test)]

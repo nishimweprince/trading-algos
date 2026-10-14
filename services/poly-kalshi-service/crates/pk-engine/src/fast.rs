@@ -7,7 +7,7 @@
 //! frame against those quotes and, on an entry, sends a pre-built order before
 //! the frame reaches the engine. The engine stays the record: when it reaches
 //! that frame, [`FastGate::fired`] gives it the entry, which it journals,
-//! reserves and shadows like its own (`"fast": true`), without sending it again.
+//! and reserves like its own (`"fast": true`), without sending it again.
 //!
 //! One order per window either way: the trigger and the engine both **claim**
 //! the window before sending ([`FastGate::claim`]); whoever claims second does

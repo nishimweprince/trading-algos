@@ -27,7 +27,6 @@ use std::path::{Path, PathBuf};
 
 use pk_core::fees::{DEFAULT_EXPONENT, DEFAULT_RATE, taker_fee};
 use pk_core::num::round_dp;
-use pk_core::shadow::US_NIGHT_UTC;
 use pk_results::stats::{fmean, stdev};
 use serde_json::{Map, Value, json};
 
@@ -37,6 +36,9 @@ use super::pd::{
 };
 use crate::frame::Frame;
 use crate::nulls::{Settled, arms, summarise};
+
+/// 01:00-04:59 ET, Kalshi's thinnest hours (EDT; one hour later in winter).
+const US_NIGHT_UTC: [u32; 6] = [5, 6, 7, 8, 9, 10];
 
 pub const LATENCIES_MS: [i64; 7] = [0, 25, 50, 100, 150, 250, 400];
 pub const OFFSETS_C: [i64; 4] = [0, 1, 2, 3];

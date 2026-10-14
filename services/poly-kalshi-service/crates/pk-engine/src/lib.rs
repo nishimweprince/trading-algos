@@ -17,8 +17,7 @@
 //! - `Trade`: books, the live decision, the paper venue, the ledger, and the
 //!   `decision`, `fill` and `settle` records. Nothing else.
 //! - `Observe`: everything `Trade` skips, on the same lines, in another
-//!   process: shadow variants, markouts, the per-second series, the uncensored
-//!   gap, BBO checks, feed latency, `window` and `resolution` records. It
+//!   process: markouts, the per-second series, the uncensored gap, BBO checks, feed latency, `window` and `resolution` records. It
 //!   decides the live rule too, so a window is consumed as the trader consumed
 //!   it, but it never orders. Markouts start from the trader's fills
 //!   ([`Engine::note_fill`]).
@@ -26,9 +25,8 @@
 //!   checked against.
 //!
 //! **Live.** With `EngineConfig::live`, an entry is an [`OrderIntent`] for the
-//! real order path, its cost is reserved in the ledger, and the paper venue
-//! still simulates it as a shadow (`paper_fill` records, no ledger). What the
-//! order path learns comes back as control lines, so the tape replays the same
+//! real order path and its cost is reserved in the ledger. What the order path
+//! learns comes back as control lines, so the tape replays the same
 //! ledger: `live_fill` and `live_exit` (positions), `balance` (the wallet, and
 //! the sizing check when flat), `latency` (the paper venue's measured latency)
 //! and `sizing` (the size's seed).
@@ -50,10 +48,9 @@ use pk_core::ledger::{Ledger, Position};
 use pk_core::metrics::Metrics;
 use pk_core::num::{lag_ms, px_key, round_dp, round_opt};
 use pk_core::risk::RiskState;
-use pk_core::shadow::{SHADOW_SHARES, Shadow, quote_json};
 use pk_core::sizing::Sizer;
 use pk_core::window::{Window, secs_f64, window_open};
-use pk_core::{Book, BookSide, BookState, NS, Quote};
+use pk_core::{Book, BookSide, BookState, NS, Quote, quote_json};
 use serde_json::{Map, Value, json};
 
 pub mod fast;
@@ -136,8 +133,6 @@ pub(crate) struct Pending {
     pub(crate) side: &'static str,
     pub(crate) decision: Decision,
     pub(crate) decision_ns: i64,
-    /// Live: the paper venue's simulation of a real order (no ledger).
-    pub(crate) shadow: bool,
 }
 
 #[derive(Debug)]
@@ -191,16 +186,6 @@ pub struct ExitIntent {
     pub fee_exponent: f64,
 }
 
-/// A shadow entry to price a latency after its decision.
-#[derive(Debug, Clone)]
-struct ShadowFill {
-    due_ns: i64,
-    key: (String, i64),
-    variant: String,
-    token: String,
-    limit: f64,
-}
-
 /// An asset's gap is nearing the threshold: sign an order for this leg ahead.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PresignHint {
@@ -223,7 +208,6 @@ pub struct EngineConfig {
     pub assets: Vec<String>,
     pub role: Role,
     pub venue: Option<PaperVenue>,
-    pub shadow: Shadow,
     /// The order's limit above the touch, never above the cap.
     pub limit_offset: f64,
     /// Order at most the shares offered at or below the limit at the decision.
@@ -237,7 +221,7 @@ pub struct EngineConfig {
     pub emit_intents: bool,
     /// Which venue is the signal and which the execution (research).
     pub direction: Direction,
-    /// Real orders: entries become intents and the paper venue is a shadow.
+    /// Real orders: entries become intents; the paper venue simulates nothing.
     pub live: bool,
     /// Order size as a percent of the balance (0 = `params.notional_usd`).
     pub order_size_pct: f64,
@@ -248,14 +232,10 @@ pub struct EngineConfig {
     pub active_exit: bool,
     /// Size an entry at its limit price (what a FAK can spend), not the touch.
     pub size_at_limit: bool,
-    /// Score shadow entries with a FAK priced this long after the decision
-    /// (`net_cents_real`). `None`: the touch only.
-    pub shadow_latency_ns: Option<i64>,
     /// Every entry orders this many shares (`PK_ORDER_SHARES`); `None` sizes
     /// from the notional.
     pub order_shares: Option<i64>,
-    /// How far under the bid the active exit sells (cents); the shadow's exit
-    /// FAK uses it too. 0 scores shadow exits at the signal's bid.
+    /// How far under the bid the active exit sells (cents).
     pub active_exit_ticks: u32,
 }
 
@@ -275,7 +255,6 @@ impl EngineConfig {
             assets,
             role: Role::Full,
             venue: None,
-            shadow: Shadow::default(),
             limit_offset: 0.0,
             size_to_depth: false,
             stamp: Map::new(),
@@ -287,7 +266,6 @@ impl EngineConfig {
             follow_tape_latency: false,
             active_exit: false,
             size_at_limit: false,
-            shadow_latency_ns: None,
             order_shares: None,
             active_exit_ticks: 0,
         }
@@ -317,7 +295,6 @@ pub struct Engine {
     markouts: Vec<Markout>,
     bbo_seen: u64,
     pub bbo_check_every: u64,
-    pub shadow: Shadow,
     pub limit_offset: f64,
     pub(crate) resolutions: HashMap<(String, i64), Vec<(String, String)>>,
     pub recent: VecDeque<Value>,
@@ -344,8 +321,6 @@ pub struct Engine {
     order_shares: Option<i64>,
     /// The venue of the frame being applied ('k', 'p' or 'c').
     frame_venue: char,
-    shadow_latency_ns: Option<i64>,
-    shadow_fills: Vec<ShadowFill>,
     /// The armed trigger (live trade engine only), and what it was last given per asset.
     fast_gate: Option<Arc<dyn FastGate>>,
     pub arms: Vec<ArmUpdate>,
@@ -366,10 +341,6 @@ impl Engine {
     pub fn new(cfg: EngineConfig, ledger: Ledger, risk: RiskState, journal: Box<dyn Sink + Send>) -> Self {
         let n = cfg.assets.len();
         let notional = cfg.params.notional_usd;
-        let mut shadow = cfg.shadow;
-        shadow.score_real = cfg.shadow_latency_ns.is_some();
-        shadow.exit_latency_ns = if cfg.active_exit_ticks > 0 { cfg.shadow_latency_ns.unwrap_or(0) } else { 0 };
-        shadow.exit_ticks = cfg.active_exit_ticks;
         Self {
             trade: matches!(cfg.role, Role::Full | Role::Trade),
             observe: matches!(cfg.role, Role::Full | Role::Observe),
@@ -391,7 +362,6 @@ impl Engine {
             markouts: Vec::new(),
             bbo_seen: 0,
             bbo_check_every: BBO_CHECK_EVERY,
-            shadow,
             limit_offset: cfg.limit_offset,
             resolutions: HashMap::new(),
             recent: VecDeque::with_capacity(200),
@@ -417,8 +387,6 @@ impl Engine {
             exit_misses: HashMap::new(),
             order_shares: cfg.order_shares,
             frame_venue: 'c',
-            shadow_latency_ns: cfg.shadow_latency_ns,
-            shadow_fills: Vec::new(),
             fast_gate: None,
             arms: Vec::new(),
             armed: vec![None; n],
@@ -482,9 +450,6 @@ impl Engine {
         }
         if !self.markouts.is_empty() {
             self.resolve_markouts(recv_ns);
-        }
-        if !self.shadow_fills.is_empty() {
-            self.resolve_shadow_fills(recv_ns);
         }
         self.frame_venue = venue;
         let touched = match venue {
@@ -595,7 +560,6 @@ impl Engine {
                 self.books.remove(&id);
             }
             let cutoff = now_open - KEEP_WINDOWS_S;
-            self.shadow.forget_before(cutoff);
             let old: Vec<i64> = self.windows[idx].range(..cutoff).map(|(o, _)| *o).collect();
             for open in old {
                 if let Some(w) = self.windows[idx].remove(&open) {
@@ -644,12 +608,6 @@ impl Engine {
             self.count("windows_unidentified");
         }
         self.write(recv_ns, record, false);
-        if identified {
-            let key = (self.assets[idx].clone(), open);
-            for record in self.shadow.close(&key) {
-                self.write(recv_ns, record, false);
-            }
-        }
     }
 
     // --- venues -----------------------------------------------------------------
@@ -933,34 +891,6 @@ impl Engine {
         let sec_into = secs_f64(recv_ns) - window.open_unix as f64;
         if self.observe {
             self.track_gap(idx, &k, &y, sec_into);
-            if self.shadow.is_active() {
-                let key = (window.asset.clone(), window.open_unix);
-                let lags = self.lags(&window);
-                let mut shadow = std::mem::take(&mut self.shadow);
-                let entered = shadow.evaluate(
-                    &key,
-                    (&k, &y, &n),
-                    sec_into,
-                    recv_ns,
-                    |buy_yes, limit| self.depth(&window, buy_yes, limit),
-                    (window.fee_rate, window.fee_exponent),
-                    lags,
-                    self.frame_venue == 'k',
-                );
-                if let Some(latency) = self.shadow_latency_ns {
-                    for e in entered {
-                        self.shadow_fills.push(ShadowFill {
-                            due_ns: recv_ns + latency,
-                            key: key.clone(),
-                            variant: e.variant,
-                            token: if e.buy_yes { window.yes_token.clone() } else { window.no_token.clone() },
-                            limit: round_dp((e.entry_px + self.limit_offset).min(e.max_entry_px), 4),
-                        });
-                    }
-                    shadow.check_exits(&key, (y.bid, n.bid), kalshi_fair(&k, true), recv_ns);
-                }
-                self.shadow = shadow;
-            }
         }
         if self.trade && self.active_exit {
             self.maybe_exit(&window, &k, &y, &n, recv_ns);
@@ -1180,7 +1110,7 @@ impl Engine {
         }
     }
 
-    /// `fast`: the armed trigger already sent this entry; reserve and shadow it,
+    /// `fast`: the armed trigger already sent this entry; reserve it,
     /// but do not send it again. The risk check applies to it as to any entry
     /// (the trigger is only armed while it passes, and is disarmed on a halt).
     fn submit(&mut self, w: &Window, d: &Decision, recv_ns: i64, fast: bool) -> Option<String> {
@@ -1255,15 +1185,16 @@ impl Engine {
                 live: self.live,
             });
         }
-        self.pending.push(Pending {
-            due_ns: recv_ns + venue.latency_ns,
-            window: w.clone(),
-            token,
-            side,
-            decision: *d,
-            decision_ns: recv_ns,
-            shadow: self.live,
-        });
+        if !self.live {
+            self.pending.push(Pending {
+                due_ns: recv_ns + venue.latency_ns,
+                window: w.clone(),
+                token,
+                side,
+                decision: *d,
+                decision_ns: recv_ns,
+            });
+        }
         None
     }
 
@@ -1347,30 +1278,6 @@ impl Engine {
         self.write(recv_ns, record, true);
         if !self.live {
             self.resize(self.ledger.cash, recv_ns, "settle");
-        }
-    }
-
-    /// Price the shadow entries whose latency has passed against the book now.
-    fn resolve_shadow_fills(&mut self, recv_ns: i64) {
-        if !self.shadow_fills.iter().any(|f| f.due_ns <= recv_ns) {
-            return;
-        }
-        let (due, keep): (Vec<ShadowFill>, Vec<ShadowFill>) =
-            std::mem::take(&mut self.shadow_fills).into_iter().partition(|f| f.due_ns <= recv_ns);
-        self.shadow_fills = keep;
-        for sf in due {
-            let (mut got, mut cost) = (0.0, 0.0);
-            if let Some(b) = self.books.get(&sf.token).filter(|b| b.snapshot_ns.is_some()) {
-                for (px, size) in b.asks_upto(sf.limit) {
-                    let take = size.min(SHADOW_SHARES - got);
-                    got += take;
-                    cost += take * px;
-                    if got >= SHADOW_SHARES - 1e-9 {
-                        break;
-                    }
-                }
-            }
-            self.shadow.set_fill(&sf.key, &sf.variant, (got, if got > 0.0 { cost / got } else { 0.0 }));
         }
     }
 
@@ -1484,7 +1391,7 @@ impl Engine {
         let result = venue.fill(book, limit, d.contracts, w.fee_rate, w.fee_exponent);
         let touch_fee = taker_fee(entry, d.contracts as f64, w.fee_rate, w.fee_exponent);
         let record = json!({
-            "type": if order.shadow { "paper_fill" } else { "fill" },
+            "type": "fill",
             "asset": w.asset,
             "open_unix": w.open_unix,
             "t_ns": recv_ns,
@@ -1503,12 +1410,6 @@ impl Engine {
             "touch_fee": round_dp(touch_fee, 4),
             "depth_at_limit": round_dp(depth, 2),
         });
-        if order.shadow {
-            // The real order's result arrives as `live_fill`; this is the comparison.
-            self.count(if result.shares > 0.0 { "paper_fills" } else { "paper_no_fills" });
-            self.write(recv_ns, record, false);
-            return;
-        }
         self.count(if result.shares > 0.0 { "fills" } else { "no_fills" });
         if self.observe {
             self.add_markout(recv_ns, w, order.side, result.shares > 0.0, result.vwap().unwrap_or(limit));
@@ -1685,11 +1586,6 @@ impl Engine {
                 "delay_s": delay_s,
             });
             self.write(recv_ns, record, false);
-            if venue == "poly" && !self.reverse {
-                for record in self.shadow.settle(&(asset.to_owned(), open_unix), outcome) {
-                    self.write(recv_ns, record, false);
-                }
-            }
         }
         let settles_on = if self.reverse { "kalshi" } else { "poly" };
         if venue == settles_on && self.trade {
@@ -1726,7 +1622,7 @@ impl Engine {
     /// Recompute the order size if nothing is at risk.
     fn resize(&mut self, balance: f64, recv_ns: i64, source: &str) {
         let open = self.ledger.open_positions().count();
-        let in_flight = self.ledger.in_flight() + self.pending.iter().filter(|p| !p.shadow).count();
+        let in_flight = self.ledger.in_flight() + self.pending.len();
         if let Some(notional) = self.sizer.reconcile(balance, open, in_flight, recv_ns) {
             self.apply_size(notional, balance, recv_ns, source);
         }

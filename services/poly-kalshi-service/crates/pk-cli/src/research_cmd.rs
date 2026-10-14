@@ -37,7 +37,7 @@ pub struct Strategy {
 }
 
 impl Strategy {
-    fn cfg(&self, shadow: String) -> ReplayConfig {
+    fn cfg(&self) -> ReplayConfig {
         ReplayConfig {
             params: StrategyParams {
                 gap_threshold: self.gap,
@@ -55,7 +55,6 @@ impl Strategy {
                 .collect(),
             latency_ms: self.latency_ms,
             start_cash: 1e9,
-            shadow,
             limit_offset: self.limit_offset,
             tape_latency: self.tape_latency,
         }
@@ -76,9 +75,6 @@ pub enum Replay {
         end: Option<String>,
         #[command(flatten)]
         strategy: Strategy,
-        /// Shadow variants JSON ('' for none); default the live service's.
-        #[arg(long, default_value = pk_core::shadow::DEFAULT_VARIANTS)]
-        shadow: String,
         /// Polymarket signals, Kalshi executes and settles (research).
         #[arg(long)]
         reverse: bool,
@@ -127,11 +123,11 @@ pub fn replay(cmd: Replay) -> anyhow::Result<()> {
             let b = pk_core::journal::read_journal(&replay)?;
             print(&pk_research::replay::compare(&a, &b));
         }
-        Replay::Run { record_dir, out, start, end, strategy, shadow: _, reverse } if reverse => {
+        Replay::Run { record_dir, out, start, end, strategy, reverse } if reverse => {
             let files = pk_tape::iter_files(&record_dir, start.as_deref(), end.as_deref());
             anyhow::ensure!(!files.is_empty(), "no recordings under {}", record_dir.display());
             std::fs::create_dir_all(&out)?;
-            let cfg = strategy.cfg(String::new());
+            let cfg = strategy.cfg();
             let mut ec = pk_engine::EngineConfig::new(cfg.params.clone(), cfg.assets.clone());
             ec.venue = Some(pk_engine::PaperVenue::new(cfg.latency_ms));
             ec.limit_offset = cfg.limit_offset;
@@ -176,14 +172,14 @@ pub fn replay(cmd: Replay) -> anyhow::Result<()> {
             std::fs::write(out.join("summary.json"), serde_json::to_vec_pretty(&summary)?)?;
             print(&summary);
         }
-        Replay::Run { record_dir, out, start, end, strategy, shadow, .. } => {
+        Replay::Run { record_dir, out, start, end, strategy, .. } => {
             let args = RunArgs {
                 record_dir,
                 out,
                 start,
                 end,
                 shift_ms: pk_research::replay::parse_shift(&strategy.shift_ms)?,
-                cfg: strategy.cfg(shadow),
+                cfg: strategy.cfg(),
             };
             print(&pk_research::replay::run(&args)?);
         }
@@ -226,7 +222,7 @@ pub fn fills(cmd: Fills) -> anyhow::Result<()> {
             let files = pk_tape::iter_files(&record_dir, start.as_deref(), end.as_deref());
             anyhow::ensure!(!files.is_empty(), "no recordings under {}", record_dir.display());
             std::fs::create_dir_all(&out)?;
-            let cfg = strategy.cfg(String::new());
+            let cfg = strategy.cfg();
             let mut engine =
                 pk_research::replay::build_engine(&cfg, Box::new(JsonlDaily::new(out.join("journal"))))?;
             let mut tap = pk_research::fills::LadderTap::default();

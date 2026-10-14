@@ -93,11 +93,6 @@ fn cfg() -> ReplayConfig {
         assets: ALL_ASSETS.split(',').map(String::from).collect(),
         latency_ms: 150,
         start_cash: 1e9,
-        // The goldens predate epoch 13's variants: the first 17 are the ones they hold.
-        shadow: {
-            let all: Vec<serde_json::Value> = serde_json::from_str(pk_core::shadow::DEFAULT_VARIANTS).unwrap();
-            serde_json::to_string(&all[..17]).unwrap()
-        },
         limit_offset: 0.0,
         tape_latency: false,
     }
@@ -126,7 +121,9 @@ fn research_matches_python() {
     let theirs: Vec<Value> = std::fs::read_to_string(golden("replay_journal.jsonl"))
         .unwrap()
         .lines()
-        .map(|l| serde_json::from_str(l).unwrap())
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        // The shadow variants were removed (epoch 14); every other record still matches.
+        .filter(|r| !matches!(r["type"].as_str(), Some("shadow" | "shadow_settle")))
         .collect();
     same("replay journal", &Value::Array(ours.clone()), &Value::Array(theirs.clone()));
     let mut g = String::new();
@@ -166,13 +163,17 @@ fn research_matches_python() {
 
     // Read-out of the Python journal.
     let ex: BTreeSet<String> = ["XRP".to_owned()].into();
-    same("readout", &pk_research::readout::readout(theirs.clone(), 0.60, None, &ex), &json("readout.json"));
+    let mut want = json("readout.json");
+    want.as_object_mut().unwrap().remove("shadow");
+    for side in ["all", "without"] {
+        want["assets"][side].as_object_mut().unwrap().remove("shadow_live");
+    }
+    same("readout", &pk_research::readout::readout(theirs.clone(), 0.60, None, &ex), &want);
 
     // Fills: run, then the grid.
     let fills_out = root.join("fills");
     std::fs::create_dir_all(&fills_out).unwrap();
-    let mut fcfg = cfg();
-    fcfg.shadow = String::new();
+    let fcfg = cfg();
     let mut engine = pk_research::replay::build_engine(
         &fcfg,
         Box::new(pk_core::journal::JsonlDaily::new(fills_out.join("journal"))),

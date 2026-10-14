@@ -21,7 +21,6 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use pk_core::StrategyParams;
-use pk_core::shadow::{DEFAULT_VARIANTS, Variant, parse_variants};
 
 use crate::alerts::NotifyConfig;
 
@@ -60,7 +59,6 @@ pub struct Settings {
     pub execution_mode: ExecutionMode,
     pub assets: Vec<String>,
     pub params: StrategyParams,
-    pub shadow_variants: Vec<Variant>,
     /// The paper venue's latency until the order path has measured its own.
     pub paper_latency_ms: i64,
     /// Order size as a percent of the balance; 0 = the static `PK_NOTIONAL_USD`.
@@ -77,8 +75,6 @@ pub struct Settings {
     pub active_exit: bool,
     /// Size an entry at its limit, so a FAK never spends more than the notional.
     pub size_at_limit: bool,
-    /// Shadow entries are also scored with a FAK priced this long after the decision.
-    pub shadow_latency_ms: i64,
     /// Every entry orders this many shares (`PK_ORDER_SHARES`); `None` sizes
     /// from `order_size_pct` / `PK_NOTIONAL_USD`.
     pub order_shares: Option<i64>,
@@ -299,10 +295,6 @@ impl Settings {
             params.entry_early_s + params.entry_late_s < 900,
             "PK_ENTRY_EARLY_S + PK_ENTRY_LATE_S leaves no entry window"
         );
-        let shadow_text =
-            e.0.get("PK_SHADOW_VARIANTS").cloned().unwrap_or_else(|| DEFAULT_VARIANTS.to_owned());
-        let shadow_variants = parse_variants(&shadow_text, &params)
-            .map_err(|err| anyhow::anyhow!("PK_SHADOW_VARIANTS: {err}"))?;
 
         let max_open: f64 = e.required("PK_MAX_OPEN_NOTIONAL_USD")?.parse()?;
         let daily_loss: f64 = e.required("PK_DAILY_LOSS_LIMIT_USD")?.parse()?;
@@ -339,11 +331,6 @@ impl Settings {
         );
         let limit_offset: f64 = e.num("PK_LIMIT_OFFSET", 0.0)?;
         anyhow::ensure!((0.0..=0.15).contains(&limit_offset), "PK_LIMIT_OFFSET must be within 0..=0.15");
-        let shadow_latency_ms: i64 = e.num("PK_SHADOW_LATENCY_MS", 250)?;
-        anyhow::ensure!(
-            (0..=5000).contains(&shadow_latency_ms),
-            "PK_SHADOW_LATENCY_MS must be within 0..=5000"
-        );
 
         let port: u16 = e.num("PORT", 8050)?;
         let status_port: u16 = e.num("PK_STATUS_PORT", 8051)?;
@@ -440,7 +427,6 @@ impl Settings {
             execution_mode: mode,
             assets,
             params,
-            shadow_variants,
             paper_latency_ms,
             order_size_pct,
             probe_cadence_s,
@@ -450,7 +436,6 @@ impl Settings {
             size_to_depth: e.flag("PK_SIZE_TO_DEPTH", false)?,
             active_exit: e.flag("PK_ACTIVE_EXIT", true)?,
             size_at_limit: e.flag("PK_SIZE_AT_LIMIT", true)?,
-            shadow_latency_ms,
             order_shares,
             active_exit_ticks,
             fast_path: e.flag("PK_FAST_PATH", false)?,
@@ -589,7 +574,6 @@ mod tests {
         assert_eq!(s.params.gap_threshold, 0.15);
         assert_eq!(s.record_dir, PathBuf::from("data/raw/dev"));
         assert_eq!(s.state_dir, PathBuf::from("data/state/dev"));
-        assert_eq!(s.shadow_variants.len(), 21);
         assert_eq!((s.order_shares, s.active_exit_ticks), (None, 3));
         assert_eq!(s.execution_mode, ExecutionMode::Paper);
         assert!(!s.order_probe && !s.order_path());
@@ -617,9 +601,7 @@ mod tests {
         assert!(with("PK_ORDER_PROBE", "on").is_err());
         assert!(with("POLY_CLOB_API_KEY", "k").is_err());
         assert!(with("API_KEY", "replace-with-a-long-random-key").is_err());
-        assert!(with("PK_SHADOW_VARIANTS", "[{\"name\":\"live\"}]").is_err());
         assert_eq!(with("PK_MAX_POLY_LAG_MS", "250").unwrap().params.max_poly_lag_ms, Some(250.0));
-        assert!(with("PK_SHADOW_VARIANTS", "").unwrap().shadow_variants.is_empty());
         // The epoch-13 gates and sizes.
         let s = with("PK_MIN_EDGE", "0.10").unwrap();
         assert_eq!(s.params.min_edge, Some(0.10));

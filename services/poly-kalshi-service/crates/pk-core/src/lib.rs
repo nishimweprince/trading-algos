@@ -11,11 +11,10 @@ pub mod ledger;
 pub mod metrics;
 pub mod num;
 pub mod risk;
-pub mod shadow;
 pub mod sizing;
 pub mod window;
 
-pub use book::{Book, BookSide, BookState, Quote};
+pub use book::{Book, BookSide, BookState, Quote, quote_json};
 pub use decision::{Action, Decision, StrategyParams, WINDOW_S, decide};
 pub use ledger::{Ledger, Position};
 pub use risk::{RiskLimits, RiskState};

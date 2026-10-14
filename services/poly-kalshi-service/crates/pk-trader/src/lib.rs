@@ -7,7 +7,7 @@
 //! forwards each line to the observer pipe and then applies it.
 //!
 //! **`pk-observer`** (its child) runs everything else on the same lines: the
-//! tape, the journal (the only writer), shadow variants, markouts, the series,
+//! tape, the journal (the only writer), markouts, the series,
 //! feed statistics and PolyBolt. If it dies, the trader keeps trading, writes
 //! its own records straight to the journal, alerts, and restarts it.
 
@@ -43,22 +43,15 @@ pub fn build_engine(
     cfg.role = role;
     let trades = role != Role::Observe;
     let live = settings.execution_mode == pk_svc::ExecutionMode::Live;
-    // Live keeps the paper venue as the shadow of each real order.
     cfg.venue = (trades && settings.execution_mode != pk_svc::ExecutionMode::Off)
         .then(|| PaperVenue::new(settings.paper_latency_ms));
     cfg.live = trades && live;
     cfg.order_size_pct = settings.order_size_pct;
     cfg.follow_tape_latency = true;
-    cfg.shadow = if role == Role::Trade {
-        pk_core::shadow::Shadow::default()
-    } else {
-        pk_core::shadow::Shadow::new(settings.shadow_variants.clone(), &settings.params)
-    };
     cfg.limit_offset = settings.limit_offset;
     cfg.size_to_depth = settings.size_to_depth;
     cfg.active_exit = trades && settings.active_exit;
     cfg.size_at_limit = settings.size_at_limit;
-    cfg.shadow_latency_ns = (role != Role::Trade).then_some(settings.shadow_latency_ms * 1_000_000);
     cfg.order_shares = settings.order_shares;
     cfg.active_exit_ticks = settings.active_exit_ticks;
     cfg.age_outlier_ms = (trades && settings.age_outlier_ms > 0.0).then_some(settings.age_outlier_ms);
