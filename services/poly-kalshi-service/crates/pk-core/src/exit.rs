@@ -9,6 +9,7 @@
 //! (+3/+5/+10¢) did worse and are deliberately absent.
 
 use crate::book::Quote;
+use crate::fees::taker_fee;
 
 pub const EXIT_MARGIN: f64 = 0.01;
 pub const EXIT_MAX_KALSHI_SPREAD: f64 = 0.02;
@@ -23,6 +24,13 @@ pub fn kalshi_fair(k: &Quote, yes: bool) -> Option<f64> {
     }
     let mid = (bid + ask) / 2.0;
     Some(if yes { mid } else { 1.0 - mid })
+}
+
+/// The lowest price an exit sells at: the entry, its taker fee per share and a
+/// cent, rounded up to the cent. The live exit and the shadow share it.
+pub fn exit_floor(vwap: f64, fee_rate: f64, fee_exponent: f64) -> f64 {
+    let raw = vwap + taker_fee(vwap, 1.0, fee_rate, fee_exponent) + 0.01;
+    ((raw - 1e-9) * 100.0).ceil() / 100.0
 }
 
 /// Sell now: the bid has reached Kalshi's price and is above the entry.

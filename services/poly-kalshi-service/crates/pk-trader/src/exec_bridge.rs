@@ -542,14 +542,29 @@ impl<S: OrderSigner> ExecBridge<S> {
         let Some(top) = self.top(&x.token, Some(x.bid), None).await else { return };
         let shares = Decimal::from_f64(x.shares).unwrap_or_default();
         let ticks = live.exec.limits.active_exit_ticks;
-        let ex = live.exec.exit_ticks(&x.token, shares, &top, ticks, t_decision).await;
+        let floor = Decimal::from_f64(x.min_px).filter(|f| *f > Decimal::ZERO);
+        let ex = live.exec.exit_ticks(&x.token, shares, &top, ticks, floor, t_decision).await;
         for t in &ex.records {
             self.record(t, &x.asset, x.open_unix);
         }
-        if let Some(e) = ex.error.clone().or(ex.refused.clone()) {
+        let error = ex.error.clone().or(ex.refused.clone());
+        if let Some(e) = &error {
             self.status.lock().last_error = Some(format!("exit: {e}"));
         }
         if ex.shares <= 0.0 {
+            // Tell the engine, so it re-arms the exit now (or in a second when
+            // the shares were not credited yet) instead of in five.
+            let reason = if ex.balance_reject {
+                "balance"
+            } else if ex.refused.is_some() {
+                "refused"
+            } else {
+                "killed"
+            };
+            (self.hooks.control)(json!({
+                "type": "exit_miss", "asset": x.asset, "open_unix": x.open_unix,
+                "reason": reason, "error": error,
+            }));
             return;
         }
         let px = ex.usd / ex.shares;

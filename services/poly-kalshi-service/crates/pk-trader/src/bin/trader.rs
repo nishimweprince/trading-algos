@@ -212,6 +212,7 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
                 LiveLimits {
                     max_entry_px: d(settings.params.max_entry_px),
                     max_notional: d(settings.max_open_notional_usd),
+                    active_exit_ticks: settings.active_exit_ticks,
                     ..LiveLimits::default()
                 },
                 RedeemConfig {

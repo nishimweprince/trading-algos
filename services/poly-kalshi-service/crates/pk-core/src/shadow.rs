@@ -14,7 +14,9 @@
 //!   limit offset against the book the engine sees a latency later
 //!   ([`Shadow::set_fill`]), then the active exit ([`crate::exit`]) or the
 //!   settlement, net of the taker fee on each leg. `filled` says whether the
-//!   order got anything; an unfilled entry has no real net.
+//!   order got anything; an unfilled entry has no real net. The exit is a FAK
+//!   too: with [`Shadow::exit_latency_ns`] set, a signal sells only if the bid
+//!   a latency later is still at or above its limit, and re-arms otherwise.
 
 use std::collections::{HashMap, HashSet};
 
@@ -23,7 +25,7 @@ use serde_json::{Map, Value, json};
 
 use crate::book::Quote;
 use crate::decision::{Action, Decision, StrategyParams, decide};
-use crate::exit::should_exit;
+use crate::exit::{exit_floor, should_exit};
 use crate::fees::taker_fee;
 use crate::num::round_dp;
 
@@ -48,7 +50,11 @@ pub const DEFAULT_VARIANTS: &str = r#"[
  {"name": "usnight", "skip_hours_utc": [5, 6, 7, 8, 9, 10]},
  {"name": "pspread01", "max_poly_spread": 0.01},
  {"name": "plag250", "max_poly_lag_ms": 250},
- {"name": "t20_cap50", "gap": 0.20, "cap": 0.50}
+ {"name": "t20_cap50", "gap": 0.20, "cap": 0.50},
+ {"name": "ktrig", "kalshi_trigger": true},
+ {"name": "edge05", "min_edge": 0.05},
+ {"name": "edge15", "min_edge": 0.15},
+ {"name": "kspread03", "max_kalshi_spread": 0.03}
 ]"#;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -57,7 +63,7 @@ pub struct Variant {
     pub params: StrategyParams,
 }
 
-const KEYS: [&str; 10] = [
+const KEYS: [&str; 12] = [
     "gap",
     "cap",
     "early",
@@ -68,10 +74,12 @@ const KEYS: [&str; 10] = [
     "kalshi_extreme",
     "skip_hours_utc",
     "max_poly_lag_ms",
+    "min_edge",
+    "kalshi_trigger",
 ];
 
 /// `[{name, gap, cap, early, late, max_kalshi_spread, max_poly_spread, min_px,
-/// kalshi_extreme, skip_hours_utc, max_poly_lag_ms}, ...]`; a missing key keeps
+/// kalshi_extreme, skip_hours_utc, max_poly_lag_ms, min_edge, kalshi_trigger}, ...]`; a missing key keeps
 /// the live value. An empty string means no variants.
 pub fn parse_variants(text: &str, base: &StrategyParams) -> anyhow::Result<Vec<Variant>> {
     if text.trim().is_empty() {
@@ -109,6 +117,7 @@ pub fn parse_variants(text: &str, base: &StrategyParams) -> anyhow::Result<Vec<V
             ("max_poly_spread", &mut p.max_poly_spread),
             ("min_px", &mut p.min_entry_px),
             ("max_poly_lag_ms", &mut p.max_poly_lag_ms),
+            ("min_edge", &mut p.min_edge),
         ] {
             if let Some(v) = item.get(key) {
                 *slot = v.as_f64();
@@ -116,6 +125,9 @@ pub fn parse_variants(text: &str, base: &StrategyParams) -> anyhow::Result<Vec<V
         }
         if let Some(v) = item.get("kalshi_extreme") {
             p.kalshi_extreme = v.as_bool();
+        }
+        if let Some(v) = item.get("kalshi_trigger") {
+            p.kalshi_trigger = v.as_bool();
         }
         if let Some(v) = item.get("skip_hours_utc") {
             p.skip_hours_utc =
@@ -154,6 +166,8 @@ struct Fired {
     fill: Option<(f64, f64)>,
     /// The bid the active exit sold at, and when.
     exit: Option<(f64, i64)>,
+    /// An exit signal's FAK: its limit and when the book is read for it.
+    exit_pending: Option<(f64, i64)>,
 }
 
 #[derive(Debug, Default)]
@@ -161,6 +175,10 @@ pub struct Shadow {
     pub variants: Vec<Variant>,
     /// Add the realistic fill and exit fields to `shadow_settle`.
     pub score_real: bool,
+    /// How long an exit's FAK takes to reach the book; 0 sells at the signal's bid.
+    pub exit_latency_ns: i64,
+    /// How far under the signal's bid the exit's limit reaches, in cents.
+    pub exit_ticks: u32,
     fired: HashMap<Key, IndexMap<String, Fired>>,
     done: HashMap<Key, HashSet<String>>,
 }
@@ -196,6 +214,7 @@ impl Shadow {
         depth: impl Fn(bool, f64) -> f64,
         fee: (f64, f64),
         lags: (Option<f64>, Option<f64>),
+        kalshi_frame: bool,
     ) -> Vec<NewEntry> {
         let mut entered = Vec::new();
         let done = self.done.entry(key.clone()).or_default();
@@ -205,7 +224,7 @@ impl Shadow {
         let (k, y, n) = quotes;
         let utc_hour = ((key.1 as f64 + sec_into) as i64).div_euclid(3600).rem_euclid(24) as u32;
         for v in &self.variants {
-            if done.contains(&v.name) {
+            if done.contains(&v.name) || (v.params.kalshi_trigger == Some(true) && !kalshi_frame) {
                 continue;
             }
             let d: Decision = decide(k, y, n, &v.params, sec_into, false, Some(utc_hour), Some(lags));
@@ -250,6 +269,7 @@ impl Shadow {
                     t_ns: recv_ns,
                     fill: None,
                     exit: None,
+                    exit_pending: None,
                 },
             );
         }
@@ -265,7 +285,8 @@ impl Shadow {
     }
 
     /// The active exit for the window's filled entries: `bids` is the YES and
-    /// NO best bid, `fair_yes` Kalshi's YES price while its book is tight.
+    /// NO best bid, `fair_yes` Kalshi's YES price while its book is tight. A
+    /// pending exit resolves even while Kalshi is wide: its FAK is already sent.
     pub fn check_exits(
         &mut self,
         key: &Key,
@@ -273,16 +294,35 @@ impl Shadow {
         fair_yes: Option<f64>,
         t: i64,
     ) {
-        let Some(fair_yes) = fair_yes else { return };
+        let (latency, ticks) = (self.exit_latency_ns, self.exit_ticks);
         let Some(fired) = self.fired.get_mut(key) else { return };
         for f in fired.values_mut() {
             let Some((_, vwap)) = f.fill.filter(|(s, _)| *s > 0.0) else { continue };
             if f.exit.is_some() {
                 continue;
             }
-            let (bid, fair) = if f.side == "yes" { (bids.0, fair_yes) } else { (bids.1, 1.0 - fair_yes) };
-            if let Some(bid) = bid.filter(|b| should_exit(*b, fair, vwap)) {
+            let bid = if f.side == "yes" { bids.0 } else { bids.1 };
+            if let Some((limit, due)) = f.exit_pending {
+                if t < due {
+                    continue;
+                }
+                f.exit_pending = None;
+                if let Some(b) = bid.filter(|b| *b >= limit - 1e-9) {
+                    f.exit = Some((b, t));
+                    continue;
+                }
+            }
+            let Some(fair_yes) = fair_yes else { continue };
+            let fair = if f.side == "yes" { fair_yes } else { 1.0 - fair_yes };
+            let Some(bid) = bid.filter(|b| should_exit(*b, fair, vwap)) else { continue };
+            if latency <= 0 {
                 f.exit = Some((bid, t));
+                continue;
+            }
+            let floor = exit_floor(vwap, f.fee_rate, f.fee_exponent);
+            let limit = round_dp((bid - 0.01 * ticks as f64).max(floor), 2);
+            if limit <= bid + 1e-9 {
+                f.exit_pending = Some((limit, t + latency));
             }
         }
     }
@@ -376,7 +416,7 @@ mod tests {
         let key: Key = ("BTC".into(), 900);
         // Kalshi 0.70/0.72 against Polymarket YES 0.44/0.46: both enter YES at 0.46.
         let quotes = (&q(0.70, 0.72), &q(0.44, 0.46), &q(0.54, 0.56));
-        let new = sh.evaluate(&key, quotes, 100.0, 1, |_, _| 500.0, (0.07, 1.0), (None, None));
+        let new = sh.evaluate(&key, quotes, 100.0, 1, |_, _| 500.0, (0.07, 1.0), (None, None), true);
         assert_eq!(new.len(), 2);
         assert!(new.iter().all(|e| e.buy_yes && e.entry_px == 0.46));
         sh.set_fill(&key, "live", (10.0, 0.47));
@@ -396,10 +436,43 @@ mod tests {
     }
 
     #[test]
+    fn the_exit_fak_fills_or_rearms_a_latency_later() {
+        let base = StrategyParams { gap_threshold: 0.15, ..Default::default() };
+        let mut sh = Shadow::new(parse_variants(r#"[{"name":"t20","gap":0.20}]"#, &base).unwrap(), &base);
+        (sh.score_real, sh.exit_latency_ns, sh.exit_ticks) = (true, 250_000_000, 3);
+        let key: Key = ("BTC".into(), 900);
+        let quotes = (&q(0.70, 0.72), &q(0.44, 0.46), &q(0.54, 0.56));
+        sh.evaluate(&key, quotes, 100.0, 1, |_, _| 500.0, (0.07, 1.0), (None, None), true);
+        sh.set_fill(&key, "live", (10.0, 0.47));
+        sh.set_fill(&key, "t20", (10.0, 0.47));
+        // Signal at 0.70: limit 0.67. A latency later the bid is 0.60: missed, and no
+        // longer a signal (Kalshi still 0.71), so nothing pending.
+        sh.check_exits(&key, (Some(0.70), Some(0.28)), Some(0.71), 1_000);
+        sh.check_exits(&key, (Some(0.68), Some(0.30)), Some(0.71), 100_000_000);
+        sh.check_exits(&key, (Some(0.60), Some(0.38)), Some(0.71), 300_000_000);
+        // Re-armed on the next signal; this time the bid holds at 0.69.
+        sh.check_exits(&key, (Some(0.70), Some(0.28)), Some(0.71), 1_000_000_000);
+        sh.check_exits(&key, (Some(0.69), Some(0.29)), None, 1_300_000_000);
+        let out = sh.settle(&key, "no");
+        let live = out.iter().find(|r| r["variant"] == "live").unwrap();
+        assert_eq!(live["exit_bid"].as_f64(), Some(0.69));
+        assert_eq!(live["held_s"].as_f64(), Some(1.3));
+        // The ktrig variant does not decide on a Polymarket frame.
+        let mut sh = Shadow::new(parse_variants(r#"[{"name":"k","kalshi_trigger":true}]"#, &base).unwrap(), &base);
+        let new = sh.evaluate(&key, quotes, 100.0, 1, |_, _| 500.0, (0.07, 1.0), (None, None), false);
+        assert_eq!(new.iter().map(|e| e.variant.as_str()).collect::<Vec<_>>(), ["live"]);
+        let new = sh.evaluate(&key, quotes, 100.0, 2, |_, _| 500.0, (0.07, 1.0), (None, None), true);
+        assert_eq!(new.iter().map(|e| e.variant.as_str()).collect::<Vec<_>>(), ["k"]);
+        assert!((exit_floor(0.47, 0.07, 1.0) - 0.50).abs() < 1e-9); // 0.47 + 0.0174 + 0.01
+    }
+
+    #[test]
     fn default_variants_parse() {
         let base = StrategyParams { gap_threshold: 0.15, ..Default::default() };
         let v = parse_variants(DEFAULT_VARIANTS, &base).unwrap();
-        assert_eq!(v.len(), 17);
+        assert_eq!(v.len(), 21);
+        assert_eq!(v[17].params.kalshi_trigger, Some(true));
+        assert_eq!(v[18].params.min_edge, Some(0.05));
         assert_eq!(v[0].params.gap_threshold, 0.08);
         assert_eq!(v[13].params.skip_hours_utc, Some(US_NIGHT_UTC.to_vec()));
         assert_eq!(v[15].params.max_poly_lag_ms, Some(250.0));

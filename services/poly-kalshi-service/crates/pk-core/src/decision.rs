@@ -24,6 +24,11 @@
 //!   ms after the venue stamped it. It is the transport lag of the book's
 //!   latest frame, not the time since the book changed: a quiet Polymarket
 //!   book while Kalshi moves is the signal itself.
+//! - `min_edge`: the tradable edge, Kalshi's implied price of the side less
+//!   the Polymarket ask, below this is `None` (`edge`, not consumed). A mid gap
+//!   on a wide Polymarket book can sit above Kalshi's price at the ask.
+//! - `kalshi_trigger`: shadow-only (the shadow reads it, `decide` does not):
+//!   the variant decides only on Kalshi frames.
 
 use serde::{Deserialize, Serialize};
 
@@ -50,6 +55,10 @@ pub struct StrategyParams {
     pub skip_hours_utc: Option<Vec<u32>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_poly_lag_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_edge: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kalshi_trigger: Option<bool>,
 }
 
 impl Default for StrategyParams {
@@ -66,6 +75,8 @@ impl Default for StrategyParams {
             kalshi_extreme: None,
             skip_hours_utc: None,
             max_poly_lag_ms: None,
+            min_edge: None,
+            kalshi_trigger: None,
         }
     }
 }
@@ -191,6 +202,12 @@ pub fn decide(
     let Some(entry_px) = entry_px.filter(|&p| p > 0.0 && p < 1.0) else {
         return Decision::none("bad_price", Some(gap));
     };
+    if let Some(min) = params.min_edge {
+        let fair = if buy_yes { k_mid } else { 1.0 - k_mid };
+        if fair - entry_px < min - 1e-9 {
+            return Decision::none("edge", Some(gap));
+        }
+    }
     if entry_px > params.max_entry_px {
         return Decision::skip("above_cap", gap, buy_yes, entry_px);
     }
@@ -254,5 +271,34 @@ mod tests {
         assert_eq!(decide(&k, &y, &n, &spread, 100.0, false, None, None).reason, "poly_spread");
         let hours = StrategyParams { skip_hours_utc: Some(vec![5]), ..p };
         assert_eq!(decide(&k, &y, &n, &hours, 100.0, false, Some(5), None).reason, "hours");
+    }
+
+    #[test]
+    fn tradable_edge_gates_do_not_consume() {
+        let p = StrategyParams {
+            gap_threshold: 0.20,
+            max_kalshi_spread: Some(0.02),
+            max_poly_spread: Some(0.05),
+            min_edge: Some(0.10),
+            ..Default::default()
+        };
+        // A wide Polymarket book: the mid gap is 0.21, the ask is above Kalshi.
+        let (k, y, n) = (q(0.53, 0.54), q(0.07, 0.58), q(0.42, 0.93));
+        let d = decide(&k, &y, &n, &p, 100.0, false, None, None);
+        assert_eq!((d.action, d.reason), (Action::None, "poly_spread"));
+        let open = StrategyParams { max_poly_spread: None, ..p.clone() };
+        let d = decide(&k, &y, &n, &open, 100.0, false, None, None);
+        assert_eq!((d.action, d.reason, d.consumes_window()), (Action::None, "edge", false));
+        // A wide Kalshi book.
+        let d = decide(&q(0.50, 0.80), &q(0.39, 0.40), &q(0.60, 0.61), &p, 100.0, false, None, None);
+        assert_eq!((d.action, d.reason), (Action::None, "kalshi_spread"));
+        // Tight books and a real edge: 0.705 - 0.46 = 0.245.
+        let d = decide(&q(0.70, 0.71), &q(0.45, 0.46), &q(0.54, 0.55), &p, 100.0, false, None, None);
+        assert_eq!(d.action, Action::Enter);
+        // NO side: fair 1 - 0.265 = 0.735; an ask of 0.52 enters, 0.67 is too close.
+        let d = decide(&q(0.26, 0.27), &q(0.48, 0.49), &q(0.51, 0.52), &p, 100.0, false, None, None);
+        assert_eq!((d.action, d.buy_yes), (Action::Enter, Some(false)));
+        let d = decide(&q(0.26, 0.27), &q(0.48, 0.49), &q(0.66, 0.67), &p, 100.0, false, None, None);
+        assert_eq!((d.action, d.reason), (Action::None, "edge"));
     }
 }

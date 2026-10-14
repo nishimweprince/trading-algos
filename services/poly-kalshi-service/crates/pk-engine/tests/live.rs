@@ -39,6 +39,7 @@ struct Opts {
     active_exit: bool,
     size_at_limit: bool,
     limit_offset: f64,
+    order_shares: Option<i64>,
 }
 
 impl Default for Opts {
@@ -51,6 +52,7 @@ impl Default for Opts {
             active_exit: false,
             size_at_limit: false,
             limit_offset: 0.0,
+            order_shares: None,
         }
     }
 }
@@ -66,6 +68,7 @@ fn engine(o: Opts) -> (Engine, Shared) {
     ec.active_exit = o.active_exit;
     ec.size_at_limit = o.size_at_limit;
     ec.limit_offset = o.limit_offset;
+    ec.order_shares = o.order_shares;
     let sink = Shared::default();
     let risk =
         RiskState::new(RiskLimits { max_open_notional_usd: 1e9, daily_loss_limit_usd: 1e9, kill_file: None });
@@ -345,6 +348,57 @@ fn live_active_exit_is_an_intent_and_its_result_closes() {
     assert_eq!((exit["reason"].as_str(), exit["venue"].as_str()), (Some("fair"), Some("live")));
     assert_eq!(sink.of("settle")[0]["outcome"], "exit");
     assert_eq!(e.ledger.open_positions().count(), 0);
+}
+
+#[test]
+fn a_missed_live_exit_rearms_at_once_or_after_a_balance_second() {
+    let (mut e, sink) = engine(Opts { live: true, cash: 0.0, active_exit: true, ..Default::default() });
+    setup(&mut e);
+    ctl(&mut e, 1.0, json!({"type":"balance","balance":100.0}));
+    cross(&mut e, 30.0);
+    ctl(
+        &mut e,
+        30.6,
+        json!({"type":"live_fill","asset":"BTC","open_unix":OPEN,"side":"yes","token":"Y",
+               "order_id":"0xo","ordered":10.0,"shares":10.0,"cost":4.6,"entry_px":0.46,
+               "limit_px":0.46,"status":"matched","decision_ns":at(30.02)}),
+    );
+    poly_catches_up(&mut e, 35.0);
+    let x = std::mem::take(&mut e.exits).pop().unwrap();
+    // The floor: the 0.46 entry, its fee and a cent, under the 0.70 bid.
+    assert!(x.min_px > 0.47 && x.min_px < 0.70, "{}", x.min_px);
+    // The FAK was killed: the next update may try again at once.
+    ctl(&mut e, 35.2, json!({"type":"exit_miss","asset":"BTC","open_unix":OPEN,"reason":"killed"}));
+    poly_catches_up(&mut e, 35.3);
+    assert_eq!(std::mem::take(&mut e.exits).len(), 1);
+    // The shares were not credited yet: wait a second.
+    ctl(&mut e, 35.5, json!({"type":"exit_miss","asset":"BTC","open_unix":OPEN,"reason":"balance"}));
+    poly_catches_up(&mut e, 35.9);
+    assert!(e.exits.is_empty());
+    poly_catches_up(&mut e, 36.6);
+    assert_eq!(std::mem::take(&mut e.exits).len(), 1);
+    let misses = sink.of("exit_miss");
+    assert_eq!(misses.iter().map(|m| m["misses"].as_u64().unwrap()).collect::<Vec<_>>(), [1, 2]);
+    // Past the cap a miss waits the full retry.
+    for i in 0..6 {
+        ctl(&mut e, 37.0 + i as f64 * 0.01, json!({"type":"exit_miss","asset":"BTC","open_unix":OPEN,"reason":"killed"}));
+    }
+    poly_catches_up(&mut e, 38.0);
+    assert!(e.exits.is_empty());
+    poly_catches_up(&mut e, 42.2);
+    assert_eq!(e.exits.len(), 1);
+}
+
+#[test]
+fn fixed_shares_size_every_entry() {
+    let opts = Opts { order_shares: Some(10), size_at_limit: true, limit_offset: 0.06, ..Default::default() };
+    let (mut e, sink) = engine(opts);
+    setup(&mut e);
+    cross(&mut e, 30.0);
+    assert_eq!(sink.of("decision")[0]["contracts"], 10);
+    assert_eq!(e.contracts_for(0.05), 10);
+    tick(&mut e, 30.5);
+    assert_eq!(sink.of("fill")[0]["ordered"], 10);
 }
 
 #[derive(Default)]

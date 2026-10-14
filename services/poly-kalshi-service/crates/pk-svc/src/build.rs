@@ -7,6 +7,7 @@
 use std::sync::OnceLock;
 
 use pk_core::StrategyParams;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 pub fn build_id() -> String {
@@ -46,14 +47,16 @@ pub fn config_hash(
     config_hash_with(params, latency_ms, limit_offset, size_to_depth, order_size_pct, &[])
 }
 
-/// [`config_hash`] plus the switches that are on (`active_exit`, `size_at_limit`).
+/// [`config_hash`] plus the settings that are on: switches (`active_exit`,
+/// `size_at_limit`) as `true`, sizes (`order_shares`, `active_exit_ticks`) as numbers.
+/// A fixed share count replaces the notional and the percentage in the hash.
 pub fn config_hash_with(
     params: &StrategyParams,
     latency_ms: i64,
     limit_offset: f64,
     size_to_depth: bool,
     order_size_pct: f64,
-    on: &[&str],
+    on: &[(&str, Value)],
 ) -> String {
     let mut fields = serde_json::to_value(params).expect("params serialise");
     let obj = fields.as_object_mut().expect("object");
@@ -68,8 +71,12 @@ pub fn config_hash_with(
     if size_to_depth {
         obj.insert("size_to_depth".into(), true.into());
     }
-    for name in on {
-        obj.insert((*name).into(), true.into());
+    for (name, value) in on {
+        if *name == "order_shares" {
+            obj.remove("notional_usd");
+            obj.remove("order_size_pct");
+        }
+        obj.insert((*name).into(), value.clone());
     }
     let sorted: std::collections::BTreeMap<_, _> = obj.iter().collect();
     let body = serde_json::to_string(&sorted).expect("json");
@@ -95,6 +102,15 @@ mod tests {
         let pct = config_hash(&p, 150, 0.0, false, 5.0);
         assert_ne!(a, pct);
         // The size moves with the balance; the hash does not.
-        assert_eq!(pct, config_hash(&StrategyParams { notional_usd: 7.0, ..p }, 150, 0.0, false, 5.0));
+        assert_eq!(pct, config_hash(&StrategyParams { notional_usd: 7.0, ..p.clone() }, 150, 0.0, false, 5.0));
+        // Fixed shares: neither the notional nor the percentage counts.
+        let shares = |n: f64, pct: f64| {
+            config_hash_with(&StrategyParams { notional_usd: n, ..p.clone() }, 150, 0.0, false, pct, &[(
+                "order_shares",
+                10.into(),
+            )])
+        };
+        assert_eq!(shares(7.0, 5.0), shares(3.0, 0.0));
+        assert_ne!(shares(7.0, 5.0), pct);
     }
 }

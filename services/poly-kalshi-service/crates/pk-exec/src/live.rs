@@ -44,7 +44,7 @@ impl Default for LiveLimits {
             max_entry_px: Decimal::new(60, 2),
             max_notional: Decimal::from(50),
             exit_ticks: 2,
-            active_exit_ticks: 1,
+            active_exit_ticks: 3,
             poll_every: Duration::from_millis(200),
             poll_for: Duration::from_secs(5),
         }
@@ -63,12 +63,18 @@ pub enum Refused {
     BadPrice(Decimal),
     #[error("size {0} is under the minimum {1}")]
     BelowMin(Decimal, Decimal),
+    #[error("best bid {0} is under the exit floor {1}")]
+    BelowFloor(Decimal, Decimal),
     #[error("notional {0} is over the cap {1}")]
     Notional(Decimal, Decimal),
 }
 
 fn floor_to(x: Decimal, step: Decimal) -> Decimal {
     if step <= Decimal::ZERO { x } else { (x / step).floor() * step }
+}
+
+fn ceil_to(x: Decimal, step: Decimal) -> Decimal {
+    if step <= Decimal::ZERO { x } else { (x / step).ceil() * step }
 }
 
 /// The entry order for this decision, or why there is none. Pure.
@@ -100,13 +106,26 @@ pub fn entry_spec(
 
 /// The flatten sell for `shares` held: FAK at `exit_ticks` under the best bid. Pure.
 pub fn exit_spec(token: &str, shares: Decimal, top: &Top, limits: &LiveLimits) -> Result<OrderSpec, Refused> {
-    exit_spec_ticks(token, shares, top, limits.exit_ticks)
+    exit_spec_ticks(token, shares, top, limits.exit_ticks, None)
 }
 
-/// A FAK sell of `shares` at `ticks` under the best bid. Pure.
-pub fn exit_spec_ticks(token: &str, shares: Decimal, top: &Top, ticks: u32) -> Result<OrderSpec, Refused> {
+/// A FAK sell of `shares` at `ticks` under the best bid, and never under
+/// `floor` (rounded up to the tick). Pure.
+pub fn exit_spec_ticks(
+    token: &str,
+    shares: Decimal,
+    top: &Top,
+    ticks: u32,
+    floor: Option<Decimal>,
+) -> Result<OrderSpec, Refused> {
     let bid = top.best_bid.ok_or(Refused::NoBid)?;
-    let price = (bid - top.tick * Decimal::from(ticks)).max(top.tick);
+    let mut price = (bid - top.tick * Decimal::from(ticks)).max(top.tick);
+    if let Some(floor) = floor.map(|f| ceil_to(f, top.tick)) {
+        if floor > bid {
+            return Err(Refused::BelowFloor(bid, floor));
+        }
+        price = price.max(floor);
+    }
     if price >= Decimal::ONE {
         return Err(Refused::BadPrice(price));
     }
@@ -193,19 +212,20 @@ impl<S: OrderSigner> LiveExec<S> {
     }
 
     pub async fn exit(&self, token: &str, shares: Decimal, top: &Top) -> Executed {
-        self.exit_ticks(token, shares, top, self.limits.exit_ticks, Instant::now()).await
+        self.exit_ticks(token, shares, top, self.limits.exit_ticks, None, Instant::now()).await
     }
 
-    /// The active exit's sell: a FAK `ticks` under the bid.
+    /// The active exit's sell: a FAK `ticks` under the bid, not under `floor`.
     pub async fn exit_ticks(
         &self,
         token: &str,
         shares: Decimal,
         top: &Top,
         ticks: u32,
+        floor: Option<Decimal>,
         t_decision: Instant,
     ) -> Executed {
-        match exit_spec_ticks(token, shares, top, ticks) {
+        match exit_spec_ticks(token, shares, top, ticks, floor) {
             Ok(spec) => self.execute(&spec, t_decision).await,
             Err(r) => Executed { refused: Some(r.to_string()), cost_basis: "none", ..Default::default() },
         }
@@ -231,12 +251,16 @@ impl<S: OrderSigner> LiveExec<S> {
         out.records.push(timing);
         if !ok {
             out.balance_reject = out.error.as_deref().is_some_and(is_balance_reject);
-            if out.balance_reject {
+            // Only buys count toward the halt: a sell seconds after its entry is
+            // refused until the shares are credited, which is no funding fault.
+            if out.balance_reject && spec.side == Side::Buy {
                 out.rejects_in_row = self.balance_rejects.fetch_add(1, Ordering::Relaxed) + 1;
             }
             return out;
         }
-        self.balance_rejects.store(0, Ordering::Relaxed);
+        if spec.side == Side::Buy {
+            self.balance_rejects.store(0, Ordering::Relaxed);
+        }
         if let Some((shares, usd)) = ack.as_ref().and_then(|a| from_ack(a, spec.side)) {
             (out.shares, out.usd, out.cost_basis) = (f(shares), f(usd), "ack");
             return out;
@@ -358,6 +382,14 @@ mod tests {
         assert_eq!((s.side, s.price, s.size), (Side::Sell, d("0.42"), d("10.55")));
         assert_eq!(exit_spec("t", d("10"), &top(None, Some("0.5")), &l), Err(Refused::NoBid));
         assert_eq!(exit_spec("t", d("10"), &top(Some("0.01"), None), &l).unwrap().price, d("0.01"));
+        // The active exit: three ticks under the bid, never under the floor.
+        let t = top(Some("0.70"), None);
+        assert_eq!(exit_spec_ticks("t", d("10"), &t, 3, None).unwrap().price, d("0.67"));
+        assert_eq!(exit_spec_ticks("t", d("10"), &t, 3, Some(d("0.6812"))).unwrap().price, d("0.69"));
+        assert_eq!(
+            exit_spec_ticks("t", d("10"), &t, 3, Some(d("0.705"))),
+            Err(Refused::BelowFloor(d("0.70"), d("0.71")))
+        );
     }
 
     #[test]

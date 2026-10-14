@@ -79,6 +79,11 @@ pub struct Settings {
     pub size_at_limit: bool,
     /// Shadow entries are also scored with a FAK priced this long after the decision.
     pub shadow_latency_ms: i64,
+    /// Every entry orders this many shares (`PK_ORDER_SHARES`); `None` sizes
+    /// from `order_size_pct` / `PK_NOTIONAL_USD`.
+    pub order_shares: Option<i64>,
+    /// How far under the bid the active exit sells, in ticks (`PK_ACTIVE_EXIT_TICKS`).
+    pub active_exit_ticks: u32,
     /// The armed trigger (live only): Kalshi frame → pre-built order on the
     /// Kalshi feed's own pinned thread (`pk_trader::fast`, `pk_trader::hot`).
     pub fast_path: bool,
@@ -258,8 +263,20 @@ impl Settings {
             // The review's stale-frame and spread guards, available as live params.
             max_poly_spread: e.opt_num("PK_MAX_POLY_SPREAD")?,
             max_poly_lag_ms: e.opt_num("PK_MAX_POLY_LAG_MS")?,
+            // The epoch-13 tradable-edge gates.
+            max_kalshi_spread: e.opt_num("PK_MAX_KALSHI_SPREAD")?,
+            min_edge: e.opt_num("PK_MIN_EDGE")?,
+            min_entry_px: e.opt_num("PK_MIN_ENTRY_PX")?,
             ..Default::default()
         };
+        for (key, v) in [
+            ("PK_MAX_POLY_SPREAD", params.max_poly_spread),
+            ("PK_MAX_KALSHI_SPREAD", params.max_kalshi_spread),
+            ("PK_MIN_EDGE", params.min_edge),
+            ("PK_MIN_ENTRY_PX", params.min_entry_px),
+        ] {
+            anyhow::ensure!(v.is_none_or(|v| 0.0 < v && v < 1.0), "{key} must be in (0, 1)");
+        }
         anyhow::ensure!(
             0.0 < params.gap_threshold && params.gap_threshold < 1.0,
             "PK_GAP_THRESHOLD must be in (0, 1)"
@@ -294,6 +311,16 @@ impl Settings {
             order_size_pct > 0.0 || params.notional_usd <= max_open,
             "PK_NOTIONAL_USD cannot exceed PK_MAX_OPEN_NOTIONAL_USD"
         );
+        let order_shares: Option<i64> = e.opt_num("PK_ORDER_SHARES")?.map(|n| n as i64);
+        if let Some(n) = order_shares {
+            anyhow::ensure!(n >= 5, "PK_ORDER_SHARES must be at least 5 (the venue minimum)");
+            anyhow::ensure!(
+                n as f64 * params.max_entry_px <= max_open + 1e-9,
+                "PK_ORDER_SHARES × PK_MAX_ENTRY_PX cannot exceed PK_MAX_OPEN_NOTIONAL_USD"
+            );
+        }
+        let active_exit_ticks: u32 = e.num("PK_ACTIVE_EXIT_TICKS", 3)?;
+        anyhow::ensure!((1..=10).contains(&active_exit_ticks), "PK_ACTIVE_EXIT_TICKS must be within 1..=10");
         let paper_latency_ms: i64 = e.num("PK_PAPER_LATENCY_MS", 250)?;
         anyhow::ensure!(
             (0..=5000).contains(&paper_latency_ms),
@@ -424,6 +451,8 @@ impl Settings {
             active_exit: e.flag("PK_ACTIVE_EXIT", true)?,
             size_at_limit: e.flag("PK_SIZE_AT_LIMIT", true)?,
             shadow_latency_ms,
+            order_shares,
+            active_exit_ticks,
             fast_path: e.flag("PK_FAST_PATH", false)?,
             fast_conns: e.num::<usize>("PK_FAST_CONNS", 3)?.clamp(1, 16),
             hot_core: match e.num::<i64>("PK_HOT_CORE", -1)? {
@@ -560,7 +589,8 @@ mod tests {
         assert_eq!(s.params.gap_threshold, 0.15);
         assert_eq!(s.record_dir, PathBuf::from("data/raw/dev"));
         assert_eq!(s.state_dir, PathBuf::from("data/state/dev"));
-        assert_eq!(s.shadow_variants.len(), 17);
+        assert_eq!(s.shadow_variants.len(), 21);
+        assert_eq!((s.order_shares, s.active_exit_ticks), (None, 3));
         assert_eq!(s.execution_mode, ExecutionMode::Paper);
         assert!(!s.order_probe && !s.order_path());
         assert_eq!((s.order_size_pct, s.latency_window, s.latency_min_samples), (5.0, 50, 10));
@@ -590,6 +620,18 @@ mod tests {
         assert!(with("PK_SHADOW_VARIANTS", "[{\"name\":\"live\"}]").is_err());
         assert_eq!(with("PK_MAX_POLY_LAG_MS", "250").unwrap().params.max_poly_lag_ms, Some(250.0));
         assert!(with("PK_SHADOW_VARIANTS", "").unwrap().shadow_variants.is_empty());
+        // The epoch-13 gates and sizes.
+        let s = with("PK_MIN_EDGE", "0.10").unwrap();
+        assert_eq!(s.params.min_edge, Some(0.10));
+        assert_eq!(with("PK_MAX_KALSHI_SPREAD", "0.02").unwrap().params.max_kalshi_spread, Some(0.02));
+        assert_eq!(with("PK_MIN_ENTRY_PX", "0.20").unwrap().params.min_entry_px, Some(0.20));
+        assert!(with("PK_MIN_EDGE", "1.5").is_err());
+        assert!(with("PK_MAX_KALSHI_SPREAD", "0").is_err());
+        assert_eq!(with("PK_ORDER_SHARES", "10").unwrap().order_shares, Some(10));
+        assert!(with("PK_ORDER_SHARES", "4").is_err());
+        assert!(with("PK_ORDER_SHARES", "1000").is_err()); // 1000 × 0.60 > 500
+        assert_eq!(with("PK_ACTIVE_EXIT_TICKS", "5").unwrap().active_exit_ticks, 5);
+        assert!(with("PK_ACTIVE_EXIT_TICKS", "0").is_err());
     }
 
     #[test]

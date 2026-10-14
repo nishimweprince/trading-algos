@@ -43,7 +43,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use pk_core::decision::{Action, Decision, StrategyParams, WINDOW_S, decide};
-use pk_core::exit::{EXIT_MIN_SHARES, kalshi_fair, should_exit};
+use pk_core::exit::{EXIT_MIN_SHARES, exit_floor, kalshi_fair, should_exit};
 use pk_core::fees::taker_fee;
 use pk_core::journal::Sink;
 use pk_core::ledger::{Ledger, Position};
@@ -79,6 +79,11 @@ pub const EXIT_GAP: f64 = 0.03;
 const HORIZONS: [i64; 5] = [1, 5, 30, 60, 120];
 /// A live exit signal is not repeated for this long (the order is in flight).
 pub const EXIT_RETRY_NS: i64 = 5 * NS;
+/// After an exit's FAK sold nothing (`exit_miss`) the next signal may fire at
+/// once; after a balance reject (shares not credited yet) a second later. Past
+/// this many misses a position waits [`EXIT_RETRY_NS`] between tries.
+pub const EXIT_MAX_ATTEMPTS: u32 = 8;
+pub const EXIT_BALANCE_RETRY_NS: i64 = NS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
@@ -179,6 +184,8 @@ pub struct ExitIntent {
     pub shares: f64,
     pub bid: f64,
     pub fair: f64,
+    /// The lowest price the sell may take: entry, fee and a cent ([`exit_floor`]).
+    pub min_px: f64,
     pub decision_ns: i64,
     pub fee_rate: f64,
     pub fee_exponent: f64,
@@ -244,6 +251,12 @@ pub struct EngineConfig {
     /// Score shadow entries with a FAK priced this long after the decision
     /// (`net_cents_real`). `None`: the touch only.
     pub shadow_latency_ns: Option<i64>,
+    /// Every entry orders this many shares (`PK_ORDER_SHARES`); `None` sizes
+    /// from the notional.
+    pub order_shares: Option<i64>,
+    /// How far under the bid the active exit sells (cents); the shadow's exit
+    /// FAK uses it too. 0 scores shadow exits at the signal's bid.
+    pub active_exit_ticks: u32,
 }
 
 /// `Forward` is the trade: Kalshi signals, Polymarket executes. `Reverse`
@@ -275,6 +288,8 @@ impl EngineConfig {
             active_exit: false,
             size_at_limit: false,
             shadow_latency_ns: None,
+            order_shares: None,
+            active_exit_ticks: 0,
         }
     }
 }
@@ -325,6 +340,10 @@ pub struct Engine {
     active_exit: bool,
     size_at_limit: bool,
     exit_until: HashMap<String, i64>,
+    exit_misses: HashMap<String, u32>,
+    order_shares: Option<i64>,
+    /// The venue of the frame being applied ('k', 'p' or 'c').
+    frame_venue: char,
     shadow_latency_ns: Option<i64>,
     shadow_fills: Vec<ShadowFill>,
     /// The armed trigger (live trade engine only), and what it was last given per asset.
@@ -349,6 +368,8 @@ impl Engine {
         let notional = cfg.params.notional_usd;
         let mut shadow = cfg.shadow;
         shadow.score_real = cfg.shadow_latency_ns.is_some();
+        shadow.exit_latency_ns = if cfg.active_exit_ticks > 0 { cfg.shadow_latency_ns.unwrap_or(0) } else { 0 };
+        shadow.exit_ticks = cfg.active_exit_ticks;
         Self {
             trade: matches!(cfg.role, Role::Full | Role::Trade),
             observe: matches!(cfg.role, Role::Full | Role::Observe),
@@ -393,6 +414,9 @@ impl Engine {
             active_exit: cfg.active_exit,
             size_at_limit: cfg.size_at_limit,
             exit_until: HashMap::new(),
+            exit_misses: HashMap::new(),
+            order_shares: cfg.order_shares,
+            frame_venue: 'c',
             shadow_latency_ns: cfg.shadow_latency_ns,
             shadow_fills: Vec::new(),
             fast_gate: None,
@@ -462,6 +486,7 @@ impl Engine {
         if !self.shadow_fills.is_empty() {
             self.resolve_shadow_fills(recv_ns);
         }
+        self.frame_venue = venue;
         let touched = match venue {
             'p' => self.poly(text, recv_ns),
             'k' => self.kalshi(text, recv_ns),
@@ -827,7 +852,7 @@ impl Engine {
                 self.count(&format!("{kind}_{prefix}"));
                 Some(Vec::new())
             }
-            Some(kind @ ("latency" | "sizing" | "live_fill" | "live_exit" | "balance")) => {
+            Some(kind @ ("latency" | "sizing" | "live_fill" | "live_exit" | "exit_miss" | "balance")) => {
                 if self.trade {
                     let kind = kind.to_owned();
                     match serde_json::from_str::<Value>(text) {
@@ -920,6 +945,7 @@ impl Engine {
                     |buy_yes, limit| self.depth(&window, buy_yes, limit),
                     (window.fee_rate, window.fee_exponent),
                     lags,
+                    self.frame_venue == 'k',
                 );
                 if let Some(latency) = self.shadow_latency_ns {
                     for e in entered {
@@ -992,10 +1018,8 @@ impl Engine {
             self.state[idx].decision = Some(d);
             return;
         }
-        if decision.action == Action::Enter && self.size_at_limit && fast_fire.is_none() {
-            // A FAK spends up to shares × limit: size so that stays the notional.
-            let limit = self.limit_px(decision.entry_px.expect("an entry has a price"));
-            decision.contracts = ((self.params.notional_usd / limit).floor() as i64).max(1);
+        if decision.action == Action::Enter && fast_fire.is_none() {
+            decision.contracts = self.contracts_for(decision.entry_px.expect("an entry has a price")).max(1);
         }
         if decision.action == Action::Enter && self.size_to_depth && fast_fire.is_none() {
             let entry = decision.entry_px.expect("an entry has a price");
@@ -1106,10 +1130,7 @@ impl Engine {
             best_bid: book.and_then(Book::best_bid),
             best_ask: ask,
             limit_px: ask.map(|a| self.limit_px(a)),
-            contracts: ask.filter(|a| *a > 0.0).map(|a| {
-                let px = if self.size_at_limit { self.limit_px(a) } else { a };
-                (self.params.notional_usd / px).floor() as i64
-            }),
+            contracts: ask.filter(|a| *a > 0.0).map(|a| self.contracts_for(a)),
         });
     }
 
@@ -1261,6 +1282,7 @@ impl Engine {
         }
         self.exit_until.insert(key, recv_ns + EXIT_RETRY_NS);
         self.count("exit_signals");
+        let min_px = exit_floor(vwap, w.fee_rate, w.fee_exponent);
         if self.live {
             self.exits.push(ExitIntent {
                 asset: w.asset.clone(),
@@ -1270,6 +1292,7 @@ impl Engine {
                 shares,
                 bid,
                 fair: round_dp(fair, 4),
+                min_px,
                 decision_ns: recv_ns,
                 fee_rate: w.fee_rate,
                 fee_exponent: w.fee_exponent,
@@ -1277,7 +1300,7 @@ impl Engine {
             let record = json!({
                 "type": "exit_signal", "asset": w.asset, "open_unix": w.open_unix, "t_ns": recv_ns,
                 "side": side, "shares": shares, "bid": bid, "fair": round_dp(fair, 4),
-                "entry_vwap": round_dp(vwap, 4),
+                "entry_vwap": round_dp(vwap, 4), "min_px": min_px,
             });
             self.write(recv_ns, record, false);
         } else {
@@ -1368,7 +1391,7 @@ impl Engine {
             let entry = q.ask.filter(|a| q.valid && *a > 0.0 && *a < 1.0 && *a <= self.params.max_entry_px)?;
             let limit = self.limit_px(entry);
             let px = if self.size_at_limit { limit } else { entry };
-            let contracts = (self.params.notional_usd / px).floor() as i64;
+            let contracts = self.contracts_for(entry);
             (contracts >= 1).then(|| ArmSide {
                 token: token.to_owned(),
                 entry_px: entry,
@@ -1419,6 +1442,16 @@ impl Engine {
         for idx in 0..self.armed.len() {
             self.disarm(idx);
         }
+    }
+
+    /// Shares for an entry at `entry_px`: `order_shares` when set, else the
+    /// notional at the limit (`size_at_limit`: what a FAK can spend) or the touch.
+    pub fn contracts_for(&self, entry_px: f64) -> i64 {
+        if let Some(n) = self.order_shares {
+            return n;
+        }
+        let px = if self.size_at_limit { self.limit_px(entry_px) } else { entry_px };
+        (self.params.notional_usd / px).floor() as i64
     }
 
     pub fn limit_px(&self, entry_px: f64) -> f64 {
@@ -1718,7 +1751,7 @@ impl Engine {
         let s = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
         // A wallet's results apply only to a live engine: a paper replay of a
         // live tape simulates its own fills.
-        if matches!(kind, "live_fill" | "live_exit" | "balance") && !self.live {
+        if matches!(kind, "live_fill" | "live_exit" | "exit_miss" | "balance") && !self.live {
             return;
         }
         match kind {
@@ -1767,6 +1800,26 @@ impl Engine {
                 }
             }
             "live_fill" => self.live_fill(v, recv_ns),
+            "exit_miss" => {
+                let key = format!("{}:{}", s("asset"), v.get("open_unix").and_then(Value::as_i64).unwrap_or(0));
+                let reason = s("reason");
+                let misses = self.exit_misses.entry(key.clone()).or_insert(0);
+                *misses += 1;
+                let misses = *misses;
+                let until = match reason.as_str() {
+                    _ if misses >= EXIT_MAX_ATTEMPTS => recv_ns + EXIT_RETRY_NS,
+                    "balance" => recv_ns + EXIT_BALANCE_RETRY_NS,
+                    _ => recv_ns,
+                };
+                self.exit_until.insert(key, until);
+                self.count("exit_misses");
+                let record = json!({
+                    "type": "exit_miss", "t_ns": recv_ns, "asset": s("asset"),
+                    "open_unix": v.get("open_unix"), "reason": reason, "misses": misses,
+                    "error": v.get("error"),
+                });
+                self.write(recv_ns, record, false);
+            }
             "live_exit" => {
                 let (asset, open) = (s("asset"), v.get("open_unix").and_then(Value::as_i64).unwrap_or(0));
                 let (shares, proceeds, fee) =

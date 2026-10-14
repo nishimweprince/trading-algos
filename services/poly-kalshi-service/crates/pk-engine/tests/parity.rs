@@ -93,7 +93,10 @@ fn engine(c: &Cfg, role: Role, sink: Box<dyn Sink + Send>) -> Engine {
     let mut ec = EngineConfig::new(c.params.clone(), ["BTC", "ETH", "SOL", "XRP"].map(String::from).to_vec());
     ec.role = role;
     ec.venue = Some(PaperVenue::new(c.latency_ms));
-    ec.shadow = Shadow::new(parse_variants(DEFAULT_VARIANTS, &c.params).unwrap(), &c.params);
+    // The goldens predate epoch 13's variants: the first 17 are the ones they hold.
+    let mut variants = parse_variants(DEFAULT_VARIANTS, &c.params).unwrap();
+    variants.truncate(17);
+    ec.shadow = Shadow::new(variants, &c.params);
     ec.limit_offset = c.limit_offset;
     ec.size_to_depth = c.size_to_depth;
     let risk = RiskState::new(RiskLimits {

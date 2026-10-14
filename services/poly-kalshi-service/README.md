@@ -7,6 +7,24 @@ Polymarket's bid catches up with Kalshi's price (the active exit), else hold to
 settlement. Kalshi is the signal only; Binance is recorded and compared
 (lead–lag panel) but never decides: from Dublin it arrives after both venues move.
 
+**Epoch 13 (2026-10-14).** The epoch-12 review (−$24.31 live over 43 trades,
+while the touch edge across all crossings was +9.8¢) found three mechanical
+leaks, now closed:
+- **Entries need a tradable edge.** Mid gaps on ZEC's ~0.5-wide Polymarket
+  book led to buys above Kalshi's price. Entries on wide Kalshi books could
+  never use the exit. Live now requires Kalshi spread ≤ 0.02, Polymarket
+  spread ≤ 0.05, Kalshi's price − ask ≥ 0.10 and ask ≥ 0.20
+  (`PK_MAX_KALSHI_SPREAD`, `PK_MAX_POLY_SPREAD`, `PK_MIN_EDGE`,
+  `PK_MIN_ENTRY_PX`).
+- **Exits that land.** The exit sells 3 ticks under the bid, never under
+  entry + fee + 1¢ (`PK_ACTIVE_EXIT_TICKS`). A miss re-arms at once, or 1 s
+  later when the shares were not credited yet.
+- **Fixed size.** Every entry is 10 shares (`PK_ORDER_SHARES`). The 5-share
+  minimum no longer refuses the dearer entries, which left mostly cheap tails.
+
+The shadow's exit is now a FAK a latency later too, and the variants `ktrig`,
+`edge05`, `edge15` and `kspread03` measure the next steps.
+
 **Epoch 11 (2026-10-12).** From the 10-10/11 tape (652 shadow entries replayed
 through the books at 250 ms): threshold 0.20 (was 0.15), limit touch + 6¢ (was
 +2¢), shares sized at the limit, the active exit (`pk_core::exit`), shadow
@@ -157,11 +175,18 @@ Funds at another address (for example the deposit wallet while
 - **Active exit** (`PK_ACTIVE_EXIT`). While a position is open the engine checks
   it on every update: once the held leg's best bid is within 1¢ of Kalshi's
   price for that side (Kalshi spread ≤ 2¢) and above the entry, it writes an
-  `exit_signal` and the bridge sells with a FAK one tick under the bid. What sold
+  `exit_signal` and the bridge sells with a FAK `PK_ACTIVE_EXIT_TICKS` (3) under
+  the bid, never under entry + fee + 1¢. What sold
   comes back as `live_exit` (`reason: "fair"`): an `exit` record, and a `settle`
-  record with `outcome: "exit"` when nothing is left. A signal is not repeated
-  for 5 s; under 1 share the remainder settles. The status page's Exits panel
+  record with `outcome: "exit"` when nothing is left. When nothing sold, the
+  bridge sends `exit_miss`. A killed or refused FAK re-arms at the next update,
+  a balance reject (shares not credited yet) 1 s later, and after 8 misses a
+  signal waits 5 s. An exit's balance reject never counts toward the
+  balance-reject halt; under 1 share the remainder settles. The status page's Exits panel
   compares each exit with holding to settlement.
+- **Fixed shares** (`PK_ORDER_SHARES`, epoch 13: 10). When it is set, every
+  entry orders that many shares and the two sizes below only set the
+  `too_small` check.
 - **Compounding size.** The order size is `PK_ORDER_SIZE_PCT` of the balance (paper:
   ledger cash; live: the wallet's pUSD). It is held in memory and recomputed
   only at a reconciliation with no open position and no order in flight. Every
@@ -236,7 +261,10 @@ restores the one-process layout.
   - No exit, ever.
 - **Stale and wide books** (the review's step 3): `PK_MAX_POLY_LAG_MS` and
   `PK_MAX_POLY_SPREAD` guard the live rule (off by default; the `plag250` and
-  `pspread01` shadow variants measure them). A Polymarket book older than
+  `pspread01` shadow variants measure them). The epoch-13 gates are
+  `PK_MAX_KALSHI_SPREAD`, `PK_MIN_EDGE` (Kalshi's price of the side minus the
+  ask) and `PK_MIN_ENTRY_PX`. A spread, lag or edge gate that fails does not
+  consume the window. A Polymarket book older than
   `PK_AGE_OUTLIER_MS` at a decision is journalled as an `age_outlier` with its
   cause: venue silence, a shard reconnect, or frame lag.
 - **Paper fill** (`pk-engine::paper`):
@@ -262,7 +290,7 @@ Every journal record carries `epoch` (`PK_RESULTS_EPOCH`), `build` (the git comm
 - The status page, `pk readout` and the export use only the current epoch, and the page header shows how many older records were set aside.
 - Epoch 7 starts with the Rust service (`PK_RESULTS_EPOCH=7`, also the default).
 - Changing the epoch archives the paper ledger (`ledger.epoch-<old>.json`) and starts a fresh one. So does switching between paper and live (`ledger.epoch-<old>.live.json` for a live one).
-- `config` hashes `PK_ORDER_SIZE_PCT` rather than the size, and the latency seed rather than the latency: those two move at runtime and are journaled as `sizing` and `latency` records.
+- With `PK_ORDER_SHARES` set, `config` hashes the share count instead of either size. Otherwise it hashes `PK_ORDER_SIZE_PCT` rather than the size, and the latency seed rather than the latency: those two move at runtime and are journaled as `sizing` and `latency` records.
 - Bump the epoch whenever a fix invalidates earlier results.
 - Records from before epochs existed, i.e. the ghost-level period, are always excluded.
 

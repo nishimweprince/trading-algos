@@ -93,7 +93,11 @@ fn cfg() -> ReplayConfig {
         assets: ALL_ASSETS.split(',').map(String::from).collect(),
         latency_ms: 150,
         start_cash: 1e9,
-        shadow: pk_core::shadow::DEFAULT_VARIANTS.into(),
+        // The goldens predate epoch 13's variants: the first 17 are the ones they hold.
+        shadow: {
+            let all: Vec<serde_json::Value> = serde_json::from_str(pk_core::shadow::DEFAULT_VARIANTS).unwrap();
+            serde_json::to_string(&all[..17]).unwrap()
+        },
         limit_offset: 0.0,
         tape_latency: false,
     }
