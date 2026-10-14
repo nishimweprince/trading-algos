@@ -112,22 +112,60 @@ int replay(const std::string& path) {
   return first_hash == second_hash ? 0 : 1;
 }
 
-int calibrate(const std::string& path) {
+int calibrate(const std::string& path, std::size_t train_size, std::size_t evaluation_size) {
   std::ifstream input(path);
   if (!input) { std::cerr << "cannot open calibration file\n"; return 1; }
-  bpmm::RollingRegression regression;
+  if (train_size < 2 || evaluation_size == 0) {
+    std::cerr << "calibration windows must have at least two training rows and one evaluation row\n";
+    return 2;
+  }
+  struct Observation final { double bp; double next_return; };
+  std::vector<Observation> observations;
   double bp = 0;
   double next_return = 0;
   char comma = 0;
   while (input >> bp >> comma >> next_return) {
     if (comma != ',') { std::cerr << "expected bp,next_return CSV\n"; return 1; }
-    regression.push(bp, next_return);
+    observations.push_back({bp, next_return});
   }
-  const auto fit = regression.fit();
-  std::cout << "{\"observations\":" << regression.size() << ",\"intercept\":" << fit.intercept
-            << ",\"slope\":" << fit.slope << ",\"calibrated\":"
-            << (fit.calibrated ? "true" : "false") << "}\n";
-  return fit.calibrated ? 0 : 1;
+  if (observations.size() < train_size + evaluation_size) {
+    std::cerr << "calibration file does not contain one complete train/evaluation window\n";
+    return 1;
+  }
+  std::size_t windows = 0;
+  std::size_t evaluated = 0;
+  std::size_t direction_correct = 0;
+  double squared_error = 0;
+  double slope_sum = 0;
+  for (std::size_t start = 0; start + train_size + evaluation_size <= observations.size();
+       start += evaluation_size) {
+    bpmm::RollingRegression regression(train_size);
+    for (std::size_t i = start; i < start + train_size; ++i)
+      regression.push(observations[i].bp, observations[i].next_return);
+    const auto fit = regression.fit();
+    if (!fit.calibrated) {
+      std::cerr << "singular calibration window at row " << start << '\n';
+      return 1;
+    }
+    slope_sum += fit.slope;
+    ++windows;
+    for (std::size_t i = start + train_size;
+         i < start + train_size + evaluation_size; ++i) {
+      const auto forecast = fit.predict(observations[i].bp);
+      const auto error = forecast - observations[i].next_return;
+      squared_error += error * error;
+      if ((forecast >= 0) == (observations[i].next_return >= 0)) ++direction_correct;
+      ++evaluated;
+    }
+  }
+  const auto window_count = static_cast<double>(windows);
+  const auto evaluated_count = static_cast<double>(evaluated);
+  std::cout << "{\"observations\":" << observations.size() << ",\"train_size\":" << train_size
+            << ",\"evaluation_size\":" << evaluation_size << ",\"windows\":" << windows
+            << ",\"evaluated\":" << evaluated << ",\"mean_slope\":" << slope_sum / window_count
+            << ",\"mse\":" << squared_error / evaluated_count << ",\"direction_accuracy\":"
+            << static_cast<double>(direction_correct) / evaluated_count << "}\n";
+  return 0;
 }
 
 int daily_report(const std::string& path) {
@@ -473,7 +511,11 @@ int main(int argc, char** argv) {
     catch (const std::exception& error) { std::cerr << "configuration: " << error.what() << '\n'; return 2; }
   }
   if (command == "replay" && argc >= 3) return replay(argv[2]);
-  if (command == "calibrate" && argc >= 3) return calibrate(argv[2]);
+  if (command == "calibrate" && argc >= 3) {
+    const auto train = static_cast<std::size_t>(std::stoull(option(argc, argv, "--train", "51840")));
+    const auto evaluation = static_cast<std::size_t>(std::stoull(option(argc, argv, "--evaluate", "12959")));
+    return calibrate(argv[2], train, evaluation);
+  }
   if (command == "daily-report" && argc >= 3) return daily_report(argv[2]);
   if (command == "drill") return drill();
   if (command == "gapcheck" && argc >= 3) {

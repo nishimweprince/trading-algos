@@ -40,6 +40,10 @@ build/release/bar-mm calibrate research/bp_returns.csv
 
 Calibration CSV contains `bp,next_minute_return`, one pair per line. Preparing
 those pairs must respect the timestamp rules in the strategy specification.
+The command walks 51,840-row training windows followed by frozen 12,959-row
+evaluation windows and reports mean slope, MSE, and directional accuracy. The
+`--train` and `--evaluate` options exist for fixture tests; research reports use
+the defaults.
 
 The status server binds only to `127.0.0.1`: `/health/live`, `/health/ready`,
 and `/metrics` return the allowlisted shadow status JSON. A kill file cancels
