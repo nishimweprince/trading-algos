@@ -17,5 +17,6 @@
   "quoter": {"maker_fee_bp": 0, "max_spread_bp": 4, "cooldown_ms": 5000,
              "entry_timeout_ms": 30000, "reverse_bp": 2, "max_reprices": 1,
              "target_gap_frac": 0.6, "close_gap_bp": 0.5, "stop_mult": 1.5,
+             "hard_stop_bp": 12, "exit_grace_ms": 10000,
              "min_entry_imb": 0.5, "cancel_imb": 0.25}
 }

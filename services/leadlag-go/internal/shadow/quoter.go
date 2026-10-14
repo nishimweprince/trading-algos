@@ -20,6 +20,12 @@ import (
 // most close_gap_bp, and is flattened as a taker after horizon_ms or when the
 // follower moves stop_mult × gap against it.
 //
+// Exit ladder (explore-4). With hard_stop_bp > 0, stop_mult × gap is a soft
+// stop: the exit moves to our own touch (reason stop_soft) instead of
+// crossing, and only an adverse move of hard_stop_bp crosses (stop). With
+// exit_grace_ms > 0, the horizon also moves the exit to the touch (timeout),
+// crossing only exit_grace_ms later. An exit at the touch follows it.
+//
 // Queue imbalance (explore-4): our side's share of the follower's L1 size,
 // bid/(bid+ask) for a long and ask/(bid+ask) for a short. A thin queue on our
 // side is the one about to be swept, and a fill there is adversely selected
@@ -40,6 +46,10 @@ type QuoterCfg struct {
 	CloseGapBp     float64 `json:"close_gap_bp,omitempty"`
 	StopMult       float64 `json:"stop_mult,omitempty"`
 
+	// HardStopBp, ExitGraceMs: the exit ladder, 0: off.
+	HardStopBp  float64 `json:"hard_stop_bp,omitempty"`
+	ExitGraceMs int64   `json:"exit_grace_ms,omitempty"`
+
 	// MinEntryImb, CancelImb: queue-imbalance gate and cancel, 0: off.
 	MinEntryImb float64 `json:"min_entry_imb,omitempty"`
 	CancelImb   float64 `json:"cancel_imb,omitempty"`
@@ -56,6 +66,9 @@ func (c *QuoterCfg) validate(p *Params) error {
 	}
 	if c.EntryTimeoutMs <= 0 || c.ReverseBp < 0 || c.MaxReprices < 0 || c.TargetGapFrac < 0 || c.CloseGapBp < 0 || c.StopMult < 0 {
 		return errors.New("shadow: quoter needs entry_timeout_ms > 0 and reverse_bp, max_reprices, target_gap_frac, close_gap_bp, stop_mult >= 0")
+	}
+	if c.HardStopBp < 0 || c.ExitGraceMs < 0 {
+		return errors.New("shadow: quoter hard_stop_bp and exit_grace_ms must be >= 0")
 	}
 	if c.MinEntryImb < 0 || c.MinEntryImb > 1 || c.CancelImb < 0 || c.CancelImb > 1 ||
 		(c.MinEntryImb > 0 && c.CancelImb >= c.MinEntryImb) {
@@ -504,6 +517,18 @@ func (e *Engine) qExitAtTouch(f int, s *qslot, now int64) bool {
 	return true
 }
 
+// qToTouch moves the exit to our own touch once (exit mode 1), naming why
+// when that made it more aggressive; later quotes keep it at the touch.
+func (e *Engine) qToTouch(f int, s *qslot, now int64, why string) {
+	if s.exitMode == 1 {
+		return
+	}
+	s.exitMode = 1
+	if e.qExitAtTouch(f, s, now) {
+		s.reason = why
+	}
+}
+
 // qFlatten cancels the resting exit and schedules a taker exit for when the cancel lands.
 func (e *Engine) qFlatten(s *qslot, now int64, why string) {
 	s.reason = why
@@ -554,19 +579,30 @@ func (e *Engine) qTimers(now int64) {
 			if !s.exit.active() { // the exit was rejected (it would have crossed): rest it at the touch
 				e.qExitAtTouch(f, s, now)
 			}
-			adverse := float64(s.dir) * (mid - s.entryPx) / s.entryPx * 1e4
+			adverse := 0.0
+			if qt.bid > 0 && qt.ask > qt.bid {
+				adverse = float64(s.dir) * (mid - s.entryPx) / s.entryPx * 1e4
+			}
+			horizon := s.fillNs + e.p.HorizonMs*1_000_000
+			soft := q.cfg.StopMult > 0 && adverse <= -q.cfg.StopMult*s.gap
 			switch {
-			case now >= s.fillNs+e.p.HorizonMs*1_000_000:
-				e.qFlatten(s, now, "timeout")
-			case q.cfg.StopMult > 0 && adverse <= -q.cfg.StopMult*s.gap:
+			case q.cfg.HardStopBp > 0 && adverse <= -q.cfg.HardStopBp:
 				e.qFlatten(s, now, "stop")
+			case now >= horizon+q.cfg.ExitGraceMs*1_000_000:
+				e.qFlatten(s, now, "timeout")
+			case now >= horizon: // exit_grace_ms > 0: rest at the touch first
+				e.qToTouch(f, s, now, "timeout")
+			case soft && q.cfg.HardStopBp == 0:
+				e.qFlatten(s, now, "stop")
+			case soft:
+				e.qToTouch(f, s, now, "stop_soft")
 			case s.exitMode == 0:
 				if r, ok := e.qResidual(f, s); ok && r <= q.cfg.CloseGapBp {
-					s.exitMode = 1
-					if e.qExitAtTouch(f, s, now) {
-						s.reason = "gap_closed"
-					}
+					e.qToTouch(f, s, now, "gap_closed")
 				}
+			}
+			if s.state == qOpen && s.exitMode == 1 {
+				e.qExitAtTouch(f, s, now) // follow the touch as it moves away
 			}
 		case qFlatting:
 			if now >= s.flatNs {

@@ -169,7 +169,8 @@ type Trade struct {
 	NetUSD      float64 `json:"net_usd"`
 	ExitKind    string  `json:"exit_kind"` // "taker" | "maker"
 	// ExitReason: why the exit started: timeout (the horizon), gap_closed,
-	// target (the resting target filled), stop.
+	// target (the resting target filled), stop, stop_soft (the soft stop moved
+	// the exit to the touch).
 	ExitReason string `json:"exit_reason,omitempty"`
 	// |leader move| over the window, the follower's own signed move over it,
 	// and the gap (leader − follower), all in bp.
@@ -425,7 +426,7 @@ func New(p Params, symbols []string, halted *atomic.Bool, sink func(*Trade)) *En
 }
 
 // exitReasons index ByReason.
-var exitReasons = [...]string{"timeout", "gap_closed", "target", "stop"}
+var exitReasons = [...]string{"timeout", "gap_closed", "target", "stop", "stop_soft"}
 
 func reasonIndex(r string) int {
 	for i, x := range exitReasons {

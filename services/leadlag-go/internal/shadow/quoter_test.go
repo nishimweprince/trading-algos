@@ -222,6 +222,78 @@ func TestQuoterCancelsWhenItsSideThins(t *testing.T) {
 	}
 }
 
+// ladderParams: explore-4's exit ladder on the test quoter (soft stop at
+// 0.5 × gap = 3 bp, hard stop 12 bp, 2 s of grace after the 5 s horizon).
+func ladderParams() Params {
+	p := quoterParams()
+	p.Quoter.StopMult, p.Quoter.HardStopBp, p.Quoter.ExitGraceMs = 0.5, 12, 2000
+	return p
+}
+
+// filledLong builds the feed and fills the long entry at 99.99 at 20.3 s.
+func filledLong(q *qfeed, trades ...[3]float64) []model.Event {
+	q.build()
+	q.trade(20_300, 99.98, 1, true)
+	for _, t := range trades { // [ms, px, qty] buy aggressors
+		q.trade(int64(t[0]), t[1], t[2], false)
+	}
+	sortByRecv(q.evs)
+	return q.evs
+}
+
+func TestQuoterSoftStopRestsAtTheTouchAndFollowsIt(t *testing.T) {
+	sol := func(t int64) float64 {
+		switch {
+		case t >= 21_500:
+			return 99.93 // ask 99.94: the exit follows it down
+		case t >= 21_000:
+			return 99.95 // −4 bp: past the 3 bp soft stop, short of the 12 bp hard stop
+		}
+		return 100
+	}
+	q := &qfeed{endMs: 25_000, btc: btcJump, sol: sol}
+	_, trades, _ := runQ(ladderParams(), filledLong(q, [3]float64{22_000, 99.95, 1}))
+	if len(trades) != 1 {
+		t.Fatalf("trades %d", len(trades))
+	}
+	if tr := trades[0]; tr.ExitReason != "stop_soft" || tr.ExitKind != "maker" || tr.FeesBp != 0 || tr.ExitPx != 99.94 {
+		t.Fatalf("trade %+v", tr)
+	}
+}
+
+func TestQuoterHardStopCrosses(t *testing.T) {
+	q := &qfeed{endMs: 25_000, btc: btcJump, sol: step(21_000, 100, 99.85)} // −14 bp
+	_, trades, _ := runQ(ladderParams(), filledLong(q))
+	if len(trades) != 1 {
+		t.Fatalf("trades %d", len(trades))
+	}
+	if tr := trades[0]; tr.ExitReason != "stop" || tr.ExitKind != "taker" || tr.FeesBp != 4 || tr.ExitPx != 99.84 {
+		t.Fatalf("trade %+v", tr)
+	}
+}
+
+func TestQuoterHorizonRestsThenCrossesAfterTheGrace(t *testing.T) {
+	flat := step(99_999, 100, 100)
+	// Nobody lifts the touch: a taker exit 5 s + 2 s after the fill.
+	q := &qfeed{endMs: 30_000, btc: btcJump, sol: flat}
+	_, trades, _ := runQ(ladderParams(), filledLong(q))
+	if len(trades) != 1 || trades[0].ExitReason != "timeout" || trades[0].ExitKind != "taker" {
+		t.Fatalf("trades %+v", trades)
+	}
+	if held := (trades[0].ExitNs - trades[0].EntryNs) / ms; held < 7000 || held > 7200 {
+		t.Fatalf("held %d ms", held)
+	}
+	// A buyer lifts our ask (moved from the 100.03 target to the 100.01 touch) inside the grace: a maker exit.
+	q = &qfeed{endMs: 30_000, btc: btcJump, sol: flat}
+	_, trades, _ = runQ(ladderParams(), filledLong(q, [3]float64{26_000, 100.02, 1}))
+	if len(trades) != 1 {
+		t.Fatalf("trades %d", len(trades))
+	}
+	if tr := trades[0]; tr.ExitReason != "timeout" || tr.ExitKind != "maker" || tr.ExitPx != 100.01 {
+		t.Fatalf("trade %+v", tr)
+	}
+}
+
 func TestQuoterReplayIsDeterministic(t *testing.T) {
 	q := &qfeed{endMs: 28_000, btc: btcJump, sol: step(21_000, 100, 100.05)}
 	q.build()
@@ -248,6 +320,11 @@ func TestQuoterParams(t *testing.T) {
 	bad.Quoter.MinEntryImb, bad.Quoter.CancelImb = 0.4, 0.4
 	if bad.Validate() == nil {
 		t.Fatal("cancel_imb >= min_entry_imb accepted")
+	}
+	bad = quoterParams()
+	bad.Quoter.HardStopBp = -1
+	if bad.Validate() == nil {
+		t.Fatal("hard_stop_bp < 0 accepted")
 	}
 	bad = quoterParams()
 	bad.Quoter.MinEntryImb = 1.5
