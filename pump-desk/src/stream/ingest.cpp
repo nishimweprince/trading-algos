@@ -68,9 +68,10 @@ struct Ingest::Impl {
     bool changed = false;
     WatchCmd c;
     while (sh.watch_cmds.try_pop(c)) {
-      auto it = std::find(spec.watched.begin(), spec.watched.end(), c.key);
-      if (c.add && it == spec.watched.end()) { spec.watched.push_back(c.key); changed = true; }
-      if (!c.add && it != spec.watched.end()) { *it = spec.watched.back(); spec.watched.pop_back(); changed = true; }
+      std::vector<Pubkey>& keys = c.kind == WatchKind::PoolTxs ? spec.pool_txs : spec.watched;
+      auto it = std::find(keys.begin(), keys.end(), c.key);
+      if (c.add && it == keys.end()) { keys.push_back(c.key); changed = true; }
+      if (!c.add && it != keys.end()) { *it = keys.back(); keys.pop_back(); changed = true; }
     }
     return changed;
   }

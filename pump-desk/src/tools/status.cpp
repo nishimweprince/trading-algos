@@ -398,6 +398,62 @@ std::string status_json(const std::string& path, int hours, int& http) {
   }
   err_json += ']';
 
+  // Buys per leader class, and the wallets landing ahead of us (rival_tx before our fill).
+  auto rows_json = [&](const char* sql, auto&& row_fn, std::string& out_json) -> bool {
+    Stmt st;
+    if (!prepare(db.p, sql, st, err)) return false;
+    sqlite3_bind_int64(st.s, 1, since);
+    out_json = "[";
+    bool first_row = true;
+    int rc;
+    while ((rc = sqlite3_step(st.s)) == SQLITE_ROW) {
+      if (!first_row) out_json += ',';
+      first_row = false;
+      Js row;
+      row_fn(st.s, row);
+      out_json += row.done();
+    }
+    out_json += ']';
+    if (rc != SQLITE_DONE) err = sqlite3_errmsg(db.p);
+    return rc == SQLITE_DONE;
+  };
+  std::string routing_json, rivals_json;
+  bool routing_ok = rows_json(
+      "SELECT r.text, COUNT(*), COALESCE(SUM(f.i1 = 1), 0), COALESCE(SUM(f.text LIKE 'guard_%'), 0),"
+      " AVG(CASE WHEN f.i1 = 1 AND f.d5 = 1 AND f.i6 >= 0 THEN f.i6 END), AVG(r.i1)"
+      " FROM events r LEFT JOIN events f ON f.type='fill' AND f.sig=r.sig"
+      " WHERE r.type='route' AND r.i5=0 AND r.ts>=?1 GROUP BY r.text ORDER BY 2 DESC",
+      [](sqlite3_stmt* st, Js& row) {
+        row.str("class", col_s(st, 0));
+        row.n("buys", col_i(st, 1));
+        row.n("landed", col_i(st, 2));
+        row.n("beaten", col_i(st, 3));
+        if (sqlite3_column_type(st, 4) == SQLITE_NULL) row.nul("avg_slots");
+        else row.f("avg_slots", col_d(st, 4));
+        row.f("avg_cu_price", col_d(st, 5));
+      },
+      routing_json);
+  bool rivals_ok = routing_ok && rows_json(
+      "SELECT r.a, COUNT(DISTINCT r.b), COUNT(*) FROM events r"
+      " JOIN events o ON o.type='order' AND o.i0=0 AND o.b=r.b"
+      " LEFT JOIN events f ON f.type='fill' AND f.i0=0 AND f.sig=o.sig AND f.d5=1 AND f.i6>=0"
+      " WHERE r.type='rival_tx' AND r.i4>0 AND r.d1<0.5 AND r.ts>=?1"
+      " AND (f.id IS NULL OR r.slot < f.slot OR (r.slot = f.slot AND r.i0 >= 0 AND f.i5 >= 0 AND r.i0 < f.i5))"
+      " GROUP BY r.a ORDER BY 2 DESC, 3 DESC LIMIT 5",
+      [](sqlite3_stmt* st, Js& row) {
+        row.str("wallet", col_s(st, 0));
+        row.n("pools", col_i(st, 1));
+        row.n("txs", col_i(st, 2));
+      },
+      rivals_json);
+  if (!rivals_ok) {
+    http = 500;
+    Js j;
+    j.b("ok", false);
+    j.str("error", err);
+    return j.done();
+  }
+
   Js out;
   out.b("ok", true);
   out.n("hours", hours);
@@ -406,6 +462,8 @@ std::string status_json(const std::string& path, int hours, int& http) {
   out.raw("window", window.done());
   out.raw("open", open_json);
   out.raw("errors", err_json);
+  out.raw("routing", routing_json);
+  out.raw("rivals", rivals_json);
   return out.done();
 }
 
@@ -474,7 +532,8 @@ const char kPage[] = R"page(<!DOCTYPE html>
   dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
   table { width: 100%; border-collapse: collapse; }
   td { padding: 0.35rem 0.75rem 0.35rem 0; vertical-align: top; font-variant-numeric: tabular-nums; }
-  td:last-child { padding-right: 0; text-align: right; }
+  th { padding: 0 0.75rem 0.35rem 0; text-align: left; font-weight: 500; color: var(--muted); }
+  td:last-child, th:last-child { padding-right: 0; text-align: right; }
   .mint { word-break: break-all; }
   .err { list-style: none; margin: 0; padding: 0; }
   .err li { margin: 0 0 0.55rem; }
@@ -507,6 +566,14 @@ const char kPage[] = R"page(<!DOCTYPE html>
   <section>
     <h2>Open positions</h2>
     <div id="positions"></div>
+  </section>
+  <section>
+    <h2>Buys by leader</h2>
+    <div id="routing"></div>
+  </section>
+  <section>
+    <h2>Landing ahead of us</h2>
+    <div id="rivals"></div>
   </section>
   <section>
     <h2>Send errors</h2>
@@ -553,6 +620,35 @@ function lat(sample, unit) {
   const p99 = Number(sample.p99).toLocaleString(undefined, { maximumFractionDigits: 1 });
   const u = unit ? " " + unit : "";
   return "p50 " + p50 + u + ", p99 " + p99 + u + " (n=" + num(sample.n) + ")";
+}
+function table(box, rows, empty, head, cells) {
+  box.replaceChildren();
+  if (!rows.length) {
+    const p = document.createElement("p");
+    p.className = "empty";
+    p.textContent = empty;
+    box.append(p);
+    return;
+  }
+  const t = document.createElement("table");
+  const hr = document.createElement("tr");
+  for (const h of head) {
+    const th = document.createElement("th");
+    th.textContent = h;
+    hr.append(th);
+  }
+  t.append(hr);
+  for (const r of rows) {
+    const tr = document.createElement("tr");
+    cells(r).forEach((v, i) => {
+      const td = document.createElement("td");
+      if (i === 0) td.className = "mint";
+      td.textContent = v;
+      tr.append(td);
+    });
+    t.append(tr);
+  }
+  box.append(t);
 }
 function setStream(text, bad) {
   const el = document.getElementById("stream");
@@ -649,6 +745,12 @@ function render(j) {
     }
     pos.append(table);
   }
+  table(document.getElementById("routing"), j.routing || [], "No buys in this window",
+    ["Leader", "Buys", "Landed", "Beaten", "Slots to land", "CU price"],
+    (r) => [r["class"], num(r.buys), num(r.landed), num(r.beaten),
+            r.avg_slots === null ? "\u2014" : Number(r.avg_slots).toFixed(2), num(Math.round(r.avg_cu_price || 0))]);
+  table(document.getElementById("rivals"), j.rivals || [], "Nobody landed ahead of our buys",
+    ["Wallet", "Pools", "Txs"], (r) => [r.wallet, num(r.pools), num(r.txs)]);
   const box = document.getElementById("errors");
   box.replaceChildren();
   const errs = j.errors || [];

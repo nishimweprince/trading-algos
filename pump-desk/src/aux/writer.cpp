@@ -42,6 +42,8 @@ const char* event_name(Ev t) {
     case Ev::Kill: return "kill";
     case Ev::Stats: return "stats";
     case Ev::Warn: return "warn";
+    case Ev::Route: return "route";
+    case Ev::RivalTx: return "rival_tx";
   }
   return "unknown";
 }
@@ -126,6 +128,19 @@ std::string event_json(const Event& e) {
           .i("base_delta", e.i[2]).i("sol_delta", e.i[3]).i("sent_to_fill_ns", e.i[4]).d("price", e.d[0])
           .i("tx_index", e.i[5]).i("slots_to_land", e.i[6]).i("shred_to_seen_ns", e.i[7]).d("writes_ahead", e.d[1])
           .d("completed_to_seen_ms", e.d[2]).str("via", escape(e.text));
+      if (!is_zero(e.c)) j.str("beaten_by", b58(e.c));
+      break;
+    case Ev::Route:
+      j.str("sig", sig_or_empty(e.sig)).str("side", e.i[5] == 0 ? "buy" : "sell").str("leader_class", escape(e.text))
+          .str("leader", key_or_empty(e.a)).i("cu_price", e.i[1]).i("cu_limit", e.i[2]).b("jito", e.i[3])
+          .i("guards", e.i[4]).i("sender_tip", e.i[6]).b("routed", e.i[7]);
+      break;
+    case Ev::RivalTx:
+      j.str("sig", sig_or_empty(e.sig)).str("signer", b58(e.a)).str("pool", b58(e.b)).i("tx_index", e.i[0])
+          .i("cu_price", e.i[1]).i("cu_limit", e.i[2]).i("tip", e.i[3]).str("tip_to", key_or_empty(e.c))
+          .str("route", e.d[0] == 1 ? "sender" : e.d[0] == 2 ? "jito" : e.d[0] == 3 ? "other" : "none")
+          .i("quote_delta", e.i[4]).str("leader_class", leader_class_name(LeaderClass(e.i[5]))).str("leader", escape(e.text))
+          .i("slots_after_migrate", e.i[6]).i("cu_consumed", e.i[7]).b("failed", e.d[1] >= 0.5);
       break;
     case Ev::PositionOpen:
       j.str("mint", b58(e.a)).str("curve", b58(e.b)).str("coin_creator", key_or_empty(e.c)).str("buy_sig", sig_or_empty(e.sig))
@@ -196,7 +211,15 @@ void Writer::open() {
   CREATE VIEW fills AS SELECT ts, slot, CASE i0 WHEN 0 THEN 'buy' ELSE 'sell' END AS side, sig, a AS mint,
     i1 AS ok, i2 AS base_delta, i3 AS sol_delta, i4 AS sent_to_fill_ns, d0 AS price, text AS via,
     d5 = 1 AS has_landing, i5 AS tx_index, i6 AS slots_to_land, i7 AS shred_to_seen_ns, d1 AS writes_ahead,
-    d2 AS completed_to_seen_ms FROM events WHERE type='fill';
+    d2 AS completed_to_seen_ms, c AS beaten_by FROM events WHERE type='fill';
+  CREATE VIEW IF NOT EXISTS routes AS SELECT ts, slot AS target_slot, sig, CASE i5 WHEN 0 THEN 'buy' ELSE 'sell' END AS side,
+    text AS leader_class, a AS leader, i1 AS cu_price, i2 AS cu_limit, i3 AS jito, i4 AS guards, i6 AS sender_tip,
+    i7 AS routed FROM events WHERE type='route';
+  CREATE VIEW IF NOT EXISTS rival_txs AS SELECT ts, slot, sig, a AS signer, b AS pool, i0 AS tx_index, i1 AS cu_price,
+    i2 AS cu_limit, i3 AS tip, c AS tip_to, CASE CAST(d0 AS INTEGER) WHEN 1 THEN 'sender' WHEN 2 THEN 'jito' WHEN 3 THEN 'other' ELSE 'none' END AS route,
+    i4 AS quote_delta, CASE i5 WHEN 1 THEN 'bam' WHEN 2 THEN 'firedancer' ELSE 'agave' END AS leader_class, text AS leader,
+    i6 AS slots_after_migrate, i7 AS cu_consumed, d1 AS failed FROM events WHERE type='rival_tx';
+  CREATE INDEX IF NOT EXISTS events_type_b ON events(type, b);
   CREATE VIEW IF NOT EXISTS migrations AS SELECT ts, slot, sig, a AS mint, b AS caller, i0 AS landed, i1 AS tracked,
     i2 AS fired, i3 AS curve_buy_before, i4 AS pool_buy_after FROM events WHERE type='migrate';
   )");
@@ -336,7 +359,9 @@ void Writer::write(const Event& e) {
     sqlite3_step(p);
   }
   if (e.type == Ev::Stats) status_line(e);
-  else if (e.type != Ev::CurveAdmit && e.type != Ev::Migrate && e.type != Ev::SendAck) log_.info(line);
+  else if (e.type != Ev::CurveAdmit && e.type != Ev::Migrate && e.type != Ev::SendAck && e.type != Ev::RivalTx &&
+           e.type != Ev::Route)
+    log_.info(line);
   else if (e.type == Ev::SendAck && e.i[2] == 0) log_.warn(line);
 }
 

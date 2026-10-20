@@ -1,8 +1,11 @@
 #include "aux/aux.hpp"
 
+#include <simdjson.h>
 #include <sys/stat.h>
 
 #include <chrono>
+#include <fstream>
+#include <sstream>
 #include <thread>
 #include <vector>
 
@@ -24,7 +27,51 @@ bool file_exists(const std::string& path) {
   return !path.empty() && ::stat(path.c_str(), &st) == 0;
 }
 
+int64_t mtime_of(const std::string& path) {
+  struct stat st;
+  if (path.empty() || ::stat(path.c_str(), &st) != 0) return -1;
+  return int64_t(st.st_mtime);
+}
+
 }  // namespace
+
+RivalsFile parse_rivals(std::string_view json, const Pubkey& self, size_t max_rivals) {
+  simdjson::dom::parser p;
+  simdjson::dom::element root = p.parse(json.data(), json.size());
+  RivalsFile out;
+  simdjson::dom::array guard;
+  if (root["guard"].get(guard) == simdjson::SUCCESS) {
+    for (simdjson::dom::element v : guard) {
+      std::string_view s;
+      Pubkey k{};
+      if (out.set.n >= std::min(max_rivals, MAX_RIVALS) || v.get(s) != simdjson::SUCCESS || !b58_decode32(s, k) || k == self) continue;
+      out.set.wallets[out.set.n++] = k;
+    }
+  }
+  for (size_t c = 0; c < N_LEADER_CLASSES; ++c) {
+    uint64_t v = 0;
+    if (root["beat_cu_price"][leader_class_name(LeaderClass(c))].get(v) == simdjson::SUCCESS) out.beat_cu_price[c] = v;
+  }
+  return out;
+}
+
+RoutePolicy make_route_policy(const Config& cfg, uint64_t estimate, const uint64_t beat_cu_price[N_LEADER_CLASSES]) {
+  RoutePolicy rp;
+  const Config::RouteClass* rcs[N_LEADER_CLASSES] = {&cfg.routing.agave, &cfg.routing.bam, &cfg.routing.firedancer};
+  uint64_t base = estimate ? estimate : cfg.fees.cu_price_default;
+  for (size_t c = 0; c < N_LEADER_CLASSES; ++c) {
+    const Config::RouteClass& rc = *rcs[c];
+    RouteProfile& p = rp.by_class[c];
+    uint64_t est = uint64_t(double(base) * cfg.entry.priority_multiplier * rc.cu_price_multiplier);
+    if (rc.cu_price_mode == "floor") p.cu_price = cfg.fees.cu_price_floor;
+    else if (rc.cu_price_mode == "beat_rivals") p.cu_price = std::max(est, std::min(beat_cu_price[c], cfg.fees.cu_price_cap));
+    else p.cu_price = est;
+    p.cu_limit = rc.cu_limit;
+    p.sender_tip = rc.sender_tip_lamports ? rc.sender_tip_lamports : cfg.sender.tip_lamports;
+    p.jito = rc.jito && cfg.jito.enabled;
+  }
+  return rp;
+}
 
 void refresh_amm_config(Rpc& rpc, Shared& sh) {
   const Derived& d = derived();
@@ -43,8 +90,11 @@ void run_aux_fast(const Config& cfg, Shared& sh, const Pubkey& wallet, Logger& l
   name_thread("pd-aux-fast");
   pin_thread(cfg.threads.aux_cpu);
   Rpc rpc(cfg.rpc.http_url, cfg.rpc.timeout_ms);
-  uint64_t next_bh = 0, next_amm = 0, next_bal = 0, next_fee = 0, next_kill = 0;
+  uint64_t next_bh = 0, next_amm = 0, next_bal = 0, next_fee = 0, next_kill = 0, next_rivals = 0;
   int bh_failures = 0;
+  int64_t rivals_mtime = -2;
+  RivalsFile rivals;
+  bool routes_dirty = true;
   while (!sh.stop.load(std::memory_order_relaxed)) {
     uint64_t now = now_ns();
     try {
@@ -84,6 +134,31 @@ void run_aux_fast(const Config& cfg, Shared& sh, const Pubkey& wallet, Logger& l
           est = std::max(cfg.fees.cu_price_floor, std::min(cfg.fees.cu_price_cap, est));
           sh.cu_price.store(est);
         }
+        routes_dirty = true;
+      }
+      if (now >= next_rivals) {
+        next_rivals = now + 1'000'000'000ULL;
+        int64_t m = mtime_of(cfg.routing.rivals_path);
+        if (m != rivals_mtime) {
+          rivals_mtime = m;
+          if (m < 0) {
+            rivals = RivalsFile{};
+          } else {
+            std::ifstream f(cfg.routing.rivals_path);
+            std::stringstream ss;
+            ss << f.rdbuf();
+            rivals = parse_rivals(ss.str(), wallet, size_t(cfg.lighthouse.max_rivals));
+          }
+          sh.rivals.store(rivals.set);
+          log.info("rivals: " + std::to_string(rivals.set.n) + " guarded, beat cu_price agave " +
+                   std::to_string(rivals.beat_cu_price[0]) + " / bam " + std::to_string(rivals.beat_cu_price[1]) +
+                   " / firedancer " + std::to_string(rivals.beat_cu_price[2]));
+          routes_dirty = true;
+        }
+      }
+      if (routes_dirty && cfg.routing.enabled) {
+        routes_dirty = false;
+        sh.routes.store(make_route_policy(cfg, sh.cu_price.load(), rivals.beat_cu_price));
       }
     } catch (const std::exception& e) {
       log.warn(std::string("aux-fast: ") + e.what());

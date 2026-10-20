@@ -116,6 +116,38 @@ struct Config {
     std::vector<std::string> tip_accounts;
   } jito;
 
+  /** Per leader class: how this client orders transactions decides what we pay for. */
+  struct RouteClass {
+    std::string cu_price_mode = "estimate";  // estimate | floor | beat_rivals
+    double cu_price_multiplier = 1;           // on top of entry.priority_multiplier
+    uint32_t cu_limit = 0;                    // 0 = measured from our own fills
+    uint64_t sender_tip_lamports = 0;         // 0 = sender.tip_lamports
+    bool jito = false;                        // also send via Jito (needs jito.enabled)
+  };
+
+  struct Routing {
+    bool enabled = true;
+    int lookahead_slots = 1;  // price for the leader of (processed tip + this)
+    std::string bam_validators_path = "data/bam_validators.json";
+    int cluster_nodes_refresh_s = 600;
+    std::string rivals_path = "data/rivals.json";  // pump-desk-report --rivals writes it
+    int rival_window_slots = 4;     // record pool txs up to migrate slot + this
+    double cu_limit_margin_pct = 15;
+    int cu_samples_min = 8;         // measured CU needs this many buy fills, else entry.cu_limit
+    // Agave/Jito: priority decides. BAM: arrival decides, priority doesn't count.
+    // Firedancer: fee per requested CU decides.
+    RouteClass agave{"beat_rivals"}, bam{"floor"}, firedancer{"beat_rivals"};
+  } routing;
+
+  /** Lighthouse assertions in front of every buy. */
+  struct Lighthouse {
+    bool enabled = true;
+    bool vault_guard = true;       // revert if the pool quote vault grew past what we priced
+    int vault_tolerance_bps = 50;
+    bool rival_guard = true;       // revert if a listed rival already holds the mint
+    int max_rivals = 3;            // <= MAX_RIVALS (sol/swap.hpp)
+  } lighthouse;
+
   struct Threads {
     int ingest_cpu = 1, logic_cpu = 2, exec_cpu = 3, aux_cpu = -1;
     int fifo_priority = 0;

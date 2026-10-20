@@ -192,6 +192,19 @@ std::string Rpc::latest_signature_for(const Pubkey& address) {
   return "";
 }
 
+Rpc::EpochInfo Rpc::epoch_info(const char* commitment) {
+  std::string body = call("getEpochInfo", std::string("[{\"commitment\":\"") + commitment + "\"}]");
+  simdjson::dom::parser p;
+  element r = p.parse(body)["result"];
+  EpochInfo e;
+  e.epoch = u64_of(r["epoch"]);
+  e.absolute_slot = u64_of(r["absoluteSlot"]);
+  e.slot_index = u64_of(r["slotIndex"]);
+  e.slots_in_epoch = u64_of(r["slotsInEpoch"]);
+  if (!e.slots_in_epoch || e.slot_index > e.absolute_slot) throw std::runtime_error("bad getEpochInfo");
+  return e;
+}
+
 uint64_t Rpc::priority_fee_estimate(const std::vector<Pubkey>& accounts, const char* level) {
   try {
     std::string body = call("getPriorityFeeEstimate", "[{\"accountKeys\":" + keys_json(accounts) +

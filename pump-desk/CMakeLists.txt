@@ -33,6 +33,7 @@ add_library(pdcore STATIC
   src/sol/amm.cpp
   src/sol/constants.cpp
   src/sol/crypto.cpp
+  src/sol/lighthouse.cpp
   src/sol/swap.cpp
   src/sol/tx.cpp
   src/stream/request.cpp
@@ -42,6 +43,7 @@ add_library(pdcore STATIC
   src/logic/txparse.cpp
   src/net/conn.cpp
   src/aux/aux.cpp
+  src/aux/leaders.cpp
   src/aux/rpc.cpp
   src/aux/writer.cpp
   src/exec/exec.cpp)

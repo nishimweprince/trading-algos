@@ -5,6 +5,8 @@
 #include <sstream>
 #include <stdexcept>
 
+#include "sol/swap.hpp"
+
 namespace pd {
 
 namespace {
@@ -155,6 +157,19 @@ Config load_config(const std::string& path) {
   G(sender, connections); G(sender, ping_ms); G(sender, tip_accounts);
   G(sender, retry_429_ms); G(sender, max_429_retries);
   G(jito, enabled); G(jito, url); G(jito, tip_lamports); G(jito, tip_accounts);
+  G(routing, enabled); G(routing, lookahead_slots); G(routing, bam_validators_path);
+  G(routing, cluster_nodes_refresh_s); G(routing, rivals_path); G(routing, rival_window_slots);
+  G(routing, cu_limit_margin_pct); G(routing, cu_samples_min);
+  for (auto [name, rc] : {std::pair{"agave", &c.routing.agave}, {"bam", &c.routing.bam}, {"firedancer", &c.routing.firedancer}}) {
+    std::string sec = std::string("routing.") + name + ".";
+    r.get(sec + "cu_price_mode", rc->cu_price_mode);
+    r.get(sec + "cu_price_multiplier", rc->cu_price_multiplier);
+    r.get(sec + "cu_limit", rc->cu_limit);
+    r.get(sec + "sender_tip_lamports", rc->sender_tip_lamports);
+    r.get(sec + "jito", rc->jito);
+  }
+  G(lighthouse, enabled); G(lighthouse, vault_guard); G(lighthouse, vault_tolerance_bps); G(lighthouse, rival_guard);
+  G(lighthouse, max_rivals);
   G(threads, ingest_cpu); G(threads, logic_cpu); G(threads, exec_cpu); G(threads, aux_cpu);
   G(threads, fifo_priority); G(threads, lock_memory);
   G(ring, slots); G(ring, slot_bytes);
@@ -200,6 +215,24 @@ Config load_config(const std::string& path) {
     throw std::runtime_error("config: exit slippage tiers must not be empty");
   if (c.risk.max_concurrent_positions < 1 || c.risk.max_concurrent_positions > 8)
     throw std::runtime_error("config: risk.max_concurrent_positions must be 1..8");
+  if (c.routing.lookahead_slots < 0 || c.routing.lookahead_slots > 8) throw std::runtime_error("config: routing.lookahead_slots must be 0..8");
+  if (c.routing.rival_window_slots < 0 || c.routing.rival_window_slots > 64)
+    throw std::runtime_error("config: routing.rival_window_slots must be 0..64");
+  if (c.routing.cu_limit_margin_pct < 0 || c.routing.cu_samples_min < 1) throw std::runtime_error("config: routing.cu_limit_margin_pct / cu_samples_min");
+  for (auto [name, rc] : {std::pair{"agave", &c.routing.agave}, {"bam", &c.routing.bam}, {"firedancer", &c.routing.firedancer}}) {
+    const std::string& m = rc->cu_price_mode;
+    std::string sec = std::string("config: routing.") + name;
+    if (m != "estimate" && m != "floor" && m != "beat_rivals") throw std::runtime_error(sec + ".cu_price_mode must be estimate|floor|beat_rivals");
+    if (rc->cu_price_multiplier <= 0) throw std::runtime_error(sec + ".cu_price_multiplier must be > 0");
+    if (rc->jito && !c.jito.enabled) throw std::runtime_error(sec + ".jito needs jito.enabled");
+    if (rc->sender_tip_lamports && c.sender.swqos_only && rc->sender_tip_lamports < 5000)
+      throw std::runtime_error(sec + ".sender_tip_lamports must be >= 5000 with swqos_only");
+    if (rc->sender_tip_lamports && !c.sender.swqos_only && rc->sender_tip_lamports < 1'000'000)
+      throw std::runtime_error(sec + ".sender_tip_lamports must be >= 1000000 without swqos_only");
+  }
+  if (c.lighthouse.max_rivals < 0 || c.lighthouse.max_rivals > int(MAX_RIVALS))
+    throw std::runtime_error("config: lighthouse.max_rivals must be 0.." + std::to_string(MAX_RIVALS));
+  if (c.lighthouse.vault_tolerance_bps < 0) throw std::runtime_error("config: lighthouse.vault_tolerance_bps must be >= 0");
   return c;
 }
 

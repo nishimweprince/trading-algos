@@ -15,6 +15,8 @@
 #include "frames.hpp"
 #include "logic/engine.hpp"
 #include "logic/exit_fsm.hpp"
+#include "aux/aux.hpp"
+#include "sol/lighthouse.hpp"
 #include "sol/constants.hpp"
 #include "test.hpp"
 
@@ -181,7 +183,7 @@ TEST(engine_full_round_trip) {
   CHECK(c->keys_ready);
   CHECK(c->fee == TransferFee::None);  // proven by the create logs
   CHECK(c->keys.pool == r.pool);
-  CHECK(r.sh->watch_cmds.size() == 3);
+  CHECK(r.sh->watch_cmds.size() == 4);  // pool, both vaults, and the pool's txs (rival profiling)
 
   r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
   Packet pk;
@@ -623,6 +625,219 @@ TEST(exit_fsm_matches_engine_ts) {
   exit_on_fill(s, ExitTrigger::TakeProfit0, x);
   CHECK(s.tp0_done);
   CHECK_EQ(s.stop_price, 1.08);
+}
+
+namespace {
+
+/** A table that gives every slot in [0, 4096) the same class and leader. */
+std::unique_ptr<LeaderTable> uniform_table(LeaderClass c, const Pubkey& leader) {
+  auto t = std::make_unique<LeaderTable>();
+  t->first_slot = 0;
+  t->cls.assign(4096, uint8_t(c));
+  t->leader.assign(4096, 1);
+  t->identities = {Pubkey{}, leader};
+  return t;
+}
+
+void publish_routes(Rig& r, uint64_t estimate, uint64_t beat_agave = 0) {
+  uint64_t beat[N_LEADER_CLASSES] = {beat_agave, 0, 0};
+  r.sh->routes.store(make_route_policy(r.cfg, estimate, beat));
+}
+
+const Event* route_for(const std::vector<Event>& es, Side side) {
+  for (auto& e : es)
+    if (e.type == Ev::Route && e.i[5] == int64_t(side)) return &e;
+  return nullptr;
+}
+
+}  // namespace
+
+TEST(engine_routes_by_leader_class) {
+  Pubkey leader = parse_pubkey("D2L6yPZ2FmmmTKPgzaMKdhu6EWZcTpLy1Vhx8uvZe7NZ");
+  struct Want {
+    LeaderClass cls;
+    uint64_t cu_price;
+  };
+  // estimate 1.2M; Agave beats the rivals' 3M; BAM pays the floor; Firedancer the estimate (no rival price).
+  for (Want w : {Want{LeaderClass::Agave, 3'000'000}, Want{LeaderClass::Bam, 100'000}, Want{LeaderClass::Firedancer, 1'200'000}}) {
+    Rig r;
+    auto table = uniform_table(w.cls, leader);
+    r.sh->leaders.store(table.get());
+    publish_routes(r, 1'200'000, 3'000'000);
+    r.create();
+    r.band(1'000'000'000'000ULL);
+    r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
+    Packet pk;
+    CHECK(r.pop_packet(pk));
+    CHECK(!pk.jito);  // jito.enabled is off; BAM never routes through the block engine
+    auto es = r.events();
+    const Event* rt = route_for(es, Side::Buy);
+    CHECK(rt != nullptr);
+    if (!rt) continue;
+    CHECK_EQ(rt->i[0], int64_t(w.cls));
+    CHECK_EQ(rt->i[1], int64_t(w.cu_price));
+    CHECK_EQ(rt->i[2], int64_t(r.cfg.entry.cu_limit));  // no measured samples yet
+    CHECK_EQ(rt->i[4], int64_t(1));                     // the vault guard
+    CHECK_EQ(rt->i[7], int64_t(1));
+    CHECK(rt->a == leader);
+    CHECK(rt->sig == pk.sig);
+    const Event* o = find(es, Ev::Order);
+    CHECK(o && o->i[4] == int64_t(w.cu_price));
+    r.sh->leaders.store(nullptr);
+  }
+}
+
+TEST(engine_routing_fallbacks) {
+  // No leader table: Agave. No policy yet: the legacy single price, unrouted.
+  Rig r;
+  r.sh->cu_price.store(700'000);
+  r.create();
+  r.band(1'000'000'000'000ULL);
+  r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
+  Packet pk;
+  CHECK(r.pop_packet(pk));
+  auto es = r.events();
+  const Event* rt = route_for(es, Side::Buy);
+  CHECK(rt != nullptr);
+  if (rt) {
+    CHECK_EQ(rt->i[0], int64_t(LeaderClass::Agave));
+    CHECK_EQ(rt->i[1], int64_t(700'000));
+    CHECK_EQ(rt->i[7], int64_t(0));
+    CHECK(is_zero(rt->a));
+  }
+}
+
+TEST(engine_guard_revert_is_beaten) {
+  Pubkey rival = parse_pubkey("9bnz4RShgq1hAnLnZbP8kbgBg1kEmcJBYQq3gQbmnSta");
+  for (int which = 0; which < 2; ++which) {  // 0: vault guard, 1: rival guard
+    Rig r;
+    RivalSet rs;
+    rs.wallets[0] = rival;
+    rs.n = 1;
+    r.sh->rivals.store(rs);
+    r.create();
+    r.band(1'000'000'000'000ULL);
+    const CurveSlot* c = r.eng->curve(r.curve);
+    CHECK(c && c->n_rivals == 1);
+    if (c) CHECK(c->rival_atas[0] == ata(rival, r.mint, prog::TOKEN_2022));
+    r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
+    Packet pk;
+    CHECK(r.pop_packet(pk));
+    const Position& p = r.eng->position(0);
+    CHECK_EQ(int(p.guards.count()), 2);
+    CHECK_EQ(int(p.guard_ix0), 2);
+    CHECK_EQ(p.guards.max_quote_vault, uint64_t(67'410'000'000ULL + 67'410'000'000ULL / 10'000 * 50));
+    r.events();
+    TxSpec t;
+    t.filters = {"wallet"};
+    t.sig = pk.sig;
+    t.slot = ++r.slot;
+    t.failed = true;
+    t.err = custom_ix_error(uint8_t(2 + which), lighthouse::ERR_ASSERTION_FAILED);
+    t.keys = {r.kp.pubkey()};
+    t.pre = {1'000'000'000};
+    t.post = {1'000'000'000 - 400'000};
+    r.feed(tx_frame(t));
+    CHECK(p.state == PosState::Empty);
+    CHECK(!r.eng->killed());
+    CHECK_EQ(r.eng->reserved_lamports(), uint64_t(0));
+    auto es = r.events();
+    const Event* f = find(es, Ev::Fill, which ? "guard_rival" : "guard_vault");
+    CHECK(f != nullptr);
+    if (f) CHECK(which ? f->c == rival : is_zero(f->c));
+    CHECK(find(es, Ev::PositionClose, which ? "beaten_rival" : "beaten_vault") != nullptr);
+  }
+}
+
+TEST(engine_sheds_rival_guards_that_dont_fit) {
+  // No tips in the test config: the widest buy + vault guard has room for exactly one rival guard.
+  Rig r;
+  RivalSet rs;
+  for (uint8_t i = 0; i < 3; ++i) rs.wallets[rs.n++] = Keypair::from_seed(std::vector<uint8_t>(32, uint8_t(90 + i)).data()).pubkey();
+  r.cfg.lighthouse.max_rivals = 3;
+  r.sh->rivals.store(rs);
+  r.create();
+  r.band(1'000'000'000'000ULL);
+  const CurveSlot* c = r.eng->curve(r.curve);
+  CHECK(c && c->n_rivals == 1);
+  r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
+  Packet pk;
+  CHECK(r.pop_packet(pk));
+  CHECK(verify_packet(pk, r.kp.pubkey()));
+  CHECK_EQ(int(r.eng->position(0).guards.count()), 2);
+}
+
+TEST(engine_measures_buy_cu) {
+  Rig r;
+  r.cfg.routing.cu_samples_min = 1;
+  publish_routes(r, 1'000'000);
+  r.create();
+  r.band(1'000'000'000'000ULL);
+  r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
+  Packet pk;
+  CHECK(r.pop_packet(pk));
+  const Position& p = r.eng->position(0);
+  TxSpec t;
+  t.filters = {"wallet"};
+  t.sig = pk.sig;
+  t.slot = ++r.slot;
+  t.keys = {r.kp.pubkey()};
+  t.pre = {1'000'000'000};
+  t.post = {840'000'000};
+  t.post_tokens = {{r.mint_s, r.user_s, r.t22_s, p.expected_base}};
+  t.cu_consumed = 100'000;
+  r.feed(tx_frame(t));
+  CHECK_EQ(r.eng->measured_cu_limit(), uint32_t(115'000));  // + cu_limit_margin_pct
+}
+
+TEST(engine_records_rival_txs) {
+  Rig r;
+  r.create();
+  r.band(1'000'000'000'000ULL);
+  r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
+  Packet pk;
+  CHECK(r.pop_packet(pk));
+  r.events();
+  uint64_t migrate_slot = r.slot;
+  Pubkey rival = parse_pubkey("9bnz4RShgq1hAnLnZbP8kbgBg1kEmcJBYQq3gQbmnSta");
+  Pubkey tip = parse_pubkey("96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5");
+  auto rival_tx = [&](const Pubkey& signer, uint64_t slot, uint8_t seed) {
+    TxSpec t;
+    t.filters = {"pools"};
+    t.sig = make_sig(seed);
+    t.slot = slot;
+    t.index = 7;
+    t.keys = {signer, r.pool, r.quote_vault, tip, prog::COMPUTE_BUDGET, prog::SYSTEM};
+    auto cat = [](std::vector<uint8_t> a, const std::vector<uint8_t>& b) { a.insert(a.end(), b.begin(), b.end()); return a; };
+    t.ixs = {{4, {}, cat({2}, le_bytes(150'000, 4))},
+             {4, {}, cat({3}, le_bytes(4'000'000, 8))},
+             {5, {0, 3}, cat(le_bytes(2, 4), le_bytes(2'000'000, 8))}};
+    t.pre_tokens = {{r.wsol_s, r.pool_s, r.token_s, 67'410'000'000ULL}};
+    t.post_tokens = {{r.wsol_s, r.pool_s, r.token_s, 68'410'000'000ULL}};
+    t.cu_consumed = 90'000;
+    r.feed(tx_frame(t));
+  };
+  rival_tx(rival, migrate_slot, 60);
+  rival_tx(r.kp.pubkey(), migrate_slot, 61);                                     // ours: not a rival
+  rival_tx(rival, migrate_slot + uint64_t(r.cfg.routing.rival_window_slots) + 1, 62);  // after the window
+  auto es = r.events();
+  int n = 0;
+  for (auto& e : es) n += e.type == Ev::RivalTx;
+  CHECK_EQ(n, 1);
+  const Event* e = find(es, Ev::RivalTx);
+  CHECK(e != nullptr);
+  if (!e) return;
+  CHECK(e->a == rival);
+  CHECK(e->b == r.pool);
+  CHECK(e->c == tip);
+  CHECK_EQ(e->i[0], int64_t(7));
+  CHECK_EQ(e->i[1], int64_t(4'000'000));
+  CHECK_EQ(e->i[2], int64_t(150'000));
+  CHECK_EQ(e->i[3], int64_t(2'000'000));
+  CHECK_EQ(e->i[4], int64_t(1'000'000'000));
+  CHECK_EQ(e->i[6], int64_t(0));
+  CHECK_EQ(e->i[7], int64_t(90'000));
+  CHECK_EQ(e->d[0], 3.0);  // an unlisted tip account: "other"
 }
 
 // Not an assertion of speed (CI boxes vary): prints the in-process trigger latency,

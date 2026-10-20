@@ -13,6 +13,7 @@ constexpr size_t MAX_FILTERS = 8;
 constexpr size_t MAX_LOGS = 384;
 constexpr size_t MAX_TOKEN_BALANCES = 96;
 constexpr size_t MAX_KEYS = 128;
+constexpr size_t MAX_TX_IXS = 24;
 
 struct AccountView {
   std::string_view pubkey;  // 32 bytes
@@ -31,13 +32,25 @@ struct TokenBalanceView {
   uint64_t amount = 0;          // raw units (ui_token_amount.amount)
 };
 
+/** A top-level CompiledInstruction: indexes into TxView::keys. */
+struct CompiledIxView {
+  uint32_t program = 0;
+  std::string_view accounts;  // one u8 key index per account
+  std::string_view data;
+};
+
 struct TxView {
   uint64_t slot = 0;
   int64_t index = -1;          // position in the block (Info.index); -1 when absent
   std::string_view signature;  // 64 bytes
   bool failed = false;         // meta.err present
+  std::string_view err;        // meta.err.err: bincode TransactionError
   bool has_meta = false;
   uint64_t fee = 0;
+  uint64_t cu_consumed = 0;    // meta.compute_units_consumed; 0 when absent
+  CompiledIxView ixs[MAX_TX_IXS];
+  uint8_t n_ixs = 0;
+  bool ixs_truncated = false;
   // message.account_keys then meta.loaded_writable / loaded_readonly addresses (the full key list)
   std::string_view keys[MAX_KEYS];
   uint16_t n_static_keys = 0;

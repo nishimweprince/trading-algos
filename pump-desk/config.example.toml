@@ -105,6 +105,55 @@ url = "https://frankfurt.mainnet.block-engine.jito.wtf/api/v1/transactions"
 tip_lamports = 10000
 # tip_accounts = [...]        # defaults: the 8 Jito tip accounts
 
+# Leader-aware routing. aux-leaders classifies every slot's leader:
+#   agave       Agave / Jito without BAM: priority (CU price) decides ordering
+#   bam         BAM: arrival at the BAM node decides (~20 ms auctions); priority doesn't count
+#   firedancer  Firedancer / Frankendancer (version 0.x): fee per requested CU decides
+# Buys are priced for the leader of (processed tip + lookahead_slots).
+[routing]
+enabled = true
+lookahead_slots = 1
+bam_validators_path = "data/bam_validators.json"  # JSON array of identities; missing = no BAM leaders
+cluster_nodes_refresh_s = 600
+rivals_path = "data/rivals.json"  # written by pump-desk-report --rivals (pump-desk-rivals.timer)
+rival_window_slots = 4            # stream every pool tx up to migrate slot + 4 (rival_txs view)
+cu_limit_margin_pct = 15          # measured CU limit = max of the last 32 landed buys + this
+cu_samples_min = 8                # until then: entry.cu_limit
+
+# cu_price_mode: estimate (Helius x multipliers) | floor (fees.cu_price_floor) |
+# beat_rivals (max of estimate and rivals.json's p90 + 1 for this class, capped at fees.cu_price_cap)
+# cu_limit 0 = measured. sender_tip_lamports 0 = sender.tip_lamports. jito needs jito.enabled.
+[routing.agave]
+cu_price_mode = "beat_rivals"
+cu_price_multiplier = 1
+cu_limit = 0
+sender_tip_lamports = 0
+jito = false
+
+[routing.bam]
+cu_price_mode = "floor"           # arrival, not price: send fast, don't overpay
+cu_price_multiplier = 1
+cu_limit = 0
+sender_tip_lamports = 0
+jito = false                      # a Jito bundle/tx takes the block-engine hop (~+50 ms)
+
+[routing.firedancer]
+cu_price_mode = "beat_rivals"
+cu_price_multiplier = 1
+cu_limit = 0                      # tight measured limit raises fee per requested CU
+sender_tip_lamports = 0
+jito = false
+
+# Lighthouse assertions ahead of every buy: if someone landed first the tx reverts
+# (~700 CU each) instead of filling up to entry.slippage_pct worse. Reverts close as
+# beaten_vault / beaten_rival, never retry, never count toward the kill latch.
+[lighthouse]
+enabled = true
+vault_guard = true                # pool quote vault must be <= what we priced + tolerance
+vault_tolerance_bps = 50
+rival_guard = true                # rivals.json guard wallets must not hold the mint yet
+max_rivals = 3                    # each costs ~48 bytes; guards that don't fit one packet are dropped
+
 [threads]
 ingest_cpu = 1
 logic_cpu = 2

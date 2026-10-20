@@ -14,6 +14,8 @@ inline constexpr Pubkey TOKEN_2022 = PK("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpP
 inline constexpr Pubkey SYSTEM = PK("11111111111111111111111111111111");
 inline constexpr Pubkey ATA = PK("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 inline constexpr Pubkey COMPUTE_BUDGET = PK("ComputeBudget111111111111111111111111111111");
+/** lighthouse-sdk-legacy 2.0.1 LIGHTHOUSE_PROGRAM_ID. */
+inline constexpr Pubkey LIGHTHOUSE = PK("L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95");
 
 inline constexpr Pubkey WSOL = PK("So11111111111111111111111111111111111111112");
 /** Every Migrate/MigrateV2 references it: `accountRequired` narrows pump.fun txs to migrations. */
