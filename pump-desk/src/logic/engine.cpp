@@ -12,6 +12,7 @@
 #include "core/sys.hpp"
 #include "logic/txparse.hpp"
 #include "sol/constants.hpp"
+#include "sol/lighthouse.hpp"
 
 namespace pd {
 
@@ -114,6 +115,7 @@ void Engine::on_frame(const uint8_t* data, size_t len, uint64_t recv_ns) {
       if (u.has_filter("wallet")) on_wallet_tx(u.tx);
       if (u.has_filter("migrate")) on_migrate(u.tx, recv_ns);
       if (u.has_filter("creates")) on_create(u.tx);
+      if (u.has_filter("pools")) on_pool_tx(u.tx);
       break;
     case UpdateView::Slot:
       on_slot(u.slot);
@@ -261,6 +263,25 @@ void Engine::prepare_keys(CurveSlot& s) {
   watch(s.keys.pool, s.curve, ROLE_POOL);
   watch(s.keys.pool_base_vault, s.curve, ROLE_BASE_VAULT);
   watch(s.keys.pool_quote_vault, s.curve, ROLE_QUOTE_VAULT);
+  // Rival ATAs: one PDA search each, here at fire, never at the trigger.
+  if (cfg_.lighthouse.enabled && cfg_.lighthouse.rival_guard) {
+    refresh_rivals();
+    s.n_rivals = 0;
+    for (uint8_t i = 0; i < rivals_.n && i < uint8_t(cfg_.lighthouse.max_rivals); ++i) {
+      s.rivals[s.n_rivals] = rivals_.wallets[i];
+      s.rival_atas[s.n_rivals] = ata(rivals_.wallets[i], s.mint, s.token_program);
+      ++s.n_rivals;
+    }
+    s.n_rivals = fit_rival_guards(s);
+  }
+  // Every tx on the new pool for a few slots after the migrate: who lands first, and how they pay.
+  if (cfg_.routing.enabled && !s.pool_txs_watched) {
+    WatchCmd c;
+    c.kind = WatchKind::PoolTxs;
+    c.key = s.keys.pool;
+    if (sh_.watch_cmds.push(c)) s.pool_txs_watched = true;
+    else warn("watch queue full");
+  }
 }
 
 void Engine::drop_curve(const Pubkey& key) {
@@ -270,6 +291,13 @@ void Engine::drop_curve(const Pubkey& key) {
     unwatch(s->keys.pool);
     unwatch(s->keys.pool_base_vault);
     unwatch(s->keys.pool_quote_vault);
+  }
+  if (s->pool_txs_watched) {
+    WatchCmd c;
+    c.add = false;
+    c.kind = WatchKind::PoolTxs;
+    c.key = s->keys.pool;
+    if (!sh_.watch_cmds.push(c)) warn("watch queue full");
   }
   if (s->mint_known) mint_index_.erase(s->mint);
   if (s->resolving && unresolved_curves_) --unresolved_curves_;
@@ -281,7 +309,15 @@ void Engine::expire(uint64_t now) {
   size_t n = 0;
   const uint64_t window = uint64_t(cfg_.racer.track_window_minutes) * 60'000'000'000ULL;
   const uint64_t no_pool = uint64_t(cfg_.racer.complete_no_pool_sec) * 1'000'000'000ULL;
+  const uint64_t rival_window = uint64_t(cfg_.routing.rival_window_slots);
   curves_.for_each([&](const Pubkey& k, CurveSlot& s) {
+    if (s.pool_txs_watched && s.migrate_slot && last_slot_ > s.migrate_slot + rival_window) {
+      WatchCmd c;
+      c.add = false;
+      c.kind = WatchKind::PoolTxs;
+      c.key = s.keys.pool;
+      if (sh_.watch_cmds.push(c)) s.pool_txs_watched = false;
+    }
     if (n >= 256) return;
     for (const Position& p : positions_)
       if (p.state != PosState::Empty && p.curve == k) return;  // a position still reads this curve's pool
@@ -480,6 +516,7 @@ void Engine::on_migrate(const TxView& tx, uint64_t recv_ns) {
   emit();
 
   if (!s || !m.landed) return;
+  if (!s->migrate_slot) s->migrate_slot = tx.slot;
   s->migrated = true;
   if (!s->migrated_ns) s->migrated_ns = now_ns_();
   if (s->traded) return;
@@ -555,17 +592,36 @@ int Engine::active_positions() const {
   return n;
 }
 
-TxParams Engine::tx_params(bool exit) {
+TxParams Engine::tx_params(bool exit, RouteChoice& rc) {
   TxParams p;
-  p.cu_limit = exit ? cfg_.exits.cu_limit : cfg_.entry.cu_limit;
-  uint64_t price = sh_.cu_price.load(std::memory_order_relaxed);
-  if (!price) price = cfg_.fees.cu_price_default;
-  price = uint64_t(double(price) * (exit ? cfg_.exits.exit_priority_multiplier : cfg_.entry.priority_multiplier));
-  p.cu_price = price;
-  if (!sender_tips_.empty()) {
-    p.tips[p.n_tips++] = Tip{sender_tips_[tip_rr_ % sender_tips_.size()], exit ? cfg_.sender.exit_tip_lamports : cfg_.sender.tip_lamports};
+  rc = RouteChoice{};
+  rc.slot = last_slot_ + uint64_t(cfg_.routing.lookahead_slots);
+  if (const LeaderTable* t = sh_.leaders.load(std::memory_order_acquire)) {
+    rc.cls = t->class_at(rc.slot);
+    if (const Pubkey* id = t->leader_at(rc.slot)) rc.leader = *id;
   }
-  if (cfg_.jito.enabled && !jito_tips_.empty()) p.tips[p.n_tips++] = Tip{jito_tips_[tip_rr_ % jito_tips_.size()], cfg_.jito.tip_lamports};
+  refresh_routes();
+  uint64_t sender_tip = exit ? cfg_.sender.exit_tip_lamports : cfg_.sender.tip_lamports;
+  if (routes_version_) {
+    // Per leader class: priority for Agave, arrival for BAM, fee per requested CU for Firedancer.
+    const RouteProfile& rp = routes_.by_class[size_t(rc.cls)];
+    rc.routed = true;
+    rc.jito = rp.jito;
+    p.cu_price = exit ? rp.exit_cu_price : rp.cu_price;
+    if (exit) p.cu_limit = cfg_.exits.cu_limit;
+    else if (rp.cu_limit) p.cu_limit = rp.cu_limit;
+    else p.cu_limit = n_cu_samples_ >= uint32_t(cfg_.routing.cu_samples_min) ? measured_cu_ : cfg_.entry.cu_limit;
+    if (!exit) sender_tip = rp.sender_tip;
+  } else {
+    p.cu_limit = exit ? cfg_.exits.cu_limit : cfg_.entry.cu_limit;
+    uint64_t price = sh_.cu_price.load(std::memory_order_relaxed);
+    if (!price) price = cfg_.fees.cu_price_default;
+    p.cu_price = uint64_t(double(price) * (exit ? cfg_.exits.exit_priority_multiplier : cfg_.entry.priority_multiplier));
+    rc.jito = cfg_.jito.enabled;
+  }
+  rc.jito = rc.jito && cfg_.jito.enabled && !jito_tips_.empty();
+  if (!sender_tips_.empty()) p.tips[p.n_tips++] = Tip{sender_tips_[tip_rr_ % sender_tips_.size()], sender_tip};
+  if (rc.jito) p.tips[p.n_tips++] = Tip{jito_tips_[tip_rr_ % jito_tips_.size()], cfg_.jito.tip_lamports};
   ++tip_rr_;
   // Rotate fee recipients (write-lock spread), skipping unset entries.
   for (int i = 0; i < 8; ++i) {
@@ -580,10 +636,15 @@ TxParams Engine::tx_params(bool exit) {
   return p;
 }
 
-bool Engine::send_packet(Side side, uint8_t pos, uint8_t attempt, const IxList& ixs, uint64_t recv_ns, Signature& sig_out) {
+bool Engine::send_packet(Side side, uint8_t pos, uint8_t attempt, const IxList& ixs, uint64_t recv_ns, bool jito,
+                         Signature& sig_out) {
+  build_too_large_ = false;
   BlockhashSnap bh;
   if (!sh_.blockhash.load(bh) || bh.fetched_ns == 0) return false;
-  if (!build_signed_tx(wallet_, ixs, bh.hash, *tx_)) return false;
+  if (!build_signed_tx(wallet_, ixs, bh.hash, *tx_)) {
+    build_too_large_ = true;
+    return false;
+  }
   Packet* pk = sh_.packets.claim();
   if (!pk) {
     sh_.counters.packets_dropped.fetch_add(1, std::memory_order_relaxed);
@@ -592,6 +653,7 @@ bool Engine::send_packet(Side side, uint8_t pos, uint8_t attempt, const IxList& 
   pk->side = side;
   pk->pos = pos;
   pk->attempt = attempt;
+  pk->jito = jito;
   pk->sig = tx_->sig;
   pk->t_recv_ns = recv_ns;
   pk->b64_len = static_cast<uint16_t>(b64_encode(tx_->bytes, tx_->len, pk->b64));
@@ -635,7 +697,8 @@ void Engine::trigger(CurveSlot& s, uint64_t base_res, uint64_t quote_res, uint64
     FeeBps fees = compute_fees_bps(amm_, true, s.mint_supply ? s.mint_supply : DEFAULT_MINT_SUPPLY, base_res,
                                    quote_res + virt, s.keys.mayhem, s.pool_seen ? s.pool.creator_fee_bps : 0);
     q = buy_quote_input(size, cfg_.entry.slippage_pct, base_res, quote_res, virt, fees, is_zero(s.keys.coin_creator));
-    TxParams tp = tx_params(false);
+    RouteChoice rc;
+    TxParams tp = tx_params(false, rc);
     uint64_t tips = 0;
     for (uint8_t i = 0; i < tp.n_tips; ++i) tips += tp.tips[i].lamports;
     uint64_t priority = uint64_t(tp.cu_limit) * tp.cu_price / 1'000'000;
@@ -649,9 +712,20 @@ void Engine::trigger(CurveSlot& s, uint64_t base_res, uint64_t quote_res, uint64
     else if (wallet_lamports_ < reserved_ + need + headroom) veto = "insufficient_balance";
     else {
       int idx = free_position();
-      buy_ixs(*ixs_, user_, s.keys, amm_, tp, q.base_out, q.max_quote);
+      BuyGuards guards;
+      Pubkey guard_rivals[MAX_RIVALS]{};
+      build_guards(s, quote_res, guards, guard_rivals);
+      buy_ixs(*ixs_, user_, s.keys, amm_, tp, q.base_out, q.max_quote, &guards);
       Signature sig;
-      if (!send_packet(Side::Buy, uint8_t(idx), 0, *ixs_, recv_ns, sig)) {
+      bool sent = send_packet(Side::Buy, uint8_t(idx), 0, *ixs_, recv_ns, rc.jito, sig);
+      // Over one packet (the pool push widened the buy after fire): shed rival guards, then the vault guard.
+      while (!sent && build_too_large_ && guards.count()) {
+        if (guards.n_rivals) guards.n_rivals = 0;
+        else guards.vault = false;
+        buy_ixs(*ixs_, user_, s.keys, amm_, tp, q.base_out, q.max_quote, &guards);
+        sent = send_packet(Side::Buy, uint8_t(idx), 0, *ixs_, recv_ns, rc.jito, sig);
+      }
+      if (!sent) {
         veto = "build_or_queue_failed";
       } else {
         Position& p = positions_[size_t(idx)];
@@ -673,6 +747,10 @@ void Engine::trigger(CurveSlot& s, uint64_t base_res, uint64_t quote_res, uint64
         p.base_res = base_res;
         p.quote_res = quote_res;
         p.virtual_quote = virt;
+        p.guards = guards;
+        p.guard_ix0 = budget_ix_count(tp);
+        std::memcpy(p.rivals, guard_rivals, sizeof guard_rivals);
+        p.buy_cu_limit = tp.cu_limit;
         reserved_ += need;
         watch(s.keys.pool, s.curve, ROLE_POOL);
         watch(s.keys.pool_base_vault, s.curve, ROLE_BASE_VAULT);
@@ -700,6 +778,7 @@ void Engine::trigger(CurveSlot& s, uint64_t base_res, uint64_t quote_res, uint64
         std::snprintf(o->text, sizeof o->text, "%s",
                       src == TriggerSrc::MigrateTx ? "migrate_tx" : src == TriggerSrc::PoolPush ? "pool_push" : "pool_wait_timeout");
         emit();
+        emit_route(sig, Side::Buy, tp, rc, guards.count());
       }
     }
   }
@@ -758,10 +837,11 @@ void Engine::send_sell(Position& p, int idx, ExitTrigger t, double fraction, uin
   SellQuote q = sell_base_input(base_in, slip, p.base_res, p.quote_res, p.virtual_quote, fees, is_zero(p.keys.coin_creator));
   // A real vault that can't pay the quote means liquidity is gone: salvage what's there.
   uint64_t min_quote = q.ok ? q.min_quote : 0;
-  TxParams tp = tx_params(true);
+  RouteChoice rc;
+  TxParams tp = tx_params(true, rc);
   sell_ixs(*ixs_, user_, p.keys, amm_, tp, base_in, min_quote, full);
   Signature sig;
-  if (!send_packet(Side::Sell, uint8_t(idx), uint8_t(p.sell_attempts), *ixs_, recv_ns, sig)) {
+  if (!send_packet(Side::Sell, uint8_t(idx), uint8_t(p.sell_attempts), *ixs_, recv_ns, rc.jito, sig)) {
     warn("sell build/queue failed (pos %d)", idx);
     p.sell_sent_ns = now_ns_();  // retry on the exit timer
     p.state = PosState::SellSent;
@@ -798,6 +878,7 @@ void Engine::send_sell(Position& p, int idx, ExitTrigger t, double fraction, uin
   o->d[2] = slip;
   std::snprintf(o->text, sizeof o->text, "%s", exit_trigger_name(t));
   emit();
+  emit_route(sig, Side::Sell, tp, rc, 0);
 }
 
 void Engine::fill_landing(Event* f, uint64_t order_slot, uint64_t slot, int64_t tx_index, uint64_t seen_ns) {
@@ -814,7 +895,7 @@ void Engine::fill_landing(Event* f, uint64_t order_slot, uint64_t slot, int64_t 
 }
 
 void Engine::on_buy_result(int idx, bool ok, int64_t sol_delta, int64_t base_delta, uint64_t slot, const char* how,
-                           int64_t tx_index, uint64_t seen_ns) {
+                           int64_t tx_index, uint64_t seen_ns, const Pubkey* beaten_by) {
   Position& p = positions_[size_t(idx)];
   if (p.state != PosState::BuySent) return;
   reserved_ = reserved_ > p.reserved ? reserved_ - p.reserved : 0;
@@ -831,12 +912,17 @@ void Engine::on_buy_result(int idx, bool ok, int64_t sol_delta, int64_t base_del
   f->i[4] = int64_t(now_ns_() - p.buy_sent_ns);
   fill_landing(f, p.order_slot, slot, tx_index, seen_ns);
   f->d[1] = double(p.writes_ahead);
+  if (beaten_by) f->c = *beaten_by;
   std::snprintf(f->text, sizeof f->text, "%s", how);
 
   if (!ok || base_delta <= 0) {
     emit();
     p.sol_spent = -sol_delta;
-    close_position(idx, ok ? "buy_no_tokens" : "buy_failed");
+    // A Lighthouse guard reverted it: someone landed first. Never retried, never counts toward the kill.
+    const char* reason = ok ? "buy_no_tokens" : "buy_failed";
+    if (std::strcmp(how, "guard_vault") == 0) reason = "beaten_vault";
+    else if (std::strcmp(how, "guard_rival") == 0) reason = "beaten_rival";
+    close_position(idx, reason);
     return;
   }
   p.base_amount = p.base_bought = uint64_t(base_delta);
@@ -984,7 +1070,24 @@ void Engine::on_wallet_tx(const TxView& tx) {
              int64_t(sum_tokens(tx.pre_tokens, tx.n_pre_tokens, p.mint_b58.sv(), user_b58_.sv()));
     };
     if (p.state == PosState::BuySent && std::memcmp(sig, p.buy_sig.data(), 64) == 0) {
-      on_buy_result(int(i), !tx.failed, sol_delta, base_delta(), tx.slot, "stream", tx.index, last_frame_ns_);
+      const char* how = "stream";
+      const Pubkey* beaten_by = nullptr;
+      uint8_t ix = 0;
+      uint32_t code = 0;
+      if (tx.failed && custom_instruction_error(tx, ix, code) && code == lighthouse::ERR_ASSERTION_FAILED &&
+          ix >= p.guard_ix0 && ix < p.guard_ix0 + p.guards.count()) {
+        uint8_t g = uint8_t(ix - p.guard_ix0);
+        if (p.guards.vault && g == 0) {
+          how = "guard_vault";
+        } else {
+          how = "guard_rival";
+          beaten_by = &p.rivals[g - (p.guards.vault ? 1 : 0)];
+        }
+      }
+      if (!tx.failed && tx.cu_consumed) add_cu_sample(tx.cu_consumed);
+      // Ran out of compute: ratchet the measured limit up so the next buy has room.
+      else if (tx.failed && p.buy_cu_limit && tx.cu_consumed >= p.buy_cu_limit) add_cu_sample(uint64_t(p.buy_cu_limit) * 5 / 4);
+      on_buy_result(int(i), !tx.failed, sol_delta, base_delta(), tx.slot, how, tx.index, last_frame_ns_, beaten_by);
       return;
     }
     for (uint8_t k = 0; k < std::min<uint8_t>(p.n_sell_sigs, 8); ++k) {
@@ -1073,6 +1176,139 @@ bool Engine::restore_position(const RestoredPosition& r) {
 void Engine::refresh_amm() {
   uint64_t v = sh_.amm.version();
   if (v != amm_version_) amm_version_ = sh_.amm.load(amm_);
+}
+
+void Engine::refresh_routes() {
+  uint64_t v = sh_.routes.version();
+  if (v != routes_version_) routes_version_ = sh_.routes.load(routes_);
+}
+
+void Engine::refresh_rivals() {
+  uint64_t v = sh_.rivals.version();
+  if (v != rivals_version_) rivals_version_ = sh_.rivals.load(rivals_);
+}
+
+void Engine::add_cu_sample(uint64_t cu) {
+  cu_samples_[n_cu_samples_++ % cu_samples_.size()] = uint32_t(std::min<uint64_t>(cu, 1'400'000));
+  uint32_t mx = 0;
+  for (size_t i = 0; i < std::min<size_t>(n_cu_samples_, cu_samples_.size()); ++i) mx = std::max(mx, cu_samples_[i]);
+  measured_cu_ = uint32_t(std::min(1'400'000.0, std::ceil(double(mx) * (1.0 + cfg_.routing.cu_limit_margin_pct / 100.0))));
+}
+
+void Engine::build_guards(const CurveSlot& s, uint64_t quote_res, BuyGuards& g, Pubkey* rivals) const {
+  g = BuyGuards{};
+  if (!cfg_.lighthouse.enabled) return;
+  if (cfg_.lighthouse.vault_guard) {
+    g.vault = true;
+    g.max_quote_vault = quote_res + quote_res / 10'000 * uint64_t(cfg_.lighthouse.vault_tolerance_bps);
+  }
+  if (cfg_.lighthouse.rival_guard) {
+    for (uint8_t i = 0; i < s.n_rivals && g.n_rivals < MAX_RIVALS; ++i) {
+      rivals[g.n_rivals] = s.rivals[i];
+      g.rival_atas[g.n_rivals++] = s.rival_atas[i];
+    }
+  }
+}
+
+uint8_t Engine::fit_rival_guards(const CurveSlot& s) {
+  refresh_amm();
+  if (!s.n_rivals || !amm_.valid) return 0;
+  // Both tips and both budget ixs; the trigger still sheds guards if the pool push widens the buy.
+  const SwapKeys& k = s.keys;
+  TxParams p;
+  p.cu_limit = cfg_.entry.cu_limit ? cfg_.entry.cu_limit : 1;
+  p.cu_price = 1;
+  if (!sender_tips_.empty()) p.tips[p.n_tips++] = Tip{sender_tips_[0], 1};
+  if (cfg_.jito.enabled && !jito_tips_.empty()) p.tips[p.n_tips++] = Tip{jito_tips_[0], 1};
+  BuyGuards g;
+  Pubkey rivals[MAX_RIVALS];
+  build_guards(s, 1, g, rivals);
+  uint8_t msg[PACKET_DATA_SIZE];
+  for (uint8_t n = g.n_rivals; n > 0; --n) {
+    g.n_rivals = n;
+    buy_ixs(*ixs_, user_, k, amm_, p, 1, 1, &g);
+    if (compile_message_v0(user_.user, *ixs_, Hash{}, msg, PACKET_DATA_SIZE - 65)) return n;
+  }
+  return 0;
+}
+
+void Engine::emit_route(const Signature& sig, Side side, const TxParams& tp, const RouteChoice& rc, uint8_t guards) {
+  Event* e = ev(Ev::Route);
+  e->slot = rc.slot;
+  e->sig = sig;
+  e->a = rc.leader;
+  e->i[0] = int64_t(rc.cls);
+  e->i[1] = int64_t(tp.cu_price);
+  e->i[2] = int64_t(tp.cu_limit);
+  e->i[3] = rc.jito;
+  e->i[4] = guards;
+  e->i[5] = int64_t(side);
+  e->i[6] = tp.n_tips ? int64_t(tp.tips[0].lamports) : 0;
+  e->i[7] = rc.routed;
+  std::snprintf(e->text, sizeof e->text, "%s", leader_class_name(rc.cls));
+  emit();
+}
+
+void Engine::on_pool_tx(const TxView& tx) {
+  if (tx.n_keys == 0 || tx.keys[0].size() != 32) return;
+  // The pool this tx touched, among the fired curves' pools.
+  const WatchRef* w = nullptr;
+  Pubkey pool{};
+  for (uint16_t i = 0; i < tx.n_keys && !w; ++i) {
+    if (tx.keys[i].size() != 32) continue;
+    Pubkey k = key_from(pb::u8(tx.keys[i]));
+    const WatchRef* r = watches_.find(k);
+    if (r && r->role == ROLE_POOL && !is_zero(r->curve)) { w = r; pool = k; }
+  }
+  if (!w) return;
+  const CurveSlot* s = curves_.find(w->curve);
+  if (!s || !s->migrate_slot || tx.slot < s->migrate_slot || tx.slot > s->migrate_slot + uint64_t(cfg_.routing.rival_window_slots)) return;
+  Pubkey signer = key_from(pb::u8(tx.keys[0]));
+  if (signer == user_.user) return;
+  // SOL into the pool's quote vault (+ buy, - sell); the migrate tx itself creates the vault.
+  int64_t quote_delta = int64_t(sum_tokens(tx.post_tokens, tx.n_post_tokens, known_b58().wsol_sv(), s->pool_b58.sv())) -
+                        int64_t(sum_tokens(tx.pre_tokens, tx.n_pre_tokens, known_b58().wsol_sv(), s->pool_b58.sv()));
+  bool has_pre = false;
+  for (uint16_t i = 0; i < tx.n_pre_tokens && !has_pre; ++i) has_pre = tx.pre_tokens[i].owner == s->pool_b58.sv();
+  if (!has_pre) return;  // the migrate (or a create) itself, not a swap
+  BudgetInfo b = compute_budget_of(tx);
+  TipInfo tip = tip_of(tx);
+  int route = 0;  // 0 none, 1 sender, 2 jito, 3 other
+  Pubkey tip_dst{};
+  if (tip.dst >= 0 && tip.dst < tx.n_keys && tx.keys[tip.dst].size() == 32) {
+    tip_dst = key_from(pb::u8(tx.keys[tip.dst]));
+    route = 3;
+    for (const Pubkey& k : sender_tips_) if (k == tip_dst) route = 1;
+    for (const Pubkey& k : jito_tips_) if (k == tip_dst) route = 2;
+  }
+  LeaderClass cls = LeaderClass::Agave;
+  const Pubkey* leader = nullptr;
+  if (const LeaderTable* t = sh_.leaders.load(std::memory_order_acquire)) {
+    cls = t->class_at(tx.slot);
+    leader = t->leader_at(tx.slot);
+  }
+  Event* e = ev(Ev::RivalTx);
+  e->slot = tx.slot;
+  std::memcpy(e->sig.data(), tx.signature.data(), 64);
+  e->a = signer;
+  e->b = pool;
+  e->c = tip_dst;
+  e->i[0] = tx.index;
+  e->i[1] = int64_t(b.cu_price);
+  e->i[2] = int64_t(b.cu_limit);
+  e->i[3] = int64_t(tip.lamports);
+  e->i[4] = quote_delta;
+  e->i[5] = int64_t(cls);
+  e->i[6] = int64_t(tx.slot - s->migrate_slot);
+  e->i[7] = int64_t(tx.cu_consumed);
+  e->d[0] = route;
+  e->d[1] = tx.failed;
+  if (leader) {
+    B58Key k;
+    k.set(*leader);
+    std::snprintf(e->text, sizeof e->text, "%.*s", int(k.len), k.s);
+  }
+  emit();
 }
 
 void Engine::drain_queues(uint64_t now) {

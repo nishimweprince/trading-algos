@@ -14,6 +14,8 @@ struct SubscriptionSpec {
   Pubkey wallet{};
   /** Pools / vaults of fired curves and open positions. */
   std::vector<Pubkey> watched;
+  /** Fresh pools whose every tx is streamed for a few slots after the migrate (rival profiling). */
+  std::vector<Pubkey> pool_txs;
 };
 
 /** The full request; Yellowstone replaces the whole subscription on every write. */

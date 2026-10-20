@@ -3,8 +3,9 @@
 //   pump-desk [--config pump-desk.toml] [--preflight]
 //
 // There is no dry-run. --preflight runs the boot checks (RPC, PumpSwap
-// configs, a simulated buy on a known canonical pool, Sender connectivity) and
-// exits without subscribing or trading.
+// configs, a simulated guarded buy on a known canonical pool, a Lighthouse
+// assertion that must fail, Sender connectivity) and exits without subscribing
+// or trading.
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -14,6 +15,7 @@
 #include <thread>
 
 #include "aux/aux.hpp"
+#include "aux/leaders.hpp"
 #include "aux/rpc.hpp"
 #include "aux/writer.hpp"
 #include "core/base58.hpp"
@@ -27,6 +29,7 @@
 #include "sol/constants.hpp"
 #include "sol/crypto.hpp"
 #include "sol/layouts.hpp"
+#include "sol/lighthouse.hpp"
 #include "sol/swap.hpp"
 #include "stream/ingest.hpp"
 
@@ -92,8 +95,12 @@ void self_check(Rpc& rpc, Shared& sh, const Keypair& kp, const Config& cfg, Logg
   p.cu_price = cfg.fees.cu_price_floor;
   p.tips[0] = Tip{parse_pubkey(cfg.sender.tip_accounts.at(0)), cfg.sender.tip_lamports};
   p.n_tips = 1;
+  // The live guard: the quote vault may not have grown past what we priced (+ tolerance).
+  BuyGuards guards;
+  guards.vault = cfg.lighthouse.enabled && cfg.lighthouse.vault_guard;
+  guards.max_quote_vault = pr.quote + pr.quote / 10'000 * uint64_t(cfg.lighthouse.vault_tolerance_bps);
   IxList ixs;
-  buy_ixs(ixs, u, k, amm, p, q.base_out, q.max_quote);
+  buy_ixs(ixs, u, k, amm, p, q.base_out, q.max_quote, &guards);
   BlockhashSnap bh;
   sh.blockhash.load(bh);
   SignedTx tx;
@@ -101,7 +108,25 @@ void self_check(Rpc& rpc, Shared& sh, const Keypair& kp, const Config& cfg, Logg
   std::string err = rpc.simulate(b64(tx.bytes, tx.len));
   if (!err.empty()) throw std::runtime_error("self-check: simulated buy failed: " + err);
   log.info("self-check ok: simulated buy on " + b58(SEED_POOL) + " (" + std::to_string(tx.len) + " bytes, " +
-           std::to_string(q.base_out) + " base for <= " + std::to_string(q.max_quote) + " lamports)");
+           std::to_string(int(guards.count())) + " guard(s), " + std::to_string(q.base_out) + " base for <= " +
+           std::to_string(q.max_quote) + " lamports)");
+  if (!cfg.lighthouse.enabled) return;
+  // Both assertion kinds must decode on chain, and a false one must abort with AssertionFailed (0x1771):
+  // proof the guards can revert a buy, not just ride along.
+  IxList fail;
+  ix::cu_limit(fail, 20'000);
+  lighthouse::assert_lamports(fail, pda({std::string_view("pump-desk-absent"), kp.pubkey()}, prog::SYSTEM),
+                              lighthouse::IntOp::Equal, 0);
+  lighthouse::assert_token_amount(fail, pr.pool.quote_vault, lighthouse::IntOp::GreaterThan, pr.quote * 4 + 1'000'000'000'000ULL);
+  if (!build_signed_tx(kp, fail, bh.hash, tx)) throw std::runtime_error("self-check: guard tx too large");
+  err = rpc.simulate(b64(tx.bytes, tx.len));
+  if (err.find("6001") == std::string::npos && err.find("0x1771") == std::string::npos)
+    throw std::runtime_error("self-check: a false Lighthouse assertion did not fail with AssertionFailed: " +
+                             (err.empty() ? std::string("it passed") : err));
+  // {"InstructionError":[2,{"Custom":6001}]}: index 1 (the lamports assertion) passed, index 2 failed.
+  if (err.find("[2,") == std::string::npos)
+    throw std::runtime_error("self-check: the Lighthouse lamports assertion failed where it must pass: " + err);
+  log.info("self-check ok: Lighthouse assertions decode, and a false one reverts with AssertionFailed");
 }
 
 void restore_positions(Rpc& rpc, Writer& writer, Engine& eng, const Keypair& kp, Logger& log) {
@@ -220,6 +245,7 @@ int main(int argc, char** argv) {
     std::thread t_writer([&] { writer.run(); });
     std::thread t_fast([&] { run_aux_fast(cfg, *sh, kp.pubkey(), log); });
     std::thread t_req([&] { run_aux_req(cfg, *sh, kp.pubkey(), log); });
+    std::thread t_leaders([&] { run_aux_leaders(cfg, *sh, log); });
     std::thread t_capture;
     if (!cfg.storage.capture_path.empty()) {
       t_capture = std::thread([&] {
@@ -254,6 +280,7 @@ int main(int argc, char** argv) {
     t_exec.join();
     t_fast.join();
     t_req.join();
+    t_leaders.join();  // after logic: it frees the leader tables
     if (t_capture.joinable()) t_capture.join();
     t_writer.join();
     for (size_t i = 0; i < MAX_POSITIONS; ++i) {

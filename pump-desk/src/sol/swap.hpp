@@ -1,7 +1,7 @@
 #pragma once
 // PumpSwap buy / sell transactions, mirroring @pump-fun/pump-swap-sdk 1.20.0
 // OfflinePumpAmm.buyInstructionsNoPool / sellInstructionsNoPool:
-//   buy : [CU limit, CU price] ata(WSOL) transfer(max_quote) sync_native ata(base) buy close(WSOL) [tips]
+//   buy : [CU limit, CU price] [guards] ata(WSOL) transfer(max_quote) sync_native ata(base) buy close(WSOL) [tips]
 //   sell: [CU limit, CU price] ata(WSOL) sell close(WSOL) [close(base) on a full exit] [tips]
 // Every key except the amounts is derived before the trigger (SwapKeys), so
 // building at trigger time is a ~1 µs compile plus one ed25519 signature.
@@ -54,6 +54,21 @@ struct TxParams {
   uint8_t buyback_index = 0;
 };
 
+constexpr size_t MAX_RIVALS = 5;  // 16 instructions per tx: 10 for a tipped buy, 1 vault guard, 5 rivals
+
+/**
+ * Lighthouse assertions that run before the swap: if another buy landed first the
+ * pool's quote vault has grown, or a listed rival already holds the mint, and the
+ * whole tx reverts instead of filling behind them.
+ */
+struct BuyGuards {
+  bool vault = false;
+  uint64_t max_quote_vault = 0;      // pool quote vault must hold <= this
+  Pubkey rival_atas[MAX_RIVALS]{};   // each must not exist (0 lamports)
+  uint8_t n_rivals = 0;
+  uint8_t count() const { return uint8_t(uint8_t(vault) + n_rivals); }
+};
+
 /** Append the PumpSwap `buy` instruction (+ remaining accounts). */
 void pump_buy_ix(IxList& l, const UserKeys& u, const SwapKeys& k, const AmmConfig& cfg, const TxParams& p,
                  uint64_t base_out, uint64_t max_quote);
@@ -61,9 +76,11 @@ void pump_buy_ix(IxList& l, const UserKeys& u, const SwapKeys& k, const AmmConfi
 void pump_sell_ix(IxList& l, const UserKeys& u, const SwapKeys& k, const AmmConfig& cfg, const TxParams& p,
                   uint64_t base_in, uint64_t min_quote);
 
-/** Full buy instruction list (see header). */
+/** Full buy instruction list (see header). Guards start at instruction index budget_ix_count(p). */
 void buy_ixs(IxList& l, const UserKeys& u, const SwapKeys& k, const AmmConfig& cfg, const TxParams& p,
-             uint64_t base_out, uint64_t max_quote);
+             uint64_t base_out, uint64_t max_quote, const BuyGuards* guards = nullptr);
+/** Compute-budget instructions buy_ixs / sell_ixs put first. */
+inline uint8_t budget_ix_count(const TxParams& p) { return uint8_t((p.cu_limit ? 1 : 0) + (p.cu_price ? 1 : 0)); }
 /** Full sell instruction list; `close_base` also closes the emptied base ATA (rent back). */
 void sell_ixs(IxList& l, const UserKeys& u, const SwapKeys& k, const AmmConfig& cfg, const TxParams& p,
               uint64_t base_in, uint64_t min_quote, bool close_base);

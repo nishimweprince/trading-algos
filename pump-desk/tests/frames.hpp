@@ -15,6 +15,13 @@ struct TokenBal {
   uint64_t amount;
 };
 
+/** A top-level compiled instruction: program and accounts are indexes into TxSpec::keys. */
+struct CIx {
+  uint32_t program = 0;
+  std::vector<uint8_t> accounts;
+  std::vector<uint8_t> data;
+};
+
 struct TxSpec {
   std::vector<std::string> filters;
   pd::Signature sig{};
@@ -22,7 +29,10 @@ struct TxSpec {
   int64_t index = -1;  // Info.index (position in block); omitted when < 0
   std::vector<pd::Pubkey> keys;
   bool failed = false;
+  std::string err = "x";        // meta.err.err bytes when failed (bincode TransactionError)
   uint64_t fee = 5000;
+  uint64_t cu_consumed = 0;     // meta.compute_units_consumed; omitted when 0
+  std::vector<CIx> ixs;
   std::vector<uint64_t> pre, post;
   std::vector<std::string> logs;
   std::vector<TokenBal> pre_tokens, post_tokens;
@@ -45,13 +55,20 @@ inline pd::pb::Writer token_balance(const TokenBal& t, uint32_t idx) {
 inline std::string tx_frame(const TxSpec& s) {
   pd::pb::Writer msg;
   for (auto& k : s.keys) msg.bytes(2, sv(k.data(), 32));
+  for (auto& ix : s.ixs) {
+    pd::pb::Writer c;
+    c.u64(1, ix.program);
+    c.bytes(2, sv(ix.accounts.data(), ix.accounts.size()));
+    c.bytes(3, sv(ix.data.data(), ix.data.size()));
+    msg.message(4, c);
+  }
   pd::pb::Writer txn;
   txn.bytes(1, sv(s.sig.data(), 64));
   txn.message(2, msg);
   pd::pb::Writer meta;
   if (s.failed) {
     pd::pb::Writer err;
-    err.bytes(1, "x");
+    err.bytes(1, s.err);
     meta.message(1, err);
   }
   meta.u64(2, s.fee);
@@ -62,6 +79,7 @@ inline std::string tx_frame(const TxSpec& s) {
   }
   for (auto v : s.post) meta.u64(4, v);  // unpacked on purpose: both encodings must parse
   for (auto& l : s.logs) meta.bytes(6, l);
+  if (s.cu_consumed) meta.u64(16, s.cu_consumed);
   uint32_t i = 0;
   for (auto& t : s.pre_tokens) meta.message(7, token_balance(t, i++));
   i = 0;
@@ -106,6 +124,23 @@ inline std::string slot_frame(uint64_t slot, uint32_t status = 0) {
   root.bytes(1, "heartbeat");
   root.message(3, s);
   return root.out;
+}
+
+/** bincode TransactionError::InstructionError(index, InstructionError::Custom(code)). */
+inline std::string custom_ix_error(uint8_t index, uint32_t code) {
+  std::string e;
+  auto u32 = [&](uint32_t v) { for (int i = 0; i < 4; ++i) e.push_back(char((v >> (8 * i)) & 0xff)); };
+  u32(8);
+  e.push_back(char(index));
+  u32(25);
+  u32(code);
+  return e;
+}
+
+inline std::vector<uint8_t> le_bytes(uint64_t v, int n) {
+  std::vector<uint8_t> out;
+  for (int i = 0; i < n; ++i) out.push_back(uint8_t((v >> (8 * i)) & 0xff));
+  return out;
 }
 
 inline pd::Signature make_sig(uint8_t seed) {

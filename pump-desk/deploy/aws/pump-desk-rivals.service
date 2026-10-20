@@ -1,0 +1,10 @@
+[Unit]
+Description=pump-desk rival ranking (writes data/rivals.json)
+
+[Service]
+Type=oneshot
+User=@USER@
+WorkingDirectory=@ROOT@
+# Read-only on the run database. pump-desk reloads the file when its mtime changes.
+ExecStart=@ROOT@/build/pump-desk-report @ROOT@/data/pump-desk.db --rivals --out @ROOT@/data/rivals.json --top 3 --since-hours 72
+Nice=10

@@ -69,4 +69,25 @@ LaunchInfo parse_launch(const TxView& tx);
 /** Logs complete, no "transfer fee", exactly one InitializeMint{,2} and it ran under Token-2022. */
 bool create_logs_prove_no_transfer_fee(const TxView& tx);
 
+/** Top-level ComputeBudget settings (0 = not set). */
+struct BudgetInfo {
+  uint32_t cu_limit = 0;
+  uint64_t cu_price = 0;  // micro-lamports per CU
+};
+BudgetInfo compute_budget_of(const TxView& tx);
+
+/**
+ * The largest top-level System transfer from the fee payer to an account no other
+ * top-level instruction references: a tip (a WSOL wrap goes to an account the
+ * token program then touches). dst = -1 when there is none.
+ */
+struct TipInfo {
+  int dst = -1;  // index into tx.keys
+  uint64_t lamports = 0;
+};
+TipInfo tip_of(const TxView& tx);
+
+/** meta.err as InstructionError(index, Custom(code)). False for any other error shape. */
+bool custom_instruction_error(const TxView& tx, uint8_t& ix_index, uint32_t& code);
+
 }  // namespace pd

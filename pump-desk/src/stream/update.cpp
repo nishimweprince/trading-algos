@@ -68,6 +68,19 @@ void parse_message(std::string_view s, TxView& tx) {
     if (f == 2 && wt == pb::LEN) {
       std::string_view k = r.bytes();
       if (tx.n_keys < MAX_KEYS) tx.keys[tx.n_keys++] = k;
+    } else if (f == 4 && wt == pb::LEN) {
+      // CompiledInstruction { program_id_index 1, accounts 2, data 3 }
+      std::string_view ix = r.bytes();
+      if (tx.n_ixs >= MAX_TX_IXS) { tx.ixs_truncated = true; continue; }
+      CompiledIxView& c = tx.ixs[tx.n_ixs++];
+      c = CompiledIxView{};
+      Reader in(ix);
+      while (in.next(f, wt)) {
+        if (f == 1 && wt == pb::VARINT) c.program = static_cast<uint32_t>(in.varint());
+        else if (f == 2 && wt == pb::LEN) c.accounts = in.bytes();
+        else if (f == 3 && wt == pb::LEN) c.data = in.bytes();
+        else in.skip(wt);
+      }
     } else {
       r.skip(wt);
     }
@@ -78,15 +91,23 @@ void parse_message(std::string_view s, TxView& tx) {
 void parse_meta(std::string_view s, TxView& tx, std::string_view* loaded_w, uint16_t& n_w, std::string_view* loaded_r,
                 uint16_t& n_r) {
   // TransactionStatusMeta { err 1, fee 2, pre_balances 3, post_balances 4, log_messages 6,
-  //   pre_token_balances 7, post_token_balances 8, loaded_writable 12, loaded_readonly 13 }
+  //   pre_token_balances 7, post_token_balances 8, loaded_writable 12, loaded_readonly 13,
+  //   compute_units_consumed 16 }
   Reader r(s);
   uint32_t f, wt;
   while (r.next(f, wt)) {
     switch (f) {
-      case 1:
+      case 1: {
         tx.failed = true;
-        r.skip(wt);
+        // TransactionError { err 1 }
+        Reader in(r.bytes());
+        while (in.next(f, wt)) {
+          if (f == 1 && wt == pb::LEN) tx.err = in.bytes();
+          else in.skip(wt);
+        }
         break;
+      }
+      case 16: tx.cu_consumed = r.varint(); break;
       case 2: tx.fee = r.varint(); break;
       case 3:
         pb::each_varint(r, wt, [&](uint64_t v) { if (tx.n_pre_balances < MAX_KEYS) tx.pre_balances[tx.n_pre_balances++] = v; });
@@ -125,8 +146,10 @@ void parse_transaction(std::string_view s, TxView& tx) {
   tx.slot = 0;
   tx.index = -1;
   tx.signature = {};
-  tx.failed = tx.has_meta = tx.logs_truncated = false;
-  tx.fee = 0;
+  tx.failed = tx.has_meta = tx.logs_truncated = tx.ixs_truncated = false;
+  tx.err = {};
+  tx.fee = tx.cu_consumed = 0;
+  tx.n_ixs = 0;
   tx.n_keys = tx.n_static_keys = tx.n_pre_balances = tx.n_post_balances = tx.n_logs = 0;
   tx.n_pre_tokens = tx.n_post_tokens = 0;
   std::string_view loaded_w[MAX_KEYS], loaded_r[MAX_KEYS];

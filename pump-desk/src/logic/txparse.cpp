@@ -236,4 +236,57 @@ LaunchInfo parse_launch(const TxView& tx) {
   return L;
 }
 
+namespace {
+
+bool program_is(const TxView& tx, const CompiledIxView& ix, const Pubkey& program) {
+  return ix.program < tx.n_static_keys && tx.keys[ix.program].size() == 32 &&
+         key_eq(reinterpret_cast<const uint8_t*>(tx.keys[ix.program].data()), program);
+}
+
+uint64_t le(std::string_view d, size_t off, size_t n) {
+  uint64_t v = 0;
+  for (size_t i = 0; i < n; ++i) v |= uint64_t(uint8_t(d[off + i])) << (8 * i);
+  return v;
+}
+
+}  // namespace
+
+BudgetInfo compute_budget_of(const TxView& tx) {
+  BudgetInfo b;
+  for (uint8_t i = 0; i < tx.n_ixs; ++i) {
+    const CompiledIxView& ix = tx.ixs[i];
+    if (ix.data.empty() || !program_is(tx, ix, prog::COMPUTE_BUDGET)) continue;
+    // ComputeBudgetInstruction: 2 SetComputeUnitLimit(u32), 3 SetComputeUnitPrice(u64)
+    if (uint8_t(ix.data[0]) == 2 && ix.data.size() >= 5) b.cu_limit = uint32_t(le(ix.data, 1, 4));
+    else if (uint8_t(ix.data[0]) == 3 && ix.data.size() >= 9) b.cu_price = le(ix.data, 1, 8);
+  }
+  return b;
+}
+
+TipInfo tip_of(const TxView& tx) {
+  TipInfo best;
+  for (uint8_t i = 0; i < tx.n_ixs; ++i) {
+    const CompiledIxView& ix = tx.ixs[i];
+    // SystemInstruction::Transfer = u32 2 + u64 lamports; accounts [from, to]
+    if (ix.data.size() != 12 || ix.accounts.size() != 2 || le(ix.data, 0, 4) != 2 || !program_is(tx, ix, prog::SYSTEM)) continue;
+    if (uint8_t(ix.accounts[0]) != 0) continue;
+    uint8_t dst = uint8_t(ix.accounts[1]);
+    bool elsewhere = false;
+    for (uint8_t j = 0; j < tx.n_ixs && !elsewhere; ++j)
+      if (j != i) elsewhere = tx.ixs[j].accounts.find(char(dst)) != std::string_view::npos;
+    uint64_t lamports = le(ix.data, 4, 8);
+    if (!elsewhere && lamports > best.lamports) best = TipInfo{int(dst), lamports};
+  }
+  return best;
+}
+
+bool custom_instruction_error(const TxView& tx, uint8_t& ix_index, uint32_t& code) {
+  // bincode: TransactionError::InstructionError (8) u32, index u8, InstructionError::Custom (25) u32, code u32
+  std::string_view e = tx.err;
+  if (e.size() < 13 || le(e, 0, 4) != 8 || le(e, 5, 4) != 25) return false;
+  ix_index = uint8_t(e[4]);
+  code = uint32_t(le(e, 9, 4));
+  return true;
+}
+
 }  // namespace pd

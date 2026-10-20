@@ -1,0 +1,70 @@
+{
+ "generated": "2026-10-20T22:43:35.515Z",
+ "sdkVersion": "2.0.1",
+ "cases": [
+  {
+   "name": "token-amount-le",
+   "kind": "token_amount",
+   "target": "BWFkM4yH4mEjrjQ4Q8xJ4xnx2aTzTmZ3cY4TXo5FXR5z",
+   "op": 5,
+   "value": "67747050000",
+   "program": "L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95",
+   "keys": [
+    {
+     "pubkey": "BWFkM4yH4mEjrjQ4Q8xJ4xnx2aTzTmZ3cY4TXo5FXR5z",
+     "signer": false,
+     "writable": false
+    }
+   ],
+   "data": "09000210f209c60f00000005"
+  },
+  {
+   "name": "token-amount-lt-wide",
+   "kind": "token_amount",
+   "target": "BWFkM4yH4mEjrjQ4Q8xJ4xnx2aTzTmZ3cY4TXo5FXR5z",
+   "op": 3,
+   "value": "1234567890123456789",
+   "program": "L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95",
+   "keys": [
+    {
+     "pubkey": "BWFkM4yH4mEjrjQ4Q8xJ4xnx2aTzTmZ3cY4TXo5FXR5z",
+     "signer": false,
+     "writable": false
+    }
+   ],
+   "data": "0900021581e97df410221103"
+  },
+  {
+   "name": "lamports-eq-zero",
+   "kind": "lamports",
+   "target": "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
+   "op": 0,
+   "value": "0",
+   "program": "L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95",
+   "keys": [
+    {
+     "pubkey": "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
+     "signer": false,
+     "writable": false
+    }
+   ],
+   "data": "050000000000000000000000"
+  },
+  {
+   "name": "lamports-ge",
+   "kind": "lamports",
+   "target": "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
+   "op": 4,
+   "value": "2039280",
+   "program": "L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95",
+   "keys": [
+    {
+     "pubkey": "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
+     "signer": false,
+     "writable": false
+    }
+   ],
+   "data": "050000f01d1f000000000004"
+  }
+ ]
+}

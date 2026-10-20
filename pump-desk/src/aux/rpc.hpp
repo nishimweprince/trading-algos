@@ -60,6 +60,11 @@ class Rpc {
   RpcTransaction transaction(const std::string& sig_b58, const char* commitment = "confirmed");
   RpcSigStatus signature_status(const std::string& sig_b58);
   std::string latest_signature_for(const Pubkey& address);
+  struct EpochInfo {
+    uint64_t epoch = 0, absolute_slot = 0, slot_index = 0, slots_in_epoch = 0;
+    uint64_t first_slot() const { return absolute_slot - slot_index; }
+  };
+  EpochInfo epoch_info(const char* commitment = "processed");
   /** Helius getPriorityFeeEstimate (micro-lamports/CU); 0 when unavailable. */
   uint64_t priority_fee_estimate(const std::vector<Pubkey>& accounts, const char* level = "VeryHigh");
   /** Empty string = success; otherwise the error plus logs. */

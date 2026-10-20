@@ -240,7 +240,7 @@ void Exec::run() {
   size_t rr = 0;
   while (!sh_.stop.load(std::memory_order_relaxed)) {
     if (Packet* p = sh_.packets.peek()) {
-      // Sender first (primary), then Jito with the same signed bytes.
+      // Sender first (primary), then Jito with the same signed bytes when the packet asks for it.
       bool sent = false;
       for (size_t i = 0; i < sender_.size() && !sent; ++i) {
         Link& l = *sender_[(rr + i) % sender_.size()];
@@ -259,7 +259,8 @@ void Exec::run() {
         v.definitive = true;
         report(q, Route::Sender, v, 0, "no sender connection", now_ns());
       }
-      for (auto& l : jito_) send(*l, *p);
+      // Jito only for packets priced for it (never BAM leaders: the block-engine hop costs ~50 ms).
+      if (p->jito) for (auto& l : jito_) send(*l, *p);
       sh_.packets.pop();
       continue;  // drain the queue before anything else
     }

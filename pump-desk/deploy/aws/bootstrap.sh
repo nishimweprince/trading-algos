@@ -41,11 +41,14 @@ ENV
 chmod 600 "$ROOT/.env"
 sed -e "s#@ROOT@#$ROOT#g" -e "s#@USER@#$(id -un)#g" "$HERE/pump-desk.service" | sudo tee /etc/systemd/system/pump-desk.service >/dev/null
 sed -e "s#@ROOT@#$ROOT#g" -e "s#@USER@#$(id -un)#g" "$HERE/pump-desk-status.service" | sudo tee /etc/systemd/system/pump-desk-status.service >/dev/null
+sed -e "s#@ROOT@#$ROOT#g" -e "s#@USER@#$(id -un)#g" "$HERE/pump-desk-rivals.service" | sudo tee /etc/systemd/system/pump-desk-rivals.service >/dev/null
+sudo install -m 0644 "$HERE/pump-desk-rivals.timer" /etc/systemd/system/pump-desk-rivals.timer
 sudo systemctl daemon-reload
 echo
 echo "Done. Next:"
 echo "  1. fill $ROOT/.env (chmod 600) and review $ROOT/pump-desk.toml"
 echo "  2. preflight:  set -a; . $ROOT/.env; set +a; $ROOT/build/pump-desk --config $ROOT/pump-desk.toml --preflight"
 echo "  3. isolate cores (README §Cores): isolcpus=1-3,5-7 nohz_full=1-3,5-7 rcu_nocbs=1-3,5-7"
-echo "     reboot, then: sudo systemctl enable --now pump-desk pump-desk-status"
+echo "     reboot, then: sudo systemctl enable --now pump-desk pump-desk-status pump-desk-rivals.timer"
+echo "     optional: list BAM validator identities in $ROOT/data/bam_validators.json (JSON array)"
 echo "  4. optional tunnel, from the housekeeping core: cloudflared tunnel --url http://127.0.0.1:8787"

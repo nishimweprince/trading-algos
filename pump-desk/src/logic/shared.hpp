@@ -4,11 +4,13 @@
 // the logic or exec thread runs per frame.
 #include <atomic>
 #include <cstdint>
+#include <vector>
 
 #include "core/ring.hpp"
 #include "core/types.hpp"
 #include "sol/amm.hpp"
 #include "sol/layouts.hpp"
+#include "sol/swap.hpp"
 
 namespace pd {
 
@@ -21,6 +23,7 @@ struct Packet {
   Side side = Side::Buy;
   uint8_t pos = 0;      // position slot
   uint8_t attempt = 0;
+  bool jito = false;    // also send to the Jito links (the tx carries a Jito tip)
   Signature sig{};
   uint64_t t_recv_ns = 0;    // frame arrival (ingest)
   uint64_t t_signed_ns = 0;  // packet ready (logic)
@@ -46,9 +49,59 @@ struct SendResult {
 };
 
 // --- logic -> ingest -----------------------------------------------------------
+enum class WatchKind : uint8_t {
+  Account = 0,  // account pushes ("watch")
+  PoolTxs = 1,  // every tx that touches the key ("pools"): rival profiling
+};
+
 struct WatchCmd {
   bool add = true;
+  WatchKind kind = WatchKind::Account;
   Pubkey key{};
+};
+
+// --- leaders and routing (aux -> logic) ------------------------------------------
+/** How the leader orders transactions: by priority, by BAM arrival, or by fee per requested CU. */
+enum class LeaderClass : uint8_t { Agave = 0, Bam = 1, Firedancer = 2 };
+constexpr size_t N_LEADER_CLASSES = 3;
+
+inline const char* leader_class_name(LeaderClass c) {
+  switch (c) {
+    case LeaderClass::Bam: return "bam";
+    case LeaderClass::Firedancer: return "firedancer";
+    default: return "agave";
+  }
+}
+
+/** One epoch's leader schedule, classified. Immutable once published; aux keeps it alive. */
+struct LeaderTable {
+  uint64_t first_slot = 0;
+  std::vector<uint8_t> cls;        // LeaderClass per slot offset
+  std::vector<uint16_t> leader;    // index into identities per slot offset
+  std::vector<Pubkey> identities;
+
+  bool covers(uint64_t slot) const { return slot >= first_slot && slot - first_slot < cls.size(); }
+  LeaderClass class_at(uint64_t slot) const { return covers(slot) ? LeaderClass(cls[slot - first_slot]) : LeaderClass::Agave; }
+  const Pubkey* leader_at(uint64_t slot) const { return covers(slot) ? &identities[leader[slot - first_slot]] : nullptr; }
+};
+
+/** Fee, CU and route for one leader class. */
+struct RouteProfile {
+  uint64_t cu_price = 0;       // micro-lamports per CU, buys
+  uint64_t exit_cu_price = 0;  // micro-lamports per CU, sells
+  uint32_t cu_limit = 0;    // 0 = measured by logic from our fills (entry.cu_limit until enough samples)
+  uint64_t sender_tip = 0;
+  bool jito = false;        // also send through Jito (needs jito.enabled)
+};
+
+struct RoutePolicy {
+  RouteProfile by_class[N_LEADER_CLASSES];
+};
+
+/** Wallets the rival guard checks (data/rivals.json, ranked by pump-desk-report --rivals). */
+struct RivalSet {
+  Pubkey wallets[MAX_RIVALS]{};
+  uint8_t n = 0;
 };
 
 // --- logic <-> aux --------------------------------------------------------------
@@ -96,7 +149,7 @@ struct BlockhashSnap {
 // --- events (logic -> writer) ---------------------------------------------------
 enum class Ev : uint8_t {
   Boot, CurveAdmit, CurveFire, Migrate, Decision, Order, SendAck, Fill, PositionOpen, PositionUpdate,
-  PositionClose, Gap, Kill, Stats, Warn,
+  PositionClose, Gap, Kill, Stats, Warn, Route, RivalTx,
 };
 
 /** One generic fixed-size record; the meaning of a/b/c/i[]/d[] per type is in writer.cpp. */
@@ -125,6 +178,9 @@ struct Shared {
   Seqlock<BlockhashSnap> blockhash;
   Seqlock<AmmConfig> amm;
   std::atomic<uint64_t> cu_price{0};
+  Seqlock<RoutePolicy> routes;               // aux-fast; version 0 = routing off or not computed yet
+  Seqlock<RivalSet> rivals;                  // aux-fast, from routing rivals file
+  std::atomic<const LeaderTable*> leaders{nullptr};  // aux-leaders; null until the first schedule
   std::atomic<bool> kill_file{false};
   std::atomic<bool> stop{false};
   Counters counters;

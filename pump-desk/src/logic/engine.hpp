@@ -5,6 +5,7 @@
 //   pool pushes  -> trigger (whichever completes the input set first, once)
 //   vault pushes -> marks -> exit FSM -> sells
 //   wallet txs   -> fills and the in-memory balance
+//   pool txs     -> rival profiling (who lands ahead of us, how they pay)
 // Nothing here allocates after construction.
 #include <array>
 #include <cstdint>
@@ -46,6 +47,11 @@ struct CurveSlot {
   Signature last_sig{};  // the tx that last wrote the curve (mint resolution fallback)
   bool keys_ready = false;
   SwapKeys keys;
+  // Rival guard: wallets from the rivals file and their ATAs for this mint, derived at fire.
+  Pubkey rivals[MAX_RIVALS]{}, rival_atas[MAX_RIVALS]{};
+  uint8_t n_rivals = 0;
+  bool pool_txs_watched = false;
+  uint64_t migrate_slot = 0;
   // Pool-side inputs, from pushes (watched from fire).
   bool pool_seen = false, base_seen = false, quote_seen = false;
   Pool pool;
@@ -85,6 +91,11 @@ struct Position {
   int64_t writes_counting = 0;
   // Slot of the frame that triggered the latest buy or sell (fill slot minus this = slots to land).
   uint64_t order_slot = 0;
+  // Lighthouse guards on the buy: instruction index of the first, and the rival behind each rival guard.
+  BuyGuards guards;
+  uint8_t guard_ix0 = 0;
+  Pubkey rivals[MAX_RIVALS]{};
+  uint32_t buy_cu_limit = 0;
   // open
   uint64_t base_amount = 0;
   uint64_t base_bought = 0;
@@ -143,6 +154,8 @@ class Engine {
   uint64_t reserved_lamports() const { return reserved_; }
   bool killed() const { return kill_latched_; }
   uint64_t last_slot() const { return last_slot_; }
+  /** The buy CU limit measured from landed buys (0 until the first sample). */
+  uint32_t measured_cu_limit() const { return measured_cu_; }
 
  private:
   // frame handlers
@@ -168,18 +181,26 @@ class Engine {
 
   // trading
   enum class TriggerSrc : uint8_t { MigrateTx, PoolPush, PoolWaitTimeout };
+  /** Which leader a packet is priced for, and how. */
+  struct RouteChoice {
+    LeaderClass cls = LeaderClass::Agave;
+    Pubkey leader{};
+    uint64_t slot = 0;
+    bool routed = false;  // a per-class profile was applied (else the single legacy policy)
+    bool jito = false;
+  };
   void trigger(CurveSlot& s, uint64_t base_res, uint64_t quote_res, uint64_t virt, uint64_t recv_ns, TriggerSrc src);
   /** Fire when the pool account and both vault balances are known. */
   void try_trigger(CurveSlot& s, uint64_t recv_ns, TriggerSrc src);
   int free_position() const;
   int active_positions() const;
-  bool send_packet(Side side, uint8_t pos, uint8_t attempt, const IxList& ixs, uint64_t recv_ns, Signature& sig_out);
+  bool send_packet(Side side, uint8_t pos, uint8_t attempt, const IxList& ixs, uint64_t recv_ns, bool jito, Signature& sig_out);
   void mark(Position& p, uint64_t now_ns);
   void maybe_exit(Position& p, int idx, uint64_t now_ns);
   void send_sell(Position& p, int idx, ExitTrigger t, double fraction, uint64_t recv_ns);
-  /** tx_index and seen_ns come from a stream fill; -1 / 0 otherwise. */
+  /** tx_index and seen_ns come from a stream fill; -1 / 0 otherwise. beaten_by: the rival a guard reverted on. */
   void on_buy_result(int idx, bool ok, int64_t sol_delta, int64_t base_delta, uint64_t slot, const char* how,
-                     int64_t tx_index = -1, uint64_t seen_ns = 0);
+                     int64_t tx_index = -1, uint64_t seen_ns = 0, const Pubkey* beaten_by = nullptr);
   void on_sell_result(int idx, const Signature& sig, bool ok, int64_t sol_delta, int64_t base_delta, uint64_t slot,
                       const char* how, int64_t tx_index = -1, uint64_t seen_ns = 0);
   /** Landing fields shared by buy and sell Fill events (i[5..7], d[2]). */
@@ -187,10 +208,18 @@ class Engine {
   void close_position(int idx, const char* reason);
   void release_watches(const Position& p);
   void latch_kill(const char* why);
-  TxParams tx_params(bool exit);
+  TxParams tx_params(bool exit, RouteChoice& rc);
+  void emit_route(const Signature& sig, Side side, const TxParams& tp, const RouteChoice& rc, uint8_t guards);
+  void refresh_rivals();
+  void build_guards(const CurveSlot& s, uint64_t quote_res, BuyGuards& g, Pubkey* rivals) const;
+  /** How many of the curve's rival guards still fit one packet on its widest buy. */
+  uint8_t fit_rival_guards(const CurveSlot& s);
+  void on_pool_tx(const TxView& tx);
+  void add_cu_sample(uint64_t cu);
 
   // shared snapshots
   void refresh_amm();
+  void refresh_routes();
   void drain_queues(uint64_t now_ns);
 
   // events
@@ -220,6 +249,15 @@ class Engine {
   SignedTx* tx_;
   AmmConfig amm_;
   uint64_t amm_version_ = 0;
+  RoutePolicy routes_{};
+  uint64_t routes_version_ = 0;  // 0 = no per-class policy yet: legacy fees
+  RivalSet rivals_{};
+  uint64_t rivals_version_ = 0;
+  // Compute units our landed buys consumed; the max of the window (+ margin) is the measured CU limit.
+  std::array<uint32_t, 32> cu_samples_{};
+  uint32_t n_cu_samples_ = 0;
+  uint32_t measured_cu_ = 0;
+  bool build_too_large_ = false;  // the last send_packet failed because the tx exceeded one packet
 
   uint64_t wallet_lamports_ = 0, wallet_slot_ = 0, reserved_ = 0;
   bool kill_latched_ = false;

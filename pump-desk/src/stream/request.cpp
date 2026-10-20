@@ -19,8 +19,8 @@ pb::Writer memcmp_filter(uint64_t offset, const uint8_t* bytes, size_t n) {
   return f;
 }
 
-pb::Writer tx_filter(bool failed_set, bool failed, std::initializer_list<Pubkey> include,
-                     std::initializer_list<Pubkey> required) {
+template <class Include, class Required>
+pb::Writer tx_filter(bool failed_set, bool failed, const Include& include, const Required& required) {
   // SubscribeRequestFilterTransactions { vote 1, failed 2, account_include 3, account_required 6 }
   pb::Writer t;
   t.boolean(1, false);
@@ -29,6 +29,8 @@ pb::Writer tx_filter(bool failed_set, bool failed, std::initializer_list<Pubkey>
   for (const Pubkey& k : required) t.bytes(6, b58(k));
   return t;
 }
+
+using Keys = std::initializer_list<Pubkey>;
 
 }  // namespace
 
@@ -57,9 +59,11 @@ std::string encode_subscribe_request(const SubscriptionSpec& spec) {
     req.map_entry(2, "heartbeat", s);
   }
   // transactions (3)
-  req.map_entry(3, "migrate", tx_filter(false, false, {}, {prog::PUMP_FUN, prog::MIGRATION_AUTHORITY}));
-  req.map_entry(3, "creates", tx_filter(true, false, {}, {prog::PUMP_FUN, prog::MINT_AUTHORITY}));
-  if (!is_zero(spec.wallet)) req.map_entry(3, "wallet", tx_filter(false, false, {spec.wallet}, {}));
+  req.map_entry(3, "migrate", tx_filter(false, false, Keys{}, Keys{prog::PUMP_FUN, prog::MIGRATION_AUTHORITY}));
+  req.map_entry(3, "creates", tx_filter(true, false, Keys{}, Keys{prog::PUMP_FUN, prog::MINT_AUTHORITY}));
+  if (!is_zero(spec.wallet)) req.map_entry(3, "wallet", tx_filter(false, false, Keys{spec.wallet}, Keys{}));
+  // Failed txs too: a rival's reverted attempt still shows how it paid.
+  if (!spec.pool_txs.empty()) req.map_entry(3, "pools", tx_filter(false, false, spec.pool_txs, Keys{}));
   // commitment (6) = PROCESSED (0); optional field, so presence is explicit.
   req.u64(6, 0);
   return req.out;

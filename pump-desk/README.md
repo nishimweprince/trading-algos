@@ -1,9 +1,14 @@
 # pump-desk
 
 > **Status (2026-10-14): migration sniping is shelved.** The live VM is
-> kill-latched and must remain so. A roughly 19-hour replay found no capturable
-> first-position edge. New hypotheses belong in [`research/`](research/README.md)
-> and must survive a chronological holdout before any live work resumes.
+> kill-latched. A roughly 19-hour replay found no capturable first-position
+> edge. New hypotheses belong in [`research/`](research/README.md).
+>
+> **2026-10-21:** leader-aware routing, Lighthouse guards and rival profiling
+> were added for a live measurement run (owner's decision). They change how we
+> race; they do not change the replay verdict. Run one epoch with `KILL`
+> present first so the leader table and `data/rivals.json` fill, then judge it
+> on `pump-desk-report`'s per-class and rival tables.
 
 A C++ rewrite of `pump-fun/` that trades the **migration racer** strategy live. It watches pump.fun bonding curves that are nearly complete. When one graduates, it buys first position on the new canonical PumpSwap pool and exits it with a configurable rule set.
 
@@ -24,9 +29,41 @@ A C++ rewrite of `pump-fun/` that trades the **migration racer** strategy live. 
    - real pool SOL within `[25, 100]`
    - buy impact ≤ 3 %
    - concurrency and balance
-5. **Buy.** Size is 15 % of the available balance (compounding). It builds the PumpSwap `buy` exactly as `@pump-fun/pump-swap-sdk` 1.20 does: WSOL wrap → base ATA → buy → unwrap, with CU price and a Sender tip. It signs with libsodium and hands the packet to the exec thread.
-6. **Fills** come from the same gRPC stream (a wallet transaction filter). Unconfirmed orders are resolved by RPC.
-7. **Exits** are a port of `pump-fun/src/exits/engine.ts` `evaluateExit`: TP0/TP1/TP2, hard stop, trailing, time stop, dead money and slippage tiers. Defaults are the live set: TP 50 % full exit, no stop, trailing off, 10-minute time stop. A full exit also closes the base ATA, which returns its rent.
+5. **Route.** Price the buy for the leader of the next slot (see *Routing* below): CU price, CU limit, tip and Jito per leader class.
+6. **Guard.** Lighthouse assertions go in front of the swap. If the pool quote vault grew past what we priced (someone landed first), or a ranked rival already holds the mint, the whole tx reverts (~700 CU per assertion) instead of filling up to `slippage_pct` worse.
+7. **Buy.** Size is 15 % of the available balance (compounding). It builds the PumpSwap `buy` exactly as `@pump-fun/pump-swap-sdk` 1.20 does: WSOL wrap → base ATA → buy → unwrap, with CU price and a Sender tip. It signs with libsodium and hands the packet to the exec thread.
+8. **Fills** come from the same gRPC stream (a wallet transaction filter). Unconfirmed orders are resolved by RPC.
+9. **Exits** are a port of `pump-fun/src/exits/engine.ts` `evaluateExit`: TP0/TP1/TP2, hard stop, trailing, time stop, dead money and slippage tiers. Defaults are the live set: TP 50 % full exit, no stop, trailing off, 10-minute time stop. A full exit also closes the base ATA, which returns its rent.
+
+## Routing
+
+How a leader orders transactions decides what is worth paying for:
+
+| Leader | Ordering | Default policy (`[routing.<class>]`) |
+|---|---|---|
+| Agave / Jito without BAM | priority (CU price) | `beat_rivals`: max(Helius estimate, p90 CU price of the wallets that landed ahead of us + 1) |
+| BAM | arrival at the BAM node across auctions (every ~20 ms; batches execute in order); inside one auction likely fee/tip (unconfirmed) | `beat_rivals`: send at once for the next auction and bid high to win inside it. Plain tx over Sender's staked route from Frankfurt, never Jito (the block-engine hop is ~+50 ms) |
+| Firedancer / Frankendancer | fee per *requested* CU | `beat_rivals` with a tight CU limit (max of our last 32 landed buys + 15 %) |
+
+- **Leader table.** `aux-leaders` loads `getLeaderSchedule` (current and next epoch) and `getClusterNodes` (every 10 minutes). It classifies each identity: on the BAM list (`data/bam_validators.json`, a JSON array you maintain) → BAM; version `0.x` → Firedancer; else Agave. It publishes an immutable slot → class table. The trigger does one array read; a slot outside the table is Agave (the old single policy).
+- **Profiles.** `aux-fast` rebuilds the per-class profiles on every fee refresh and whenever `rivals.json` changes. Logic picks the profile for `processed tip + lookahead_slots`. Each order gets a `route` row: class, leader, CU price and limit, Jito, guards.
+- **Exits.** Sells are priced per class by `exit_cu_price_mode` (default `estimate` × `exits.exit_priority_multiplier`), independent of the buy price. A late take-profit gives back the move, so a cheap buy class still exits at a high bid; on BAM the sell is a plain tx at that bid, aimed at the next auction.
+- **Jito per packet.** Exec sends to Jito only packets priced for it. The class's `jito = true` needs `jito.enabled`.
+
+### Rivals
+
+- **Capture.** From fire, every tx on the new pool is streamed for `rival_window_slots` slots after the migrate (filter `pools`). Each one becomes a `rival_txs` row: signer, slot and index, CU price/limit, tip and route (Sender / Jito / other tip account), SOL in, leader class, CU consumed.
+- **Ranking.** `pump-desk-report --rivals` (systemd `pump-desk-rivals.timer`, every 15 minutes, last 72 h) ranks the wallets whose buys landed ahead of ours. It writes `data/rivals.json`:
+  - `guard`: the top wallets, for the rival guard.
+  - `beat_cu_price`: per class, p90 + 1. Set only with ≥ 5 samples.
+- **Reload.** pump-desk reloads the file when its mtime changes.
+- **Guard reverts.**
+  - A buy reverted by a guard closes as `beaten_vault` or `beaten_rival`. The fill row's `beaten_by` names the rival.
+  - It is never retried and never counts toward the kill latch.
+- **Packet size.** Every guard costs a key plus an instruction (~48 bytes). The widest buy (cashback + Token-2022) with one tip and the vault guard is 1221 of 1232 bytes.
+  - Rival guards that don't fit one packet are dropped at fire.
+  - The trigger sheds guards again if the pool push widened the buy.
+  - In practice the rival guard needs an address lookup table to be active; see *Not done*.
 
 ## Threads
 
@@ -35,9 +72,9 @@ A C++ rewrite of `pump-fun/` that trades the **migration racer** strategy live. 
 | 1 | ingest | grpc++ generic bidi stream. Raw `SubscribeUpdate` bytes go into a preallocated frame ring (Disruptor-style; logic gates it, the capture recorder reads lossily). Owns subscription rewrites and pings. |
 | 2 | logic | Zero-copy protobuf wire parse, then tracker, trigger, screen, sizing, tx build and sign, positions, exits. No heap after construction. |
 | 3 | exec | Spins on the packet queue. Writes to warm keep-alive HTTP/1.1 sockets (`TCP_NODELAY`) to Helius Sender fra, and optionally Jito Frankfurt with the same signed bytes. Reads acks between packets. |
-| any | aux-fast, aux-req, writer, capture | Blockhash (2 s), PumpSwap configs (30 s), priority fee (3 s), balance, KILL file; curve→mint and unconfirmed-order RPC; SQLite + JSONL. |
+| any | aux-fast, aux-req, aux-leaders, writer, capture | Blockhash (2 s), PumpSwap configs (30 s), priority fee and route profiles (3 s), rivals file, balance, KILL file; curve→mint and unconfirmed-order RPC; leader schedule and cluster versions; SQLite + JSONL. |
 
-Measured in-process trigger latency (frame in → signed packet queued, `bench_trigger_latency`): **~20–30 µs p50** on an M-series laptop, unpinned.
+Measured in-process trigger latency (frame in → signed packet queued, `bench_trigger_latency`): **~15–30 µs p50** on an M-series laptop, unpinned, with the vault guard on. Routing adds one array read and a cached profile copy; guards add 1–2 instructions to the compile.
 
 ## Correctness of the hand-rolled bytes
 
@@ -45,7 +82,10 @@ Measured in-process trigger latency (frame in → signed packet queued, `bench_t
 - Boot runs a **self-check**: it builds a buy on a graduated canonical pool and `simulateTransaction`s it. Any program error refuses the start.
 - Before this commit, the C++ buy was simulated OK against mainnet on the seed pool and on 4 fresh migrations (2 of them mayhem pools).
 
-Regenerate fixtures after an SDK upgrade with `node pump-desk/tools/fixtures/gen.mjs` (needs `pump-fun/node_modules`).
+- `tools/fixtures/lighthouse.mjs` builds the two Lighthouse assertions with `lighthouse-sdk-legacy` 2.0.1 and writes `tests/fixtures/lighthouse.json`; `pd_tests` asserts byte equality.
+- Boot also simulates a buy *with* the vault guard, and a guard-only tx whose second assertion is false; it must fail with `AssertionFailed` (6001) at that index, or the start is refused.
+
+Regenerate fixtures after an SDK upgrade with `node pump-desk/tools/fixtures/gen.mjs` (needs `pump-fun/node_modules`), and `node pump-desk/tools/fixtures/lighthouse.mjs <dir>` after `npm install --prefix <dir> --ignore-scripts lighthouse-sdk-legacy@2.0.1 rpc-websockets@7.11.0`.
 
 ## Build and deploy (AWS eu-central-1)
 
@@ -71,7 +111,17 @@ Build only on the VM; grpc++ is not installed on the laptop.
 - **Sender 429s:** exec resends the same signed bytes on the other link after `sender.retry_429_ms` × try (default 1 s; live, Sender let through about 1 tx/s for this key), up to `sender.max_429_retries`. A 429 on a sell also restarts that sell's exit timer, so the engine doesn't send a second sell into the backoff. A 429 is never a rejection, so it costs no exit attempt and can't trip the kill latch. A sell rejected at send time (no connection, a rejected request) waits `exits.exit_retry_ms` before the next attempt. Only an on-chain failure retries at once on the next slippage tier.
 - **Landing, not "fill ms":** sent → fill seen (~150 ms) is mostly chain and stream time. Judge routing and fee changes on the landing fields of each buy fill: slots to land (fill slot − processed tip at send), index in the block, pool quote-vault writes by other txs between our send and ours, and first shred / slot completed → seen (from LaserStream inter-slot statuses; n/a if the endpoint doesn't send them). They're in the `fills` view, the report, and the status page.
 - **One bot per wallet.** A wallet tx that isn't ours but moves a held position's tokens out (a wallet app, another bot on the same key) is followed: the position shrinks, or closes as `external_sell`, instead of exits retrying into an emptied token account.
-- **Report:** `./build/pump-desk-report data/pump-desk.db [--since-hours 24]` shows net PnL including fees, tips and rent, exit reasons, landing and latency percentiles. Raw data is in the `events` table and the `decisions`, `orders`, `acks`, `fills` and `migrations` views, plus `data/events.jsonl`.
+- **Report:** `./build/pump-desk-report data/pump-desk.db [--since-hours 24]` shows:
+  - net PnL including fees, tips and rent
+  - exit reasons
+  - landing and latency percentiles
+  - buys by leader class
+  - guard reverts and who beat us
+  - the wallets landing ahead of us
+
+  Raw data is in the `events` table, the `decisions`, `orders`, `acks`, `fills`, `routes`, `rival_txs` and `migrations` views, and `data/events.jsonl`.
+- **Rivals:** `sudo systemctl enable --now pump-desk-rivals.timer` refreshes `data/rivals.json`. Run `./build/pump-desk-report data/pump-desk.db --rivals` once by hand to see the ranking.
+- **BAM list:** put the BAM validators' identities in `data/bam_validators.json` (`["identity", ...]`). Without it, every non-Firedancer leader is treated as Agave.
 - **Status page:** `sudo systemctl enable --now pump-desk-status` serves `http://127.0.0.1:8787`. The page polls `/api/status` every 10 seconds. The process only reads `data/pump-desk.db` and is left unpinned, so with the isolcpus line above it stays on the housekeeping core. Do not publish port 8787. Point cloudflared at that URL:
 
   `cloudflared tunnel --url http://127.0.0.1:8787`
@@ -88,7 +138,7 @@ src/stream   SubscribeUpdate views, SubscribeRequest encoder, grpc++ ingest
 src/logic    engine (tracker/trigger/screen/positions), tx parsing, exit FSM, shared queues/events
 src/exec     Sender/Jito sender
 src/net      TCP/TLS connections, HTTP/1.1 parser
-src/aux      RPC client, aux threads, writer
+src/aux      RPC client, aux threads (fees/routes/rivals, leader schedule), writer
 src/tools    report, status page
 tests/       golden SDK bytes, engine round trips over synthetic frames, rings, parser, writer
 proto/       vendored LaserStream geyser.proto / solana-storage.proto (field reference; no protoc needed)
@@ -97,6 +147,12 @@ proto/       vendored LaserStream geyser.proto / solana-storage.proto (field ref
 ## Not done / known gaps
 
 - The gRPC ingest (`src/stream/ingest.cpp`) compiles only on the VM. Everything else builds and is tested locally.
+- **The rival guard needs an address lookup table to be active.**
+  - The widest guarded buy leaves 11 bytes of headroom, so rival guards are usually dropped as too large.
+  - Moving the static PumpSwap accounts (global/fee config, event authority, volume accumulator, fee and buyback recipients and their ATAs, WSOL mint, tip accounts) into an ALT would free ~300 bytes.
+  - It needs an on-chain ALT owned by the wallet and v0 lookup compilation.
+  - The vault guard already reverts behind *any* earlier buyer. Rival attribution comes from `rival_txs` either way.
+- **BAM ordering within one auction** (fee or tip) is not confirmed. The `bam` profile bids high in case it is; `cu_price_mode = "floor"` relies on arrival alone.
 - Jito is built but off. Enable `jito.enabled` only after `pump-desk-report` shows the extra tip ix costs nothing measurable. The send itself is parallel.
 - Exits rely on vault pushes (every swap writes both vaults) plus a timer. No RPC polling on positions.
 - No shred-level feed. A Jito ShredStream proxy in FRA would see migrate txs and our fills from raw block data before replay. The report's first shred → seen and slot completed → seen numbers size the possible gain. It needs a Jito auth key and a separate process.

@@ -1,0 +1,10 @@
+[Unit]
+Description=Rank pump-desk rivals every 15 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+Unit=pump-desk-rivals.service
+
+[Install]
+WantedBy=timers.target
