@@ -687,6 +687,37 @@ TEST(engine_routes_by_leader_class) {
   }
 }
 
+TEST(engine_bam_exit_bids_high) {
+  // BAM buys at the floor here, yet the take-profit sell still pays estimate x exit multiplier.
+  Rig r;
+  r.cfg.routing.bam.cu_price_mode = "floor";
+  auto table = uniform_table(LeaderClass::Bam, parse_pubkey("D2L6yPZ2FmmmTKPgzaMKdhu6EWZcTpLy1Vhx8uvZe7NZ"));
+  r.sh->leaders.store(table.get());
+  publish_routes(r, 1'200'000);
+  r.create();
+  r.band(1'000'000'000'000ULL);
+  r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
+  Packet pk;
+  CHECK(r.pop_packet(pk));
+  const Position& p = r.eng->position(0);
+  r.wallet_fill(p.buy_sig, 1'000'000'000, 840'000'000, 0, p.expected_base);
+  r.feed(account_frame("watch", r.quote_vault, prog::TOKEN, token_account(3 * 67'410'000'000ULL), r.slot));
+  Packet sell;
+  CHECK(r.pop_packet(sell));
+  CHECK(sell.side == Side::Sell);
+  CHECK(!sell.jito);
+  auto es = r.events();
+  const Event* buy = route_for(es, Side::Buy);
+  const Event* rt = route_for(es, Side::Sell);
+  CHECK(buy && buy->i[1] == int64_t(r.cfg.fees.cu_price_floor));
+  CHECK(rt != nullptr);
+  if (rt) {
+    CHECK_EQ(rt->i[0], int64_t(LeaderClass::Bam));
+    CHECK_EQ(rt->i[1], int64_t(1'200'000 * r.cfg.exits.exit_priority_multiplier));
+  }
+  r.sh->leaders.store(nullptr);
+}
+
 TEST(engine_routing_fallbacks) {
   // No leader table: Agave. No policy yet: the legacy single price, unrouted.
   Rig r;

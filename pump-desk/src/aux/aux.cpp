@@ -62,10 +62,15 @@ RoutePolicy make_route_policy(const Config& cfg, uint64_t estimate, const uint64
   for (size_t c = 0; c < N_LEADER_CLASSES; ++c) {
     const Config::RouteClass& rc = *rcs[c];
     RouteProfile& p = rp.by_class[c];
-    uint64_t est = uint64_t(double(base) * cfg.entry.priority_multiplier * rc.cu_price_multiplier);
-    if (rc.cu_price_mode == "floor") p.cu_price = cfg.fees.cu_price_floor;
-    else if (rc.cu_price_mode == "beat_rivals") p.cu_price = std::max(est, std::min(beat_cu_price[c], cfg.fees.cu_price_cap));
-    else p.cu_price = est;
+    auto price = [&](const std::string& mode, double multiplier) {
+      uint64_t est = uint64_t(double(base) * multiplier);
+      if (mode == "floor") return cfg.fees.cu_price_floor;
+      if (mode == "beat_rivals") return std::max(est, std::min(beat_cu_price[c], cfg.fees.cu_price_cap));
+      return est;
+    };
+    p.cu_price = price(rc.cu_price_mode, cfg.entry.priority_multiplier * rc.cu_price_multiplier);
+    // Exits are priced on their own: a late take-profit gives back the move, whatever the buy paid.
+    p.exit_cu_price = price(rc.exit_cu_price_mode, cfg.exits.exit_priority_multiplier);
     p.cu_limit = rc.cu_limit;
     p.sender_tip = rc.sender_tip_lamports ? rc.sender_tip_lamports : cfg.sender.tip_lamports;
     p.jito = rc.jito && cfg.jito.enabled;

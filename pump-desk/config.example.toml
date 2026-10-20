@@ -123,10 +123,13 @@ cu_samples_min = 8                # until then: entry.cu_limit
 
 # cu_price_mode: estimate (Helius x multipliers) | floor (fees.cu_price_floor) |
 # beat_rivals (max of estimate and rivals.json's p90 + 1 for this class, capped at fees.cu_price_cap)
+# exit_cu_price_mode prices sells the same way (estimate x exits.exit_priority_multiplier), on its
+# own: a sell's price never follows the buy's (a floor-priced buy class still exits at a high bid).
 # cu_limit 0 = measured. sender_tip_lamports 0 = sender.tip_lamports. jito needs jito.enabled.
 [routing.agave]
 cu_price_mode = "beat_rivals"
 cu_price_multiplier = 1
+exit_cu_price_mode = "estimate"
 cu_limit = 0
 sender_tip_lamports = 0
 jito = false
@@ -134,6 +137,7 @@ jito = false
 [routing.bam]
 cu_price_mode = "beat_rivals"     # send at once (next auction) and bid high to win inside it
 cu_price_multiplier = 1
+exit_cu_price_mode = "estimate"
 cu_limit = 0
 sender_tip_lamports = 0
 jito = false                      # a Jito bundle/tx takes the block-engine hop (~+50 ms)
@@ -141,6 +145,7 @@ jito = false                      # a Jito bundle/tx takes the block-engine hop 
 [routing.firedancer]
 cu_price_mode = "beat_rivals"
 cu_price_multiplier = 1
+exit_cu_price_mode = "estimate"
 cu_limit = 0                      # tight measured limit raises fee per requested CU
 sender_tip_lamports = 0
 jito = false

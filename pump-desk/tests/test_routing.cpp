@@ -180,6 +180,10 @@ TEST(route_policy_modes) {
   c.routing.bam.cu_price_mode = "floor";  // arrival only
   CHECK_EQ(make_route_policy(c, 1'000'000, beat).by_class[size_t(LeaderClass::Bam)].cu_price, uint64_t(100'000));
   CHECK(!agave.jito && !bam.jito && !fd.jito);
+  // Exits: estimate x exit multiplier on every class, whatever the buy mode.
+  for (const RouteProfile* x : {&agave, &bam, &fd}) CHECK_EQ(x->exit_cu_price, uint64_t(1'000'000 * c.exits.exit_priority_multiplier));
+  c.routing.bam.exit_cu_price_mode = "beat_rivals";
+  CHECK_EQ(make_route_policy(c, 1'000'000, beat).by_class[size_t(LeaderClass::Bam)].exit_cu_price, uint64_t(5'000'000));
   // Without a rival price, beat_rivals is the estimate; the estimate falls back to the default.
   uint64_t none[N_LEADER_CLASSES] = {0, 0, 0};
   c.routing.agave.cu_price_multiplier = 2;

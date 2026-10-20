@@ -47,6 +47,7 @@ How a leader orders transactions decides what is worth paying for:
 
 - **Leader table.** `aux-leaders` loads `getLeaderSchedule` (current and next epoch) and `getClusterNodes` (every 10 minutes). It classifies each identity: on the BAM list (`data/bam_validators.json`, a JSON array you maintain) → BAM; version `0.x` → Firedancer; else Agave. It publishes an immutable slot → class table. The trigger does one array read; a slot outside the table is Agave (the old single policy).
 - **Profiles.** `aux-fast` rebuilds the per-class profiles on every fee refresh and whenever `rivals.json` changes. Logic picks the profile for `processed tip + lookahead_slots`. Each order gets a `route` row: class, leader, CU price and limit, Jito, guards.
+- **Exits.** Sells are priced per class by `exit_cu_price_mode` (default `estimate` × `exits.exit_priority_multiplier`), independent of the buy price. A late take-profit gives back the move, so a cheap buy class still exits at a high bid; on BAM the sell is a plain tx at that bid, aimed at the next auction.
 - **Jito per packet.** Exec sends to Jito only packets priced for it. The class's `jito = true` needs `jito.enabled`.
 
 ### Rivals

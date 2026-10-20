@@ -120,6 +120,7 @@ struct Config {
   struct RouteClass {
     std::string cu_price_mode = "estimate";  // estimate | floor | beat_rivals
     double cu_price_multiplier = 1;           // on top of entry.priority_multiplier
+    std::string exit_cu_price_mode = "estimate";  // sells: same modes, times exits.exit_priority_multiplier
     uint32_t cu_limit = 0;                    // 0 = measured from our own fills
     uint64_t sender_tip_lamports = 0;         // 0 = sender.tip_lamports
     bool jito = false;                        // also send via Jito (needs jito.enabled)

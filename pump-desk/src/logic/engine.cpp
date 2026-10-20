@@ -607,7 +607,7 @@ TxParams Engine::tx_params(bool exit, RouteChoice& rc) {
     const RouteProfile& rp = routes_.by_class[size_t(rc.cls)];
     rc.routed = true;
     rc.jito = rp.jito;
-    p.cu_price = exit ? uint64_t(double(rp.cu_price) * cfg_.exits.exit_priority_multiplier) : rp.cu_price;
+    p.cu_price = exit ? rp.exit_cu_price : rp.cu_price;
     if (exit) p.cu_limit = cfg_.exits.cu_limit;
     else if (rp.cu_limit) p.cu_limit = rp.cu_limit;
     else p.cu_limit = n_cu_samples_ >= uint32_t(cfg_.routing.cu_samples_min) ? measured_cu_ : cfg_.entry.cu_limit;

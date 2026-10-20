@@ -164,6 +164,7 @@ Config load_config(const std::string& path) {
     std::string sec = std::string("routing.") + name + ".";
     r.get(sec + "cu_price_mode", rc->cu_price_mode);
     r.get(sec + "cu_price_multiplier", rc->cu_price_multiplier);
+    r.get(sec + "exit_cu_price_mode", rc->exit_cu_price_mode);
     r.get(sec + "cu_limit", rc->cu_limit);
     r.get(sec + "sender_tip_lamports", rc->sender_tip_lamports);
     r.get(sec + "jito", rc->jito);
@@ -220,9 +221,11 @@ Config load_config(const std::string& path) {
     throw std::runtime_error("config: routing.rival_window_slots must be 0..64");
   if (c.routing.cu_limit_margin_pct < 0 || c.routing.cu_samples_min < 1) throw std::runtime_error("config: routing.cu_limit_margin_pct / cu_samples_min");
   for (auto [name, rc] : {std::pair{"agave", &c.routing.agave}, {"bam", &c.routing.bam}, {"firedancer", &c.routing.firedancer}}) {
-    const std::string& m = rc->cu_price_mode;
     std::string sec = std::string("config: routing.") + name;
-    if (m != "estimate" && m != "floor" && m != "beat_rivals") throw std::runtime_error(sec + ".cu_price_mode must be estimate|floor|beat_rivals");
+    for (const std::string* m : {&rc->cu_price_mode, &rc->exit_cu_price_mode})
+      if (*m != "estimate" && *m != "floor" && *m != "beat_rivals")
+        throw std::runtime_error(sec + (m == &rc->cu_price_mode ? ".cu_price_mode" : ".exit_cu_price_mode") +
+                                 " must be estimate|floor|beat_rivals");
     if (rc->cu_price_multiplier <= 0) throw std::runtime_error(sec + ".cu_price_multiplier must be > 0");
     if (rc->jito && !c.jito.enabled) throw std::runtime_error(sec + ".jito needs jito.enabled");
     if (rc->sender_tip_lamports && c.sender.swqos_only && rc->sender_tip_lamports < 5000)

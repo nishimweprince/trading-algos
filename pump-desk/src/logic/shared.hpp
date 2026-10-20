@@ -87,7 +87,8 @@ struct LeaderTable {
 
 /** Fee, CU and route for one leader class. */
 struct RouteProfile {
-  uint64_t cu_price = 0;    // micro-lamports per CU
+  uint64_t cu_price = 0;       // micro-lamports per CU, buys
+  uint64_t exit_cu_price = 0;  // micro-lamports per CU, sells
   uint32_t cu_limit = 0;    // 0 = measured by logic from our fills (entry.cu_limit until enough samples)
   uint64_t sender_tip = 0;
   bool jito = false;        // also send through Jito (needs jito.enabled)
