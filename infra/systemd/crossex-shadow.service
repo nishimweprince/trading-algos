@@ -14,7 +14,8 @@ ExecStart=/opt/trading-algos/services/crossex-arbitrage/build/release/crossex sh
 # and the daily loss limit resets. Open shadow pairs are marked out as "shutdown".
 RuntimeMaxSec=1d
 Restart=always
-RestartSec=5
+# Longer backoff so a Binance 429 or WS drop does not storm the REST fee path.
+RestartSec=30
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

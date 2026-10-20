@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <thread>
 
 namespace cxa {
 namespace {
@@ -168,8 +169,20 @@ bool BinanceFeed::run(std::atomic<bool>& stop, ResyncFlags& resync, std::string&
       }
     }
   }
-  for (std::size_t i = 0; i < symbols_.size(); ++i)
+  // Keep draining the sockets while REST snapshots run. A 30-symbol basket can
+  // spend several seconds here; an idle combined stream is closed by Binance.
+  for (std::size_t i = 0; i < symbols_.size(); ++i) {
+    for (auto& socket : sockets) {
+      for (;;) {
+        const auto status = socket.receive(frame, 0, error);
+        if (status == WebSocket::Status::timeout) break;
+        if (status != WebSocket::Status::frame) return false;
+        buffered.emplace_back(wall_ns(), frame);
+      }
+    }
     if (!snapshot(i, error)) return false;
+    if (i + 1 < symbols_.size()) std::this_thread::sleep_for(std::chrono::milliseconds(40));
+  }
   for (const auto& [receive_ns, data] : buffered) {
     if (!frames_(receive_ns, data)) {
       if (error.empty()) error = "binance frame handler stopped the feed";
