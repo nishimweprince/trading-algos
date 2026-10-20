@@ -1,0 +1,27 @@
+[Unit]
+Description=Binance-Bybit cross-exchange arbitrage, shadow fills on mainnet data
+After=network-online.target chronyd.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=crossex
+Group=crossex
+WorkingDirectory=/opt/trading-algos/services/crossex-arbitrage
+EnvironmentFile=/etc/crossex.env
+ExecStart=/opt/trading-algos/services/crossex-arbitrage/build/release/crossex shadow --mode shadow
+# Daily restart: fresh journal file, fresh WebSocket sessions (Binance drops at 24 h),
+# and the daily loss limit resets. Open shadow pairs are marked out as "shutdown".
+RuntimeMaxSec=1d
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/data/crossex
+LimitNOFILE=65536
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
