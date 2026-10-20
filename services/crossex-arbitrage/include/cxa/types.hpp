@@ -81,9 +81,10 @@ struct Level final {
   Quantity quantity{};
 };
 
-// Binance @0ms diffs reach a few hundred levels and list far prices first, so a diff
-// is never truncated: anything larger is treated as a gap.
-constexpr std::size_t kMaxDepthChanges = 512;
+// Binance @0ms diffs reach past 600 levels per side on BTCUSDT (measured
+// 2026-10-20, Tokyo) and list far prices first, so a diff is never truncated:
+// anything larger is treated as a gap.
+constexpr std::size_t kMaxDepthChanges = 2048;
 
 // One book change on either venue. Bybit snapshots (L50) travel as a DepthEvent with
 // `snapshot` set; Binance REST snapshots are larger and travel as BookSnapshot.

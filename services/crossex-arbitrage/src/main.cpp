@@ -223,10 +223,15 @@ int shadow(int argc, char** argv) {
       const auto venue = static_cast<Venue>(v);
       std::string detail;
       if (!verify_read_only(http, venue, credentials[v], detail)) {
-        std::cerr << "key check failed: " << detail << " (use read-only keys, or --public-only)\n";
-        return 2;
+        if (environment("CXA_ALLOW_TRADING_KEYS", "0") != "1") {
+          std::cerr << "key check failed: " << detail << " (use read-only keys, or --public-only)\n";
+          return 2;
+        }
+        std::cerr << "WARNING: " << detail << "; proceeding with a trading-capable key "
+                  << "(CXA_ALLOW_TRADING_KEYS=1)\n";
+      } else {
+        std::cerr << detail << '\n';
       }
-      std::cerr << detail << '\n';
       if (!fetch_taker_fees(http, venue, credentials[v], basket, fees[v], error)) {
         std::cerr << "fees: " << error << '\n';
         return 1;

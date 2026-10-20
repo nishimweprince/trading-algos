@@ -57,3 +57,28 @@ binary sha256:
 probe Tokyo     (binance signed p99 / bybit signed p99 / feed age p99):
 probe Singapore (binance signed p99 / bybit signed p99 / feed age p99):
 ```
+
+### 2026-10-20 (ap-northeast-1, 57.183.17.58)
+
+```
+region / instance type / AMI: ap-northeast-1 / 4 vCPU 16 GB / Amazon Linux 2023
+CPU model: Intel(R) Xeon(R) CPU E5-2686 v4 @ 2.30GHz (x86_64)
+compiler: g++ 11.5.0 (cmake 4.4.4 from pip; distro cmake 3.22 is too old)
+libcurl version (with wss): 8.11.1 built from source into /opt/curl
+  (distro libcurl 8.21.0 advertises WSS in curl-config but its runtime
+  protocol list lacks wss, so the service refused to start against it)
+commit: 7df9070 + uncommitted fixes (kMaxDepthChanges 2048, replay header
+  order tolerance, Binance connect pre-roll, CXA_ALLOW_TRADING_KEYS valve;
+  see git status)
+binary sha256: 1a46b32ebb987a5d8d35...
+keys: binance read-only verified (taker 500 ppm); bybit key has trade
+  permission, running with CXA_ALLOW_TRADING_KEYS=1 at operator direction
+  (shadow has no order-entry code; prefer a read-only key when convenient)
+signed RTT p50 from Tokyo: binance 4.3 ms, bybit 38.8 ms (measured)
+smoke (full shadow with keys, 15 symbols, 90 s): 94k depth events,
+  gaps [0,0], gapcheck ok, replay deterministic (hash stable across runs)
+service: crossex-shadow enabled+active since 2026-10-20T14:38Z, journal
+  /data/crossex/crossex-%Y%m%dT%H%M%SZ.jsonl, daily restart, hourly zstd
+data disk: /dev/xvdb (100 GB, xfs) mounted at /data via fstab
+status UI: http://127.0.0.1:8070/ (loopback only; expose via cloudflared)
+```

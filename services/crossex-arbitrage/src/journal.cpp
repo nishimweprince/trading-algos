@@ -244,6 +244,19 @@ bool replay_journal(const std::string& path, const RuntimeConfig& config, Replay
   if (!input) { error = "cannot open journal " + path; return false; }
   std::vector<Instrument> instruments;
   std::unique_ptr<Engine> engine;
+  struct PendingFee final {
+    int venue{};
+    std::uint16_t symbol{};
+    std::int64_t ppm{};
+  };
+  struct PendingLatency final {
+    int venue{};
+    std::uint64_t rtt{};
+  };
+  // Fees and latency samples precede market data in any order (the writer emits
+  // each instrument with its fees); they apply once the engine exists.
+  std::vector<PendingFee> pending_fees;
+  std::vector<PendingLatency> pending_latency;
   auto depth = std::make_unique<DepthEvent>();
   std::string line;
   std::uint64_t line_number = 0;
@@ -251,6 +264,10 @@ bool replay_journal(const std::string& path, const RuntimeConfig& config, Replay
     if (engine) return true;
     if (instruments.empty()) { error = "journal has no instruments before market data"; return false; }
     engine = std::make_unique<Engine>(instruments, config.strategy, config.risk, config.shadow);
+    for (const auto& fee : pending_fees) engine->set_taker_fee(venue_from(fee.venue), fee.symbol, fee.ppm);
+    for (const auto& sample : pending_latency) engine->add_latency_sample(venue_from(sample.venue), sample.rtt);
+    pending_fees.clear();
+    pending_latency.clear();
     return true;
   };
   while (input.next(line)) {
@@ -277,16 +294,18 @@ bool replay_journal(const std::string& path, const RuntimeConfig& config, Replay
         int venue = 0;
         std::uint16_t symbol = 0;
         std::int64_t ppm = 0;
-        if (!(row >> venue >> symbol >> ppm) || !ensure_engine()) return bad();
-        engine->set_taker_fee(venue_from(venue), symbol, ppm);
+        if (!(row >> venue >> symbol >> ppm)) return bad();
+        if (engine) engine->set_taker_fee(venue_from(venue), symbol, ppm);
+        else pending_fees.push_back({venue, symbol, ppm});
         break;
       }
       case 'L': {
         int venue = 0;
         std::uint64_t receive_ns = 0;
         std::uint64_t rtt = 0;
-        if (!(row >> venue >> receive_ns >> rtt) || !ensure_engine()) return bad();
-        engine->add_latency_sample(venue_from(venue), rtt);
+        if (!(row >> venue >> receive_ns >> rtt)) return bad();
+        if (engine) engine->add_latency_sample(venue_from(venue), rtt);
+        else pending_latency.push_back({venue, rtt});
         break;
       }
       case 'S': {

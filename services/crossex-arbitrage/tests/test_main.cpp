@@ -140,6 +140,20 @@ void test_parsers() {
                             symbols, frame) &&
               frame.kind == FrameKind::ignored,
           "unknown symbol ignored");
+  // Live BTCUSDT @depth@0ms diffs exceed 512 levels per side; dropping one breaks
+  // the pu chain and forces a resync, so the parser must accept them.
+  std::string many;
+  for (int i = 0; i < 600; ++i) {
+    if (i != 0) many += ',';
+    many += "[\"60000.00\",\"0.5\"]";
+  }
+  const std::string wide =
+      "{\"stream\":\"btcusdt@depth@0ms\",\"data\":{\"e\":\"depthUpdate\",\"E\":1,\"T\":1,\"s\":\"BTCUSDT\","
+      "\"U\":1,\"u\":2,\"pu\":0,\"b\":[" +
+      many + "],\"a\":[[\"60001.00\",\"0.5\"]]}}";
+  require(parse_binance_frame(wide, 7, symbols, frame) && frame.kind == FrameKind::depth,
+          "600-level diff parses");
+  require(frame.depth.symbol == 0 && frame.depth.bid_count == 600, "wide diff fields");
 }
 
 void test_instruments() {
@@ -305,6 +319,32 @@ void test_replay_fixture() {
   require(gapcheck(path, gaps, error) && gaps.gaps[0] == 1 && gaps.recoveries[0] == 1, "gapcheck recovery");
 }
 
+void test_replay_interleaved_header() {
+  // The writer emits each instrument with its fees (Y C C Y C C); replay must
+  // accept that order rather than fail on the second instrument.
+  const auto path = std::filesystem::temp_directory_path() / "cxa-interleaved-test.jsonl";
+  {
+    std::ofstream out(path);
+    out << "Z 1 shadow pessimistic 100000000000 1000 500000 T0,T1\n";
+    out << "Y 0 T0 A0 B0 1000000 100000 100000 500000000 1000000 100000 100000 500000000 100000 100000\n";
+    out << "C 0 0 500\nC 1 0 550\n";
+    out << "Y 1 T1 A1 B1 1000000 100000 100000 500000000 1000000 100000 100000 500000000 100000 100000\n";
+    out << "C 0 1 500\nC 1 1 550\n";
+    out << "S 0 0 1700000000000000000 1000 1 10000000000 10000000000 1 10002000000 10000000000\n";
+    out << "D 0 0 0 1700000000001000000 1700000000001 1001 1001 1000 1 10000000000 10000000000 1 "
+           "10002000000 10000000000\n";
+    out << "S 0 1 1700000000000000000 2000 1 10000000000 10000000000 1 10002000000 10000000000\n";
+    out << "D 0 1 0 1700000000001000000 1700000000001 2001 2001 2000 1 10000000000 10000000000 1 "
+           "10002000000 10000000000\n";
+  }
+  RuntimeConfig config = scenario_config();
+  ReplayResult result;
+  std::string error;
+  require(replay_journal(path.string(), config, result, error), "interleaved replay: " + error);
+  require(result.events == 4, "interleaved events replayed");
+  std::filesystem::remove(path);
+}
+
 void test_reports() {
   const auto path = std::filesystem::temp_directory_path() / "cxa-report-test.jsonl";
   {
@@ -336,7 +376,7 @@ void test_reports() {
 
 int main(int argc, char** argv) {
   fixtures = argc > 1 ? argv[1] : "tests/fixtures";
-  const std::array<std::pair<const char*, void (*)()>, 14> cases{{
+  const std::array<std::pair<const char*, void (*)()>, 15> cases{{
       {"decimal_and_ppm", test_decimal_and_ppm},
       {"book_and_sweep", test_book_and_sweep},
       {"binance_sync", test_binance_sync},
@@ -351,6 +391,7 @@ int main(int argc, char** argv) {
       {"funding_settlement", test_funding_settlement},
       {"entry_risk_gates", test_entry_risk_gates},
       {"replay_fixture", test_replay_fixture},
+      {"replay_interleaved_header", test_replay_interleaved_header},
   }};
   try {
     for (const auto& [name, test] : cases) {

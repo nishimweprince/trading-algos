@@ -143,11 +143,40 @@ bool BinanceFeed::run(std::atomic<bool>& stop, ResyncFlags& resync, std::string&
   if (!sockets[0].connect(stream_url("public", "@depth@0ms"), error) ||
       !sockets[1].connect(stream_url("market", "@markPrice@1s"), error))
     return false;
-  // The depth stream is already buffering, so every snapshot is bridged by later diffs.
+  // The combined stream only starts dispatching about 100 ms after the handshake;
+  // snapshots taken before the first event per symbol can never bridge, because the
+  // spanning diffs were never sent. Buffer raw frames until every symbol has produced
+  // a depth event (or a cap expires), snapshot, then replay the buffer in order.
+  std::vector<std::pair<std::uint64_t, std::string>> buffered;
+  std::vector<bool> seen(symbols_.size(), false);
+  std::size_t seen_count = 0;
+  std::string frame;
+  const auto preroll_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  while (seen_count < symbols_.size() && std::chrono::steady_clock::now() < preroll_deadline &&
+         !stop.load(std::memory_order_relaxed)) {
+    for (std::size_t k = 0; k < sockets.size(); ++k) {
+      const auto status = sockets[k].receive(frame, 100, error);
+      if (status == WebSocket::Status::timeout) continue;
+      if (status != WebSocket::Status::frame) return false;
+      buffered.emplace_back(wall_ns(), frame);
+      if (k == 0 && frame.find("depthUpdate") != std::string_view::npos) {
+        for (std::size_t i = 0; i < symbols_.size(); ++i) {
+          if (seen[i] || frame.find("\"s\":\"" + symbols_[i] + "\"") == std::string_view::npos) continue;
+          seen[i] = true;
+          ++seen_count;
+        }
+      }
+    }
+  }
   for (std::size_t i = 0; i < symbols_.size(); ++i)
     if (!snapshot(i, error)) return false;
+  for (const auto& [receive_ns, data] : buffered) {
+    if (!frames_(receive_ns, data)) {
+      if (error.empty()) error = "binance frame handler stopped the feed";
+      return false;
+    }
+  }
   std::array<std::chrono::steady_clock::time_point, kMaxSymbols> last_resync{};
-  std::string frame;
   while (!stop.load(std::memory_order_relaxed)) {
     bool received = false;
     for (auto& socket : sockets) {
