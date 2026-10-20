@@ -125,15 +125,18 @@ impl WalletRedeemer {
         let provider = ProviderBuilder::new().connect(rpc_url).await?.erased();
         let chain = provider.get_chain_id().await?;
         anyhow::ensure!(chain == POLYGON, "POLYGON_RPC_URL is chain {chain}, not Polygon ({POLYGON})");
+        // The calldata goes in both `input` and `data`: Infura's Polygon
+        // endpoint answers an eth_call with only `input` with "Internal error".
         let tx = <Ethereum as Network>::TransactionRequest::default()
             .with_to(self.wallet)
-            .with_input(typed::ownerCall {}.abi_encode());
-        let owner = provider
+            .with_input(typed::ownerCall {}.abi_encode())
+            .with_input_and_data();
+        let ret = provider
             .call(tx)
             .await
-            .ok()
-            .and_then(|r| typed::ownerCall::abi_decode_returns(&r).ok())
-            .ok_or_else(|| anyhow::anyhow!("POLY_FUNDER {} is not a deposit wallet (no owner)", self.wallet))?;
+            .map_err(|e| anyhow::anyhow!("POLY_FUNDER {}: owner() call failed on POLYGON_RPC_URL: {e}", self.wallet))?;
+        let owner = typed::ownerCall::abi_decode_returns(&ret)
+            .map_err(|_| anyhow::anyhow!("POLY_FUNDER {} is not a deposit wallet (no owner)", self.wallet))?;
         anyhow::ensure!(
             owner == self.signer.address(),
             "POLY_FUNDER {} is owned by {owner}, not this key's {}",
