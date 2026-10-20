@@ -18,6 +18,8 @@ Edit `User=`, the paths and `--profile` in each unit if yours differ.
 | `execution-service-binance-live.service` | MAINNET gateway on `127.0.0.1:8011` (profile `binance-live`); the OFI scalper no longer uses it (shadow only since 2026-10-11). Not enabled: start by hand |
 | `ofi-research.service` | One-shot Stage 2 pipeline (`--shallow` by default) at nice 19, idle IO and a memory ceiling, so research runs next to the recorder and the shadow bridge. `sudo systemctl start ofi-research`; arguments in a drop-in |
 | `ofi-unit-alert@.service` | `OnFailure=` hook on the three services above: a Telegram alert when one fails to start or crashes |
+| `crossex-shadow.service` | Binance↔Bybit arbitrage, mainnet shadow fills, status on `127.0.0.1:8070`; user `crossex`, checkout `/opt/trading-algos`, env `/etc/crossex.env` (read-only keys). See `services/crossex-arbitrage/RUNBOOK.md` |
+| `crossex-compress.service` + `.timer` | Hourly: zstd every closed crossex journal (all but the newest) |
 
 ## Host setup (once)
 
