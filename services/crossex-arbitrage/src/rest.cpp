@@ -8,6 +8,7 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <thread>
 
 namespace cxa {
 namespace {
@@ -172,10 +173,11 @@ bool verify_read_only(HttpClient& http, Venue venue, const Credentials& credenti
   return true;
 }
 
-bool fetch_taker_fees(HttpClient& http, Venue venue, const Credentials& credentials,
-                      const std::vector<Instrument>& basket, std::vector<std::int64_t>& taker_ppm,
-                      std::string& error) {
+bool fetch_fees(HttpClient& http, Venue venue, const Credentials& credentials,
+                const std::vector<Instrument>& basket, std::vector<std::int64_t>& taker_ppm,
+                std::vector<std::int64_t>& maker_ppm, std::string& error) {
   taker_ppm.assign(basket.size(), 0);
+  maker_ppm.assign(basket.size(), 0);
   const auto v = index(venue);
   if (venue == Venue::bybit) {
     const auto result = signed_get(http, venue, credentials, kBybit, "/v5/account/fee-rate", "category=linear");
@@ -184,19 +186,29 @@ bool fetch_taker_fees(HttpClient& http, Venue venue, const Credentials& credenti
     for (std::size_t i = 0; i < basket.size(); ++i) {
       const auto needle = "\"symbol\":\"" + basket[i].symbol[v] + "\"";
       const auto pos = body.find(needle);
-      if (pos == std::string_view::npos ||
-          !json::rate_ppm(json::enclosing_object(body, pos), "\"takerFeeRate\"", taker_ppm[i])) {
+      const auto object = json::enclosing_object(body, pos);
+      if (pos == std::string_view::npos || !json::rate_ppm(object, "\"takerFeeRate\"", taker_ppm[i]) ||
+          !json::rate_ppm(object, "\"makerFeeRate\"", maker_ppm[i])) {
         error = "bybit: no fee rate for " + basket[i].symbol[v];
         return false;
       }
     }
     return true;
   }
+  // Per-symbol commissionRate; space requests so a 30-symbol basket stays under
+  // Binance's IP weight budget (especially after a restart storm).
   for (std::size_t i = 0; i < basket.size(); ++i) {
-    const auto result = signed_get(http, venue, credentials, kBinanceFutures, "/fapi/v1/commissionRate",
-                                   "symbol=" + basket[i].symbol[v]);
+    HttpResult result;
+    for (int attempt = 0; attempt < 5; ++attempt) {
+      if (i > 0 || attempt > 0) std::this_thread::sleep_for(std::chrono::milliseconds(150));
+      result = signed_get(http, venue, credentials, kBinanceFutures, "/fapi/v1/commissionRate",
+                          "symbol=" + basket[i].symbol[v]);
+      if (result.status != 429) break;
+      std::this_thread::sleep_for(std::chrono::seconds(2 + attempt));
+    }
     if (!api_ok(venue, result, error)) return false;
-    if (!json::rate_ppm(result.body, "\"takerCommissionRate\"", taker_ppm[i])) {
+    if (!json::rate_ppm(result.body, "\"takerCommissionRate\"", taker_ppm[i]) ||
+        !json::rate_ppm(result.body, "\"makerCommissionRate\"", maker_ppm[i])) {
       error = "binance: no commission rate for " + basket[i].symbol[v];
       return false;
     }
@@ -207,8 +219,10 @@ bool fetch_taker_fees(HttpClient& http, Venue venue, const Credentials& credenti
 bool load_instruments(HttpClient& http, std::vector<Instrument>& basket, std::string& error) {
   const auto binance = http.get(std::string(kBinanceFutures) + "/fapi/v1/exchangeInfo");
   if (!api_ok(Venue::binance, binance, error)) return false;
-  for (auto& instrument : basket) {
+  for (std::size_t i = 0; i < basket.size(); ++i) {
+    auto& instrument = basket[i];
     if (!parse_binance_instrument(binance.body, instrument, error)) return false;
+    if (i > 0) std::this_thread::sleep_for(std::chrono::milliseconds(50));
     const auto bybit = http.get(std::string(kBybit) + "/v5/market/instruments-info?category=linear&symbol=" +
                                 instrument.symbol[index(Venue::bybit)]);
     if (!api_ok(Venue::bybit, bybit, error)) return false;

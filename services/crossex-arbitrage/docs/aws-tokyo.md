@@ -82,3 +82,18 @@ service: crossex-shadow enabled+active since 2026-10-20T14:38Z, journal
 data disk: /dev/xvdb (100 GB, xfs) mounted at /data via fstab
 status UI: http://127.0.0.1:8070/ (loopback only; expose via cloudflared)
 ```
+
+### 2026-10-20T22:48Z — PREREG restart (maker/taker + wider basket)
+
+```
+prior journal archived: /data/crossex/archive/crossex-20261020T143851Z.jsonl
+exec_mode: maker_taker (CXA_MAKER_TIMEOUT_MS=2000)
+trade_notional: 250; min_net_ppm: 0; latency: pessimistic
+basket: 30 dual-listed USDT perps (see PREREG.md)
+fees: binance taker/maker 500/200; bybit 550/200 (account rates)
+ops fixes for 30-symbol start: throttle commissionRate + Bybit instrument
+  GETs; drain Binance WS during REST snapshots; RestartSec=30
+service: crossex-shadow stable since ~2026-10-20T22:48Z (30/30 books ok)
+gate: ≥14 days, ≥150 cycles, legging ≤10%; mean net reported not gating
+journal: /data/crossex/crossex-*.jsonl (new run after archive)
+```

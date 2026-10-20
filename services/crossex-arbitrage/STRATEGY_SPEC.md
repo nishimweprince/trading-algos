@@ -43,23 +43,33 @@ For a symbol, let `m_B` and `m_Y` be the Binance and Bybit mids and
   (`dir = −1`) is the reverse. Direction-signed values: `β = dir·b` and
   `β̄ = dir·b̄`.
 
-For trade quantity `q` (`CXA_TRADE_NOTIONAL / m`, rounded down to the common
-step), sweep full displayed depth:
+For trade quantity `q` (`CXA_TRADE_NOTIONAL / m`, default $250, rounded down to
+the common step):
+
+**`CXA_EXEC_MODE=taker_taker`:** sweep full displayed depth on both venues.
 
 - entry gap `g = (VWAP_sell(short venue, q) − VWAP_buy(long venue, q)) / m`
 - exit gap now `x = (VWAP_buy(short venue, q) − VWAP_sell(long venue, q)) / m`
-- expected capture `c = g − β̄ − (x − β)`. This is the entry gap minus the
-  expected exit gap once the basis returns to its mean, where the expected exit
-  gap is the mean plus today's crossing cost at this size.
-- fees `f = 2·(taker_B + taker_Y)`, using the account's real rates in shadow
-  with keys.
+- fees `f = 2·(taker_B + taker_Y)`
+
+**`CXA_EXEC_MODE=maker_taker` (PREREG default):** for each candidate maker venue,
+join the book (buy at best bid, sell at best ask) and hedge the other venue at
+taker VWAP. Pick the (direction, maker venue) with the largest `n`.
+
+- entry buy/sell use the maker join price on the maker venue and VWAP on the hedge
+- exit uses the opposite join on the maker venue and VWAP on the hedge
+- fees `f = 2·(maker_makerVenue + taker_hedgeVenue)` from account rates
+
+Then for either mode:
+
+- expected capture `c = g − β̄ − (x − β)`
 - funding cost `F` over `CXA_EXPECTED_HOLD_MS` (10 min). For every venue whose
   next settlement falls inside that window, add the long leg's rate and
   subtract the short leg's rate.
 - net `n = c − f − F − CXA_SAFETY_PPM`.
 
-**Entry:** when the pair is flat, take the direction with the larger `n`, and
-enter if `n ≥ CXA_MIN_NET_PPM` (1000 = 10 bp) and every risk gate passes.
+**Entry:** when the pair is flat, take the candidate with the larger `n`, and
+enter if `n ≥ CXA_MIN_NET_PPM` (default 0) and every risk gate passes.
 
 ## Exit triggers (checked on every book update while open, in order)
 
@@ -73,15 +83,21 @@ enter if `n ≥ CXA_MIN_NET_PPM` (1000 = 10 bp) and every risk gate passes.
 
 ## Orders (shadow and future live)
 
-Every leg is an IOC limit order.
+**Taker/taker:** every leg is an IOC limit order.
 
 - Entry limit: the worst level touched by the decision-time sweep, widened by
   `(n − min_net)/2`. A fill at that limit still clears the threshold.
 - Exit limit: the worst swept level widened by `CXA_CLOSE_SLIPPAGE_PPM` (50 bp).
 - Repair limit: best price widened by `CXA_HEDGE_SLIPPAGE_PPM` (2%).
 
-**Repairs.** After both entry legs resolve, any residual (from unequal fills)
-is unwound on the venue holding the excess. If nothing filled on one side, the
+**Maker/taker:** post a PostOnly join on the maker venue; do nothing on the hedge
+venue until a maker fill. For every maker fill `Δq`, immediately submit an IOC
+taker hedge of `Δq` on the other venue. Cancel residual maker size on timeout
+(`CXA_MAKER_TIMEOUT_MS`, default 2 s) or when live `n` falls below `min_net`.
+Exit uses the same pattern on the entry maker venue. Repairs stay taker IOC.
+
+**Repairs.** After entry legs resolve, any residual (from unequal fills) is
+unwound on the venue holding the excess. If nothing filled on one side, the
 pair ends `legged_out` once flat. When a close leaves any leg open, it is
 re-closed with repair limits. After `max_repair_attempts` (20), the pair is
 marked out at the book and the engine halts until restart.
@@ -93,16 +109,16 @@ marked out at the book and the engine halts until restart.
   p95 (`pessimistic`), or a configured constant (`fixed`), plus
   `CXA_ENGINE_PENALTY_NS` (1 ms). Draws use a seeded PRNG, so replay is
   deterministic.
-- On arrival the leg sweeps the book as it stood at the arrival time, before
-  the event that moved the clock past it is applied. Only
-  `CXA_AVAILABLE_PPM` (50%) of each displayed level counts. The fill is
-  rounded down to the venue step, and the fee is the venue's taker rate on the
-  filled notional.
-- If the book is not verified at arrival, the IOC fills nothing.
-- Known optimism: shadow fills don't consume the book, so a repair right after
-  an entry on the same venue sees the same liquidity. Signed REST GETs don't
-  include matching-engine time; the penalty term covers that until Phase 2
-  canaries measure send→fill directly.
+- **Taker IOC:** on arrival the leg sweeps the book as of arrival time. Only
+  `CXA_AVAILABLE_PPM` (50%) of each displayed level counts. Fee = taker rate.
+  Unverified book → no fill.
+- **Maker PostOnly:** on arrival the order rests. It fills when the book trades
+  through the limit (`best_ask ≤ limit` for buys, `best_bid ≥ limit` for sells),
+  size `min(rest, haircut · touch size)`, fee = maker rate. Unfilled residual
+  cancels at timeout.
+- Known optimism: shadow fills don't consume the book. Signed REST GETs don't
+  include matching-engine time; the penalty covers that until Phase 2 canaries
+  measure send→fill directly.
 
 ## Funding accounting
 
@@ -129,7 +145,7 @@ Each gate maps to a risk code:
 | Symbol enabled | `symbol_disabled` |
 | Each venue feed's last message ≤ `CXA_MAX_FEED_AGE_NS` (1 s) | `feed_stale` |
 | Each book updated within `CXA_MAX_BOOK_AGE_NS` (60 s) | `book_stale` |
-| Taker fee known on both venues | `fees_unknown` |
+| Taker fee known on both venues; maker fee known when `maker_taker` | `fees_unknown` |
 | Funding rate and next time known on both venues | `funding_unknown` |
 | Basis warm | `basis_cold` |
 | Open pairs < `CXA_MAX_OPEN_PAIRS` (3) | `max_pairs` |

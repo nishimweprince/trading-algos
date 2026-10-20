@@ -41,6 +41,14 @@ std::string_view latency_mode_name(LatencyMode mode) noexcept {
   return "unknown";
 }
 
+std::string_view exec_mode_name(ExecMode mode) noexcept {
+  switch (mode) {
+    case ExecMode::taker_taker: return "taker_taker";
+    case ExecMode::maker_taker: return "maker_taker";
+  }
+  return "unknown";
+}
+
 RuntimeConfig load_runtime_config() {
   RuntimeConfig config;
   if (const auto* basket = std::getenv("CXA_BASKET")) config.basket = basket;
@@ -60,6 +68,13 @@ RuntimeConfig load_runtime_config() {
   s.hedge_slippage_ppm = integer("CXA_HEDGE_SLIPPAGE_PPM", s.hedge_slippage_ppm);
   s.cooldown_ms = unsigned_integer("CXA_COOLDOWN_MS", s.cooldown_ms);
   s.max_mid_divergence_ppm = integer("CXA_MAX_MID_DIVERGENCE_PPM", s.max_mid_divergence_ppm);
+  s.maker_timeout_ms = unsigned_integer("CXA_MAKER_TIMEOUT_MS", s.maker_timeout_ms);
+  if (const auto* mode = std::getenv("CXA_EXEC_MODE")) {
+    const std::string_view text(mode);
+    if (text == "taker_taker") s.exec_mode = ExecMode::taker_taker;
+    else if (text == "maker_taker") s.exec_mode = ExecMode::maker_taker;
+    else throw std::invalid_argument("CXA_EXEC_MODE must be taker_taker or maker_taker");
+  }
   auto& r = config.risk;
   r.max_open_pairs = static_cast<std::uint32_t>(unsigned_integer("CXA_MAX_OPEN_PAIRS", r.max_open_pairs));
   r.max_pair_notional_raw = usd("CXA_MAX_PAIR_NOTIONAL", r.max_pair_notional_raw);
@@ -81,11 +96,15 @@ RuntimeConfig load_runtime_config() {
   h.seed = unsigned_integer("CXA_SEED", h.seed);
   h.fallback_taker_ppm[0] = integer("CXA_BINANCE_TAKER_PPM", h.fallback_taker_ppm[0]);
   h.fallback_taker_ppm[1] = integer("CXA_BYBIT_TAKER_PPM", h.fallback_taker_ppm[1]);
+  h.fallback_maker_ppm[0] = integer("CXA_BINANCE_MAKER_PPM", h.fallback_maker_ppm[0]);
+  h.fallback_maker_ppm[1] = integer("CXA_BYBIT_MAKER_PPM", h.fallback_maker_ppm[1]);
   if (s.trade_notional_raw <= 0 || s.trade_notional_raw > r.max_pair_notional_raw)
     throw std::invalid_argument("CXA_TRADE_NOTIONAL must be positive and within CXA_MAX_PAIR_NOTIONAL");
   if (h.available_ppm <= 0 || h.available_ppm > kPpm)
     throw std::invalid_argument("CXA_AVAILABLE_PPM must be in (0, 1000000]");
   if (s.basis_halflife_ms == 0) throw std::invalid_argument("CXA_BASIS_HALFLIFE_MS must be positive");
+  if (s.exec_mode == ExecMode::maker_taker && s.maker_timeout_ms == 0)
+    throw std::invalid_argument("CXA_MAKER_TIMEOUT_MS must be positive for maker_taker");
   return config;
 }
 
