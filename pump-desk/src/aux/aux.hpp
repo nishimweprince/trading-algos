@@ -27,6 +27,7 @@ RivalsFile parse_rivals(std::string_view json, const Pubkey& self, size_t max_ri
 RoutePolicy make_route_policy(const Config& cfg, uint64_t estimate, const uint64_t beat_cu_price[N_LEADER_CLASSES]);
 
 void run_aux_fast(const Config& cfg, Shared& sh, const Pubkey& wallet, Logger& log);
-void run_aux_req(const Config& cfg, Shared& sh, const Pubkey& wallet, Logger& log);
+/** `wallet` signs only Jupiter's exit-of-last-resort transactions (AuxOp::JupiterSell). */
+void run_aux_req(const Config& cfg, Shared& sh, const Keypair& wallet, Logger& log);
 
 }  // namespace pd

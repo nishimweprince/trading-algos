@@ -4,14 +4,18 @@
 #include <sys/stat.h>
 
 #include <chrono>
+#include <cstring>
 #include <fstream>
+#include <memory>
 #include <sstream>
 #include <thread>
 #include <vector>
 
+#include "aux/jupiter.hpp"
 #include "aux/rpc.hpp"
 #include "aux/writer.hpp"
 #include "core/base58.hpp"
+#include "core/base64.hpp"
 #include "core/sys.hpp"
 #include "sol/constants.hpp"
 #include "sol/layouts.hpp"
@@ -211,10 +215,13 @@ bool read_mint(Rpc& rpc, const Pubkey& mint, AuxResp& out) {
 
 }  // namespace
 
-void run_aux_req(const Config& cfg, Shared& sh, const Pubkey& wallet, Logger& log) {
+void run_aux_req(const Config& cfg, Shared& sh, const Keypair& kp, Logger& log) {
   name_thread("pd-aux-req");
   pin_thread(cfg.threads.aux_cpu);
+  const Pubkey& wallet = kp.pubkey();
   Rpc rpc(cfg.rpc.http_url, cfg.rpc.timeout_ms);
+  std::unique_ptr<Jupiter> jupiter;
+  if (cfg.jupiter.enabled) jupiter = std::make_unique<Jupiter>(cfg);
   std::vector<Deferred> queue;
   const std::string wallet_b58 = b58(wallet);
   static constexpr int CURVE_RETRY_MS[] = {0, 300, 800, 1500, 3000, 6000};
@@ -260,6 +267,36 @@ void run_aux_req(const Config& cfg, Shared& sh, const Pubkey& wallet, Logger& lo
         } else if (d.req.op == AuxOp::ReadMint) {
           r.ok = read_mint(rpc, d.req.mint, r);
           respond(r);
+        } else if (d.req.op == AuxOp::JupiterSell) {
+          // One attempt per request: logic decides on retries (jupiter.max_attempts).
+          auto refuse = [&](const std::string& why) {
+            std::snprintf(r.error, sizeof r.error, "%s", why.c_str());
+            log.warn("jupiter exit " + b58(d.req.mint) + ": " + why);
+            respond(r);
+          };
+          try {
+            if (!jupiter) throw std::runtime_error("disabled");
+            JupiterSwap js = jupiter->sell_to_sol(d.req.mint, d.req.amount, wallet);
+            r.out_lamports = js.out_lamports;
+            std::vector<uint8_t> tx;
+            std::string why;
+            if (!js.sim_error.empty()) {
+              refuse("simulation failed: " + js.sim_error);
+            } else if (!b64_decode(js.tx_b64, tx) || !sign_single_signer_tx(tx, kp, &why)) {
+              refuse("refused tx: " + (why.empty() ? std::string("bad base64") : why));
+            } else {
+              std::string sig = rpc.send_transaction(b64(tx.data(), tx.size()));
+              // The signature we wrote (shortvec 1, then the slot) is the tx id the stream will show.
+              std::memcpy(r.sig.data(), tx.data() + 1, 64);
+              r.ok = true;
+              log.warn("jupiter exit sent " + b58(d.req.mint) + " via " + js.route + ": " + std::to_string(d.req.amount) +
+                       " tokens for ~" + std::to_string(js.out_lamports) + " lamports (min " +
+                       std::to_string(js.min_out_lamports) + "), sig " + sig);
+              respond(r);
+            }
+          } catch (const std::exception& e) {
+            refuse(e.what());
+          }
         } else {  // ResolveSig
           std::string sig = b58(d.req.sig);
           RpcSigStatus st = rpc.signature_status(sig);

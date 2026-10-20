@@ -160,6 +160,17 @@ vault_tolerance_bps = 50
 rival_guard = true                # rivals.json guard wallets must not hold the mint yet
 max_rivals = 3                    # each costs ~48 bytes; guards that don't fit one packet are dropped
 
+# Exit of last resort. When the PumpSwap sell is exhausted (exits.max_exit_attempts), the kill
+# still latches (no new entries), but the position is sold through Jupiter's Swap API (any pool it
+# indexes) instead of waiting for the operator. Needs JUPITER_API_KEY in .env; off without it.
+[jupiter]
+enabled = true
+url = "https://api.jup.ag/swap/v1"
+slippage_bps = 1500
+max_attempts = 3                  # Jupiter sells per position, then the operator
+confirm_ms = 20000                # wait for the fill on the stream before the next attempt
+max_priority_lamports = 2000000
+
 [threads]
 ingest_cpu = 1
 logic_cpu = 2

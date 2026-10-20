@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "core/types.hpp"
@@ -46,6 +47,9 @@ class Rpc {
 
   /** Raw call: returns the response body. Throws on transport failure or a JSON-RPC error. */
   std::string call(const std::string& method, const std::string& params_json);
+  /** One HTTP exchange on the kept-alive connection (any API on this host). Throws on transport failure only. */
+  std::string http(const char* verb, std::string_view path, std::string_view body, std::string_view headers, int& status,
+                   const char* what);
 
   struct Blockhash {
     Hash hash{};
@@ -67,6 +71,8 @@ class Rpc {
   EpochInfo epoch_info(const char* commitment = "processed");
   /** Helius getPriorityFeeEstimate (micro-lamports/CU); 0 when unavailable. */
   uint64_t priority_fee_estimate(const std::vector<Pubkey>& accounts, const char* level = "VeryHigh");
+  /** sendTransaction (skipPreflight, maxRetries 3): the signature. Throws on a JSON-RPC error. */
+  std::string send_transaction(const std::string& tx_b64);
   /** Empty string = success; otherwise the error plus logs. */
   std::string simulate(const std::string& tx_b64);
 

@@ -68,7 +68,8 @@ class HttpResponseParser {
   std::string_view body_;
 };
 
-/** Format a request into `out` (reused buffer). */
-void format_request(std::string& out, const char* method, const Url& url, std::string_view path, std::string_view body);
+/** Format a request into `out` (reused buffer). `headers`: extra "Name: value\r\n" lines. */
+void format_request(std::string& out, const char* method, const Url& url, std::string_view path, std::string_view body,
+                    std::string_view headers = {});
 
 }  // namespace pd

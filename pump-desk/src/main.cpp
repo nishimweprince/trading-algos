@@ -15,6 +15,7 @@
 #include <thread>
 
 #include "aux/aux.hpp"
+#include "aux/jupiter.hpp"
 #include "aux/leaders.hpp"
 #include "aux/rpc.hpp"
 #include "aux/writer.hpp"
@@ -214,6 +215,19 @@ int main(int argc, char** argv) {
     log.info("wallet balance " + std::to_string(double(lamports) / 1e9) + " SOL");
     if (lamports < 10'000'000) log.warn("wallet holds < 0.01 SOL: every entry will be vetoed");
     self_check(rpc, *sh, kp, cfg, log);
+    if (cfg.jupiter.enabled) {
+      // The exit of last resort must answer before we need it. Not fatal: it is only a fallback.
+      try {
+        Jupiter jup(cfg);
+        JupiterSwap js = jup.sell_to_sol(SEED_MINT, 1'000'000'000, kp.pubkey());
+        log.info("jupiter exit fallback ready: " + js.route + " quote for the seed pool, " + std::to_string(js.out_lamports) +
+                 " lamports for 1000 tokens");
+      } catch (const std::exception& e) {
+        log.warn(std::string("jupiter exit fallback NOT reachable (stuck exits go to the operator): ") + e.what());
+      }
+    } else {
+      log.info("jupiter exit fallback off (set JUPITER_API_KEY to enable)");
+    }
 
     Exec exec(cfg, *sh);
     std::string exec_err;
@@ -244,7 +258,7 @@ int main(int argc, char** argv) {
     };
     std::thread t_writer([&] { writer.run(); });
     std::thread t_fast([&] { run_aux_fast(cfg, *sh, kp.pubkey(), log); });
-    std::thread t_req([&] { run_aux_req(cfg, *sh, kp.pubkey(), log); });
+    std::thread t_req([&] { run_aux_req(cfg, *sh, kp, log); });
     std::thread t_leaders([&] { run_aux_leaders(cfg, *sh, log); });
     std::thread t_capture;
     if (!cfg.storage.capture_path.empty()) {

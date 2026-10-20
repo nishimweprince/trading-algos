@@ -871,6 +871,112 @@ TEST(engine_records_rival_txs) {
   CHECK_EQ(e->d[0], 3.0);  // an unlisted tip account: "other"
 }
 
+namespace {
+
+/** Buy, fill, take-profit sell, and have that sell fail on chain: with max_exit_attempts = 1 the exits are spent. */
+Packet exhaust_exits(Rig& r) {
+  r.cfg.exits.max_exit_attempts = 1;
+  r.create();
+  r.band(1'000'000'000'000ULL);
+  r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
+  Packet pk;
+  CHECK(r.pop_packet(pk));
+  const Position& p = r.eng->position(0);
+  r.wallet_fill(p.buy_sig, 1'000'000'000, 840'000'000, 0, p.expected_base);
+  r.feed(account_frame("watch", r.quote_vault, prog::TOKEN, token_account(3 * 67'410'000'000ULL), r.slot));
+  Packet sell;
+  CHECK(r.pop_packet(sell));
+  CHECK(sell.side == Side::Sell);
+  r.wallet_fill(sell.sig, 840'000'000, 839'990'000, p.base_amount, p.base_amount, true);
+  return sell;
+}
+
+bool pop_jupiter_req(Rig& r, AuxReq& out) {
+  AuxReq q;
+  while (r.sh->aux_reqs.try_pop(q))
+    if (q.op == AuxOp::JupiterSell) { out = q; return true; }
+  return false;
+}
+
+}  // namespace
+
+TEST(engine_jupiter_takes_exhausted_exits) {
+  Rig r;
+  r.cfg.jupiter.enabled = true;
+  r.cfg.jupiter.api_key = "test";
+  exhaust_exits(r);
+  const Position& p = r.eng->position(0);
+  CHECK(r.eng->killed());  // entries stop all the same
+  CHECK(p.state == PosState::SellSent);
+  CHECK(p.jupiter_pending);
+  AuxReq q;
+  CHECK(pop_jupiter_req(r, q));
+  CHECK(q.mint == r.mint);
+  CHECK_EQ(q.amount, p.base_amount);
+
+  // No route: retried 5 s later, as a new attempt.
+  AuxResp no;
+  no.op = AuxOp::JupiterSell;
+  no.pos = q.pos;
+  no.mint = q.mint;
+  CHECK(r.sh->aux_resps.push(no));
+  r.eng->poll(g_mono);
+  CHECK(!pop_jupiter_req(r, q));
+  g_mono += 5'000'000'001ULL;
+  r.eng->poll(g_mono);
+  CHECK(pop_jupiter_req(r, q));
+  CHECK_EQ(int(p.jupiter_attempts), 2);
+
+  // Sent: the stream's fill of that signature closes the position.
+  AuxResp ok = no;
+  ok.ok = true;
+  ok.sig = make_sig(77);
+  ok.out_lamports = 250'000'000;
+  CHECK(r.sh->aux_resps.push(ok));
+  r.eng->poll(g_mono);
+  CHECK(find(r.events(), Ev::Order, "jupiter TAKE_PROFIT_1") != nullptr);
+  r.wallet_fill(ok.sig, 839'990'000, 1'089'000'000, p.base_amount, 0);
+  CHECK(p.state == PosState::Empty);
+  auto es = r.events();
+  CHECK(find(es, Ev::PositionClose, "jupiter_exit") != nullptr);
+}
+
+TEST(engine_jupiter_gives_up_after_max_attempts) {
+  Rig r;
+  r.cfg.jupiter.enabled = true;
+  r.cfg.jupiter.api_key = "test";
+  r.cfg.jupiter.max_attempts = 1;
+  exhaust_exits(r);
+  const Position& p = r.eng->position(0);
+  AuxReq q;
+  CHECK(pop_jupiter_req(r, q));
+  // Sent, then failed on chain: no attempt left, so the operator sells it.
+  AuxResp ok;
+  ok.op = AuxOp::JupiterSell;
+  ok.pos = q.pos;
+  ok.mint = q.mint;
+  ok.ok = true;
+  ok.sig = make_sig(78);
+  CHECK(r.sh->aux_resps.push(ok));
+  r.eng->poll(g_mono);
+  r.wallet_fill(ok.sig, 839'990'000, 839'980'000, p.base_amount, p.base_amount, true);
+  r.eng->poll(g_mono);
+  CHECK(p.state == PosState::Open);
+  CHECK(!p.jupiter_pending);
+  CHECK(!pop_jupiter_req(r, q));
+}
+
+TEST(engine_exhausted_exits_without_jupiter_hand_off) {
+  Rig r;  // no JUPITER_API_KEY: jupiter.enabled stays as load_config leaves it, off
+  r.cfg.jupiter.enabled = false;
+  exhaust_exits(r);
+  const Position& p = r.eng->position(0);
+  CHECK(r.eng->killed());
+  CHECK(p.state == PosState::Open);
+  AuxReq q;
+  CHECK(!pop_jupiter_req(r, q));
+}
+
 // Not an assertion of speed (CI boxes vary): prints the in-process trigger latency,
 // migrate frame in -> signed packet queued, on the real clocks.
 TEST(bench_trigger_latency) {

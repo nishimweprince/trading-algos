@@ -979,6 +979,10 @@ void Engine::on_sell_result(int idx, const Signature& sig, bool ok, int64_t sol_
   emit();
   if (!ok) {
     if (p.state != PosState::SellSent) return;  // a stale attempt; the live one is still pending
+    if (p.jupiter_pending) {
+      p.jupiter_due_ns = now_ns_();  // Jupiter's sell failed on chain: the next attempt at once
+      return;
+    }
     if (send_rejected) {
       // Never reached the chain (no connection, rejected request): an instant resend
       // meets the same wall. The exit timer resends after exit_retry_ms.
@@ -987,8 +991,7 @@ void Engine::on_sell_result(int idx, const Signature& sig, bool ok, int64_t sol_
     }
     // Failed on-chain: retry at once on the next slippage tier.
     if (++p.sell_attempts >= cfg_.exits.max_exit_attempts) {
-      latch_kill("exit attempts exhausted");
-      p.state = PosState::Open;
+      exits_exhausted(p, idx, "exit attempts exhausted");
       return;
     }
     send_sell(p, idx, p.sell_trigger, p.sell_full ? 1.0 : double(p.sell_base) / double(std::max<uint64_t>(p.base_bought, 1)), last_frame_ns_);
@@ -999,11 +1002,13 @@ void Engine::on_sell_result(int idx, const Signature& sig, bool ok, int64_t sol_
   p.sol_received += sol_delta;
   exit_on_fill(p.exit, p.sell_trigger, cfg_.exits);
   if (p.base_amount == 0) {
-    close_position(idx, exit_trigger_name(p.sell_trigger));
+    close_position(idx, sig == p.jupiter_sig ? "jupiter_exit" : exit_trigger_name(p.sell_trigger));
     return;
   }
   p.state = PosState::Open;
   p.sell_attempts = 0;
+  p.jupiter_pending = false;
+  p.jupiter_due_ns = 0;
   Event* u = ev(Ev::PositionUpdate);
   u->slot = slot;
   u->a = p.mint;
@@ -1043,6 +1048,34 @@ void Engine::release_watches(const Position& p) {
   unwatch(p.keys.pool);
   unwatch(p.keys.pool_base_vault);
   unwatch(p.keys.pool_quote_vault);
+}
+
+void Engine::exits_exhausted(Position& p, int idx, const char* why) {
+  latch_kill(why);
+  p.sell_attempts = cfg_.exits.max_exit_attempts;
+  if (!try_jupiter_exit(p, idx)) p.state = PosState::Open;  // keep marking; the operator sells it
+}
+
+bool Engine::try_jupiter_exit(Position& p, int idx) {
+  p.jupiter_pending = false;
+  p.jupiter_due_ns = 0;
+  if (!cfg_.jupiter.enabled || p.jupiter_attempts >= cfg_.jupiter.max_attempts || p.base_amount == 0) return false;
+  AuxReq r;
+  r.op = AuxOp::JupiterSell;
+  r.mint = p.mint;
+  r.pos = uint8_t(idx);
+  r.side = Side::Sell;
+  r.amount = p.base_amount;
+  if (!sh_.aux_reqs.push(r)) return false;
+  ++p.jupiter_attempts;
+  p.jupiter_pending = true;
+  p.state = PosState::SellSent;
+  p.sell_sent_ns = now_ns_();
+  p.sell_base = p.base_amount;
+  p.sell_full = true;
+  warn("jupiter exit %d/%d for %.8s: %llu tokens", int(p.jupiter_attempts), cfg_.jupiter.max_attempts, p.mint_b58.s,
+       (unsigned long long)p.base_amount);
+  return true;
 }
 
 void Engine::latch_kill(const char* why) {
@@ -1361,6 +1394,33 @@ void Engine::drain_queues(uint64_t now) {
         if (a.landed && a.has_fill) on_buy_result(a.pos, true, a.sol_delta, a.base_delta, a.slot, "rpc");
         else if (a.failed || a.expired) on_buy_result(a.pos, false, a.sol_delta, 0, a.slot, a.expired ? "expired" : "rpc_failed");
       }
+    } else if (a.op == AuxOp::JupiterSell) {
+      Position& p = positions_[a.pos];
+      if (p.state != PosState::SellSent || !p.jupiter_pending || p.mint != a.mint) continue;
+      if (!a.ok) {
+        p.jupiter_due_ns = now_ns_() + 5'000'000'000ULL;  // no route / API error: try again in 5 s
+        continue;
+      }
+      // The stream fill matches it like any sell; give it confirm_ms before the next attempt.
+      p.sell_sigs[p.n_sell_sigs % 8] = a.sig;
+      ++p.n_sell_sigs;
+      p.jupiter_sig = a.sig;
+      p.sell_sent_ns = now_ns_();
+      p.order_slot = last_slot_;
+      p.jupiter_due_ns = p.sell_sent_ns + uint64_t(cfg_.jupiter.confirm_ms) * 1'000'000ULL;
+      Event* o = ev(Ev::Order);
+      o->slot = last_slot_;
+      o->sig = a.sig;
+      o->a = p.mint;
+      o->b = p.keys.pool;
+      o->i[0] = int64_t(Side::Sell);
+      o->i[1] = int64_t(p.base_amount);
+      o->i[3] = int64_t(a.out_lamports);
+      o->i[6] = p.jupiter_attempts;
+      o->d[0] = p.last_price;
+      o->d[1] = gain_pct(p.exit.entry_price, p.last_price);
+      std::snprintf(o->text, sizeof o->text, "jupiter %s", exit_trigger_name(p.sell_trigger));
+      emit();
     }
   }
 
@@ -1389,12 +1449,14 @@ void Engine::poll(uint64_t now) {
         }
         break;
       case PosState::SellSent:
+        if (p.jupiter_pending) {
+          if (p.jupiter_due_ns && now >= p.jupiter_due_ns && !try_jupiter_exit(p, int(i))) p.state = PosState::Open;
+          break;
+        }
         // elapsed(): a sell re-sent inside drain_queues() above is newer than `now`.
         if (elapsed(now, p.sell_sent_ns) > uint64_t(cfg_.exits.exit_retry_ms) * 1'000'000ULL) {
           if (++p.sell_attempts >= cfg_.exits.max_exit_attempts) {
-            latch_kill("exit unconfirmed after max attempts");
-            p.state = PosState::Open;  // keep marking; no automatic resend while killed
-            p.sell_attempts = cfg_.exits.max_exit_attempts;
+            exits_exhausted(p, int(i), "exit unconfirmed after max attempts");
           } else {
             send_sell(p, int(i), p.sell_trigger, p.sell_full ? 1.0 : double(p.sell_base) / double(std::max<uint64_t>(p.base_bought, 1)), now);
           }

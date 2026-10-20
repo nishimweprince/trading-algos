@@ -1,6 +1,9 @@
 // Leader classification, route policy, rivals file, Lighthouse bytes (lighthouse-sdk-legacy,
 // tools/fixtures/lighthouse.mjs) and the tx fields rival profiling reads.
+#include <sodium.h>
+
 #include "aux/aux.hpp"
+#include "aux/jupiter.hpp"
 #include "aux/leaders.hpp"
 #include "fixture.hpp"
 #include "frames.hpp"
@@ -250,4 +253,28 @@ TEST(tx_budget_tip_and_error_fields) {
   f = tx_frame(t);
   CHECK(parse_update(reinterpret_cast<const uint8_t*>(f.data()), f.size(), u));
   CHECK(!custom_instruction_error(u.tx, ix, code));
+}
+
+TEST(jupiter_tx_signing) {
+  Keypair kp = Keypair::from_seed(std::vector<uint8_t>(32, 7).data());
+  Keypair other = Keypair::from_seed(std::vector<uint8_t>(32, 8).data());
+  IxList l;
+  ix::cu_limit(l, 200'000);
+  ix::transfer(l, kp.pubkey(), other.pubkey(), 1);
+  uint8_t msg[PACKET_DATA_SIZE];
+  size_t n = compile_message_v0(kp.pubkey(), l, Hash{}, msg, sizeof msg);
+  CHECK(n > 0);
+  // As Jupiter returns it: one zeroed signature slot, then the message.
+  std::vector<uint8_t> tx(1 + 64 + n, 0);
+  tx[0] = 1;
+  std::memcpy(tx.data() + 65, msg, n);
+  std::vector<uint8_t> theirs = tx;
+  std::string err;
+  CHECK(sign_single_signer_tx(tx, kp, &err));
+  CHECK(crypto_sign_ed25519_verify_detached(tx.data() + 1, tx.data() + 65, n, kp.pubkey().data()) == 0);
+  CHECK(!sign_single_signer_tx(theirs, other, &err));  // someone else's fee payer: never signed
+  CHECK_EQ(err, std::string("fee payer is not our wallet"));
+  std::vector<uint8_t> two = theirs;
+  two[0] = 2;
+  CHECK(!sign_single_signer_tx(two, kp, &err));
 }

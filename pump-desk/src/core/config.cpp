@@ -171,6 +171,8 @@ Config load_config(const std::string& path) {
   }
   G(lighthouse, enabled); G(lighthouse, vault_guard); G(lighthouse, vault_tolerance_bps); G(lighthouse, rival_guard);
   G(lighthouse, max_rivals);
+  G(jupiter, enabled); G(jupiter, url); G(jupiter, slippage_bps); G(jupiter, max_attempts); G(jupiter, confirm_ms);
+  G(jupiter, max_priority_lamports);
   G(threads, ingest_cpu); G(threads, logic_cpu); G(threads, exec_cpu); G(threads, aux_cpu);
   G(threads, fifo_priority); G(threads, lock_memory);
   G(ring, slots); G(ring, slot_bytes);
@@ -184,6 +186,8 @@ Config load_config(const std::string& path) {
   env_default(c.stream.token, "HELIUS_GRPC_TOKEN");
   env_default(c.rpc.http_url, "HELIUS_HTTP_URL");
   if (const char* s = std::getenv("SENDER_URL")) c.sender.url = s;
+  if (const char* k = std::getenv("JUPITER_API_KEY")) c.jupiter.api_key = k;
+  if (c.jupiter.api_key.empty()) c.jupiter.enabled = false;
   if (const char* j = std::getenv("JITO_URL")) c.jito.url = j;
 
   if (c.sender.tip_accounts.empty())
@@ -216,6 +220,9 @@ Config load_config(const std::string& path) {
     throw std::runtime_error("config: exit slippage tiers must not be empty");
   if (c.risk.max_concurrent_positions < 1 || c.risk.max_concurrent_positions > 8)
     throw std::runtime_error("config: risk.max_concurrent_positions must be 1..8");
+  if (c.jupiter.slippage_bps < 1 || c.jupiter.slippage_bps > 10000 || c.jupiter.max_attempts < 0 || c.jupiter.max_attempts > 20 ||
+      c.jupiter.confirm_ms < 1000)
+    throw std::runtime_error("config: jupiter.slippage_bps 1..10000, max_attempts 0..20, confirm_ms >= 1000");
   if (c.routing.lookahead_slots < 0 || c.routing.lookahead_slots > 8) throw std::runtime_error("config: routing.lookahead_slots must be 0..8");
   if (c.routing.rival_window_slots < 0 || c.routing.rival_window_slots > 64)
     throw std::runtime_error("config: routing.rival_window_slots must be 0..64");

@@ -69,10 +69,20 @@ Rpc::Rpc(const std::string& url, int timeout_ms) : url_(parse_url(url)), timeout
 
 std::string Rpc::call(const std::string& method, const std::string& params_json) {
   body_ = "{\"jsonrpc\":\"2.0\",\"id\":" + std::to_string(id_++) + ",\"method\":\"" + method + "\",\"params\":" + params_json + "}";
-  format_request(req_, "POST", url_, url_.path, body_);
+  int status = 0;
+  std::string out = http("POST", url_.path, body_, {}, status, method.c_str());
+  if (status != 200) throw std::runtime_error("rpc http " + std::to_string(status) + ": " + out.substr(0, 200));
+  if (out.find("\"error\"") != std::string::npos && out.find("\"result\"") == std::string::npos)
+    throw std::runtime_error("rpc error: " + method + ": " + out.substr(0, 300));
+  return out;
+}
+
+std::string Rpc::http(const char* verb, std::string_view path, std::string_view body, std::string_view headers, int& status,
+                      const char* what) {
+  format_request(req_, verb, url_, path, body, headers);
   for (int attempt = 0; attempt < 2; ++attempt) {
     std::string err;
-    if (!conn_.open() && !conn_.connect(url_, timeout_ms_, &err)) throw std::runtime_error("rpc connect: " + err);
+    if (!conn_.open() && !conn_.connect(url_, timeout_ms_, &err)) throw std::runtime_error(std::string("connect ") + what + ": " + err);
     parser_.reset();
     if (!conn_.write_all(req_.data(), req_.size(), timeout_ms_)) {
       conn_.close();
@@ -85,7 +95,7 @@ std::string Rpc::call(const std::string& method, const std::string& params_json)
       int left = int((deadline - std::min(deadline, now_ns())) / 1'000'000ULL);
       if (left <= 0) {
         conn_.close();
-        throw std::runtime_error("rpc timeout: " + method);
+        throw std::runtime_error(std::string("timeout: ") + what);
       }
       if (!conn_.wait_readable(left)) continue;
       ssize_t n = conn_.read_some(buf, sizeof buf);
@@ -96,13 +106,10 @@ std::string Rpc::call(const std::string& method, const std::string& params_json)
       conn_.close();
       continue;
     }
-    std::string out(parser_.body());
-    if (parser_.status() != 200) throw std::runtime_error("rpc http " + std::to_string(parser_.status()) + ": " + out.substr(0, 200));
-    if (out.find("\"error\"") != std::string::npos && out.find("\"result\"") == std::string::npos)
-      throw std::runtime_error("rpc error: " + method + ": " + out.substr(0, 300));
-    return out;
+    status = parser_.status();
+    return std::string(parser_.body());
   }
-  throw std::runtime_error("rpc connection lost: " + method);
+  throw std::runtime_error(std::string("connection lost: ") + what);
 }
 
 Rpc::Blockhash Rpc::latest_blockhash(const char* commitment) {
@@ -203,6 +210,15 @@ Rpc::EpochInfo Rpc::epoch_info(const char* commitment) {
   e.slots_in_epoch = u64_of(r["slotsInEpoch"]);
   if (!e.slots_in_epoch || e.slot_index > e.absolute_slot) throw std::runtime_error("bad getEpochInfo");
   return e;
+}
+
+std::string Rpc::send_transaction(const std::string& tx_b64) {
+  std::string body = call("sendTransaction", "[\"" + tx_b64 +
+                                                 "\",{\"encoding\":\"base64\",\"skipPreflight\":true,\"maxRetries\":3}]");
+  simdjson::dom::parser p;
+  std::string_view sig;
+  if (p.parse(body)["result"].get(sig) != simdjson::SUCCESS) throw std::runtime_error("sendTransaction: no signature");
+  return std::string(sig);
 }
 
 uint64_t Rpc::priority_fee_estimate(const std::vector<Pubkey>& accounts, const char* level) {

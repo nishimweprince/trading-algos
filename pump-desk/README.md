@@ -93,7 +93,7 @@ Build only on the VM; grpc++ is not installed on the laptop.
 
 1. Launch Ubuntu 24.04 in **eu-central-1**: c7i.2xlarge or larger, 4+ physical cores. Use ENA and an elastic IP.
 2. Clone the repo, check out `feat/pump-desk-cpp`, then run `bash pump-desk/deploy/aws/bootstrap.sh`. It does: apt deps → sysctl → chrony on the AWS time source → Release build (`-O3 -march=native -flto`) → `pd_tests` → systemd units for the trader and the status page.
-3. Fill `pump-desk/.env` (mode 600): `HELIUS_GRPC_URL` (LaserStream Frankfurt), `HELIUS_GRPC_TOKEN`, `HELIUS_HTTP_URL`, `WALLET_PRIVATE_KEY` (base58 or JSON array). Optional: `SENDER_URL`, `JITO_URL`.
+3. Fill `pump-desk/.env` (mode 600): `HELIUS_GRPC_URL` (LaserStream Frankfurt), `HELIUS_GRPC_TOKEN`, `HELIUS_HTTP_URL`, `WALLET_PRIVATE_KEY` (base58 or JSON array). Optional: `SENDER_URL`, `JITO_URL`, `JUPITER_API_KEY` (the exit of last resort, below).
 4. Review `pump-desk/pump-desk.toml`, which starts as a copy of `config.example.toml`.
 5. **Cores**: 4 physical cores. On c7i, logical cpu N and N+4 are two threads of one physical core. Isolate the three hot cores and their siblings so the kernel, the writer, ssh, cloudflared, and the status page stay on the remaining core (cpus 0 and 4):
 
@@ -107,7 +107,15 @@ Build only on the VM; grpc++ is not installed on the laptop.
 
 - **Stop entries:** `touch pump-desk/KILL`. Exits keep running. `rm` it to resume.
 - **Stop the process:** `sudo systemctl stop pump-desk`. Open and in-flight positions are persisted. On the next start they are restored from `data/pump-desk.db` after checking the wallet's token balance, and re-marked from the pool.
-- **Kill latch:** if an exit fails `max_exit_attempts` times, entries stop and that position is left for you to sell by hand.
+- **Kill latch:** if an exit fails `max_exit_attempts` times, entries stop.
+  - **With `JUPITER_API_KEY` set,** the position is then sold through Jupiter's Swap API, the exit of last resort, routed over every pool Jupiter indexes:
+    - aux-req quotes it and has Jupiter build the swap.
+    - It refuses the tx unless the only signer and fee payer is our wallet, or if Jupiter's own simulation fails.
+    - It signs and sends through the RPC. The stream's fill closes the position as `jupiter_exit`.
+  - It makes up to `jupiter.max_attempts` attempts: a no-route answer retries after 5 s, and an unconfirmed send after `confirm_ms`.
+  - After that, or without the key, the position is left for you to sell by hand.
+  - Preflight logs whether the fallback is ready.
+  - The base ATA's rent stays in the token account after a Jupiter exit; close it by hand to reclaim it.
 - **Sender 429s:** exec resends the same signed bytes on the other link after `sender.retry_429_ms` × try (default 1 s; live, Sender let through about 1 tx/s for this key), up to `sender.max_429_retries`. A 429 on a sell also restarts that sell's exit timer, so the engine doesn't send a second sell into the backoff. A 429 is never a rejection, so it costs no exit attempt and can't trip the kill latch. A sell rejected at send time (no connection, a rejected request) waits `exits.exit_retry_ms` before the next attempt. Only an on-chain failure retries at once on the next slippage tier.
 - **Landing, not "fill ms":** sent → fill seen (~150 ms) is mostly chain and stream time. Judge routing and fee changes on the landing fields of each buy fill: slots to land (fill slot − processed tip at send), index in the block, pool quote-vault writes by other txs between our send and ours, and first shred / slot completed → seen (from LaserStream inter-slot statuses; n/a if the endpoint doesn't send them). They're in the `fills` view, the report, and the status page.
 - **One bot per wallet.** A wallet tx that isn't ours but moves a held position's tokens out (a wallet app, another bot on the same key) is followed: the position shrinks, or closes as `external_sell`, instead of exits retrying into an emptied token account.

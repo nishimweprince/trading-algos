@@ -272,10 +272,12 @@ bool HttpResponseParser::parse() {
   return true;
 }
 
-void format_request(std::string& out, const char* method, const Url& url, std::string_view path, std::string_view body) {
+void format_request(std::string& out, const char* method, const Url& url, std::string_view path, std::string_view body,
+                    std::string_view headers) {
   out.clear();
   out.append(method).append(" ").append(path).append(" HTTP/1.1\r\nHost: ").append(url.host);
   out.append("\r\nConnection: keep-alive\r\nAccept: application/json\r\n");
+  out.append(headers);
   if (!body.empty() || std::strcmp(method, "POST") == 0) {
     out.append("Content-Type: application/json\r\nContent-Length: ").append(std::to_string(body.size())).append("\r\n");
   }

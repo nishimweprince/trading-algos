@@ -43,6 +43,7 @@ add_library(pdcore STATIC
   src/logic/txparse.cpp
   src/net/conn.cpp
   src/aux/aux.cpp
+  src/aux/jupiter.cpp
   src/aux/leaders.cpp
   src/aux/rpc.cpp
   src/aux/writer.cpp

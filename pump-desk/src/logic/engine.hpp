@@ -116,6 +116,12 @@ struct Position {
   ExitTrigger sell_trigger = ExitTrigger::None;
   uint64_t sell_base = 0;
   bool sell_full = false;
+  // Jupiter, after the PumpSwap exits are exhausted: pending from the request until the
+  // position closes or Jupiter gives up; due = when the next attempt may start (0 = in flight).
+  bool jupiter_pending = false;
+  uint8_t jupiter_attempts = 0;
+  uint64_t jupiter_due_ns = 0;
+  Signature jupiter_sig{};  // the latest Jupiter tx sent
 };
 
 /** An open position loaded from the database at boot. */
@@ -208,6 +214,10 @@ class Engine {
   void close_position(int idx, const char* reason);
   void release_watches(const Position& p);
   void latch_kill(const char* why);
+  /** PumpSwap exits are used up: entries stop; the position goes to Jupiter, else to the operator. */
+  void exits_exhausted(Position& p, int idx, const char* why);
+  /** Ask aux-req for one Jupiter sell of the whole position. False when none is left to try. */
+  bool try_jupiter_exit(Position& p, int idx);
   TxParams tx_params(bool exit, RouteChoice& rc);
   void emit_route(const Signature& sig, Side side, const TxParams& tp, const RouteChoice& rc, uint8_t guards);
   void refresh_rivals();

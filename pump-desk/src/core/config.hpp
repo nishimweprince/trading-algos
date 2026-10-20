@@ -150,6 +150,17 @@ struct Config {
     int max_rivals = 3;            // <= MAX_RIVALS (sol/swap.hpp)
   } lighthouse;
 
+  /** Jupiter Swap API: sells a position the PumpSwap exits could not (exits.max_exit_attempts). */
+  struct Jupiter {
+    bool enabled = true;          // and JUPITER_API_KEY set; otherwise off
+    std::string url = "https://api.jup.ag/swap/v1";
+    std::string api_key;          // JUPITER_API_KEY only (never the config file)
+    int slippage_bps = 1500;
+    int max_attempts = 3;         // Jupiter sells per position; then hands off
+    int confirm_ms = 20000;       // wait this long for the stream to show it before the next attempt
+    uint64_t max_priority_lamports = 2'000'000;
+  } jupiter;
+
   struct Threads {
     int ingest_cpu = 1, logic_cpu = 2, exec_cpu = 3, aux_cpu = -1;
     int fifo_priority = 0;
