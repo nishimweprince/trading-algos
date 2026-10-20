@@ -103,12 +103,13 @@ std::string book_name(BookState state) {
   return "unknown";
 }
 
-std::string summary_json(const Engine& engine, std::string_view latency_mode, bool kill_file) {
+std::string summary_json(const Engine& engine, std::string_view latency_mode, std::string_view exec_mode,
+                         bool kill_file) {
   const auto& m = engine.metrics();
   std::ostringstream out;
   bool ready = true;
   out << "{\"service_live\":true,\"mode\":\"shadow\",\"latency_mode\":\"" << latency_mode
-      << "\",\"halted\":" << (engine.halted() ? "true" : "false")
+      << "\",\"exec_mode\":\"" << exec_mode << "\",\"halted\":" << (engine.halted() ? "true" : "false")
       << ",\"loss_halted\":" << (engine.loss_halted() ? "true" : "false")
       << ",\"kill_file\":" << (kill_file ? "true" : "false") << ",\"net_raw\":" << m.net_raw
       << ",\"fees_raw\":" << m.fees_raw << ",\"funding_raw\":" << m.funding_raw << ",\"cycles\":" << m.cycles
@@ -137,7 +138,9 @@ std::string summary_json(const Engine& engine, std::string_view latency_mode, bo
         << book_name(b.state()) << '/' << book_name(y.state()) << "\",\"basis_ppm\":" << basis
         << ",\"mean_ppm\":" << engine.basis_mean_ppm(s) << ",\"warm\":" << (engine.basis_warm(s) ? "true" : "false")
         << ",\"disabled\":" << (engine.symbol_disabled(s) ? "true" : "false") << ",\"fee_ppm\":["
-        << engine.taker_ppm(Venue::binance, s) << ',' << engine.taker_ppm(Venue::bybit, s) << "],\"funding_ppm\":["
+        << engine.taker_ppm(Venue::binance, s) << ',' << engine.taker_ppm(Venue::bybit, s)
+        << "],\"maker_ppm\":[" << engine.maker_ppm(Venue::binance, s) << ',' << engine.maker_ppm(Venue::bybit, s)
+        << "],\"funding_ppm\":["
         << engine.funding(Venue::binance, s).rate.raw / 100 << ',' << engine.funding(Venue::bybit, s).rate.raw / 100
         << "],\"phase\":\"" << phase_name(pair.phase) << "\",\"dir\":" << sign(pair.dir) << ",\"qty_raw\":["
         << pair.qty_raw[0] << ',' << pair.qty_raw[1] << "]}";
@@ -163,6 +166,7 @@ struct AuxMessage final {
   Venue venue{Venue::binance};
   std::uint16_t symbol{};
   std::int64_t taker_ppm{};
+  std::int64_t maker_ppm{};
   std::uint64_t receive_ns{};
   std::uint64_t rtt_ns{};
 };
@@ -215,9 +219,13 @@ int shadow(int argc, char** argv) {
   if (!load_instruments(http, basket, error)) { std::cerr << "instruments: " << error << '\n'; return 1; }
 
   std::array<Credentials, kVenues> credentials{load_credentials(Venue::binance), load_credentials(Venue::bybit)};
-  std::array<std::vector<std::int64_t>, kVenues> fees;
+  std::array<std::vector<std::int64_t>, kVenues> taker_fees;
+  std::array<std::vector<std::int64_t>, kVenues> maker_fees;
   if (public_only) {
-    for (std::size_t v = 0; v < kVenues; ++v) fees[v].assign(basket.size(), config.shadow.fallback_taker_ppm[v]);
+    for (std::size_t v = 0; v < kVenues; ++v) {
+      taker_fees[v].assign(basket.size(), config.shadow.fallback_taker_ppm[v]);
+      maker_fees[v].assign(basket.size(), config.shadow.fallback_maker_ppm[v]);
+    }
   } else {
     for (std::size_t v = 0; v < kVenues; ++v) {
       const auto venue = static_cast<Venue>(v);
@@ -232,7 +240,7 @@ int shadow(int argc, char** argv) {
       } else {
         std::cerr << detail << '\n';
       }
-      if (!fetch_taker_fees(http, venue, credentials[v], basket, fees[v], error)) {
+      if (!fetch_fees(http, venue, credentials[v], basket, taker_fees[v], maker_fees[v], error)) {
         std::cerr << "fees: " << error << '\n';
         return 1;
       }
@@ -250,8 +258,8 @@ int shadow(int argc, char** argv) {
   for (std::size_t s = 0; s < basket.size(); ++s) {
     journal.instrument(s, basket[s]);
     for (std::size_t v = 0; v < kVenues; ++v) {
-      engine->set_taker_fee(static_cast<Venue>(v), static_cast<std::uint16_t>(s), fees[v][s]);
-      journal.fee(static_cast<Venue>(v), s, fees[v][s]);
+      engine->set_fees(static_cast<Venue>(v), static_cast<std::uint16_t>(s), taker_fees[v][s], maker_fees[v][s]);
+      journal.fee(static_cast<Venue>(v), s, taker_fees[v][s], maker_fees[v][s]);
     }
   }
   journal.flush();
@@ -310,7 +318,8 @@ int shadow(int argc, char** argv) {
           case RecordKind::snapshot: written = journal.snapshot(*record.snapshot); break;
           case RecordKind::aux:
             written = record.aux.kind == AuxKind::fee
-                          ? journal.fee(record.aux.venue, record.aux.symbol, record.aux.taker_ppm)
+                          ? journal.fee(record.aux.venue, record.aux.symbol, record.aux.taker_ppm,
+                                        record.aux.maker_ppm)
                           : journal.latency(record.aux.venue, record.aux.receive_ns, record.aux.rtt_ns);
             break;
           case RecordKind::output: written = journal.output(record.output); break;
@@ -348,21 +357,23 @@ int shadow(int argc, char** argv) {
           const auto venue = static_cast<Venue>(v);
           const auto result = signed_probe(probe_http, venue, credentials[v]);
           if (!result.ok) continue;
-          if (!aux_queue->try_push({AuxKind::latency, venue, 0, 0, wall_ns(), result.elapsed_ns}))
+          if (!aux_queue->try_push({AuxKind::latency, venue, 0, 0, 0, wall_ns(), result.elapsed_ns}))
             fail("aux queue overflow");
         }
         if (std::chrono::steady_clock::now() >= next_fees) {
           next_fees += std::chrono::hours(1);
           for (std::size_t v = 0; v < kVenues; ++v) {
-            std::vector<std::int64_t> updated;
+            std::vector<std::int64_t> updated_taker;
+            std::vector<std::int64_t> updated_maker;
             std::string fee_error;
-            if (!fetch_taker_fees(probe_http, static_cast<Venue>(v), credentials[v], basket, updated, fee_error)) {
+            if (!fetch_fees(probe_http, static_cast<Venue>(v), credentials[v], basket, updated_taker, updated_maker,
+                            fee_error)) {
               std::cerr << "fee refresh: " << fee_error << '\n';
               continue;
             }
-            for (std::size_t s = 0; s < updated.size(); ++s)
-              aux_queue->try_push({AuxKind::fee, static_cast<Venue>(v), static_cast<std::uint16_t>(s), updated[s],
-                                   wall_ns(), 0});
+            for (std::size_t s = 0; s < updated_taker.size(); ++s)
+              aux_queue->try_push({AuxKind::fee, static_cast<Venue>(v), static_cast<std::uint16_t>(s),
+                                   updated_taker[s], updated_maker[s], wall_ns(), 0});
           }
         }
         for (int i = 0; i < 20 && !aux_stop.load(std::memory_order_relaxed); ++i)
@@ -393,6 +404,7 @@ int shadow(int argc, char** argv) {
     };
     const auto publish = [&] {
       auto text = summary_json(*engine, latency_mode_name(config.shadow.latency_mode),
+                               exec_mode_name(config.strategy.exec_mode),
                                kill_file_active.load(std::memory_order_acquire));
       std::lock_guard lock(summary_mutex);
       summary.swap(text);
@@ -422,7 +434,8 @@ int shadow(int argc, char** argv) {
         std::this_thread::sleep_for(std::chrono::microseconds(20));
       } else if (at <= bt && at <= yt) {
         aux_queue->try_pop(aux_message);
-        if (aux_message.kind == AuxKind::fee) engine->set_taker_fee(aux_message.venue, aux_message.symbol, aux_message.taker_ppm);
+        if (aux_message.kind == AuxKind::fee)
+          engine->set_fees(aux_message.venue, aux_message.symbol, aux_message.taker_ppm, aux_message.maker_ppm);
         else engine->add_latency_sample(aux_message.venue, aux_message.rtt_ns);
         Record record;
         record.kind = RecordKind::aux;
@@ -549,7 +562,8 @@ int shadow(int argc, char** argv) {
   kill_watcher.join();
   recorder.join();
   status.stop();
-  std::cout << summary_json(*engine, latency_mode_name(config.shadow.latency_mode), kill_file_active.load());
+  std::cout << summary_json(*engine, latency_mode_name(config.shadow.latency_mode),
+                            exec_mode_name(config.strategy.exec_mode), kill_file_active.load());
   if (pipeline_failed.load()) {
     std::lock_guard lock(error_mutex);
     std::cerr << pipeline_error << '\n';
@@ -703,14 +717,18 @@ int check_keys() {
     const auto credentials = load_credentials(venue);
     std::string detail;
     const auto read_only = verify_read_only(http, venue, credentials, detail);
-    std::vector<std::int64_t> fees;
+    std::vector<std::int64_t> taker;
+    std::vector<std::int64_t> maker;
     std::string fee_error;
-    const auto fees_ok = read_only && fetch_taker_fees(http, venue, credentials, basket, fees, fee_error);
+    const auto fees_ok = read_only && fetch_fees(http, venue, credentials, basket, taker, maker, fee_error);
     ok = ok && read_only && fees_ok;
     std::cout << (v ? "," : "") << '"' << venue_name(venue) << "\":{\"read_only\":" << (read_only ? "true" : "false")
               << ",\"detail\":\"" << detail << "\",\"taker_ppm\":{";
-    for (std::size_t s = 0; s < fees.size(); ++s)
-      std::cout << (s ? "," : "") << '"' << basket[s].name << "\":" << fees[s];
+    for (std::size_t s = 0; s < taker.size(); ++s)
+      std::cout << (s ? "," : "") << '"' << basket[s].name << "\":" << taker[s];
+    std::cout << "},\"maker_ppm\":{";
+    for (std::size_t s = 0; s < maker.size(); ++s)
+      std::cout << (s ? "," : "") << '"' << basket[s].name << "\":" << maker[s];
     std::cout << "}" << (fee_error.empty() ? "" : ",\"fee_error\":\"" + fee_error + "\"") << '}';
   }
   std::cout << "}\n";

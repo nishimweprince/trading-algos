@@ -152,7 +152,7 @@ function tile(k,v,c=''){return `<div class="tile"><span class="muted">${k}</span
 async function refresh(){
  try{
   const s=await (await fetch('/api/summary')).json();
-  document.getElementById('sub').textContent=`${s.mode} · latency ${s.latency_mode} · ${s.halted?'HALTED':'running'} · updated ${new Date().toLocaleTimeString()}`;
+  document.getElementById('sub').textContent=`${s.mode} · ${s.exec_mode||'taker_taker'} · latency ${s.latency_mode} · ${s.halted?'HALTED':'running'} · updated ${new Date().toLocaleTimeString()}`;
   document.getElementById('tiles').innerHTML=[
    tile('Net P&L (USD)',usd(s.net_raw),s.net_raw>=0?'good':'bad'),tile('Cycles',s.cycles),tile('Missed',s.missed),
    tile('Repairs',s.repairs),tile('Open pairs',s.open_pairs),tile('Census episodes',s.census_episodes),
@@ -160,7 +160,7 @@ async function refresh(){
    tile('Bybit one-way p50/p95 ms',`${(s.latency[1].p50_ns/1e6).toFixed(1)} / ${(s.latency[1].p95_ns/1e6).toFixed(1)}`),
    tile('Gaps B / Y',`${s.gaps[0]} / ${s.gaps[1]}`)].join('');
   document.getElementById('symbols').innerHTML='<tr><th>Symbol</th><th>Books</th><th>Basis bp</th><th>Mean bp</th><th>Warm</th><th>Fees B/Y ppm</th><th>Funding B/Y ppm</th><th>Phase</th><th>Dir</th></tr>'+
-   s.symbols.map(x=>`<tr><td>${x.name}</td><td>${x.books}</td><td>${bp(x.basis_ppm)}</td><td>${bp(x.mean_ppm)}</td><td>${x.warm?'yes':'no'}</td><td>${x.fee_ppm[0]}/${x.fee_ppm[1]}</td><td>${x.funding_ppm[0]}/${x.funding_ppm[1]}</td><td>${x.phase}</td><td>${x.dir}</td></tr>`).join('');
+   s.symbols.map(x=>`<tr><td>${x.name}</td><td>${x.books}</td><td>${bp(x.basis_ppm)}</td><td>${bp(x.mean_ppm)}</td><td>${x.warm?'yes':'no'}</td><td>${x.fee_ppm[0]}/${x.fee_ppm[1]}${x.maker_ppm?` m${x.maker_ppm[0]}/${x.maker_ppm[1]}`:''}</td><td>${x.funding_ppm[0]}/${x.funding_ppm[1]}</td><td>${x.phase}</td><td>${x.dir}</td></tr>`).join('');
   const a=await (await fetch('/api/activity')).json();
   document.getElementById('activity').textContent=a.rows.slice(-40).reverse().join('\n')||'no decisions yet';
  }catch(e){document.getElementById('sub').textContent='status unavailable: '+e}

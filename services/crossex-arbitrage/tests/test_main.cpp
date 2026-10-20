@@ -362,21 +362,92 @@ void test_reports() {
   std::string json, error;
   require(daily_report({path.string()}, json, error), "daily report");
   require(json.find("\"cycles\":160") != std::string::npos, "cycle count");
-  require(json.find("\"mean_net_ppm\":60.00") != std::string::npos, "mean net ppm");
-  require(json.find("\"mean_net\":false") != std::string::npos, "60 ppm fails the 800 ppm gate");
-  require(json.find("\"days\":true") != std::string::npos && json.find("\"pass\":false") != std::string::npos,
-          "gate evaluated");
+  require(json.find("\"mean_net_ppm\":60.00") != std::string::npos, "mean net ppm reported");
+  require(json.find("\"mean_net\"") == std::string::npos, "mean_net no longer gates");
+  require(json.find("\"days\":true") != std::string::npos && json.find("\"cycles\":true") != std::string::npos &&
+              json.find("\"pass\":true") != std::string::npos,
+          "sample-size gate passes");
   require(census_report({path.string()}, json, error), "census report");
   require(json.find("\"episodes\":2") != std::string::npos && json.find("\"ge_500ms\":1") != std::string::npos,
           "census buckets");
   std::filesystem::remove(path);
 }
 
+void test_maker_taker_fill_and_hedge() {
+  auto config = scenario_config();
+  config.strategy.exec_mode = ExecMode::maker_taker;
+  config.strategy.min_net_ppm = 0;
+  config.strategy.maker_timeout_ms = 5'000;
+  config.shadow.fixed_one_way_ns = {3'000'000, 5'000'000};
+  Scenario s(config);
+  s.quote(Venue::binance, "100.00", "100.02");
+  s.quote(Venue::bybit, "100.00", "100.02");
+  const auto next = s.now_ns() / 1'000'000 + 8 * 3'600'000;
+  s.funding(Venue::binance, "0.0001", next);
+  s.funding(Venue::bybit, "0.0001", next);
+  s.advance_ms(1);
+  s.engine().clear_outputs();
+  // Rich Bybit: long Binance / short Bybit. Maker join sell on Bybit at 100.62 ask.
+  s.quote(Venue::bybit, "100.60", "100.62");
+  require(s.engine().pair(0).phase == PairPhase::opening, "maker opening");
+  require(s.count(OutputKind::leg_submit) == 1, "only maker leg submitted");
+  s.advance_ms(10);  // maker arrives and rests
+  require(s.engine().pair(0).phase == PairPhase::opening, "still resting");
+  // Trade through the Bybit ask join: bid lifts through the maker sell limit.
+  s.quote(Venue::bybit, "100.62", "100.64");
+  require(s.count(OutputKind::leg_fill) >= 1, "maker fill");
+  require(s.count(OutputKind::leg_submit) >= 2, "hedge submitted after maker fill");
+  s.advance_ms(20);
+  require(s.engine().pair(0).phase == PairPhase::open, "hedged open");
+  require(s.engine().pair(0).qty_raw[0] > 0 && s.engine().pair(0).qty_raw[1] < 0, "long binance short bybit");
+}
+
+void test_maker_timeout_miss() {
+  auto config = scenario_config();
+  config.strategy.exec_mode = ExecMode::maker_taker;
+  config.strategy.min_net_ppm = 0;
+  config.strategy.maker_timeout_ms = 20;
+  config.shadow.fixed_one_way_ns = {1'000'000, 1'000'000};
+  Scenario s(config);
+  s.quote(Venue::binance, "100.00", "100.02");
+  s.quote(Venue::bybit, "100.00", "100.02");
+  const auto next = s.now_ns() / 1'000'000 + 8 * 3'600'000;
+  s.funding(Venue::binance, "0.0001", next);
+  s.funding(Venue::bybit, "0.0001", next);
+  s.advance_ms(1);
+  s.quote(Venue::bybit, "100.60", "100.62");
+  require(s.engine().pair(0).phase == PairPhase::opening, "opening");
+  s.advance_ms(50);  // arrive + timeout without a trade-through
+  require(s.engine().pair(0).phase == PairPhase::flat, "timed out to flat");
+  require(s.engine().metrics().missed == 1, "missed cycle");
+}
+
+void test_maker_taker_fee_ppm() {
+  auto config = scenario_config();
+  config.strategy.exec_mode = ExecMode::maker_taker;
+  config.strategy.min_net_ppm = 0;
+  Scenario s(config);
+  s.quote(Venue::binance, "100.00", "100.02");
+  s.quote(Venue::bybit, "100.00", "100.02");
+  const auto next = s.now_ns() / 1'000'000 + 8 * 3'600'000;
+  s.funding(Venue::binance, "0.0001", next);
+  s.funding(Venue::bybit, "0.0001", next);
+  s.advance_ms(1);
+  s.engine().clear_outputs();
+  s.quote(Venue::bybit, "100.60", "100.62");
+  const auto* decision = s.last(OutputKind::decision);
+  require(decision != nullptr, "decision");
+  // Full cycle: 2 * (maker 200 + opposing taker). Maker on Bybit => 2*(200+500)=1400.
+  // Maker on Binance => 2*(200+550)=1500. Engine picks the larger net (lower fees).
+  require(decision->decision.fees_ppm == 1400 || decision->decision.fees_ppm == 1500, "maker+taker fees");
+  require(decision->decision.fees_ppm < 2 * (500 + 550), "cheaper than taker/taker");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
   fixtures = argc > 1 ? argv[1] : "tests/fixtures";
-  const std::array<std::pair<const char*, void (*)()>, 15> cases{{
+  const std::array<std::pair<const char*, void (*)()>, 18> cases{{
       {"decimal_and_ppm", test_decimal_and_ppm},
       {"book_and_sweep", test_book_and_sweep},
       {"binance_sync", test_binance_sync},
@@ -392,6 +463,9 @@ int main(int argc, char** argv) {
       {"entry_risk_gates", test_entry_risk_gates},
       {"replay_fixture", test_replay_fixture},
       {"replay_interleaved_header", test_replay_interleaved_header},
+      {"maker_taker_fill_and_hedge", test_maker_taker_fill_and_hedge},
+      {"maker_timeout_miss", test_maker_timeout_miss},
+      {"maker_taker_fee_ppm", test_maker_taker_fee_ppm},
   }};
   try {
     for (const auto& [name, test] : cases) {

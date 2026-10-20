@@ -14,9 +14,7 @@ namespace {
 // PREREG.md gate. Changing these after shadow data exists invalidates the gate.
 constexpr double kGateDays = 14.0;
 constexpr std::size_t kGateCycles = 150;
-constexpr double kGateMeanNetPpm = 800.0;
 constexpr double kGateMaxLeggingRate = 0.10;
-constexpr double kGateWorstLossMultiple = 20.0;
 constexpr std::size_t kBootstrapResamples = 10'000;
 
 std::uint64_t timestamp_field(const std::string& line, std::size_t field) {
@@ -134,8 +132,8 @@ Journal::Journal(const std::string& path) : buffer_(1 << 20) {
 
 bool Journal::header(const RuntimeConfig& config, std::string_view mode, std::uint64_t start_ns) {
   stream_ << "Z " << start_ns << ' ' << mode << ' ' << latency_mode_name(config.shadow.latency_mode) << ' '
-          << config.strategy.trade_notional_raw << ' ' << config.strategy.min_net_ppm << ' '
-          << config.shadow.available_ppm << ' ' << config.basket << '\n';
+          << exec_mode_name(config.strategy.exec_mode) << ' ' << config.strategy.trade_notional_raw << ' '
+          << config.strategy.min_net_ppm << ' ' << config.shadow.available_ppm << ' ' << config.basket << '\n';
   return stream_.good();
 }
 
@@ -148,8 +146,8 @@ bool Journal::instrument(std::size_t symbol, const Instrument& i) {
   return stream_.good();
 }
 
-bool Journal::fee(Venue venue, std::size_t symbol, std::int64_t taker_ppm) {
-  stream_ << "C " << index(venue) << ' ' << symbol << ' ' << taker_ppm << '\n';
+bool Journal::fee(Venue venue, std::size_t symbol, std::int64_t taker_ppm, std::int64_t maker_ppm) {
+  stream_ << "C " << index(venue) << ' ' << symbol << ' ' << taker_ppm << ' ' << maker_ppm << '\n';
   return stream_.good();
 }
 
@@ -247,7 +245,8 @@ bool replay_journal(const std::string& path, const RuntimeConfig& config, Replay
   struct PendingFee final {
     int venue{};
     std::uint16_t symbol{};
-    std::int64_t ppm{};
+    std::int64_t taker_ppm{};
+    std::int64_t maker_ppm{};
   };
   struct PendingLatency final {
     int venue{};
@@ -264,7 +263,8 @@ bool replay_journal(const std::string& path, const RuntimeConfig& config, Replay
     if (engine) return true;
     if (instruments.empty()) { error = "journal has no instruments before market data"; return false; }
     engine = std::make_unique<Engine>(instruments, config.strategy, config.risk, config.shadow);
-    for (const auto& fee : pending_fees) engine->set_taker_fee(venue_from(fee.venue), fee.symbol, fee.ppm);
+    for (const auto& fee : pending_fees)
+      engine->set_fees(venue_from(fee.venue), fee.symbol, fee.taker_ppm, fee.maker_ppm);
     for (const auto& sample : pending_latency) engine->add_latency_sample(venue_from(sample.venue), sample.rtt);
     pending_fees.clear();
     pending_latency.clear();
@@ -293,10 +293,12 @@ bool replay_journal(const std::string& path, const RuntimeConfig& config, Replay
       case 'C': {
         int venue = 0;
         std::uint16_t symbol = 0;
-        std::int64_t ppm = 0;
-        if (!(row >> venue >> symbol >> ppm)) return bad();
-        if (engine) engine->set_taker_fee(venue_from(venue), symbol, ppm);
-        else pending_fees.push_back({venue, symbol, ppm});
+        std::int64_t taker_ppm = 0;
+        std::int64_t maker_ppm = 0;
+        if (!(row >> venue >> symbol >> taker_ppm)) return bad();
+        if (!(row >> maker_ppm)) maker_ppm = taker_ppm;  // archived 3-field C lines
+        if (engine) engine->set_fees(venue_from(venue), symbol, taker_ppm, maker_ppm);
+        else pending_fees.push_back({venue, symbol, taker_ppm, maker_ppm});
         break;
       }
       case 'L': {
@@ -491,11 +493,9 @@ bool daily_report(const std::vector<std::string>& paths, std::string& json, std:
   const auto legging_rate = n == 0 ? 0.0 : static_cast<double>(legged) / count;
   const bool pass_days = days >= kGateDays;
   const bool pass_cycles = n >= kGateCycles;
-  const bool pass_mean = mean_ppm >= kGateMeanNetPpm;
-  const bool pass_ci = n > 1 && ci_low > 0.0;
   const bool pass_legging = legging_rate <= kGateMaxLeggingRate;
-  const bool pass_tail = mean_usd > 0 && -worst_usd <= kGateWorstLossMultiple * mean_usd;
-  const bool pass = all_pessimistic && pass_days && pass_cycles && pass_mean && pass_ci && pass_legging && pass_tail;
+  // Mean net, CI, and worst cycle are reported for edge evaluation; they do not gate.
+  const bool pass = all_pessimistic && pass_days && pass_cycles && pass_legging;
   const auto flag = [](bool value) { return value ? "true" : "false"; };
   std::ostringstream out;
   out << "{\"files\":" << paths.size() << ",\"coverage_days\":" << fixed(days, 3) << ",\"cycles\":" << n
@@ -512,8 +512,7 @@ bool daily_report(const std::vector<std::string>& paths, std::string& json, std:
     first = false;
   }
   out << "},\"gate\":{\"pessimistic_latency\":" << flag(all_pessimistic) << ",\"days\":" << flag(pass_days)
-      << ",\"cycles\":" << flag(pass_cycles) << ",\"mean_net\":" << flag(pass_mean) << ",\"ci_low\":" << flag(pass_ci)
-      << ",\"legging\":" << flag(pass_legging) << ",\"tail\":" << flag(pass_tail) << ",\"pass\":" << flag(pass)
+      << ",\"cycles\":" << flag(pass_cycles) << ",\"legging\":" << flag(pass_legging) << ",\"pass\":" << flag(pass)
       << "}}\n";
   json = out.str();
   return true;

@@ -52,10 +52,10 @@ HttpResult signed_get(HttpClient& http, Venue venue, const Credentials& credenti
 // read-only keys only.
 bool verify_read_only(HttpClient& http, Venue venue, const Credentials& credentials, std::string& detail);
 
-// Account taker fee per basket symbol, in ppm.
-bool fetch_taker_fees(HttpClient& http, Venue venue, const Credentials& credentials,
-                      const std::vector<Instrument>& basket, std::vector<std::int64_t>& taker_ppm,
-                      std::string& error);
+// Account taker and maker fees per basket symbol, in ppm.
+bool fetch_fees(HttpClient& http, Venue venue, const Credentials& credentials,
+                const std::vector<Instrument>& basket, std::vector<std::int64_t>& taker_ppm,
+                std::vector<std::int64_t>& maker_ppm, std::string& error);
 
 bool load_instruments(HttpClient& http, std::vector<Instrument>& basket, std::string& error);
 

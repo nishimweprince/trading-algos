@@ -14,7 +14,7 @@ namespace cxa {
 
 // Append-only, space-separated records; one letter per kind. Inputs (Y C L S D M) are
 // everything replay needs; the rest are decision/fill/report records.
-//   Z header   Y instrument   C taker fee   L latency sample   S Binance snapshot
+//   Z header   Y instrument   C fee (taker [maker])   L latency sample   S Binance snapshot
 //   D depth    M funding      R raw frame   I leg submit       F leg result
 //   X entry decision          P closed cycle                   O census episode
 //   G resync request          H halt change
@@ -23,7 +23,7 @@ class Journal final {
   explicit Journal(const std::string& path);
   bool header(const RuntimeConfig& config, std::string_view mode, std::uint64_t start_ns);
   bool instrument(std::size_t symbol, const Instrument& instrument);
-  bool fee(Venue venue, std::size_t symbol, std::int64_t taker_ppm);
+  bool fee(Venue venue, std::size_t symbol, std::int64_t taker_ppm, std::int64_t maker_ppm);
   bool latency(Venue venue, std::uint64_t receive_ns, std::uint64_t rtt_ns);
   bool snapshot(const BookSnapshot& snapshot);
   bool depth(const DepthEvent& event);
