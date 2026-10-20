@@ -18,6 +18,16 @@ Price widen(Price price, Side side, std::int64_t ppm, Price tick) noexcept {
 
 std::int64_t rate_ppm(Decimal rate) noexcept { return rate.raw / (kScale / kPpm); }
 
+SweepResult maker_join(Price price, Quantity quantity) noexcept {
+  SweepResult result;
+  if (price.raw <= 0 || quantity.raw <= 0) return result;
+  result.filled = quantity;
+  result.worst = price;
+  result.vwap = price;
+  result.notional_raw = mul_scaled(price.raw, quantity.raw);
+  return result;
+}
+
 }  // namespace
 
 std::string_view exit_reason_name(ExitReason reason) noexcept {
@@ -61,6 +71,7 @@ Engine::Engine(std::vector<Instrument> instruments, StrategyConfig strategy, Ris
     latency_[v] = LatencyModel(shadow_.latency_mode, shadow_.fixed_one_way_ns[v], shadow_.engine_penalty_ns,
                                shadow_.seed + v);
   }
+  for (auto& row : maker_ppm_) row.fill(-1);
 }
 
 Output* Engine::push_output(OutputKind kind) noexcept {
@@ -76,10 +87,20 @@ Output* Engine::push_output(OutputKind kind) noexcept {
 void Engine::advance(std::uint64_t now_ns) noexcept {
   now_ns_ = std::max(now_ns_, now_ns);
   process_arrivals();
+  process_resting_makers();
+}
+
+void Engine::set_fees(Venue venue, std::uint16_t symbol, std::int64_t taker_ppm,
+                      std::int64_t maker_ppm) noexcept {
+  if (symbol >= instruments_.size()) return;
+  taker_ppm_[index(venue)][symbol] = taker_ppm;
+  maker_ppm_[index(venue)][symbol] = maker_ppm;
 }
 
 void Engine::set_taker_fee(Venue venue, std::uint16_t symbol, std::int64_t taker_ppm) noexcept {
-  if (symbol < instruments_.size()) taker_ppm_[index(venue)][symbol] = taker_ppm;
+  if (symbol >= instruments_.size()) return;
+  taker_ppm_[index(venue)][symbol] = taker_ppm;
+  if (maker_ppm_[index(venue)][symbol] < 0) maker_ppm_[index(venue)][symbol] = taker_ppm;
 }
 
 void Engine::add_latency_sample(Venue venue, std::uint64_t rtt_ns) noexcept {
@@ -98,6 +119,7 @@ void Engine::on_depth(const DepthEvent& event) noexcept {
   const auto before = book.state();
   const auto ok = event.venue == Venue::binance ? book.apply_binance(event) : book.apply_bybit(event);
   if (!ok && book.state() == BookState::gap && before != BookState::gap) on_gap(event.venue, event.symbol);
+  process_resting_makers();
   if (book.verified()) evaluate(event.symbol);
 }
 
@@ -110,6 +132,7 @@ bool Engine::on_snapshot(const BookSnapshot& snapshot) noexcept {
     on_gap(snapshot.venue, snapshot.symbol);
     return false;
   }
+  process_resting_makers();
   return true;
 }
 
@@ -139,15 +162,13 @@ void Engine::on_funding(const FundingEvent& event) noexcept {
   ++metrics_.funding_events;
   auto& state = funding_[v][event.symbol];
   if (event.next_funding_ms > 0) {
-    // A later settlement time means the previous one has been paid, at the rate that
-    // was in force before this frame.
     if (state.next_ms > 0 && event.next_funding_ms > state.next_ms && event.event_ms >= state.next_ms) {
       auto& pair = pairs_[event.symbol];
       const auto qty = pair.qty_raw[v];
       if (qty != 0 && state.known) {
         const auto mark = state.mark.raw > 0 ? state.mark : books_[v][event.symbol].mid();
         const auto payment = mul_scaled(mul_scaled(qty, mark.raw), state.rate.raw);
-        pair.funding_raw -= payment;  // longs pay positive rates
+        pair.funding_raw -= payment;
         ++metrics_.funding_settlements;
       }
     }
@@ -220,7 +241,14 @@ std::int64_t Engine::funding_cost_ppm(std::size_t symbol, Direction dir, std::ui
   return cost;
 }
 
-Edge Engine::edge(std::size_t symbol, Direction dir, Quantity quantity) const noexcept {
+std::int64_t Engine::cycle_fees_ppm(std::size_t symbol, Venue maker_venue) const noexcept {
+  const auto hedge = maker_venue == Venue::binance ? Venue::bybit : Venue::binance;
+  if (strategy_.exec_mode == ExecMode::maker_taker)
+    return 2 * (maker_ppm_[index(maker_venue)][symbol] + taker_ppm_[index(hedge)][symbol]);
+  return 2 * (taker_ppm_[0][symbol] + taker_ppm_[1][symbol]);
+}
+
+Edge Engine::edge_taker_taker(std::size_t symbol, Direction dir, Quantity quantity) const noexcept {
   Edge edge;
   if (quantity.raw <= 0) return edge;
   const auto& long_book = books_[index(long_venue(dir))][symbol];
@@ -239,14 +267,72 @@ Edge Engine::edge(std::size_t symbol, Direction dir, Quantity quantity) const no
   edge.exit_gap_ppm = ratio_ppm(edge.exit_buy.vwap.raw - edge.exit_sell.vwap.raw, mid);
   edge.basis_ppm = sign(dir) * mid_basis_ppm(symbol);
   edge.mean_ppm = sign(dir) * basis_mean_ppm(symbol);
-  // Entry gap minus the exit gap expected once the basis returns to its mean
-  // (mean plus today's crossing cost at this size).
   edge.capture_ppm = edge.gap_ppm - edge.mean_ppm - (edge.exit_gap_ppm - edge.basis_ppm);
-  edge.fees_ppm = 2 * (taker_ppm_[0][symbol] + taker_ppm_[1][symbol]);
+  edge.fees_ppm = cycle_fees_ppm(symbol, Venue::binance);
   edge.funding_ppm = funding_cost_ppm(symbol, dir, strategy_.expected_hold_ms);
   edge.net_ppm = edge.capture_ppm - edge.fees_ppm - edge.funding_ppm - strategy_.safety_ppm;
+  edge.maker_venue = Venue::binance;
   edge.valid = true;
   return edge;
+}
+
+Edge Engine::edge_maker_taker(std::size_t symbol, Direction dir, Quantity quantity,
+                              Venue maker_venue) const noexcept {
+  Edge edge;
+  if (quantity.raw <= 0) return edge;
+  const auto lv = long_venue(dir);
+  const auto sv = short_venue(dir);
+  const auto hedge_venue = maker_venue == Venue::binance ? Venue::bybit : Venue::binance;
+  const auto& maker_book = books_[index(maker_venue)][symbol];
+  const auto& hedge_book = books_[index(hedge_venue)][symbol];
+  if (!maker_book.verified() || !hedge_book.verified()) return edge;
+  if (maker_ppm_[index(maker_venue)][symbol] < 0 || taker_ppm_[index(hedge_venue)][symbol] <= 0) return edge;
+
+  const bool maker_is_long = maker_venue == lv;
+  const auto join = maker_is_long ? maker_book.best_bid().price : maker_book.best_ask().price;
+  if (join.raw <= 0) return edge;
+
+  edge.quantity = quantity;
+  if (maker_is_long) {
+    edge.buy = maker_join(join, quantity);
+    edge.sell = hedge_book.sweep(Side::sell, quantity);
+    edge.exit_sell = maker_join(maker_book.best_ask().price, quantity);
+    edge.exit_buy = hedge_book.sweep(Side::buy, quantity);
+  } else {
+    edge.sell = maker_join(join, quantity);
+    edge.buy = hedge_book.sweep(Side::buy, quantity);
+    edge.exit_buy = maker_join(maker_book.best_bid().price, quantity);
+    edge.exit_sell = hedge_book.sweep(Side::sell, quantity);
+  }
+  if (!edge.buy.complete(quantity) || !edge.sell.complete(quantity) || !edge.exit_sell.complete(quantity) ||
+      !edge.exit_buy.complete(quantity) || edge.exit_sell.vwap.raw <= 0 || edge.exit_buy.vwap.raw <= 0)
+    return edge;
+
+  const auto mid = (books_[index(lv)][symbol].mid().raw + books_[index(sv)][symbol].mid().raw) / 2;
+  edge.gap_ppm = ratio_ppm(edge.sell.vwap.raw - edge.buy.vwap.raw, mid);
+  edge.exit_gap_ppm = ratio_ppm(edge.exit_buy.vwap.raw - edge.exit_sell.vwap.raw, mid);
+  edge.basis_ppm = sign(dir) * mid_basis_ppm(symbol);
+  edge.mean_ppm = sign(dir) * basis_mean_ppm(symbol);
+  edge.capture_ppm = edge.gap_ppm - edge.mean_ppm - (edge.exit_gap_ppm - edge.basis_ppm);
+  edge.fees_ppm = cycle_fees_ppm(symbol, maker_venue);
+  edge.funding_ppm = funding_cost_ppm(symbol, dir, strategy_.expected_hold_ms);
+  edge.net_ppm = edge.capture_ppm - edge.fees_ppm - edge.funding_ppm - strategy_.safety_ppm;
+  edge.maker_venue = maker_venue;
+  edge.valid = true;
+  return edge;
+}
+
+Edge Engine::edge(std::size_t symbol, Direction dir, Quantity quantity) const noexcept {
+  if (strategy_.exec_mode != ExecMode::maker_taker) return edge_taker_taker(symbol, dir, quantity);
+  auto best = edge_maker_taker(symbol, dir, quantity, Venue::binance);
+  const auto other = edge_maker_taker(symbol, dir, quantity, Venue::bybit);
+  if (!best.valid || (other.valid && other.net_ppm > best.net_ppm)) return other;
+  return best;
+}
+
+Edge Engine::edge(std::size_t symbol, Direction dir, Quantity quantity, Venue maker_venue) const noexcept {
+  if (strategy_.exec_mode != ExecMode::maker_taker) return edge_taker_taker(symbol, dir, quantity);
+  return edge_maker_taker(symbol, dir, quantity, maker_venue);
 }
 
 void Engine::update_census(std::size_t symbol) noexcept {
@@ -307,6 +393,7 @@ RiskCode Engine::entry_risk(std::size_t symbol, std::int64_t notional_raw) const
     if (now_ns_ - last_receive_ns_[v] > limits_.max_feed_age_ns) return RiskCode::feed_stale;
     if (now_ns_ - books_[v][symbol].last_receive_ns() > limits_.max_book_age_ns) return RiskCode::book_stale;
     if (taker_ppm_[v][symbol] <= 0) return RiskCode::fees_unknown;
+    if (strategy_.exec_mode == ExecMode::maker_taker && maker_ppm_[v][symbol] < 0) return RiskCode::fees_unknown;
     if (!funding_[v][symbol].known || funding_[v][symbol].next_ms == 0) return RiskCode::funding_unknown;
   }
   if (!basis_warm(symbol)) return RiskCode::basis_cold;
@@ -330,7 +417,15 @@ void Engine::evaluate(std::size_t symbol) noexcept {
   update_census(symbol);
   const auto phase = pairs_[symbol].phase;
   if (phase == PairPhase::flat) try_open(symbol);
-  else if (phase == PairPhase::open) check_exit(symbol);
+  else if (phase == PairPhase::opening && strategy_.exec_mode == ExecMode::maker_taker) {
+    // Cancel residual maker if live hedge economics no longer clear the threshold.
+    const auto& pair = pairs_[symbol];
+    const auto qty = quantity_for(symbol, strategy_.trade_notional_raw);
+    if (qty.raw > 0) {
+      const auto live = edge(symbol, pair.dir, qty, pair.maker_venue);
+      if (!live.valid || live.net_ppm < strategy_.min_net_ppm) cancel_resting_maker(symbol);
+    }
+  } else if (phase == PairPhase::open) check_exit(symbol);
 }
 
 void Engine::try_open(std::size_t symbol) noexcept {
@@ -367,6 +462,7 @@ void Engine::try_open(std::size_t symbol) noexcept {
   pair.last_exit_gap_ppm = best.exit_gap_ppm;
   pair.reason = ExitReason::none;
   pair.opened = false;
+  pair.maker_venue = best.maker_venue;
   ++metrics_.open_pairs;
   if (auto* output = push_output(OutputKind::decision)) {
     output->decision = {cycle,          static_cast<std::uint16_t>(symbol), dir,
@@ -375,11 +471,23 @@ void Engine::try_open(std::size_t symbol) noexcept {
                         best.capture_ppm,  best.fees_ppm,                   best.funding_ppm,
                         best.net_ppm};
   }
-  // IOC limits: the worst swept level, widened by half the edge above the threshold.
-  const auto slack = std::max<std::int64_t>(0, (best.net_ppm - strategy_.min_net_ppm) / 2);
+
   const auto& instrument = instruments_[symbol];
   const auto lv = long_venue(dir);
   const auto sv = short_venue(dir);
+  if (strategy_.exec_mode == ExecMode::maker_taker) {
+    const auto maker = best.maker_venue;
+    const auto hedge = maker == Venue::binance ? Venue::bybit : Venue::binance;
+    const bool maker_is_long = maker == lv;
+    const auto maker_side = maker_is_long ? Side::buy : Side::sell;
+    const auto hedge_side = maker_is_long ? Side::sell : Side::buy;
+    const auto join = maker_is_long ? best.buy.worst : best.sell.worst;
+    submit_leg(symbol, maker, maker_side, LegPurpose::open, quantity, join, LegLiquidity::maker, hedge,
+               hedge_side);
+    return;
+  }
+
+  const auto slack = std::max<std::int64_t>(0, (best.net_ppm - strategy_.min_net_ppm) / 2);
   submit_leg(symbol, lv, Side::buy, LegPurpose::open, quantity,
              widen(best.buy.worst, Side::buy, slack, instrument.tick[index(lv)]));
   submit_leg(symbol, sv, Side::sell, LegPurpose::open, quantity,
@@ -389,7 +497,9 @@ void Engine::try_open(std::size_t symbol) noexcept {
 void Engine::check_exit(std::size_t symbol) noexcept {
   auto& pair = pairs_[symbol];
   const auto quantity = Quantity{abs64(pair.qty_raw[index(long_venue(pair.dir))])};
-  const auto current = edge(symbol, pair.dir, quantity);
+  const auto current = strategy_.exec_mode == ExecMode::maker_taker
+                           ? edge(symbol, pair.dir, quantity, pair.maker_venue)
+                           : edge(symbol, pair.dir, quantity);
   if (current.valid) pair.last_exit_gap_ppm = current.exit_gap_ppm;
   auto reason = ExitReason::none;
   if (halted()) reason = ExitReason::kill;
@@ -409,6 +519,29 @@ void Engine::begin_close(std::size_t symbol, ExitReason reason) noexcept {
   pair.phase = PairPhase::closing;
   pair.reason = reason;
   const auto& instrument = instruments_[symbol];
+
+  if (strategy_.exec_mode == ExecMode::maker_taker) {
+    const auto maker = pair.maker_venue;
+    const auto hedge = maker == Venue::binance ? Venue::bybit : Venue::binance;
+    const auto maker_qty = pair.qty_raw[index(maker)];
+    const auto hedge_qty = pair.qty_raw[index(hedge)];
+    if (maker_qty == 0 && hedge_qty == 0) {
+      resolve_pair(symbol);
+      return;
+    }
+    // Prefer resting the unwind on the entry maker venue; fall back to both-taker if flat there.
+    if (maker_qty != 0) {
+      const auto maker_side = maker_qty > 0 ? Side::sell : Side::buy;
+      const auto hedge_side = hedge_qty > 0 ? Side::sell : Side::buy;
+      const Quantity quantity{abs64(maker_qty)};
+      const auto& book = books_[index(maker)][symbol];
+      const auto join = maker_side == Side::sell ? book.best_ask().price : book.best_bid().price;
+      submit_leg(symbol, maker, maker_side, LegPurpose::close, quantity, join, LegLiquidity::maker, hedge,
+                 hedge_qty == 0 ? (maker_side == Side::sell ? Side::buy : Side::sell) : hedge_side);
+      return;
+    }
+  }
+
   for (std::size_t v = 0; v < kVenues; ++v) {
     const auto qty = pair.qty_raw[v];
     if (qty == 0) continue;
@@ -425,10 +558,10 @@ void Engine::begin_close(std::size_t symbol, ExitReason reason) noexcept {
 }
 
 void Engine::submit_leg(std::size_t symbol, Venue venue, Side side, LegPurpose purpose, Quantity quantity,
-                        Price limit) noexcept {
+                        Price limit, LegLiquidity liquidity, Venue hedge_venue, Side hedge_side) noexcept {
   auto slot = std::find_if(legs_.begin(), legs_.end(), [](const PendingLeg& leg) { return !leg.active; });
   if (slot == legs_.end()) {
-    loss_halt_ = true;  // cannot track another order; stop opening risk
+    loss_halt_ = true;
     return;
   }
   auto& pair = pairs_[symbol];
@@ -439,11 +572,14 @@ void Engine::submit_leg(std::size_t symbol, Venue venue, Side side, LegPurpose p
   record.venue = venue;
   record.side = side;
   record.purpose = purpose;
+  record.liquidity = liquidity;
   record.quantity = quantity;
   record.limit = limit;
   record.decision_ns = now_ns_;
   record.arrival_ns = now_ns_ + latency_[index(venue)].draw();
-  *slot = {true, record};
+  record.hedge_venue = hedge_venue;
+  record.hedge_side = hedge_side;
+  *slot = {true, false, record, quantity, 0};
   ++pair.pending_legs;
   ++metrics_.legs;
   if (auto* output = push_output(OutputKind::leg_submit)) output->leg = record;
@@ -455,15 +591,19 @@ void Engine::process_arrivals() noexcept {
   std::array<bool, kMaxSymbols> resolve{};
   bool any = false;
   for (auto& slot : legs_) {
-    if (!slot.active || slot.record.arrival_ns > now_ns_) continue;
+    if (!slot.active || slot.resting || slot.record.arrival_ns > now_ns_) continue;
     auto& record = slot.record;
+    if (record.liquidity == LegLiquidity::maker) {
+      slot.resting = true;
+      slot.remaining = record.quantity;
+      slot.expire_ns = record.arrival_ns + strategy_.maker_timeout_ms * kMsNs;
+      continue;
+    }
     const auto v = index(record.venue);
     const auto& instrument = instruments_[record.symbol];
     const auto& book = books_[v][record.symbol];
     Quantity filled{};
     SweepResult swept{};
-    // The book here is the state as of the arrival time: this runs before the event
-    // that advanced the clock is applied.
     if (book.verified()) {
       const auto available = book.sweep(record.side, record.quantity, record.limit, shadow_.available_ppm);
       filled = round_down(available.filled, instrument.step[v]);
@@ -493,6 +633,103 @@ void Engine::process_arrivals() noexcept {
     if (resolve[symbol]) resolve_pair(symbol);
 }
 
+void Engine::on_maker_fill(PendingLeg& slot, Quantity filled, Price price) noexcept {
+  auto& record = slot.record;
+  const auto v = index(record.venue);
+  auto& pair = pairs_[record.symbol];
+  const auto notional = mul_scaled(price.raw, filled.raw);
+  record.filled.raw += filled.raw;
+  record.vwap = price;
+  record.fee_raw += apply_ppm(notional, maker_ppm_[v][record.symbol]);
+  record.fill_ns = now_ns_;
+  apply_fill(pair, record.venue, record.side, filled, price);
+  pair.fees_raw += apply_ppm(notional, maker_ppm_[v][record.symbol]);
+  if (record.purpose == LegPurpose::open) pair.opened = true;
+  ++metrics_.fills;
+  LegRecord fill = record;
+  fill.quantity = filled;
+  fill.filled = filled;
+  fill.fee_raw = apply_ppm(notional, maker_ppm_[v][record.symbol]);
+  if (auto* output = push_output(OutputKind::leg_fill)) output->leg = fill;
+
+  slot.remaining.raw -= filled.raw;
+  // Immediate taker hedge for the filled size.
+  auto hedge_qty = filled;
+  if (record.purpose == LegPurpose::close) {
+    const auto available = abs64(pair.qty_raw[index(record.hedge_venue)]);
+    hedge_qty = Quantity{std::min(filled.raw, available)};
+  }
+  if (hedge_qty.raw > 0) {
+    const auto& hedge_book = books_[index(record.hedge_venue)][record.symbol];
+    const auto& instrument = instruments_[record.symbol];
+    const auto swept = hedge_book.sweep(record.hedge_side, hedge_qty);
+    const auto base = swept.complete(hedge_qty) ? swept.worst
+                                                : (record.hedge_side == Side::sell ? hedge_book.best_bid().price
+                                                                                  : hedge_book.best_ask().price);
+    submit_leg(record.symbol, record.hedge_venue, record.hedge_side, record.purpose, hedge_qty,
+               widen(base, record.hedge_side, strategy_.close_slippage_ppm,
+                     instrument.tick[index(record.hedge_venue)]));
+  }
+  if (slot.remaining.raw <= 0) {
+    slot.active = false;
+    slot.resting = false;
+    if (pair.pending_legs > 0) --pair.pending_legs;
+  }
+}
+
+void Engine::process_resting_makers() noexcept {
+  std::array<bool, kMaxSymbols> resolve{};
+  bool any = false;
+  for (auto& slot : legs_) {
+    if (!slot.active || !slot.resting) continue;
+    auto& record = slot.record;
+    auto& pair = pairs_[record.symbol];
+    const auto& book = books_[index(record.venue)][record.symbol];
+    const auto& instrument = instruments_[record.symbol];
+
+    if (now_ns_ >= slot.expire_ns || !book.verified()) {
+      slot.active = false;
+      slot.resting = false;
+      if (pair.pending_legs > 0) --pair.pending_legs;
+      resolve[record.symbol] = true;
+      any = true;
+      continue;
+    }
+
+    const bool crossed = record.side == Side::buy ? book.best_ask().price.raw > 0 && book.best_ask().price.raw <= record.limit.raw
+                                                  : book.best_bid().price.raw > 0 && book.best_bid().price.raw >= record.limit.raw;
+    if (!crossed) continue;
+
+    const auto touch = record.side == Side::buy ? book.best_ask() : book.best_bid();
+    const auto available = Quantity{apply_ppm(touch.quantity.raw, shadow_.available_ppm)};
+    auto fill = round_down(Quantity{std::min(slot.remaining.raw, available.raw)}, instrument.step[index(record.venue)]);
+    if (fill.raw <= 0) continue;
+    on_maker_fill(slot, fill, record.limit);
+    if (!slot.active) {
+      resolve[record.symbol] = true;
+      any = true;
+    }
+  }
+  if (!any) return;
+  for (std::size_t symbol = 0; symbol < instruments_.size(); ++symbol)
+    if (resolve[symbol] && pairs_[symbol].pending_legs == 0) resolve_pair(symbol);
+}
+
+void Engine::cancel_resting_maker(std::size_t symbol) noexcept {
+  std::array<bool, kMaxSymbols> resolve{};
+  bool any = false;
+  for (auto& slot : legs_) {
+    if (!slot.active || !slot.resting || slot.record.symbol != symbol) continue;
+    slot.active = false;
+    slot.resting = false;
+    auto& pair = pairs_[symbol];
+    if (pair.pending_legs > 0) --pair.pending_legs;
+    resolve[symbol] = true;
+    any = true;
+  }
+  if (any && pairs_[symbol].pending_legs == 0) resolve_pair(symbol);
+}
+
 void Engine::apply_fill(PairState& pair, Venue venue, Side side, Quantity quantity, Price price) noexcept {
   const auto v = index(venue);
   auto& position = pair.qty_raw[v];
@@ -511,7 +748,7 @@ void Engine::apply_fill(PairState& pair, Venue venue, Side side, Quantity quanti
   pair.realized_raw += position > 0 ? pnl : -pnl;
   position += delta;
   if (position == 0) average = 0;
-  else if ((position > 0) == (delta > 0)) average = price.raw;  // flipped through zero
+  else if ((position > 0) == (delta > 0)) average = price.raw;
 }
 
 void Engine::resolve_pair(std::size_t symbol) noexcept {
@@ -529,7 +766,7 @@ void Engine::resolve_pair(std::size_t symbol) noexcept {
       finish_cycle(symbol, pair.opened ? ExitReason::legged_out : ExitReason::missed);
       return;
     }
-    const auto residual = qb + qy;  // legs have opposite signs when balanced
+    const auto residual = qb + qy;
     if (residual != 0) {
       const auto excess = abs64(qb) > abs64(qy) ? Venue::binance : Venue::bybit;
       const auto repair = round_down(Quantity{abs64(residual)}, instrument.step[index(excess)]);
@@ -576,7 +813,10 @@ void Engine::resolve_pair(std::size_t symbol) noexcept {
 void Engine::mark_out(std::size_t symbol, ExitReason reason) noexcept {
   auto& pair = pairs_[symbol];
   for (auto& slot : legs_)
-    if (slot.active && slot.record.symbol == symbol) slot.active = false;
+    if (slot.active && slot.record.symbol == symbol) {
+      slot.active = false;
+      slot.resting = false;
+    }
   pair.pending_legs = 0;
   for (std::size_t v = 0; v < kVenues; ++v) {
     const auto qty = pair.qty_raw[v];
@@ -585,7 +825,6 @@ void Engine::mark_out(std::size_t symbol, ExitReason reason) noexcept {
     const Quantity quantity{abs64(qty)};
     const auto& book = books_[v][symbol];
     auto swept = book.sweep(side, quantity);
-    // Any size beyond displayed depth is marked at the last level (or mid).
     if (!swept.complete(quantity)) {
       const auto rest = quantity.raw - swept.filled.raw;
       const auto price = swept.worst.raw > 0 ? swept.worst.raw : book.mid().raw;

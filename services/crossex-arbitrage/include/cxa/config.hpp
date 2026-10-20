@@ -11,16 +11,18 @@ namespace cxa {
 constexpr std::size_t kCensusSizes = 4;
 constexpr std::size_t kCensusThresholds = 4;
 
+enum class ExecMode : std::uint8_t { taker_taker, maker_taker };
+
 struct StrategyConfig final {
   // Executable-gap census sizes (USD notional per leg) and thresholds.
   std::array<std::int64_t, kCensusSizes> census_sizes_raw{250 * kScale, 1'000 * kScale, 5'000 * kScale,
                                                           25'000 * kScale};
   std::array<std::int64_t, kCensusThresholds> census_thresholds_ppm{3'000, 4'000, 5'000, 7'500};
-  std::int64_t trade_notional_raw{1'000 * kScale};
+  std::int64_t trade_notional_raw{250 * kScale};
   std::uint64_t basis_halflife_ms{1'800'000};
   std::uint64_t basis_warmup_ms{600'000};
   std::uint64_t basis_sample_ms{1'000};
-  std::int64_t min_net_ppm{1'000};        // expected net after fees+funding to enter
+  std::int64_t min_net_ppm{0};            // expected net after fees+funding to enter
   std::int64_t safety_ppm{0};
   std::int64_t exit_band_ppm{200};        // dislocation vs entry mean that counts as converged
   std::uint64_t expected_hold_ms{600'000};
@@ -33,6 +35,8 @@ struct StrategyConfig final {
   std::uint64_t cooldown_ms{5'000};
   std::int64_t max_mid_divergence_ppm{10'000};
   std::uint32_t max_repair_attempts{20};
+  ExecMode exec_mode{ExecMode::maker_taker};
+  std::uint64_t maker_timeout_ms{2'000};
 };
 
 struct RiskLimits final {
@@ -53,10 +57,14 @@ struct ShadowConfig final {
   std::int64_t available_ppm{500'000};  // share of displayed size a taker gets
   std::uint64_t seed{42};
   std::array<std::int64_t, kVenues> fallback_taker_ppm{500, 550};
+  std::array<std::int64_t, kVenues> fallback_maker_ppm{200, 200};
 };
 
 struct RuntimeConfig final {
-  std::string basket{"BTCUSDT,ETHUSDT"};
+  std::string basket{
+      "BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,DOGEUSDT,1000PEPEUSDT,SUIUSDT,WIFUSDT,AVAXUSDT,LINKUSDT,"
+      "ADAUSDT,LTCUSDT,ARBUSDT,OPUSDT,NEARUSDT,APTUSDT,INJUSDT,TIAUSDT,SEIUSDT,FILUSDT,ATOMUSDT,"
+      "ORDIUSDT,1000BONKUSDT,WLDUSDT,JUPUSDT,PENDLEUSDT,ENAUSDT,BCHUSDT,DOTUSDT,UNIUSDT"};
   StrategyConfig strategy{};
   RiskLimits risk{};
   ShadowConfig shadow{};
@@ -64,5 +72,6 @@ struct RuntimeConfig final {
 
 RuntimeConfig load_runtime_config();
 std::string_view latency_mode_name(LatencyMode mode) noexcept;
+std::string_view exec_mode_name(ExecMode mode) noexcept;
 
 }  // namespace cxa

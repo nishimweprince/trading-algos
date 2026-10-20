@@ -25,6 +25,9 @@ RuntimeConfig scenario_config() {
   config.strategy.basis_warmup_ms = 0;
   config.strategy.basis_halflife_ms = 3'600'000;
   config.strategy.cooldown_ms = 0;
+  config.strategy.exec_mode = ExecMode::taker_taker;
+  config.strategy.trade_notional_raw = 1'000 * kScale;
+  config.strategy.min_net_ppm = 1'000;
   config.shadow.latency_mode = LatencyMode::fixed;
   return config;
 }
@@ -34,7 +37,8 @@ Scenario::Scenario(RuntimeConfig config)
                                        config.shadow)),
       event_(std::make_unique<DepthEvent>()) {
   for (std::size_t v = 0; v < kVenues; ++v)
-    engine_->set_taker_fee(static_cast<Venue>(v), 0, config.shadow.fallback_taker_ppm[v]);
+    engine_->set_fees(static_cast<Venue>(v), 0, config.shadow.fallback_taker_ppm[v],
+                      config.shadow.fallback_maker_ppm[v]);
 }
 
 void Scenario::collect() {

@@ -24,6 +24,7 @@ inline constexpr Venue short_venue(Direction dir) noexcept {
 }
 
 enum class LegPurpose : std::uint8_t { open, close, repair };
+enum class LegLiquidity : std::uint8_t { taker, maker };
 enum class PairPhase : std::uint8_t { flat, opening, open, closing };
 enum class ExitReason : std::uint8_t {
   none, converged, max_hold, funding, stop, kill, shutdown, legged_out, missed
@@ -43,15 +44,18 @@ struct LegRecord final {
   Venue venue{Venue::binance};
   Side side{Side::buy};
   LegPurpose purpose{LegPurpose::open};
+  LegLiquidity liquidity{LegLiquidity::taker};
   Quantity quantity{};
   Price limit{};
   std::uint64_t decision_ns{};
   std::uint64_t arrival_ns{};
-  // Set when the simulated IOC resolves.
+  // Set when the simulated IOC resolves, or on each maker touch fill.
   Quantity filled{};
   Price vwap{};
   std::int64_t fee_raw{};
   std::uint64_t fill_ns{};
+  Venue hedge_venue{Venue::binance};
+  Side hedge_side{Side::buy};
 };
 
 struct CycleRecord final {
@@ -126,6 +130,7 @@ struct Edge final {
   std::int64_t fees_ppm{};
   std::int64_t funding_ppm{};
   std::int64_t net_ppm{};
+  Venue maker_venue{Venue::binance};
 };
 
 struct PairState final {
@@ -149,6 +154,7 @@ struct PairState final {
   ExitReason reason{ExitReason::none};
   std::uint64_t cooldown_until_ns{};
   bool opened{};  // at least one entry leg filled this cycle
+  Venue maker_venue{Venue::binance};
 };
 
 struct FundingState final {
@@ -190,6 +196,7 @@ class Engine final {
   // A frame that could not be applied (e.g. a diff larger than kMaxDepthChanges).
   void on_feed_gap(Venue venue, std::uint16_t symbol, std::uint64_t receive_ns) noexcept;
   void on_funding(const FundingEvent& event) noexcept;
+  void set_fees(Venue venue, std::uint16_t symbol, std::int64_t taker_ppm, std::int64_t maker_ppm) noexcept;
   void set_taker_fee(Venue venue, std::uint16_t symbol, std::int64_t taker_ppm) noexcept;
   void add_latency_sample(Venue venue, std::uint64_t rtt_ns) noexcept;
   // Durable halt: flattens open pairs through the normal (latency-delayed) path.
@@ -212,6 +219,9 @@ class Engine final {
   [[nodiscard]] std::int64_t taker_ppm(Venue venue, std::size_t symbol) const noexcept {
     return taker_ppm_[index(venue)][symbol];
   }
+  [[nodiscard]] std::int64_t maker_ppm(Venue venue, std::size_t symbol) const noexcept {
+    return maker_ppm_[index(venue)][symbol];
+  }
   [[nodiscard]] std::int64_t basis_mean_ppm(std::size_t symbol) const noexcept;
   [[nodiscard]] bool basis_warm(std::size_t symbol) const noexcept;
   [[nodiscard]] bool symbol_disabled(std::size_t symbol) const noexcept { return disabled_[symbol]; }
@@ -222,12 +232,16 @@ class Engine final {
   [[nodiscard]] std::uint64_t now_ns() const noexcept { return now_ns_; }
   [[nodiscard]] std::uint64_t state_hash() const noexcept;
   [[nodiscard]] Edge edge(std::size_t symbol, Direction dir, Quantity quantity) const noexcept;
+  [[nodiscard]] Edge edge(std::size_t symbol, Direction dir, Quantity quantity, Venue maker_venue) const noexcept;
   [[nodiscard]] RiskCode entry_risk(std::size_t symbol, std::int64_t notional_raw) const noexcept;
 
  private:
   struct PendingLeg final {
     bool active{};
+    bool resting{};  // maker has arrived and waits for a trade-through
     LegRecord record{};
+    Quantity remaining{};
+    std::uint64_t expire_ns{};
   };
   struct Basis final {
     double mean_ppm{};
@@ -243,6 +257,7 @@ class Engine final {
 
   void advance(std::uint64_t now_ns) noexcept;
   void process_arrivals() noexcept;
+  void process_resting_makers() noexcept;
   void resolve_pair(std::size_t symbol) noexcept;
   void evaluate(std::size_t symbol) noexcept;
   void update_basis(std::size_t symbol) noexcept;
@@ -252,16 +267,23 @@ class Engine final {
   void check_exit(std::size_t symbol) noexcept;
   void begin_close(std::size_t symbol, ExitReason reason) noexcept;
   void submit_leg(std::size_t symbol, Venue venue, Side side, LegPurpose purpose, Quantity quantity,
-                  Price limit) noexcept;
+                  Price limit, LegLiquidity liquidity = LegLiquidity::taker, Venue hedge_venue = Venue::binance,
+                  Side hedge_side = Side::buy) noexcept;
   void apply_fill(PairState& pair, Venue venue, Side side, Quantity quantity, Price price) noexcept;
   void finish_cycle(std::size_t symbol, ExitReason reason) noexcept;
   void on_gap(Venue venue, std::size_t symbol) noexcept;
   void mark_out(std::size_t symbol, ExitReason reason) noexcept;
+  void cancel_resting_maker(std::size_t symbol) noexcept;
+  void on_maker_fill(PendingLeg& slot, Quantity filled, Price price) noexcept;
   Output* push_output(OutputKind kind) noexcept;
   [[nodiscard]] Quantity quantity_for(std::size_t symbol, std::int64_t notional_raw) const noexcept;
   [[nodiscard]] std::int64_t funding_cost_ppm(std::size_t symbol, Direction dir,
                                               std::uint64_t horizon_ms) const noexcept;
   [[nodiscard]] std::int64_t mid_basis_ppm(std::size_t symbol) const noexcept;
+  [[nodiscard]] std::int64_t cycle_fees_ppm(std::size_t symbol, Venue maker_venue) const noexcept;
+  [[nodiscard]] Edge edge_taker_taker(std::size_t symbol, Direction dir, Quantity quantity) const noexcept;
+  [[nodiscard]] Edge edge_maker_taker(std::size_t symbol, Direction dir, Quantity quantity,
+                                      Venue maker_venue) const noexcept;
 
   std::vector<Instrument> instruments_;
   StrategyConfig strategy_;
@@ -270,6 +292,7 @@ class Engine final {
   std::array<std::array<OrderBook, kMaxSymbols>, kVenues> books_{};
   std::array<std::array<FundingState, kMaxSymbols>, kVenues> funding_{};
   std::array<std::array<std::int64_t, kMaxSymbols>, kVenues> taker_ppm_{};
+  std::array<std::array<std::int64_t, kMaxSymbols>, kVenues> maker_ppm_{};
   std::array<LatencyModel, kVenues> latency_{};
   std::array<std::uint64_t, kVenues> last_receive_ns_{};
   std::array<PairState, kMaxSymbols> pairs_{};
