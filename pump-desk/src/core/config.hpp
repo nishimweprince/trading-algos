@@ -134,9 +134,10 @@ struct Config {
     int rival_window_slots = 4;     // record pool txs up to migrate slot + this
     double cu_limit_margin_pct = 15;
     int cu_samples_min = 8;         // measured CU needs this many buy fills, else entry.cu_limit
-    // Agave/Jito: priority decides. BAM: arrival decides, priority doesn't count.
+    // Agave/Jito: priority decides. BAM: arrival decides across auctions; within one ~20 ms
+    // auction (where racers reacting to the same migrate meet) ranking is likely by fee, so bid high.
     // Firedancer: fee per requested CU decides.
-    RouteClass agave{"beat_rivals"}, bam{"floor"}, firedancer{"beat_rivals"};
+    RouteClass agave{"beat_rivals"}, bam{"beat_rivals"}, firedancer{"beat_rivals"};
   } routing;
 
   /** Lighthouse assertions in front of every buy. */

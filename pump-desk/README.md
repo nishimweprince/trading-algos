@@ -42,7 +42,7 @@ How a leader orders transactions decides what is worth paying for:
 | Leader | Ordering | Default policy (`[routing.<class>]`) |
 |---|---|---|
 | Agave / Jito without BAM | priority (CU price) | `beat_rivals`: max(Helius estimate, p90 CU price of the wallets that landed ahead of us + 1) |
-| BAM | arrival at the BAM node (auction every ~20 ms; batches execute in order) | `floor`: priority doesn't count, so pay the floor. Sender straight to the leader, never Jito (the block-engine hop is ~+50 ms) |
+| BAM | arrival at the BAM node across auctions (every ~20 ms; batches execute in order); inside one auction likely fee/tip (unconfirmed) | `beat_rivals`: send at once for the next auction and bid high to win inside it. Plain tx over Sender's staked route from Frankfurt, never Jito (the block-engine hop is ~+50 ms) |
 | Firedancer / Frankendancer | fee per *requested* CU | `beat_rivals` with a tight CU limit (max of our last 32 landed buys + 15 %) |
 
 - **Leader table.** `aux-leaders` loads `getLeaderSchedule` (current and next epoch) and `getClusterNodes` (every 10 minutes). It classifies each identity: on the BAM list (`data/bam_validators.json`, a JSON array you maintain) → BAM; version `0.x` → Firedancer; else Agave. It publishes an immutable slot → class table. The trigger does one array read; a slot outside the table is Agave (the old single policy).
@@ -151,7 +151,7 @@ proto/       vendored LaserStream geyser.proto / solana-storage.proto (field ref
   - Moving the static PumpSwap accounts (global/fee config, event authority, volume accumulator, fee and buyback recipients and their ATAs, WSOL mint, tip accounts) into an ALT would free ~300 bytes.
   - It needs an on-chain ALT owned by the wallet and v0 lookup compilation.
   - The vault guard already reverts behind *any* earlier buyer. Rival attribution comes from `rival_txs` either way.
-- **BAM ordering within one auction** (fee or tip) is not confirmed. The `bam` profile relies only on arrival.
+- **BAM ordering within one auction** (fee or tip) is not confirmed. The `bam` profile bids high in case it is; `cu_price_mode = "floor"` relies on arrival alone.
 - Jito is built but off. Enable `jito.enabled` only after `pump-desk-report` shows the extra tip ix costs nothing measurable. The send itself is parallel.
 - Exits rely on vault pushes (every swap writes both vaults) plus a timer. No RPC polling on positions.
 - No shred-level feed. A Jito ShredStream proxy in FRA would see migrate txs and our fills from raw block data before replay. The report's first shred → seen and slot completed → seen numbers size the possible gain. It needs a Jito auth key and a separate process.

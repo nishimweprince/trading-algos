@@ -107,7 +107,8 @@ tip_lamports = 10000
 
 # Leader-aware routing. aux-leaders classifies every slot's leader:
 #   agave       Agave / Jito without BAM: priority (CU price) decides ordering
-#   bam         BAM: arrival at the BAM node decides (~20 ms auctions); priority doesn't count
+#   bam         BAM: arrival at the BAM node decides across ~20 ms auctions; inside one auction,
+#               where racers reacting to the same migrate meet, ranking is likely by fee
 #   firedancer  Firedancer / Frankendancer (version 0.x): fee per requested CU decides
 # Buys are priced for the leader of (processed tip + lookahead_slots).
 [routing]
@@ -131,7 +132,7 @@ sender_tip_lamports = 0
 jito = false
 
 [routing.bam]
-cu_price_mode = "floor"           # arrival, not price: send fast, don't overpay
+cu_price_mode = "beat_rivals"     # send at once (next auction) and bid high to win inside it
 cu_price_multiplier = 1
 cu_limit = 0
 sender_tip_lamports = 0

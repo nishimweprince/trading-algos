@@ -658,8 +658,8 @@ TEST(engine_routes_by_leader_class) {
     LeaderClass cls;
     uint64_t cu_price;
   };
-  // estimate 1.2M; Agave beats the rivals' 3M; BAM pays the floor; Firedancer the estimate (no rival price).
-  for (Want w : {Want{LeaderClass::Agave, 3'000'000}, Want{LeaderClass::Bam, 100'000}, Want{LeaderClass::Firedancer, 1'200'000}}) {
+  // estimate 1.2M; Agave beats the rivals' 3M; BAM and Firedancer bid the estimate (no rival price for them).
+  for (Want w : {Want{LeaderClass::Agave, 3'000'000}, Want{LeaderClass::Bam, 1'200'000}, Want{LeaderClass::Firedancer, 1'200'000}}) {
     Rig r;
     auto table = uniform_table(w.cls, leader);
     r.sh->leaders.store(table.get());

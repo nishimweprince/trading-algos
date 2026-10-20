@@ -171,12 +171,14 @@ TEST(route_policy_modes) {
   const RouteProfile& bam = rp.by_class[size_t(LeaderClass::Bam)];
   const RouteProfile& fd = rp.by_class[size_t(LeaderClass::Firedancer)];
   CHECK_EQ(agave.cu_price, uint64_t(3'000'000));  // beat_rivals: the rivals' price beats the estimate
-  CHECK_EQ(bam.cu_price, uint64_t(100'000));      // floor: priority doesn't count there
+  CHECK_EQ(bam.cu_price, uint64_t(5'000'000));    // beat_rivals too: bid high inside the BAM auction, capped
   CHECK_EQ(fd.cu_price, uint64_t(5'000'000));     // beat_rivals, capped
   CHECK_EQ(agave.cu_limit, uint32_t(0));          // measured
   CHECK_EQ(fd.cu_limit, uint32_t(120'000));
   CHECK_EQ(agave.sender_tip, uint64_t(5000));
   CHECK_EQ(bam.sender_tip, uint64_t(7000));
+  c.routing.bam.cu_price_mode = "floor";  // arrival only
+  CHECK_EQ(make_route_policy(c, 1'000'000, beat).by_class[size_t(LeaderClass::Bam)].cu_price, uint64_t(100'000));
   CHECK(!agave.jito && !bam.jito && !fd.jito);
   // Without a rival price, beat_rivals is the estimate; the estimate falls back to the default.
   uint64_t none[N_LEADER_CLASSES] = {0, 0, 0};
