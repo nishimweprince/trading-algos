@@ -25,6 +25,9 @@ constexpr uint32_t SLOT_PROCESSED = 0, SLOT_FIRST_SHRED_RECEIVED = 3, SLOT_COMPL
 uint64_t elapsed(uint64_t now, uint64_t t) { return now > t ? now - t : 0; }
 constexpr uint64_t RENT_ATA_2022 = 2'074'080;  // 170-byte Token-2022 ATA (ImmutableOwner)
 constexpr uint64_t RENT_ATA_SPL = 2'039'280;   // 165-byte token account
+// Rent to grow an undersized pool to POOL_ACCOUNT_NEW_SIZE (user pays via extend_account).
+constexpr uint64_t RENT_PER_BYTE = 6960;
+constexpr uint64_t RENT_POOL_EXTEND_PAD = 128;  // account header in the rent formula
 constexpr uint64_t SIGNATURE_FEE = 5'000;
 constexpr uint64_t BLOCKHASH_MAX_AGE_NS = 60'000'000'000ULL;
 constexpr uint64_t DEFAULT_MINT_SUPPLY = 1'000'000'000'000'000ULL;
@@ -729,9 +732,7 @@ void Engine::trigger(CurveSlot& s, uint64_t base_res, uint64_t quote_res, uint64
         cfg_.screen.t22_fee_wait_ms > 0 && s.migrated_ns &&
         elapsed(t_decide, s.migrated_ns) < uint64_t(cfg_.screen.t22_fee_wait_ms) * 1'000'000ULL;
     soft = fee_wait || !s.migrated_ns;  // before migrate_ns is stamped, keep retrying
-  } else if (s.pool_seen && s.pool.data_len < POOL_ACCOUNT_NEW_SIZE)
-    veto = "pool_needs_extend";  // terminal: extend rarely lands inside the race window
-  else if (pool_sol < cfg_.screen.min_pool_sol) veto = "pool_below_min";
+  } else if (pool_sol < cfg_.screen.min_pool_sol) veto = "pool_below_min";
   else if (pool_sol > cfg_.screen.max_pool_sol) veto = "pool_above_max";
   else if (active_positions() >= max_positions_ || free_position() < 0) {
     veto = "max_concurrent";
@@ -739,6 +740,7 @@ void Engine::trigger(CurveSlot& s, uint64_t base_res, uint64_t quote_res, uint64
   }
 
   if (!veto) {
+    const bool extend_pool = s.pool_seen && s.pool.data_len < POOL_ACCOUNT_NEW_SIZE;
     uint64_t avail = wallet_lamports_ > reserved_ ? wallet_lamports_ - reserved_ : 0;
     size = uint64_t(double(avail) * cfg_.entry.size_wallet_pct / 100.0);
     if (cfg_.entry.max_size_sol > 0) size = std::min<uint64_t>(size, uint64_t(cfg_.entry.max_size_sol * 1e9));
@@ -751,7 +753,12 @@ void Engine::trigger(CurveSlot& s, uint64_t base_res, uint64_t quote_res, uint64
     for (uint8_t i = 0; i < tp.n_tips; ++i) tips += tp.tips[i].lamports;
     uint64_t priority = uint64_t(tp.cu_limit) * tp.cu_price / 1'000'000;
     uint64_t base_rent = s.token_program == prog::TOKEN_2022 ? RENT_ATA_2022 : RENT_ATA_SPL;
-    need = q.max_quote + base_rent + RENT_ATA_SPL + tips + priority + SIGNATURE_FEE;
+    uint64_t extend_rent = 0;
+    if (extend_pool) {
+      uint32_t grow = POOL_ACCOUNT_NEW_SIZE > s.pool.data_len ? POOL_ACCOUNT_NEW_SIZE - s.pool.data_len : 0;
+      extend_rent = (uint64_t(grow) + RENT_POOL_EXTEND_PAD) * RENT_PER_BYTE;
+    }
+    need = q.max_quote + base_rent + RENT_ATA_SPL + extend_rent + tips + priority + SIGNATURE_FEE;
     impact = effective_sol > 0 ? double(size) / 1e9 / effective_sol * 100.0 : 100.0;
     uint64_t headroom = uint64_t(cfg_.risk.gas_headroom_sol * 1e9) + uint64_t(cfg_.risk.wallet_floor_sol * 1e9);
     if (double(size) < cfg_.entry.min_size_sol * 1e9) veto = "size_below_min";
@@ -765,14 +772,14 @@ void Engine::trigger(CurveSlot& s, uint64_t base_res, uint64_t quote_res, uint64
       BuyGuards guards;
       Pubkey guard_rivals[MAX_RIVALS]{};
       build_guards(s, quote_res, guards, guard_rivals);
-      buy_ixs(*ixs_, user_, s.keys, amm_, tp, q.base_out, q.max_quote, &guards);
+      buy_ixs(*ixs_, user_, s.keys, amm_, tp, q.base_out, q.max_quote, &guards, extend_pool);
       Signature sig;
       bool sent = send_packet(Side::Buy, uint8_t(idx), 0, *ixs_, recv_ns, rc.jito, sig);
       // Over one packet (the pool push widened the buy after fire): shed rival guards, then the vault guard.
       while (!sent && build_too_large_ && guards.count()) {
         if (guards.n_rivals) guards.n_rivals = 0;
         else guards.vault = false;
-        buy_ixs(*ixs_, user_, s.keys, amm_, tp, q.base_out, q.max_quote, &guards);
+        buy_ixs(*ixs_, user_, s.keys, amm_, tp, q.base_out, q.max_quote, &guards, extend_pool);
         sent = send_packet(Side::Buy, uint8_t(idx), 0, *ixs_, recv_ns, rc.jito, sig);
       }
       if (!sent) {

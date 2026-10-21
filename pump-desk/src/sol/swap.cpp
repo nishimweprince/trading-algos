@@ -82,6 +82,13 @@ void tips(IxList& l, const UserKeys& u, const TxParams& p) {
 
 }  // namespace
 
+void pump_extend_account_ix(IxList& l, const UserKeys& u, const SwapKeys& k) {
+  const Derived& d = derived();
+  Ix& x = l.add(prog::PUMP_SWAP);
+  x.rw(k.pool).acc(u.user, true, true).ro(prog::SYSTEM).ro(d.event_authority).ro(prog::PUMP_SWAP);
+  x.bytes(disc::EXTEND_ACCOUNT, 8);
+}
+
 void pump_buy_ix(IxList& l, const UserKeys& u, const SwapKeys& k, const AmmConfig& cfg, const TxParams& p,
                  uint64_t base_out, uint64_t max_quote) {
   const Derived& d = derived();
@@ -107,7 +114,7 @@ void pump_sell_ix(IxList& l, const UserKeys& u, const SwapKeys& k, const AmmConf
 }
 
 void buy_ixs(IxList& l, const UserKeys& u, const SwapKeys& k, const AmmConfig& cfg, const TxParams& p,
-             uint64_t base_out, uint64_t max_quote, const BuyGuards* guards) {
+             uint64_t base_out, uint64_t max_quote, const BuyGuards* guards, bool extend_pool) {
   l.clear();
   budget(l, p);
   // Guards first: a revert there burns the fewest CU.
@@ -117,6 +124,8 @@ void buy_ixs(IxList& l, const UserKeys& u, const SwapKeys& k, const AmmConfig& c
     for (uint8_t i = 0; i < guards->n_rivals && i < MAX_RIVALS; ++i)
       lighthouse::assert_lamports(l, guards->rival_atas[i], lighthouse::IntOp::Equal, 0);
   }
+  // Fresh migrations often land with a short pool account; SDK prepends extend_account.
+  if (extend_pool) pump_extend_account_ix(l, u, k);
   ix::ata_idempotent(l, u.user, u.wsol_ata, u.user, prog::WSOL, prog::TOKEN);
   ix::transfer(l, u.user, u.wsol_ata, max_quote);
   ix::sync_native(l, u.wsol_ata);

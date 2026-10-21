@@ -129,6 +129,47 @@ TEST(buy_guard_layout_and_size) {
   CHECK_EQ(int(plain.n) + 1 + int(MAX_RIVALS), guarded_n);
 }
 
+TEST(buy_extend_pool_prepend) {
+  auto& g = golden();
+  AmmConfig cfg;
+  auto gc = b64bytes(g["accounts"]["globalConfig"]);
+  auto fc = b64bytes(g["accounts"]["feeConfig"]);
+  CHECK(decode_global_config(gc.data(), gc.size(), cfg));
+  CHECK(decode_fee_config(fc.data(), fc.size(), cfg));
+  auto pl = b64bytes(g["accounts"]["pool"]);
+  Pool pool;
+  CHECK(decode_pool(pl.data(), pl.size(), pool));
+  auto seed = unhex(std::string_view(g["userSeedHex"]));
+  Keypair kp = Keypair::from_seed(seed.data());
+  UserKeys u;
+  derive_user_keys(kp.pubkey(), u);
+  SwapKeys k;
+  derive_swap_keys(u, key(g["seedMint"]), prog::TOKEN, pool.coin_creator, false, false, k);
+  TxParams p;
+  p.cu_limit = 250000;
+  p.cu_price = 1234567;
+  IxList plain, extended;
+  buy_ixs(plain, u, k, cfg, p, 30'000'000, 40'000'000);
+  buy_ixs(extended, u, k, cfg, p, 30'000'000, 40'000'000, nullptr, true);
+  CHECK_EQ(int(plain.n) + 1, int(extended.n));
+  const int bi = int(budget_ix_count(p));
+  const Ix& x = extended.ixs[bi];
+  CHECK(x.program == prog::PUMP_SWAP);
+  CHECK_EQ(int(x.data_len), 8);
+  CHECK(std::memcmp(x.data, disc::EXTEND_ACCOUNT, 8) == 0);
+  CHECK_EQ(int(x.n_accounts), 5);
+  CHECK(x.accounts[0].key == k.pool);
+  CHECK(x.accounts[0].writable);
+  CHECK(x.accounts[1].key == u.user);
+  CHECK(x.accounts[1].signer);
+  CHECK(x.accounts[1].writable);
+  CHECK(x.accounts[2].key == prog::SYSTEM);
+  for (int i = 0; i < int(plain.n); ++i) {
+    const int j = i < bi ? i : i + 1;
+    CHECK(plain.ixs[i].program == extended.ixs[j].program);
+  }
+}
+
 TEST(leaders_classify_and_table) {
   CHECK(classify_version("0.708.20306") == LeaderClass::Firedancer);
   CHECK(classify_version("0.503.20214") == LeaderClass::Firedancer);

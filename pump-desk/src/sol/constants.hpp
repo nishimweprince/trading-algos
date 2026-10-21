@@ -42,6 +42,7 @@ void init_derived();
 namespace disc {
 inline constexpr uint8_t BUY[8] = {102, 6, 61, 18, 1, 218, 235, 234};
 inline constexpr uint8_t SELL[8] = {51, 230, 133, 164, 1, 127, 131, 173};
+inline constexpr uint8_t EXTEND_ACCOUNT[8] = {234, 102, 194, 203, 150, 72, 62, 229};
 inline constexpr uint8_t POOL[8] = {241, 154, 109, 4, 17, 177, 109, 188};
 inline constexpr uint8_t GLOBAL_CONFIG[8] = {149, 8, 156, 202, 160, 252, 176, 217};
 inline constexpr uint8_t FEE_CONFIG[8] = {143, 52, 146, 187, 219, 123, 76, 155};
