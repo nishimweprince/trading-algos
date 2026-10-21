@@ -16,6 +16,22 @@ find_package(CURL 7.86 REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(Threads REQUIRED)
 
+# libsecp256k1 (ECDSA with recovery for Hyperliquid signing), pinned and built from source so the
+# Windows box and dev hosts sign with the same library.
+include(FetchContent)
+set(SECP256K1_ENABLE_MODULE_RECOVERY ON CACHE BOOL "" FORCE)
+set(SECP256K1_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(SECP256K1_BUILD_EXHAUSTIVE_TESTS OFF CACHE BOOL "" FORCE)
+set(SECP256K1_BUILD_BENCHMARK OFF CACHE BOOL "" FORCE)
+set(SECP256K1_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(SECP256K1_BUILD_CTIME_TESTS OFF CACHE BOOL "" FORCE)
+set(SECP256K1_DISABLE_SHARED ON CACHE BOOL "" FORCE)
+set(SECP256K1_INSTALL OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(secp256k1
+  URL https://github.com/bitcoin-core/secp256k1/archive/refs/tags/v0.6.0.tar.gz
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+FetchContent_MakeAvailable(secp256k1)
+
 # Windows builds use MSYS2 CLANG64 (clang + libc++), which keeps __int128; MSVC does not have it.
 if(WIN32 AND NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   message(FATAL_ERROR "Windows builds need clang (MSYS2 CLANG64); MSVC lacks __int128")
@@ -25,13 +41,16 @@ set(HLA_WARNINGS -Wall -Wextra -Wconversion -Wshadow -Werror)
 
 add_library(hla_core
   src/hl_feed.cpp
+  src/hl_gateway.cpp
+  src/hl_info.cpp
   src/hl_instruments.cpp
   src/hl_parser.cpp
+  src/hl_sign.cpp
   src/net.cpp
   src/platform.cpp
 )
 target_include_directories(hla_core PUBLIC include)
-target_link_libraries(hla_core PUBLIC CURL::libcurl OpenSSL::SSL OpenSSL::Crypto Threads::Threads)
+target_link_libraries(hla_core PUBLIC CURL::libcurl OpenSSL::SSL OpenSSL::Crypto Threads::Threads secp256k1)
 if(WIN32)
   target_link_libraries(hla_core PUBLIC ws2_32 winmm)
 endif()
