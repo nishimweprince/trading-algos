@@ -14,6 +14,27 @@ of its arrival time. It has no order-entry code. `--mode` anything other than
 or withdraw are refused at startup. Phase 2 (live taker/taker IOC) is built
 only after the PREREG gate passes.
 
+## Binance ↔ Hyperliquid (second instance)
+
+`CXA_PEER` selects the venue in slot 1: `bybit` (default) or `hyperliquid`.
+One process trades one pair. The Hyperliquid shadow is a second systemd unit
+(`crossex-hl-shadow`) with its own env file
+([`config.hyperliquid.example.env`](config.hyperliquid.example.env)), journal
+directory, status port (8071) and gate ([`PREREG-HL.md`](PREREG-HL.md)).
+
+- **Book:** `bbo` plus `activeAssetCtx` over `wss://api.hyperliquid.xyz/ws`.
+  The public `l2Book` pushes only about every 5.4 s, so the HL book is top
+  of book only, and a sweep beyond L1 counts as unfillable.
+- **Latency:** every HL leg adds `CXA_HL_INCLUSION_NS` (default 200 ms) for
+  block inclusion, on top of RTT/2.
+- **Instruments:** these come from `meta` and `allMids`. Bare basket names
+  map to coins (`1000PEPEUSDT` → `kPEPE`). HL ticks follow the
+  5-significant-figure rule, so they are derived from the startup mid.
+- **Fees and probes:** fees come from `userFees` for `CXA_HL_ADDRESS`. No HL
+  key is used. RTT and time probes use `exchangeStatus`.
+- **Funding:** paid hourly. The journal `Z` header records the peer, and
+  replay refuses a journal whose peer differs from `CXA_PEER`.
+
 ## Build and test
 
 Dependencies: CMake ≥ 3.25, Ninja, a C++20 compiler, OpenSSL, and libcurl
@@ -29,7 +50,7 @@ cmake --preset sanitizers && cmake --build --preset sanitizers -j && ctest --pre
 ## Commands
 
 ```sh
-crossex probe --duration-seconds 86400      # feed age + public/signed RTT, both venues
+crossex probe --duration-seconds 86400      # feed age + public/signed RTT, Binance + peer
 crossex check-keys                           # read-only verification + account taker fees
 crossex shadow                               # main service (config from CXA_* env)
 crossex shadow --public-only --duration-seconds 60   # no keys: configured fees, fixed latency
@@ -46,7 +67,7 @@ Reports read `.jsonl` and `.jsonl.zst` files.
 
 ```
 binance thread (/public depth + /market markPrice) ─┐ SPSC
-bybit thread (orderbook.50 + tickers) ──────────────┼──▶ decision thread ──SPSC──▶ recorder
+peer thread (Bybit orderbook.50 + tickers, or HL bbo + ctx) ─┼──▶ decision thread ──SPSC──▶ recorder
 aux thread (signed RTT probes, hourly fee refresh) ─┘   (books, edge, census,
                                                           shadow venue, pairs, risk)
 status thread: 127.0.0.1:8070  /  /api/summary  /api/activity  /health/*

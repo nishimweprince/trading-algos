@@ -96,3 +96,43 @@ crossex replay        /data/crossex/<file>             # determinism (same env a
 | `recorder queue overflow` | Exits 1 | Disk too slow or full |
 | `feed_stale` rising | Entries blocked | One venue's feed is silent; check host network |
 | `symbol_disabled` | The symbol's venues disagreed by more than 1% at start | Fix the basket mapping (contract units differ) |
+
+## Binance ↔ Hyperliquid instance
+
+The second instance runs on the same host. It shares the binary and has its
+own env, data directory, port and kill file.
+
+```sh
+sudo mkdir -p /data/crossex-hl && sudo chown crossex:crossex /data/crossex-hl
+sudo install -m 0600 config.hyperliquid.example.env /etc/crossex-hl.env   # add Binance read-only key + CXA_HL_ADDRESS
+sudo -u crossex env $(sudo cat /etc/crossex-hl.env | xargs) build/release/crossex check-keys
+sudo -u crossex env $(sudo cat /etc/crossex-hl.env | xargs) build/release/crossex probe --duration-seconds 3600
+sudo cp ../../infra/systemd/crossex-hl-*.{service,timer} /etc/systemd/system/ && sudo systemctl daemon-reload
+sudo systemctl enable --now crossex-hl-shadow crossex-hl-compress.timer
+curl -s 127.0.0.1:8071/api/summary | jq '{peer,ready,depth_events,gaps,cycles,net_raw}'
+```
+
+- **Keys.** `check-keys` must show Binance `"read_only":true`, and
+  Hyperliquid `address only (no signing key)` with the account's
+  taker/maker fees. Never put an HL private or agent key on the host for
+  shadow.
+- **Probe.** Reads `hyperliquid.feed_age` (bbo `time` versus the
+  `exchangeStatus` clock) and `signed_rtt` (the `exchangeStatus` RTT). The
+  HL clock offset reads about 200 ms behind wall time from Kigali, because
+  `exchangeStatus.time` trails. Compare feed age across runs, not as an
+  absolute.
+- **Stagger starts.** Start this unit at least a minute after
+  `crossex-shadow`. Both pull Binance REST snapshots and `commissionRate`
+  at startup from the same IP, and each restarts daily from its own start
+  time.
+- **Kill.** `touch /data/crossex-hl/KILL` (independent of the Bybit
+  instance).
+- **Disk.** Binance diffs dominate the volume, at about 0.35 GB per symbol
+  per day after zstd. The 21-coin basket adds about 7 GB/day. Grow `/data`,
+  or give this instance its own volume, before the 14-day window starts.
+- **Reports.** Run them with the HL env loaded:
+  `env $(sudo cat /etc/crossex-hl.env | xargs) crossex daily-report /data/crossex-hl/*.jsonl*`.
+  Replay refuses a journal whose peer differs from `CXA_PEER`.
+- **Thin coins.** A coin whose HL L1 is usually under 2 × $250 (with
+  `CXA_AVAILABLE_PPM=500000`) rarely has a valid edge. The census report
+  shows it, but don't drop it during the PREREG window.

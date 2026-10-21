@@ -1,0 +1,11 @@
+[Unit]
+Description=Compress closed crossex-hl journals (zstd); reports read .zst directly
+
+[Service]
+Type=oneshot
+User=crossex
+Group=crossex
+Nice=19
+IOSchedulingClass=idle
+# Every journal except the newest (the one the running service appends to).
+ExecStart=/bin/sh -c 'ls -1t /data/crossex-hl/crossex-hl-*.jsonl 2>/dev/null | tail -n +2 | xargs -r zstd -q --rm -9'

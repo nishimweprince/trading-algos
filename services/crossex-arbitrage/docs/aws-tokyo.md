@@ -97,3 +97,22 @@ service: crossex-shadow stable since ~2026-10-20T22:48Z (30/30 books ok)
 gate: ≥14 days, ≥150 cycles, legging ≤10%; mean net reported not gating
 journal: /data/crossex/crossex-*.jsonl (new run after archive)
 ```
+
+### Binance ↔ Hyperliquid instance (record at deployment)
+
+Same host and binary as the Bybit instance. See `RUNBOOK.md` → "Binance ↔
+Hyperliquid instance" and fill in `PREREG-HL.md` before enabling the unit.
+
+```
+commit / binary sha256:
+CXA_HL_ADDRESS fee tier (taker/maker ppm):
+probe 1 h (binance signed p99 / hyperliquid exchangeStatus p99 / hl bbo feed age p99):
+basket (CXA_BASKET):
+service start (UTC):
+data volume for /data/crossex-hl:
+```
+
+Measured from Kigali on 2026-10-21 (laptop, not the host): HL `bbo` pushed
+every ~100 ms (p10 64 ms, p90 ~250 ms), `l2Book` every ~5.4 s, and
+`activeAssetCtx` about once per second per coin. A 60 s public-only run with
+5 coins verified both books and logged 1,851 HL bbo events with 0 gaps.

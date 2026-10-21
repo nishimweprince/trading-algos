@@ -1,0 +1,10 @@
+[Unit]
+Description=Compress closed crossex-hl journals hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
