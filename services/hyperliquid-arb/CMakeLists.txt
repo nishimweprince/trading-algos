@@ -41,6 +41,9 @@ set(HLA_WARNINGS -Wall -Wextra -Wconversion -Wshadow -Werror)
 
 add_library(hla_core
   src/bridge_shm.cpp
+  src/config.cpp
+  src/drills.cpp
+  src/engine.cpp
   src/hl_feed.cpp
   src/hl_gateway.cpp
   src/hl_info.cpp
