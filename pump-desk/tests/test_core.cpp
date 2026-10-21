@@ -242,6 +242,8 @@ TEST(config_example_parses_to_defaults) {
   CHECK_EQ(c.exits.stall_enabled, d.exits.stall_enabled);
   CHECK_EQ(c.exits.stall_arm_sec, d.exits.stall_arm_sec);
   CHECK_EQ(c.exits.stall_sec, d.exits.stall_sec);
+  CHECK_EQ(c.screen.migrate_grace_ms, d.screen.migrate_grace_ms);
+  CHECK_EQ(c.screen.t22_fee_wait_ms, d.screen.t22_fee_wait_ms);
   CHECK_EQ(c.exits.take_profit_slippage_tiers.size(), size_t(3));
   CHECK_EQ(c.sender.url, d.sender.url);
   CHECK_EQ(c.sender.tip_accounts.size(), size_t(10));

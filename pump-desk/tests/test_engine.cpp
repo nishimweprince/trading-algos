@@ -253,7 +253,7 @@ TEST(engine_pool_push_triggers_first) {
 
 TEST(engine_stale_pool_vetoes) {
   {
-    Rig r;  // migrate seen, but the pool push arrives past max_migrate_age_slots
+    Rig r;  // migrate seen, but the pool push arrives past max_migrate_age_slots and grace
     r.create();
     r.band(1'000'000'000'000ULL);
     r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL, 2, /*with_pool=*/false);
@@ -261,11 +261,29 @@ TEST(engine_stale_pool_vetoes) {
     CHECK(!r.pop_packet(pk));
     r.slot += uint64_t(r.cfg.screen.max_migrate_age_slots) + 10;
     r.feed(slot_frame(r.slot));
+    g_mono += uint64_t(r.cfg.screen.migrate_grace_ms + 1) * 1'000'000ULL;  // past wall-clock grace
     r.pool_push();
     r.feed(account_frame("watch", r.base_vault, prog::TOKEN_2022, token_account(206'900'000'000'000ULL), r.slot));
     r.feed(account_frame("watch", r.quote_vault, prog::TOKEN, token_account(67'410'000'000ULL), r.slot));
     CHECK(!r.pop_packet(pk));
     CHECK(find(r.events(), Ev::Decision, "stale_pool") != nullptr);
+  }
+  {
+    Rig r;  // late pool_push past slot age but still inside migrate_grace_ms: buy
+    r.create();
+    r.band(1'000'000'000'000ULL);
+    r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL, 2, /*with_pool=*/false);
+    Packet pk;
+    CHECK(!r.pop_packet(pk));
+    r.slot += uint64_t(r.cfg.screen.max_migrate_age_slots) + 10;
+    r.feed(slot_frame(r.slot));
+    // wall clock still inside grace (g_mono unchanged)
+    r.pool_push();
+    r.feed(account_frame("watch", r.base_vault, prog::TOKEN_2022, token_account(206'900'000'000'000ULL), r.slot));
+    r.feed(account_frame("watch", r.quote_vault, prog::TOKEN, token_account(67'410'000'000ULL), r.slot));
+    CHECK(r.pop_packet(pk));
+    CHECK(pk.side == Side::Buy);
+    CHECK(find(r.events(), Ev::Decision, "buy") != nullptr);
   }
   {
     Rig r;  // never seen incomplete and never seen migrating: a pre-graduated pool is stale
@@ -347,9 +365,8 @@ TEST(engine_vetoes) {
     CHECK(find(r.events(), Ev::Decision, "kill") != nullptr);
   }
   {
-    Rig r;  // T22 mint whose fee was never proven
-    TxSpec t;
-    r.band(1'000'000'000'000ULL);  // no create seen: resolve goes to aux, then aux says T22 + unknown fee
+    Rig r;  // T22 fee Unknown: soft-veto, then ReadMint None → buy (does not latch traded)
+    r.band(1'000'000'000'000ULL);  // no create: resolve goes to aux
     AuxReq req;
     CHECK(r.sh->aux_reqs.try_pop(req));
     CHECK(req.op == AuxOp::ResolveCurve);
@@ -366,6 +383,50 @@ TEST(engine_vetoes) {
     Packet pk;
     CHECK(!r.pop_packet(pk));
     CHECK(find(r.events(), Ev::Decision, "t22_fee_unverified") != nullptr);
+    const CurveSlot* c = r.eng->curve(r.curve);
+    CHECK(c && !c->traded);
+    // Drain the ReadMint request queued by the soft veto / set_mint, answer with None.
+    while (r.sh->aux_reqs.try_pop(req)) {
+    }
+    AuxResp fee;
+    fee.op = AuxOp::ReadMint;
+    fee.ok = true;
+    fee.curve = r.curve;
+    fee.mint = r.mint;
+    fee.token_program = prog::TOKEN_2022;
+    fee.mint_info.fee = TransferFee::None;
+    r.sh->aux_resps.push(fee);
+    r.eng->poll(g_mono);
+    CHECK(r.pop_packet(pk));
+    CHECK(pk.side == Side::Buy);
+    CHECK(find(r.events(), Ev::Decision, "buy") != nullptr);
+  }
+  {
+    Rig r;  // T22 fee still Unknown after t22_fee_wait_ms: latch
+    r.cfg.screen.t22_fee_wait_ms = 50;
+    r.band(1'000'000'000'000ULL);
+    AuxReq req;
+    CHECK(r.sh->aux_reqs.try_pop(req));
+    AuxResp a;
+    a.op = AuxOp::ResolveCurve;
+    a.ok = true;
+    a.curve = r.curve;
+    a.mint = r.mint;
+    a.token_program = prog::TOKEN_2022;
+    a.mint_info.fee = TransferFee::Unknown;
+    r.sh->aux_resps.push(a);
+    r.eng->poll(g_mono);
+    r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL, 2, /*with_pool=*/false);
+    Packet pk;
+    CHECK(!r.pop_packet(pk));  // awaiting pool
+    g_mono += uint64_t(r.cfg.screen.t22_fee_wait_ms + 1) * 1'000'000ULL;
+    r.pool_push();
+    r.feed(account_frame("watch", r.base_vault, prog::TOKEN_2022, token_account(206'900'000'000'000ULL), r.slot));
+    r.feed(account_frame("watch", r.quote_vault, prog::TOKEN, token_account(67'410'000'000ULL), r.slot));
+    CHECK(!r.pop_packet(pk));
+    CHECK(find(r.events(), Ev::Decision, "t22_fee_unverified") != nullptr);
+    const CurveSlot* c = r.eng->curve(r.curve);
+    CHECK(c && c->traded);  // hard latch after wait
   }
 }
 

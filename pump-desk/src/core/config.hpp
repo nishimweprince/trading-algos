@@ -51,6 +51,8 @@ struct Config {
     double max_buy_impact_pct = 3;
     bool require_pump_suffix = true;
     int max_migrate_age_slots = 75;  // stale_pool past this (~30 s); 0 = no age check
+    int migrate_grace_ms = 5000;     // wall-clock grace after migrate/pool-ready: skip slot-age stale
+    int t22_fee_wait_ms = 2000;      // soft t22_fee_unverified until then; then latch
     std::vector<std::string> blacklist_mints;
     std::vector<std::string> blacklist_creators;
   } screen;

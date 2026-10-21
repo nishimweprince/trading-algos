@@ -37,6 +37,8 @@ max_pool_sol = 100            # above: pumped inside the migrate slot
 max_buy_impact_pct = 3
 require_pump_suffix = true
 max_migrate_age_slots = 75    # stale_pool veto past this (~30 s at 400 ms/slot); 0 = off. A pool never seen migrating and never seen incomplete is always stale.
+migrate_grace_ms = 5000       # after migrate/pool-ready, skip slot-age stale for this long (late pool_push)
+t22_fee_wait_ms = 2000        # soft t22_fee_unverified (retry) until then; then latch
 blacklist_mints = []
 blacklist_creators = []
 

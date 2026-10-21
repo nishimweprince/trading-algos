@@ -177,6 +177,10 @@ class Engine {
   // curve lifecycle
   CurveSlot* admit(const Pubkey& key, const Curve& c, const AccountView& a);
   void set_mint(CurveSlot& s, const Pubkey& mint, const Pubkey& token_program, TransferFee fee, uint64_t supply);
+  /** Queue an aux ReadMint when T22 fee is still Unknown. */
+  void request_mint_fee(CurveSlot& s);
+  /** Vaults ready and fee known: try_trigger if we are still racing. */
+  void maybe_retrigger(CurveSlot& s, uint64_t recv_ns);
   void fire(CurveSlot& s, uint64_t slot);
   void prepare_keys(CurveSlot& s);
   void drop_curve(const Pubkey& key);

@@ -240,6 +240,27 @@ void Engine::set_mint(CurveSlot& s, const Pubkey& mint, const Pubkey& token_prog
     if (unresolved_curves_) --unresolved_curves_;
   }
   if (s.fired && !s.keys_ready && !is_zero(s.token_program)) prepare_keys(s);
+  if (s.fee == TransferFee::Unknown) request_mint_fee(s);
+}
+
+void Engine::request_mint_fee(CurveSlot& s) {
+  if (!s.mint_known || is_zero(s.mint)) return;
+  if (s.token_program == prog::TOKEN) {
+    s.fee = TransferFee::None;
+    return;
+  }
+  if (s.fee != TransferFee::Unknown) return;
+  AuxReq r;
+  r.op = AuxOp::ReadMint;
+  r.curve = s.curve;
+  r.mint = s.mint;
+  sh_.aux_reqs.push(r);
+}
+
+void Engine::maybe_retrigger(CurveSlot& s, uint64_t recv_ns) {
+  if (!s.fired || s.traded || !s.keys_ready) return;
+  if (!s.pool_seen || !s.base_seen || !s.quote_seen || s.base_amount == 0 || s.quote_amount == 0) return;
+  try_trigger(s, recv_ns ? recv_ns : last_frame_ns_, s.awaiting_pool ? TriggerSrc::MigrateTx : TriggerSrc::PoolPush);
 }
 
 void Engine::fire(CurveSlot& s, uint64_t slot) {
@@ -248,6 +269,7 @@ void Engine::fire(CurveSlot& s, uint64_t slot) {
   s.fire_slot = slot;
   sh_.counters.fires.fetch_add(1, std::memory_order_relaxed);
   if (s.mint_known && !is_zero(s.token_program)) prepare_keys(s);
+  request_mint_fee(s);
   Event* e = ev(Ev::CurveFire);
   e->slot = slot;
   e->a = s.curve;
@@ -470,8 +492,8 @@ void Engine::on_create(const TxView& tx) {
     launch_fifo_[(launch_fifo_head_ + launch_fifo_size_) % launch_fifo_cap_] = curve;
     ++launch_fifo_size_;
   }
-  // A curve admitted before its create arrived (rare; same-slot creates) resolves now.
-  if (CurveSlot* s = curves_.find(curve); s && !s->mint_known) {
+  // Apply mint / fee even when the curve already has a mint (aux may have left fee Unknown).
+  if (CurveSlot* s = curves_.find(curve)) {
     TransferFee fee = (tp == prog::TOKEN || L.no_transfer_fee) ? TransferFee::None : TransferFee::Unknown;
     set_mint(*s, mint, tp, fee, 0);
   }
@@ -520,6 +542,7 @@ void Engine::on_migrate(const TxView& tx, uint64_t recv_ns) {
   if (!s->migrate_slot) s->migrate_slot = tx.slot;
   s->migrated = true;
   if (!s->migrated_ns) s->migrated_ns = now_ns_();
+  request_mint_fee(*s);
   if (s->traded) return;
   if (!s->fired) {
     s->traded = true;
@@ -665,10 +688,10 @@ bool Engine::send_packet(Side side, uint8_t pos, uint8_t attempt, const IxList& 
 }
 
 void Engine::trigger(CurveSlot& s, uint64_t base_res, uint64_t quote_res, uint64_t virt, uint64_t recv_ns, TriggerSrc src) {
-  s.traded = true;
   sh_.counters.triggers.fetch_add(1, std::memory_order_relaxed);
   uint64_t t_decide = now_ns_();
   const char* veto = nullptr;
+  bool soft = false;  // recoverable: leave traded=false so a later push / fee resolve can retry
   double pool_sol = double(quote_res) / 1e9;
   double effective_sol = double(quote_res + virt) / 1e9;
   uint64_t size = 0, need = 0;
@@ -678,22 +701,43 @@ void Engine::trigger(CurveSlot& s, uint64_t base_res, uint64_t quote_res, uint64
   refresh_amm();
   BlockhashSnap bh;
   bool have_bh = sh_.blockhash.load(bh) && bh.fetched_ns && t_decide - bh.fetched_ns < BLOCKHASH_MAX_AGE_NS;
+  // Grace only after a real migrate tx (migrate_slot). try_trigger also stamps migrated_ns on
+  // pool-only paths; those must not skip the pre-graduated stale veto.
+  const bool in_migrate_grace =
+      s.migrate_slot && s.migrated_ns && cfg_.screen.migrate_grace_ms > 0 &&
+      elapsed(t_decide, s.migrated_ns) < uint64_t(cfg_.screen.migrate_grace_ms) * 1'000'000ULL;
+  const bool age_stale =
+      cfg_.screen.max_migrate_age_slots > 0 &&
+      ((s.migrate_slot && last_slot_ > s.migrate_slot + uint64_t(cfg_.screen.max_migrate_age_slots) && !in_migrate_grace) ||
+       (!s.migrate_slot && !s.seen_incomplete));
   if (kill_latched_ || sh_.kill_file.load(std::memory_order_relaxed)) veto = "kill";
-  else if (!amm_.valid) veto = "amm_config_missing";
-  else if (amm_.disable_flags & (1u << 3)) veto = "buys_disabled";
-  else if (!have_bh) veto = "blockhash_stale";
-  else if (s.blacklisted) veto = "blacklist";
+  else if (!amm_.valid) {
+    veto = "amm_config_missing";
+    soft = true;
+  } else if (amm_.disable_flags & (1u << 3)) veto = "buys_disabled";
+  else if (!have_bh) {
+    veto = "blockhash_stale";
+    soft = true;
+  } else if (s.blacklisted) veto = "blacklist";
   else if (cfg_.screen.require_pump_suffix && !s.pump_suffix) veto = "no_pump_suffix";
-  else if (cfg_.screen.max_migrate_age_slots > 0 &&
-           ((s.migrate_slot && last_slot_ > s.migrate_slot + uint64_t(cfg_.screen.max_migrate_age_slots)) ||
-            (!s.migrate_slot && !s.seen_incomplete)))
-    veto = "stale_pool";
+  else if (age_stale) veto = "stale_pool";
   else if (s.token_program == prog::TOKEN_2022 && s.fee == TransferFee::Present) veto = "t22_transfer_fee";
-  else if (s.token_program == prog::TOKEN_2022 && s.fee != TransferFee::None) veto = "t22_fee_unverified";
-  else if (s.pool_seen && s.pool.data_len < POOL_ACCOUNT_NEW_SIZE) veto = "pool_needs_extend";
-  else if (pool_sol < cfg_.screen.min_pool_sol) veto = "pool_below_min";
+  else if (s.token_program == prog::TOKEN_2022 && s.fee != TransferFee::None) {
+    veto = "t22_fee_unverified";
+    request_mint_fee(s);
+    const bool fee_wait =
+        cfg_.screen.t22_fee_wait_ms > 0 && s.migrated_ns &&
+        elapsed(t_decide, s.migrated_ns) < uint64_t(cfg_.screen.t22_fee_wait_ms) * 1'000'000ULL;
+    soft = fee_wait || !s.migrated_ns;  // before migrate_ns is stamped, keep retrying
+  } else if (s.pool_seen && s.pool.data_len < POOL_ACCOUNT_NEW_SIZE) {
+    veto = "pool_needs_extend";
+    soft = true;
+  } else if (pool_sol < cfg_.screen.min_pool_sol) veto = "pool_below_min";
   else if (pool_sol > cfg_.screen.max_pool_sol) veto = "pool_above_max";
-  else if (active_positions() >= max_positions_ || free_position() < 0) veto = "max_concurrent";
+  else if (active_positions() >= max_positions_ || free_position() < 0) {
+    veto = "max_concurrent";
+    soft = true;
+  }
 
   if (!veto) {
     uint64_t avail = wallet_lamports_ > reserved_ ? wallet_lamports_ - reserved_ : 0;
@@ -714,8 +758,10 @@ void Engine::trigger(CurveSlot& s, uint64_t base_res, uint64_t quote_res, uint64
     if (double(size) < cfg_.entry.min_size_sol * 1e9) veto = "size_below_min";
     else if (!q.ok) veto = "quote_failed";
     else if (impact > cfg_.screen.max_buy_impact_pct) veto = "buy_impact";
-    else if (wallet_lamports_ < reserved_ + need + headroom) veto = "insufficient_balance";
-    else {
+    else if (wallet_lamports_ < reserved_ + need + headroom) {
+      veto = "insufficient_balance";
+      soft = true;
+    } else {
       int idx = free_position();
       BuyGuards guards;
       Pubkey guard_rivals[MAX_RIVALS]{};
@@ -732,6 +778,7 @@ void Engine::trigger(CurveSlot& s, uint64_t base_res, uint64_t quote_res, uint64
       }
       if (!sent) {
         veto = "build_or_queue_failed";
+        soft = true;
       } else {
         Position& p = positions_[size_t(idx)];
         p = Position{};
@@ -787,6 +834,9 @@ void Engine::trigger(CurveSlot& s, uint64_t base_res, uint64_t quote_res, uint64
       }
     }
   }
+
+  // Latch traded on a buy or a terminal veto. Soft vetoes (fee still resolving, etc.) stay open.
+  if (!veto || !soft) s.traded = true;
 
   Event* d = ev(Ev::Decision);
   d->slot = last_slot_;
@@ -1396,6 +1446,8 @@ void Engine::drain_queues(uint64_t now) {
         continue;
       }
       set_mint(*s, a.mint, a.token_program, a.mint_info.fee, a.mint_info.supply);
+      // Fee just resolved (or mint landed): retry a soft-vetoed race without waiting for another push.
+      maybe_retrigger(*s, last_frame_ns_);
     } else if (a.op == AuxOp::ResolveSig) {
       Position& p = positions_[a.pos];
       if (a.side == Side::Buy && p.state == PosState::BuySent && p.buy_sig == a.sig) {

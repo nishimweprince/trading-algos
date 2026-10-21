@@ -139,7 +139,7 @@ Config load_config(const std::string& path) {
   G(racer, default_virtual_quote_lamports);
   G(racer, max_curves);
   G(screen, min_pool_sol); G(screen, max_pool_sol); G(screen, max_buy_impact_pct); G(screen, require_pump_suffix);
-  G(screen, max_migrate_age_slots);
+  G(screen, max_migrate_age_slots); G(screen, migrate_grace_ms); G(screen, t22_fee_wait_ms);
   G(screen, blacklist_mints); G(screen, blacklist_creators);
   G(entry, size_wallet_pct); G(entry, min_size_sol); G(entry, max_size_sol); G(entry, slippage_pct); G(entry, cu_limit);
   G(entry, priority_multiplier);
@@ -228,6 +228,8 @@ Config load_config(const std::string& path) {
   if (c.risk.max_concurrent_positions < 1 || c.risk.max_concurrent_positions > 8)
     throw std::runtime_error("config: risk.max_concurrent_positions must be 1..8");
   if (c.screen.max_migrate_age_slots < 0) throw std::runtime_error("config: screen.max_migrate_age_slots must be >= 0");
+  if (c.screen.migrate_grace_ms < 0) throw std::runtime_error("config: screen.migrate_grace_ms must be >= 0");
+  if (c.screen.t22_fee_wait_ms < 0) throw std::runtime_error("config: screen.t22_fee_wait_ms must be >= 0");
   if (c.jupiter.slippage_bps < 1 || c.jupiter.slippage_bps > 10000 || c.jupiter.max_attempts < 0 || c.jupiter.max_attempts > 20 ||
       c.jupiter.confirm_ms < 1000)
     throw std::runtime_error("config: jupiter.slippage_bps 1..10000, max_attempts 0..20, confirm_ms >= 1000");
