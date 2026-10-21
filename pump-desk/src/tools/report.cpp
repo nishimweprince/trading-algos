@@ -182,10 +182,9 @@ int main(int argc, char** argv) {
   }
   std::printf("pump-desk report: %s%s\n\n", path.c_str(), hours > 0 ? " (window)" : "");
 
-  rows("Migrations (tracked / fired / landed):",
-       "SELECT COUNT(*), SUM(tracked), SUM(fired), SUM(landed) FROM migrations WHERE ts >= ?1");
-  rows("\nDecisions by verdict:", "SELECT verdict, COUNT(*) FROM decisions WHERE ts >= ?1 GROUP BY verdict ORDER BY 2 DESC");
-  rows("\nDecisions by trigger source:", "SELECT source, COUNT(*) FROM decisions WHERE ts >= ?1 AND verdict='buy' GROUP BY source");
+  rows("Migrations (n / tracked / entered / landed):",
+       "SELECT COUNT(*), SUM(i1), SUM(i2), SUM(i0) FROM events WHERE type='migrate' AND ts >= ?1");
+  rows("\nDecisions by verdict:", "SELECT text, COUNT(*) FROM events WHERE type='decision' AND ts >= ?1 GROUP BY text ORDER BY 2 DESC");
   rows("\nBuys: orders / filled ok / failed:",
        "SELECT (SELECT COUNT(*) FROM orders WHERE side='buy' AND ts >= ?1),"
        " (SELECT COUNT(*) FROM fills WHERE side='buy' AND ok=1 AND ts >= ?1),"
@@ -196,6 +195,10 @@ int main(int argc, char** argv) {
   rows("\nExit reasons (n / net SOL / avg %):",
        "SELECT text, COUNT(*), printf('%.5f', SUM(i0) / 1e9), printf('%.2f', AVG(d1)) FROM events"
        " WHERE type='position_close' AND ts >= ?1 GROUP BY text ORDER BY 2 DESC");
+  rows("\nCloses by phase (phase / n / wins / net SOL / avg %):",
+       "SELECT CASE i5 WHEN 0 THEN 'curve' WHEN 1 THEN 'await_migrate' ELSE 'pool' END, COUNT(*), SUM(i0 > 0),"
+       " printf('%.5f', SUM(i0) / 1e9), printf('%.2f', AVG(d1)) FROM events WHERE type='position_close' AND ts >= ?1"
+       " GROUP BY 1 ORDER BY 2 DESC");
   rows("\nOpen positions:", "SELECT mint, base_amount, printf('%.10f', entry_price), datetime(opened_ms/1000,'unixepoch')"
                             " FROM positions WHERE closed=0 AND opened_ms >= ?1");
 
@@ -211,33 +214,32 @@ int main(int argc, char** argv) {
   std::printf("\nLanding (buys):\n");
   percentiles("slots to land", column("SELECT i6 FROM events WHERE type='fill' AND i0=0 AND i1=1 AND d5=1 AND i6>=0 AND ts >= ?1"), 1, "slots");
   percentiles("index in block", column("SELECT i5 FROM events WHERE type='fill' AND i0=0 AND i1=1 AND d5=1 AND i5>=0 AND ts >= ?1"), 1, "");
-  percentiles("pool writes ahead after send", column("SELECT d1 FROM events WHERE type='fill' AND i0=0 AND i1=1 AND d5=1 AND d1>=0 AND ts >= ?1"), 1, "");
   percentiles("first shred -> fill seen", column("SELECT i7 FROM events WHERE type='fill' AND i1=1 AND d5=1 AND i7!=0 AND ts >= ?1"), 1e-6, "ms");
   percentiles("slot completed -> fill seen", column("SELECT d2 FROM events WHERE type='fill' AND i1=1 AND d5=1 AND d2!=0 AND ts >= ?1"), 1, "ms");
+  // PositionUpdate rows into the pool phase carry the migrate slot.
+  std::printf("\nHold (curve-in, migrate-out):\n");
+  percentiles("buy fill -> migrate", column("SELECT u.slot - f.slot FROM events u JOIN events f ON f.type='fill' AND f.i0=0"
+                                            " AND f.i1=1 AND f.a=u.a WHERE u.type='position_update' AND u.i2=2 AND u.ts >= ?1"), 1, "slots");
+  percentiles("migrate -> sell landed", column("SELECT f.slot - u.slot FROM events u JOIN events f ON f.type='fill' AND f.i0=1"
+                                               " AND f.i1=1 AND f.a=u.a WHERE u.type='position_update' AND u.i2=2 AND u.ts >= ?1"), 1, "slots");
   rows("\nSlots to land by tip / cu_price (n / avg slots / avg index):",
        "SELECT o.i5 AS tip, o.i4 / 500000 * 500000 AS cu_price_bucket, COUNT(*), printf('%.2f', AVG(f.i6)), printf('%.1f', AVG(f.i5))"
        " FROM events f JOIN events o ON o.type='order' AND o.sig=f.sig"
        " WHERE f.type='fill' AND f.i0=0 AND f.i1=1 AND f.d5=1 AND f.i6>=0 AND f.ts >= ?1 GROUP BY 1, 2 ORDER BY 1, 2");
-  rows("\nBuys by leader class (n / landed / avg slots / avg index / beaten by a guard):",
+  rows("\nBuys by leader class (n / landed / avg slots / avg index / curve completed first):",
        "SELECT r.text, COUNT(*), SUM(f.i1 = 1), printf('%.2f', AVG(CASE WHEN f.i1 = 1 AND f.d5 = 1 AND f.i6 >= 0 THEN f.i6 END)),"
-       " printf('%.1f', AVG(CASE WHEN f.i1 = 1 AND f.i5 >= 0 THEN f.i5 END)), SUM(f.text LIKE 'guard_%')"
+       " printf('%.1f', AVG(CASE WHEN f.i1 = 1 AND f.i5 >= 0 THEN f.i5 END)), SUM(f.text = 'curve_complete')"
        " FROM events r LEFT JOIN events f ON f.type='fill' AND f.sig=r.sig"
        " WHERE r.type='route' AND r.i5=0 AND r.ts >= ?1 GROUP BY r.text ORDER BY 2 DESC");
   rows("\nCU price / limit by leader class (buys: avg cu_price / avg cu_limit / jito / routed):",
        "SELECT text, printf('%.0f', AVG(i1)), printf('%.0f', AVG(i2)), SUM(i3), SUM(i7) FROM events"
        " WHERE type='route' AND i5=0 AND ts >= ?1 GROUP BY text");
-  rows("\nGuard reverts (reason / n / SOL burnt in fees):",
-       "SELECT text, COUNT(*), printf('%.6f', -SUM(i0) / 1e9) FROM events WHERE type='position_close'"
-       " AND text LIKE 'beaten_%' AND ts >= ?1 GROUP BY text");
-  rows("\nBeaten by (rival guard reverts per wallet):",
-       "SELECT c, COUNT(*) FROM events WHERE type='fill' AND text='guard_rival' AND ts >= ?1 GROUP BY c ORDER BY 2 DESC LIMIT 10");
-  rows("\nRivals ahead of our buys (wallet / pools / txs / max cu_price):",
-       (std::string("SELECT a.signer, COUNT(DISTINCT a.pool), COUNT(*), MAX(a.cu_price) FROM (") +
-        "SELECT r.a AS signer, r.b AS pool, r.i1 AS cu_price FROM events r JOIN events o ON o.type='order' AND o.i0=0 AND o.b=r.b"
-        " LEFT JOIN events f ON f.type='fill' AND f.i0=0 AND f.sig=o.sig AND f.d5=1 AND f.i6>=0"
-        " WHERE r.type='rival_tx' AND r.i4>0 AND r.d1<0.5 AND r.ts >= ?1"
-        " AND (f.id IS NULL OR r.slot < f.slot OR (r.slot = f.slot AND r.i0 >= 0 AND f.i5 >= 0 AND r.i0 < f.i5))"
-        ") a GROUP BY a.signer ORDER BY 2 DESC, 3 DESC LIMIT 10").c_str());
+  rows("\nWho buys our pools after the migrate (wallet / pools / buys / SOL in):",
+       "SELECT a, COUNT(DISTINCT b), COUNT(*), printf('%.3f', SUM(i4) / 1e9) FROM events WHERE type='rival_tx'"
+       " AND i4 > 0 AND d1 < 0.5 AND ts >= ?1 GROUP BY a ORDER BY 4 DESC LIMIT 10");
+  rows("\nWho sells our pools after the migrate (wallet / pools / sells / SOL out):",
+       "SELECT a, COUNT(DISTINCT b), COUNT(*), printf('%.3f', -SUM(i4) / 1e9) FROM events WHERE type='rival_tx'"
+       " AND i4 < 0 AND d1 < 0.5 AND ts >= ?1 GROUP BY a ORDER BY 4 DESC LIMIT 10");
   rows("\nPool txs in the window by leader class and route (class / route / n / avg cu_price):",
        "SELECT CASE i5 WHEN 1 THEN 'bam' WHEN 2 THEN 'firedancer' ELSE 'agave' END,"
        " CASE CAST(d0 AS INTEGER) WHEN 1 THEN 'sender' WHEN 2 THEN 'jito' WHEN 3 THEN 'other' ELSE 'none' END,"

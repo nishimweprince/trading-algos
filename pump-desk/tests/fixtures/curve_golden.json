@@ -1,0 +1,740 @@
+{
+ "generated": "2026-10-21T10:05:58.124Z",
+ "sdkVersion": "4.2.0",
+ "liveMint": "5L4WmQY8eF1riggRFQ9Y4FGojyejsK8gfGemLFw8pump",
+ "seedMint": "74xrbNsxV8uPT6Kcedk2T3FNPtw8jzyVNWmaVkzxpump",
+ "tip": "4ACfpUFoaSD9bfPdeu6DBt89gB6ENTeHBXCAi87NhDEE",
+ "blockhash": "GHtXQBsoZHVnNFa9YevAzFr17DJjgHXk3ycTKD5xD3Zi",
+ "userSeedHex": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+ "params": {
+  "cuLimit": 150000,
+  "cuPrice": 1234567,
+  "tip": 5000
+ },
+ "accounts": {
+  "pumpGlobal": "p+joschscn8B07uMqzQc4FKEV/LDgX0yeEQZY9zVX+1YuiTJmd2sAqpKwvjQ3Vy8l+MonBl8tQYqVPPZVrnOblEV+WVnqlyz5gAQ2EfjzwMAAKwj/AYAAAAAeMX7UdECAACAxqR+jQMAXwAAAAAAAAAf6nQ58860xO9Lucx77kChpiYXG2hBX+3tQLeolW+E5wHB4eQAAAAAAAUAAAAAAAAAYIzMHfzpYbQ7d5wZFQWm4tO/RdWk20YYrXbILWF1RTVjg3MADqIssmTTSv9koEte+r+7dN3NBImXsZgVR9fREIOEdCkuZ1qUtDbssKmYiUIyioPdxiM4ApYSZ8XNYRfLjRgaDISfqTem80re0wge+VcAqssMm7PZCaS5FHUnpOutEeak/ClEpPqCUb74FUJuG/soxrZkZndgfGrZ9WamRteqj7Bg2CkbTE1HXa/3Yslr3A2s6zbAEurRLtOpSEFh4ATIfOuY+lzkf4A4Bv0seUXSlSSVmuwA3tl4FPOPeEYf6nQ58860xO9Lucx77kChpiYXG2hBX+3tQLeolW+E5wchXZlAeTaU4RYGbORZuBj9+bugx7QbeD+joSDKQZUyAaKLX9JqtHmmqcxsv2sLI+thiFo3HgEgrKkTvu89E4p46JMUH7GOnxV02BDheOGeMGBOMXWqLkoy38hgByfRBwkBNYRTYlYJT5EoGRJ++k5Ea0MzcheT0Th2+arb89x9C19udQGCIPlCZ3ADI3tNa0U3WbSlxpC1nDXZuxh6CQy9KjOYep67E2eZq1mSWxPl3Iswgd8AXbQnwUePpG/4w0egdOlUPz43otBGInrdy06cd0xEJYxD7fJKqKrh8AIUZlvaTDjNbbdDj1m0CLuew7TKnorR8fJGU8SZtXlsINv5sy3dnuo/ObNyEVxxhHwYRc+lNsaFB04DDkTQId4++eNcTLeA8I7i/uhL7ERqV3gl2mjUOfqKXaOwxc/1D2P0VGsBQ55lEMA9ZfrZMeidBL4Ltw1Rlx9RxBX7NEwH20GfISICI1UWqRcTTGdYjEk4IK4VXulmZVd6wbcY2kfdzyoFDuan4iBou4hkCqV/kJMIxh/vcRoBY/WnVcBwvIYNH2NnIHzs2lvMbLHq8PFtaEBFZrGNVtJIGssxcDJlbpBVHHhElkH4SVjcc6dqhdh1b1XALNrKiboZMnkMNoqxV+ktc8VLlrXJMZQeRupL4uDjESd0T8a3TPtFXv6vi9VxeSztRPwfePlKM9CQnF5rX7AhVwrY262N6P2z0g7RzZnrjk6HcBV+6+tnimVduZs39rEybHZX25DPuKh6vvjHtvLIaYgTAAAAAAAAALnS/wAAAADG+nrzvtutOj1l82qryXQxsbvkwtL24OR8pgIDRS9dYQEsAQAAAAAAAPbjY/aFP8BoR4dSDPaZvZ0/rDjsLVijekDffE1+UZWPAQI=",
+  "curve": "F7f4N2DYrGCxfo6cPbkDAMdDnyYHAAAAseZ7UKy6AgDHl3sqAAAAAACAxqR+jQMAAJmXAMmnzaz8TvkXKXAKcarAddfpMdcKAZVCkmt8uw+tAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACsI/wGAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+  "seedCurve": "F7f4N2DYrGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAxqR+jQMAAZBH+BgxaC6uA94pGAnovZna+RQoZjz4fynOcT5Ay3svAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "mintOwner": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+ },
+ "curve": {
+  "creator": "BLYvgsJmfxRLyoHCj3f7Z3yZzHWaAvof9m9TBpXbUkpc",
+  "complete": false,
+  "mayhem": false,
+  "cashback": false,
+  "creatorFeeBps": "0"
+ },
+ "fees": {
+  "protocolFeeBps": "95",
+  "creatorFeeBps": "30"
+ },
+ "pdas": {
+  "global": "4wTV1YmiEkRvAtNtsSGPtUrqRYQMe5SKy2uB4Jjaxnjf",
+  "eventAuthority": "Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1",
+  "globalVolumeAccumulator": "Hq2wp8uJ9jCPsYgNHex8RtqdvMPfVGoYwjvF1ATiwn2Y",
+  "feeConfig": "8Wf5TiAheLUqBrKXeYg2JtAFFMWtKdG2BSFgqUcPVwTt",
+  "bondingCurve": "7gW37nc77X9H6ufWPzZSSp3tt8Po6ohzvr6VowTU1uDS",
+  "bondingCurveV2": "9ukaDQPPFS3FZs41af7jE41bR9WmGTAy2yNAimstqhEd",
+  "creatorVault": "rRuFyXdWNEKTtof5vGKPosLkSSQFj7NL9smkd767gU3",
+  "userVolumeAccumulator": "6eSz5v7mkQBt4kpq1pC8MFPJRPyarqYzRiGBLRfQ9oox",
+  "userAta": "6CbgmVAVePZrVKyWtmz3UbDNcHMvE9arzm3nBcvbdLR"
+ },
+ "recipients": {
+  "fee": "62qc2CNXwrYqQScmEdiZFFAnJR262PxWEuNQtxfafNgV",
+  "reserved": "GesfTA3X2arioaHp8bbKdjG9vJtskViWACZoYvxp4twS",
+  "buyback": "5YxQFdt3Tr9zJLvkFccqXVUwhdTWJQc1fFg2YPbxvxeD"
+ },
+ "quotes": [
+  {
+   "lamports": "10000000",
+   "tokens": "336937278807",
+   "cost": "10000000",
+   "proceeds": "9746815"
+  },
+  {
+   "lamports": "50000000",
+   "tokens": "1682523010642",
+   "cost": "50000000",
+   "proceeds": "48609114"
+  },
+  {
+   "lamports": "123456789",
+   "tokens": "4144603114889",
+   "cost": "123456788",
+   "proceeds": "119459935"
+  },
+  {
+   "lamports": "1000000000",
+   "tokens": "32654471103413",
+   "cost": "1000000000",
+   "proceeds": "916371643"
+  }
+ ],
+ "cases": [
+  {
+   "name": "buy-partial",
+   "side": "buy",
+   "amount": "326290188808",
+   "maxSol": "13000000",
+   "partial": true,
+   "ixs": [
+    {
+     "program": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
+     "keys": [
+      {
+       "pubkey": "9C6hybhQ6Aycep9jaUnP6uL9ZYvDjUp1aSkFWPUFJtpj",
+       "signer": true,
+       "writable": true
+      },
+      {
+       "pubkey": "6CbgmVAVePZrVKyWtmz3UbDNcHMvE9arzm3nBcvbdLR",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "9C6hybhQ6Aycep9jaUnP6uL9ZYvDjUp1aSkFWPUFJtpj",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "5L4WmQY8eF1riggRFQ9Y4FGojyejsK8gfGemLFw8pump",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "11111111111111111111111111111111",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+       "signer": false,
+       "writable": false
+      }
+     ],
+     "data": "01"
+    },
+    {
+     "program": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+     "keys": [
+      {
+       "pubkey": "4wTV1YmiEkRvAtNtsSGPtUrqRYQMe5SKy2uB4Jjaxnjf",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "62qc2CNXwrYqQScmEdiZFFAnJR262PxWEuNQtxfafNgV",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "5L4WmQY8eF1riggRFQ9Y4FGojyejsK8gfGemLFw8pump",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "7gW37nc77X9H6ufWPzZSSp3tt8Po6ohzvr6VowTU1uDS",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "joNwqx8D8iicu7tfyxHSyffg3hSr8dVKytoVtQfQMBq",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "6CbgmVAVePZrVKyWtmz3UbDNcHMvE9arzm3nBcvbdLR",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "9C6hybhQ6Aycep9jaUnP6uL9ZYvDjUp1aSkFWPUFJtpj",
+       "signer": true,
+       "writable": true
+      },
+      {
+       "pubkey": "11111111111111111111111111111111",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "rRuFyXdWNEKTtof5vGKPosLkSSQFj7NL9smkd767gU3",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "Hq2wp8uJ9jCPsYgNHex8RtqdvMPfVGoYwjvF1ATiwn2Y",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "6eSz5v7mkQBt4kpq1pC8MFPJRPyarqYzRiGBLRfQ9oox",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "8Wf5TiAheLUqBrKXeYg2JtAFFMWtKdG2BSFgqUcPVwTt",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "9ukaDQPPFS3FZs41af7jE41bR9WmGTAy2yNAimstqhEd",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "5YxQFdt3Tr9zJLvkFccqXVUwhdTWJQc1fFg2YPbxvxeD",
+       "signer": false,
+       "writable": true
+      }
+     ],
+     "data": "66063d1201daebea082a69f84b000000405dc600000000000101"
+    }
+   ],
+   "message": "8001000c1579b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad0496640155049a2ff47e05eab72b2c8d323e570eebc6f9f59484ceaec421640282ecf64ac2f8d0dd5cbc97e3289c197cb5062a54f3d956b9ce6e5115f96567aa5cb3e663449ad3582c3dd85ddd8a9ac4859c24a264736d36eda77bcb0e534dae424f910af6d58c6915b3ef244fe230795747d3290421a4d49f9e41ac36cfd6b742b55c0ca99d8437589e3edb6d4984470d651a186a422b820d5c96082b128c8e75b31c53e24e15b40e3fc39c8fa99de0929a15af89c040455c22e4ce87ccb3cc8adc0b439e6510c03d65fad931e89d04be0bb70d51971f51c415fb344c07db419f21222eee7b892a4ef8a44aabf970cc0e37eaf7267675170c1d699cd31274496c543f0306466fe5211732ffecadba72c39be7bc8ce5bbc5f7126b2c439b3a400000008c97258f4e2489f1bb3d1029148e0d830b5a1399daff1084048e7bd8dbe9f8594050c1663990ae1432a9aaf1fec53fc1bded803cc276dbd65dbfee9f675796ff000000000000000000000000000000000000000000000000000000000000000006ddf6e1ee758fde18425dbce46ccddab61afc4d83b90d27febdf928d8a18bfc0156e0f693665acf44db1568bf175baa5189cb97f5d2ff3b655d2bb6fd6d18b03a865e69ee0f5480cabcf66357e4dc2f18d58d45c1ea7489fb3723d9793c72a6acf136eb01fc1c4e883d23c8b5844ab59a37f66add57c5e9ac3b53e059d35c64fa0911a54863412d631f4e078703296c035f0d1333a0d9c8838d73b710fe6e2d6f9ab4a4f1958dc0a9c94c3fb72c07995843eda485e3a24f10c69399f819940f0c35ffa9055a8e568da8f7bc075615274cf1c92ca41f40009c516aa414c27c708460f719d708ec7e9fab44bdfae554226383bfbb2f2d6c1c4373926e4d72a026e332daf92fabece8b63ff7a44005e5fdfd9afa158756b61c5a95f904b3b8d0810509000502f04902000900090387d61200000000000a060001000b0c0d01010e120f020b030401000c0d05100e1106121314071a66063d1201daebea082a69f84b000000405dc6000000000001010c0200080c02000000881300000000000000"
+  },
+  {
+   "name": "buy-exact",
+   "side": "buy",
+   "amount": "1234567890",
+   "maxSol": "50000",
+   "partial": false,
+   "ixs": [
+    {
+     "program": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
+     "keys": [
+      {
+       "pubkey": "9C6hybhQ6Aycep9jaUnP6uL9ZYvDjUp1aSkFWPUFJtpj",
+       "signer": true,
+       "writable": true
+      },
+      {
+       "pubkey": "6CbgmVAVePZrVKyWtmz3UbDNcHMvE9arzm3nBcvbdLR",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "9C6hybhQ6Aycep9jaUnP6uL9ZYvDjUp1aSkFWPUFJtpj",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "5L4WmQY8eF1riggRFQ9Y4FGojyejsK8gfGemLFw8pump",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "11111111111111111111111111111111",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+       "signer": false,
+       "writable": false
+      }
+     ],
+     "data": "01"
+    },
+    {
+     "program": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+     "keys": [
+      {
+       "pubkey": "4wTV1YmiEkRvAtNtsSGPtUrqRYQMe5SKy2uB4Jjaxnjf",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "62qc2CNXwrYqQScmEdiZFFAnJR262PxWEuNQtxfafNgV",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "5L4WmQY8eF1riggRFQ9Y4FGojyejsK8gfGemLFw8pump",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "7gW37nc77X9H6ufWPzZSSp3tt8Po6ohzvr6VowTU1uDS",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "joNwqx8D8iicu7tfyxHSyffg3hSr8dVKytoVtQfQMBq",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "6CbgmVAVePZrVKyWtmz3UbDNcHMvE9arzm3nBcvbdLR",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "9C6hybhQ6Aycep9jaUnP6uL9ZYvDjUp1aSkFWPUFJtpj",
+       "signer": true,
+       "writable": true
+      },
+      {
+       "pubkey": "11111111111111111111111111111111",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "rRuFyXdWNEKTtof5vGKPosLkSSQFj7NL9smkd767gU3",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "Hq2wp8uJ9jCPsYgNHex8RtqdvMPfVGoYwjvF1ATiwn2Y",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "6eSz5v7mkQBt4kpq1pC8MFPJRPyarqYzRiGBLRfQ9oox",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "8Wf5TiAheLUqBrKXeYg2JtAFFMWtKdG2BSFgqUcPVwTt",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "9ukaDQPPFS3FZs41af7jE41bR9WmGTAy2yNAimstqhEd",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "5YxQFdt3Tr9zJLvkFccqXVUwhdTWJQc1fFg2YPbxvxeD",
+       "signer": false,
+       "writable": true
+      }
+     ],
+     "data": "66063d1201daebead20296490000000050c30000000000000100"
+    }
+   ],
+   "message": "8001000c1579b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad0496640155049a2ff47e05eab72b2c8d323e570eebc6f9f59484ceaec421640282ecf64ac2f8d0dd5cbc97e3289c197cb5062a54f3d956b9ce6e5115f96567aa5cb3e663449ad3582c3dd85ddd8a9ac4859c24a264736d36eda77bcb0e534dae424f910af6d58c6915b3ef244fe230795747d3290421a4d49f9e41ac36cfd6b742b55c0ca99d8437589e3edb6d4984470d651a186a422b820d5c96082b128c8e75b31c53e24e15b40e3fc39c8fa99de0929a15af89c040455c22e4ce87ccb3cc8adc0b439e6510c03d65fad931e89d04be0bb70d51971f51c415fb344c07db419f21222eee7b892a4ef8a44aabf970cc0e37eaf7267675170c1d699cd31274496c543f0306466fe5211732ffecadba72c39be7bc8ce5bbc5f7126b2c439b3a400000008c97258f4e2489f1bb3d1029148e0d830b5a1399daff1084048e7bd8dbe9f8594050c1663990ae1432a9aaf1fec53fc1bded803cc276dbd65dbfee9f675796ff000000000000000000000000000000000000000000000000000000000000000006ddf6e1ee758fde18425dbce46ccddab61afc4d83b90d27febdf928d8a18bfc0156e0f693665acf44db1568bf175baa5189cb97f5d2ff3b655d2bb6fd6d18b03a865e69ee0f5480cabcf66357e4dc2f18d58d45c1ea7489fb3723d9793c72a6acf136eb01fc1c4e883d23c8b5844ab59a37f66add57c5e9ac3b53e059d35c64fa0911a54863412d631f4e078703296c035f0d1333a0d9c8838d73b710fe6e2d6f9ab4a4f1958dc0a9c94c3fb72c07995843eda485e3a24f10c69399f819940f0c35ffa9055a8e568da8f7bc075615274cf1c92ca41f40009c516aa414c27c708460f719d708ec7e9fab44bdfae554226383bfbb2f2d6c1c4373926e4d72a026e332daf92fabece8b63ff7a44005e5fdfd9afa158756b61c5a95f904b3b8d0810509000502f04902000900090387d61200000000000a060001000b0c0d01010e120f020b030401000c0d05100e1106121314071a66063d1201daebead20296490000000050c300000000000001000c0200080c02000000881300000000000000"
+  },
+  {
+   "name": "buy-mayhem",
+   "side": "buy",
+   "amount": "326290188808",
+   "maxSol": "13000000",
+   "partial": true,
+   "mayhem": true,
+   "ixs": [
+    {
+     "program": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
+     "keys": [
+      {
+       "pubkey": "9C6hybhQ6Aycep9jaUnP6uL9ZYvDjUp1aSkFWPUFJtpj",
+       "signer": true,
+       "writable": true
+      },
+      {
+       "pubkey": "6CbgmVAVePZrVKyWtmz3UbDNcHMvE9arzm3nBcvbdLR",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "9C6hybhQ6Aycep9jaUnP6uL9ZYvDjUp1aSkFWPUFJtpj",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "5L4WmQY8eF1riggRFQ9Y4FGojyejsK8gfGemLFw8pump",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "11111111111111111111111111111111",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+       "signer": false,
+       "writable": false
+      }
+     ],
+     "data": "01"
+    },
+    {
+     "program": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+     "keys": [
+      {
+       "pubkey": "4wTV1YmiEkRvAtNtsSGPtUrqRYQMe5SKy2uB4Jjaxnjf",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "GesfTA3X2arioaHp8bbKdjG9vJtskViWACZoYvxp4twS",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "5L4WmQY8eF1riggRFQ9Y4FGojyejsK8gfGemLFw8pump",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "7gW37nc77X9H6ufWPzZSSp3tt8Po6ohzvr6VowTU1uDS",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "joNwqx8D8iicu7tfyxHSyffg3hSr8dVKytoVtQfQMBq",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "6CbgmVAVePZrVKyWtmz3UbDNcHMvE9arzm3nBcvbdLR",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "9C6hybhQ6Aycep9jaUnP6uL9ZYvDjUp1aSkFWPUFJtpj",
+       "signer": true,
+       "writable": true
+      },
+      {
+       "pubkey": "11111111111111111111111111111111",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "rRuFyXdWNEKTtof5vGKPosLkSSQFj7NL9smkd767gU3",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "Hq2wp8uJ9jCPsYgNHex8RtqdvMPfVGoYwjvF1ATiwn2Y",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "6eSz5v7mkQBt4kpq1pC8MFPJRPyarqYzRiGBLRfQ9oox",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "8Wf5TiAheLUqBrKXeYg2JtAFFMWtKdG2BSFgqUcPVwTt",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "9ukaDQPPFS3FZs41af7jE41bR9WmGTAy2yNAimstqhEd",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "5YxQFdt3Tr9zJLvkFccqXVUwhdTWJQc1fFg2YPbxvxeD",
+       "signer": false,
+       "writable": true
+      }
+     ],
+     "data": "66063d1201daebea082a69f84b000000405dc600000000000101"
+    }
+   ],
+   "message": "8001000c1579b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad0496640155049a2ff47e05eab72b2c8d323e570eebc6f9f59484ceaec421640282ecf6e893141fb18e9f1574d810e178e19e30604e3175aa2e4a32dfc8600727d1070963449ad3582c3dd85ddd8a9ac4859c24a264736d36eda77bcb0e534dae424f910af6d58c6915b3ef244fe230795747d3290421a4d49f9e41ac36cfd6b742b55c0ca99d8437589e3edb6d4984470d651a186a422b820d5c96082b128c8e75b31c53e24e15b40e3fc39c8fa99de0929a15af89c040455c22e4ce87ccb3cc8adc0b439e6510c03d65fad931e89d04be0bb70d51971f51c415fb344c07db419f21222eee7b892a4ef8a44aabf970cc0e37eaf7267675170c1d699cd31274496c543f0306466fe5211732ffecadba72c39be7bc8ce5bbc5f7126b2c439b3a400000008c97258f4e2489f1bb3d1029148e0d830b5a1399daff1084048e7bd8dbe9f8594050c1663990ae1432a9aaf1fec53fc1bded803cc276dbd65dbfee9f675796ff000000000000000000000000000000000000000000000000000000000000000006ddf6e1ee758fde18425dbce46ccddab61afc4d83b90d27febdf928d8a18bfc0156e0f693665acf44db1568bf175baa5189cb97f5d2ff3b655d2bb6fd6d18b03a865e69ee0f5480cabcf66357e4dc2f18d58d45c1ea7489fb3723d9793c72a6acf136eb01fc1c4e883d23c8b5844ab59a37f66add57c5e9ac3b53e059d35c64fa0911a54863412d631f4e078703296c035f0d1333a0d9c8838d73b710fe6e2d6f9ab4a4f1958dc0a9c94c3fb72c07995843eda485e3a24f10c69399f819940f0c35ffa9055a8e568da8f7bc075615274cf1c92ca41f40009c516aa414c27c708460f719d708ec7e9fab44bdfae554226383bfbb2f2d6c1c4373926e4d72a026e332daf92fabece8b63ff7a44005e5fdfd9afa158756b61c5a95f904b3b8d0810509000502f04902000900090387d61200000000000a060001000b0c0d01010e120f020b030401000c0d05100e1106121314071a66063d1201daebea082a69f84b000000405dc6000000000001010c0200080c02000000881300000000000000"
+  },
+  {
+   "name": "sell-plain",
+   "side": "sell",
+   "amount": "326290188808",
+   "minSol": "9000000",
+   "ixs": [
+    {
+     "program": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+     "keys": [
+      {
+       "pubkey": "4wTV1YmiEkRvAtNtsSGPtUrqRYQMe5SKy2uB4Jjaxnjf",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "62qc2CNXwrYqQScmEdiZFFAnJR262PxWEuNQtxfafNgV",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "5L4WmQY8eF1riggRFQ9Y4FGojyejsK8gfGemLFw8pump",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "7gW37nc77X9H6ufWPzZSSp3tt8Po6ohzvr6VowTU1uDS",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "joNwqx8D8iicu7tfyxHSyffg3hSr8dVKytoVtQfQMBq",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "6CbgmVAVePZrVKyWtmz3UbDNcHMvE9arzm3nBcvbdLR",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "9C6hybhQ6Aycep9jaUnP6uL9ZYvDjUp1aSkFWPUFJtpj",
+       "signer": true,
+       "writable": true
+      },
+      {
+       "pubkey": "11111111111111111111111111111111",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "rRuFyXdWNEKTtof5vGKPosLkSSQFj7NL9smkd767gU3",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "8Wf5TiAheLUqBrKXeYg2JtAFFMWtKdG2BSFgqUcPVwTt",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "9ukaDQPPFS3FZs41af7jE41bR9WmGTAy2yNAimstqhEd",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "5YxQFdt3Tr9zJLvkFccqXVUwhdTWJQc1fFg2YPbxvxeD",
+       "signer": false,
+       "writable": true
+      }
+     ],
+     "data": "33e685a4017f83ad082a69f84b0000004054890000000000"
+    },
+    {
+     "program": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+     "keys": [
+      {
+       "pubkey": "6CbgmVAVePZrVKyWtmz3UbDNcHMvE9arzm3nBcvbdLR",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "9C6hybhQ6Aycep9jaUnP6uL9ZYvDjUp1aSkFWPUFJtpj",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "9C6hybhQ6Aycep9jaUnP6uL9ZYvDjUp1aSkFWPUFJtpj",
+       "signer": true,
+       "writable": false
+      }
+     ],
+     "data": "09"
+    }
+   ],
+   "message": "8001000a1279b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad0496644ac2f8d0dd5cbc97e3289c197cb5062a54f3d956b9ce6e5115f96567aa5cb3e663449ad3582c3dd85ddd8a9ac4859c24a264736d36eda77bcb0e534dae424f910af6d58c6915b3ef244fe230795747d3290421a4d49f9e41ac36cfd6b742b55c0155049a2ff47e05eab72b2c8d323e570eebc6f9f59484ceaec421640282ecf60ca99d8437589e3edb6d4984470d651a186a422b820d5c96082b128c8e75b31c439e6510c03d65fad931e89d04be0bb70d51971f51c415fb344c07db419f21222eee7b892a4ef8a44aabf970cc0e37eaf7267675170c1d699cd31274496c543f0306466fe5211732ffecadba72c39be7bc8ce5bbc5f7126b2c439b3a400000000156e0f693665acf44db1568bf175baa5189cb97f5d2ff3b655d2bb6fd6d18b03a865e69ee0f5480cabcf66357e4dc2f18d58d45c1ea7489fb3723d9793c72a64050c1663990ae1432a9aaf1fec53fc1bded803cc276dbd65dbfee9f675796ff000000000000000000000000000000000000000000000000000000000000000006ddf6e1ee758fde18425dbce46ccddab61afc4d83b90d27febdf928d8a18bfcacf136eb01fc1c4e883d23c8b5844ab59a37f66add57c5e9ac3b53e059d35c646f9ab4a4f1958dc0a9c94c3fb72c07995843eda485e3a24f10c69399f819940f0c35ffa9055a8e568da8f7bc075615274cf1c92ca41f40009c516aa414c27c708460f719d708ec7e9fab44bdfae554226383bfbb2f2d6c1c4373926e4d72a026e332daf92fabece8b63ff7a44005e5fdfd9afa158756b61c5a95f904b3b8d0810508000502f04902000800090387d612000000000009100a010b020304000c050d0e090f1011061833e685a4017f83ad082a69f84b00000040548900000000000d0304000001090c0200070c02000000881300000000000000"
+  },
+  {
+   "name": "sell-cashback",
+   "side": "sell",
+   "amount": "777777777",
+   "minSol": "1",
+   "cashback": true,
+   "ixs": [
+    {
+     "program": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+     "keys": [
+      {
+       "pubkey": "4wTV1YmiEkRvAtNtsSGPtUrqRYQMe5SKy2uB4Jjaxnjf",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "62qc2CNXwrYqQScmEdiZFFAnJR262PxWEuNQtxfafNgV",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "5L4WmQY8eF1riggRFQ9Y4FGojyejsK8gfGemLFw8pump",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "7gW37nc77X9H6ufWPzZSSp3tt8Po6ohzvr6VowTU1uDS",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "joNwqx8D8iicu7tfyxHSyffg3hSr8dVKytoVtQfQMBq",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "6CbgmVAVePZrVKyWtmz3UbDNcHMvE9arzm3nBcvbdLR",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "9C6hybhQ6Aycep9jaUnP6uL9ZYvDjUp1aSkFWPUFJtpj",
+       "signer": true,
+       "writable": true
+      },
+      {
+       "pubkey": "11111111111111111111111111111111",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "rRuFyXdWNEKTtof5vGKPosLkSSQFj7NL9smkd767gU3",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "8Wf5TiAheLUqBrKXeYg2JtAFFMWtKdG2BSFgqUcPVwTt",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "6eSz5v7mkQBt4kpq1pC8MFPJRPyarqYzRiGBLRfQ9oox",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "9ukaDQPPFS3FZs41af7jE41bR9WmGTAy2yNAimstqhEd",
+       "signer": false,
+       "writable": false
+      },
+      {
+       "pubkey": "5YxQFdt3Tr9zJLvkFccqXVUwhdTWJQc1fFg2YPbxvxeD",
+       "signer": false,
+       "writable": true
+      }
+     ],
+     "data": "33e685a4017f83ad71f25b2e000000000100000000000000"
+    },
+    {
+     "program": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+     "keys": [
+      {
+       "pubkey": "6CbgmVAVePZrVKyWtmz3UbDNcHMvE9arzm3nBcvbdLR",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "9C6hybhQ6Aycep9jaUnP6uL9ZYvDjUp1aSkFWPUFJtpj",
+       "signer": false,
+       "writable": true
+      },
+      {
+       "pubkey": "9C6hybhQ6Aycep9jaUnP6uL9ZYvDjUp1aSkFWPUFJtpj",
+       "signer": true,
+       "writable": false
+      }
+     ],
+     "data": "09"
+    }
+   ],
+   "message": "8001000a1379b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad0496644ac2f8d0dd5cbc97e3289c197cb5062a54f3d956b9ce6e5115f96567aa5cb3e663449ad3582c3dd85ddd8a9ac4859c24a264736d36eda77bcb0e534dae424f910af6d58c6915b3ef244fe230795747d3290421a4d49f9e41ac36cfd6b742b55c0155049a2ff47e05eab72b2c8d323e570eebc6f9f59484ceaec421640282ecf60ca99d8437589e3edb6d4984470d651a186a422b820d5c96082b128c8e75b31c53e24e15b40e3fc39c8fa99de0929a15af89c040455c22e4ce87ccb3cc8adc0b439e6510c03d65fad931e89d04be0bb70d51971f51c415fb344c07db419f21222eee7b892a4ef8a44aabf970cc0e37eaf7267675170c1d699cd31274496c543f0306466fe5211732ffecadba72c39be7bc8ce5bbc5f7126b2c439b3a400000000156e0f693665acf44db1568bf175baa5189cb97f5d2ff3b655d2bb6fd6d18b03a865e69ee0f5480cabcf66357e4dc2f18d58d45c1ea7489fb3723d9793c72a64050c1663990ae1432a9aaf1fec53fc1bded803cc276dbd65dbfee9f675796ff000000000000000000000000000000000000000000000000000000000000000006ddf6e1ee758fde18425dbce46ccddab61afc4d83b90d27febdf928d8a18bfcacf136eb01fc1c4e883d23c8b5844ab59a37f66add57c5e9ac3b53e059d35c646f9ab4a4f1958dc0a9c94c3fb72c07995843eda485e3a24f10c69399f819940f0c35ffa9055a8e568da8f7bc075615274cf1c92ca41f40009c516aa414c27c708460f719d708ec7e9fab44bdfae554226383bfbb2f2d6c1c4373926e4d72a026e332daf92fabece8b63ff7a44005e5fdfd9afa158756b61c5a95f904b3b8d0810509000502f04902000900090387d61200000000000a110b010c020304000d050e0f0a10110612071833e685a4017f83ad71f25b2e0000000001000000000000000e0304000001090d0200080c02000000881300000000000000"
+  }
+ ]
+}

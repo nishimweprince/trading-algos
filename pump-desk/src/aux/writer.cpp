@@ -104,16 +104,15 @@ std::string event_json(const Event& e) {
       break;
     case Ev::Migrate:
       j.str("sig", sig_or_empty(e.sig)).str("mint", key_or_empty(e.a)).str("caller", key_or_empty(e.b))
-          .b("landed", e.i[0]).b("tracked", e.i[1]).b("fired", e.i[2]).b("curve_buy_before", e.i[3]).b("pool_buy_after", e.i[4]);
+          .b("landed", e.i[0]).b("tracked", e.i[1]).b("entered", e.i[2]).b("curve_buy_before", e.i[3]).b("pool_buy_after", e.i[4]);
       break;
     case Ev::Decision:
-      j.str("verdict", escape(e.text)).str("mint", key_or_empty(e.a)).str("pool", key_or_empty(e.b))
-          .d("size_sol", e.d[0]).d("pool_sol", e.d[1]).d("impact_pct", e.d[2]).d("completion_cost_sol", e.d[3])
-          .d("virtual_sol", e.d[4]).i("recv_to_decide_ns", e.i[0]).i("recv_to_queued_ns", e.i[1])
-          .str("source", e.i[2] == 0 ? "migrate_tx" : e.i[2] == 1 ? "pool_push" : "pool_wait_timeout").b("pool_seen", e.i[3]).i("base_res", e.i[4]).i("quote_res", e.i[5]);
+      j.str("verdict", escape(e.text)).str("mint", key_or_empty(e.a)).str("curve", key_or_empty(e.b))
+          .d("size_sol", e.d[0]).d("curve_real_sol", e.d[1]).d("completion_cost_sol", e.d[3])
+          .i("recv_to_decide_ns", e.i[0]).i("recv_to_queued_ns", e.i[1]).i("real_tokens", e.i[4]).i("tokens", e.i[5]);
       break;
     case Ev::Order:
-      j.str("side", e.i[0] == 0 ? "buy" : "sell").str("sig", sig_or_empty(e.sig)).str("mint", b58(e.a)).str("pool", key_or_empty(e.b))
+      j.str("side", e.i[0] == 0 ? "buy" : "sell").str("sig", sig_or_empty(e.sig)).str("mint", b58(e.a)).str("venue", key_or_empty(e.b))
           .i("amount", e.i[1]).i("bound", e.i[2]).i("expected", e.i[3]).i("cu_price", e.i[4]).i("tip", e.i[5])
           .i("attempt", e.i[6]).i("recv_to_signed_ns", e.i[7]).str("reason", escape(e.text));
       if (e.i[0] == 1) j.d("mark", e.d[0]).d("gain_pct", e.d[1]).d("slippage_pct", e.d[2]);
@@ -147,18 +146,18 @@ std::string event_json(const Event& e) {
           .i("base", e.i[0]).i("sol_spent", e.i[1]).i("opened_ms", e.i[2]).d("entry_price", e.d[0]);
       break;
     case Ev::PositionUpdate:
-      j.str("mint", b58(e.a)).i("base", e.i[0]).i("sol_received", e.i[1]).b("tp0_done", e.i[2]).b("tp1_done", e.i[3]);
+      j.str("mint", b58(e.a)).i("base", e.i[0]).i("sol_received", e.i[1]).str("phase", phase_name(Phase(e.i[2])));
       break;
     case Ev::PositionClose:
       j.str("mint", b58(e.a)).str("reason", escape(e.text)).i("pnl_lamports", e.i[0]).d("pnl_sol", e.d[0]).d("pnl_pct", e.d[1])
           .i("hold_ms", e.i[1]).i("sol_spent", e.i[2]).i("sol_received", e.i[3]).i("base_left", e.i[4])
-          .d("entry_price", e.d[2]).d("last_mark", e.d[3]);
+          .str("phase", phase_name(Phase(e.i[5]))).d("entry_price", e.d[2]).d("last_mark", e.d[3]);
       break;
     case Ev::Stats:
       j.i("curves", e.i[0]).i("watches", e.i[1]).i("launches", e.i[2]).i("positions", e.i[3]).i("wallet", e.i[4])
           .i("reserved", e.i[5]).i("unresolved", e.i[6]).b("killed", e.i[7])
           .i("frames", int64_t(e.d[0])).i("parse_errors", int64_t(e.d[1])).i("reconnects", int64_t(e.d[2]))
-          .i("events_dropped", int64_t(e.d[3])).b("stream_up", e.d[4] >= 0.5);
+          .i("events_dropped", int64_t(e.d[3])).b("stream_up", e.d[4] >= 0.5).d("realized_pnl_sol", e.d[5]);
       break;
     default:
       j.str("text", escape(e.text));
@@ -197,10 +196,11 @@ void Writer::open() {
     mint TEXT PRIMARY KEY, curve TEXT, coin_creator TEXT, token_program TEXT, cashback INTEGER, mayhem INTEGER,
     buy_sig TEXT, base_amount INTEGER, base_bought INTEGER, entry_price REAL, sol_spent INTEGER, sol_received INTEGER,
     opened_ms INTEGER, tp0_done INTEGER DEFAULT 0, tp1_done INTEGER DEFAULT 0,
-    closed INTEGER DEFAULT 0, close_reason TEXT, pnl_lamports INTEGER, closed_ms INTEGER);
-  CREATE VIEW IF NOT EXISTS decisions AS SELECT ts, slot, text AS verdict, a AS mint, b AS pool, d0 AS size_sol,
-    d1 AS pool_sol, d2 AS impact_pct, d3 AS completion_cost_sol, d4 AS virtual_sol, i0 AS recv_to_decide_ns,
-    i1 AS recv_to_queued_ns, CASE i2 WHEN 0 THEN 'migrate_tx' WHEN 1 THEN 'pool_push' ELSE 'pool_wait_timeout' END AS source FROM events WHERE type='decision';
+    closed INTEGER DEFAULT 0, close_reason TEXT, pnl_lamports INTEGER, closed_ms INTEGER, phase TEXT DEFAULT 'curve');
+  DROP VIEW IF EXISTS decisions;
+  CREATE VIEW decisions AS SELECT ts, slot, text AS verdict, a AS mint, b AS curve, d0 AS size_sol,
+    d1 AS curve_real_sol, d3 AS completion_cost_sol, i0 AS recv_to_decide_ns, i1 AS recv_to_queued_ns,
+    i4 AS real_tokens, i5 AS tokens FROM events WHERE type='decision';
   CREATE VIEW IF NOT EXISTS orders AS SELECT ts, slot, CASE i0 WHEN 0 THEN 'buy' ELSE 'sell' END AS side, sig, a AS mint,
     i1 AS amount, i2 AS bound, i3 AS expected, i4 AS cu_price, i5 AS tip, i6 AS attempt, i7 AS recv_to_signed_ns,
     text AS reason FROM events WHERE type='order';
@@ -220,9 +220,16 @@ void Writer::open() {
     i4 AS quote_delta, CASE i5 WHEN 1 THEN 'bam' WHEN 2 THEN 'firedancer' ELSE 'agave' END AS leader_class, text AS leader,
     i6 AS slots_after_migrate, i7 AS cu_consumed, d1 AS failed FROM events WHERE type='rival_tx';
   CREATE INDEX IF NOT EXISTS events_type_b ON events(type, b);
-  CREATE VIEW IF NOT EXISTS migrations AS SELECT ts, slot, sig, a AS mint, b AS caller, i0 AS landed, i1 AS tracked,
-    i2 AS fired, i3 AS curve_buy_before, i4 AS pool_buy_after FROM events WHERE type='migrate';
+  DROP VIEW IF EXISTS migrations;
+  CREATE VIEW migrations AS SELECT ts, slot, sig, a AS mint, b AS caller, i0 AS landed, i1 AS tracked,
+    i2 AS entered, i3 AS curve_buy_before, i4 AS pool_buy_after FROM events WHERE type='migrate';
+  DROP VIEW IF EXISTS closes;
+  CREATE VIEW closes AS SELECT ts, a AS mint, text AS reason, i0 AS pnl_lamports, i1 AS hold_ms, i2 AS sol_spent,
+    i3 AS sol_received, CASE i5 WHEN 0 THEN 'curve' WHEN 1 THEN 'await_migrate' ELSE 'pool' END AS phase,
+    d1 AS pnl_pct FROM events WHERE type='position_close';
   )");
+  // Databases from before the curve strategy have no phase column; adding it twice fails harmlessly.
+  sqlite3_exec(db_, "ALTER TABLE positions ADD COLUMN phase TEXT DEFAULT 'curve'", nullptr, nullptr, nullptr);
   auto prep = [&](const char* sql, sqlite3_stmt** s) {
     if (sqlite3_prepare_v2(db_, sql, -1, s, nullptr) != SQLITE_OK) throw std::runtime_error(sqlite3_errmsg(db_));
   };
@@ -242,7 +249,7 @@ void Writer::open() {
        "cashback=excluded.cashback, mayhem=excluded.mayhem, buy_sig=excluded.buy_sig, base_amount=0, base_bought=0, "
        "entry_price=0, sol_spent=0, sol_received=0, opened_ms=excluded.opened_ms, tp0_done=0, tp1_done=0, closed=0, "
        "close_reason=NULL, pnl_lamports=NULL, closed_ms=NULL", &upsert_pending_);
-  prep("UPDATE positions SET base_amount=?, sol_received=?, tp0_done=?, tp1_done=? WHERE mint=?", &update_pos_);
+  prep("UPDATE positions SET base_amount=?, sol_received=?, phase=? WHERE mint=?", &update_pos_);
   prep("UPDATE positions SET closed=1, close_reason=?, pnl_lamports=?, closed_ms=?, base_amount=?, sol_received=? WHERE mint=?",
        &close_pos_);
   jsonl_ = std::fopen(cfg_.storage.jsonl_path.c_str(), "a");
@@ -253,7 +260,7 @@ std::vector<RestoredPosition> Writer::open_positions() {
   std::vector<RestoredPosition> out;
   sqlite3_stmt* s = nullptr;
   sqlite3_prepare_v2(db_, "SELECT mint,curve,coin_creator,token_program,cashback,mayhem,base_amount,base_bought,entry_price,"
-                          "sol_spent,sol_received,opened_ms,tp0_done,tp1_done FROM positions WHERE closed=0", -1, &s, nullptr);
+                          "sol_spent,sol_received,opened_ms FROM positions WHERE closed=0", -1, &s, nullptr);
   auto txt = [&](int c) { const unsigned char* t = sqlite3_column_text(s, c); return std::string(t ? reinterpret_cast<const char*>(t) : ""); };
   while (sqlite3_step(s) == SQLITE_ROW) {
     RestoredPosition r;
@@ -269,8 +276,6 @@ std::vector<RestoredPosition> Writer::open_positions() {
     r.sol_spent = sqlite3_column_int64(s, 9);
     r.sol_received = sqlite3_column_int64(s, 10);
     r.opened_ms = sqlite3_column_int64(s, 11);
-    r.tp0_done = sqlite3_column_int(s, 12);
-    r.tp1_done = sqlite3_column_int(s, 13);
     out.push_back(r);
   }
   sqlite3_finalize(s);
@@ -343,9 +348,8 @@ void Writer::write(const Event& e) {
     sqlite3_reset(p);
     sqlite3_bind_int64(p, 1, e.i[0]);
     sqlite3_bind_int64(p, 2, e.i[1]);
-    sqlite3_bind_int(p, 3, int(e.i[2]));
-    sqlite3_bind_int(p, 4, int(e.i[3]));
-    sqlite3_bind_text(p, 5, a.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(p, 3, phase_name(Phase(e.i[2])), -1, SQLITE_STATIC);
+    sqlite3_bind_text(p, 4, a.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_step(p);
   } else if (e.type == Ev::PositionClose) {
     sqlite3_stmt* p = close_pos_;
@@ -370,11 +374,11 @@ void Writer::status_line(const Event& e) {
   char buf[512];
   std::snprintf(buf, sizeof buf,
                 "status slot=%" PRIu64 " stream=%s frames=%" PRIu64 " parse_err=%" PRIu64 " reconnects=%" PRIu64
-                " curves=%" PRId64 " fires=%" PRIu64 " migrates=%" PRIu64 " triggers=%" PRIu64 " vetoes=%" PRIu64
+                " curves=%" PRId64 " pnl=%+.4f migrates=%" PRIu64 " triggers=%" PRIu64 " vetoes=%" PRIu64
                 " buys=%" PRIu64 " sells=%" PRIu64 " positions=%" PRId64 " wallet=%.4f reserved=%.4f unresolved=%" PRId64
                 " ev_drop=%" PRIu64 " killed=%d",
                 e.slot, c.stream_up.load() ? "up" : "DOWN", c.frames.load(), c.parse_errors.load(), c.reconnects.load(),
-                e.i[0], c.fires.load(), c.migrates.load(), c.triggers.load(), c.vetoes.load(), c.buys.load(),
+                e.i[0], e.d[5], c.migrates.load(), c.triggers.load(), c.vetoes.load(), c.buys.load(),
                 c.sells.load(), e.i[3], double(e.i[4]) / 1e9, double(e.i[5]) / 1e9, e.i[6], c.events_dropped.load(),
                 int(e.i[7]));
   log_.info(buf);

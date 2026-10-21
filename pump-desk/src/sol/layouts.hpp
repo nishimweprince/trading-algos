@@ -13,14 +13,20 @@ namespace pd {
 // --- pump.fun BondingCurve -------------------------------------------------
 //   8 virtual_token u64 | 16 virtual_sol u64 | 24 real_token u64 | 32 real_sol u64
 //   40 total_supply u64 | 48 complete bool | 49 creator Pubkey
-//   81 is_mayhem_mode bool | 82 is_cashback_coin bool
+//   81 is_mayhem_mode bool | 82 is_cashback_coin bool | 83 quote_mint Pubkey | 115 creator_fee_bps u64
+//   (pump-sdk 4.2.0 BondingCurve; older, shorter curves are SOL-quoted with the global creator fee)
 struct Curve {
   uint64_t virtual_token = 0, virtual_sol = 0, real_token = 0, real_sol = 0, supply = 0;
   bool complete = false;
   bool has_creator = false;
   Pubkey creator{};
   bool mayhem = false, cashback = false;
+  Pubkey quote_mint{};           // zero (or WSOL) = SOL-quoted
+  uint64_t creator_fee_bps = 0;  // 0 = the global schedule
 };
+
+/** A curve quoted in native SOL (quote-chain curves trade against another mint). */
+inline bool curve_sol_quoted(const Curve& c) { return is_zero(c.quote_mint) || c.quote_mint == prog::WSOL; }
 
 /** realTokenReserves bytes 29..31 are its top three: the band filter matches them. */
 constexpr size_t CURVE_REAL_TOKEN_TOP = 29;
@@ -37,6 +43,8 @@ inline bool decode_curve(const uint8_t* d, size_t n, Curve& c) {
   if (c.has_creator) std::memcpy(c.creator.data(), d + 49, 32);
   c.mayhem = n >= 82 && d[81] == 1;
   c.cashback = n >= 83 && d[82] == 1;
+  if (n >= 115) std::memcpy(c.quote_mint.data(), d + 83, 32);
+  if (n >= 123) c.creator_fee_bps = rd_u64(d + 115);
   return true;
 }
 

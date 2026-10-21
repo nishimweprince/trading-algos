@@ -1,0 +1,8 @@
+{
+  "name": "pump-desk-fixtures",
+  "private": true,
+  "description": "Pinned SDKs for gen_curve.mjs (npm install --ignore-scripts here; node_modules is not committed)",
+  "dependencies": {
+    "@pump-fun/pump-sdk": "4.2.0"
+  }
+}

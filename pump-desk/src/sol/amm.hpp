@@ -37,12 +37,20 @@ struct AmmConfig {
   Fees flat;
   uint32_t n_tiers = 0;
   FeeTier tiers[MAX_FEE_TIERS];
+  // pump.fun Global (bonding-curve program): fee recipients of curve buys / sells.
+  bool curve_valid = false;
+  uint64_t curve_protocol_bps = 0, curve_creator_bps = 0;
+  Pubkey curve_recipients[8]{};           // fee_recipient + fee_recipients[7]
+  Pubkey curve_reserved_recipients[8]{};  // reserved_fee_recipient + reserved_fee_recipients[7] (mayhem)
+  Pubkey curve_buyback_recipients[8]{};
 };
 
 /** Fills the GlobalConfig half (recipient ATAs included). False on a bad account. */
 bool decode_global_config(const uint8_t* d, size_t n, AmmConfig& c);
 /** Fills the FeeConfig half. False on a bad account. */
 bool decode_fee_config(const uint8_t* d, size_t n, AmmConfig& c);
+/** Fills the pump.fun Global half (curve_*). False on a bad account. */
+bool decode_pump_global(const uint8_t* d, size_t n, AmmConfig& c);
 
 struct FeeBps {
   uint64_t lp = 0, protocol = 0, creator = 0;

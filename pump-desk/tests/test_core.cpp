@@ -233,21 +233,22 @@ TEST(subscribe_requests_interslot_updates) {
 TEST(config_example_parses_to_defaults) {
   Config d;
   Config c = load_config(std::string(PD_FIXTURE_DIR) + "/../../config.example.toml");
-  CHECK_EQ(c.racer.max_completion_cost_sol, d.racer.max_completion_cost_sol);
-  CHECK_EQ(c.entry.size_wallet_pct, d.entry.size_wallet_pct);
-  CHECK_EQ(c.exits.tp1_pct, d.exits.tp1_pct);
-  CHECK_EQ(c.exits.tp0_enabled, d.exits.tp0_enabled);
-  CHECK_EQ(c.exits.hard_stop_pct, d.exits.hard_stop_pct);
-  CHECK_EQ(c.exits.liquidity_dump_pct, d.exits.liquidity_dump_pct);
-  CHECK_EQ(c.exits.stall_enabled, d.exits.stall_enabled);
-  CHECK_EQ(c.exits.stall_arm_sec, d.exits.stall_arm_sec);
-  CHECK_EQ(c.exits.stall_sec, d.exits.stall_sec);
-  CHECK_EQ(c.screen.migrate_grace_ms, d.screen.migrate_grace_ms);
-  CHECK_EQ(c.screen.t22_fee_wait_ms, d.screen.t22_fee_wait_ms);
+  CHECK_EQ(c.curve.entry_max_remaining_sol, d.curve.entry_max_remaining_sol);
+  CHECK_EQ(c.curve.max_hold_s, d.curve.max_hold_s);
+  CHECK_EQ(c.curve.allow_mayhem, d.curve.allow_mayhem);
+  CHECK_EQ(c.curve.partial_fill, d.curve.partial_fill);
+  CHECK_EQ(c.entry.size_sol, d.entry.size_sol);
+  CHECK_EQ(c.entry.slippage_pct, d.entry.slippage_pct);
+  CHECK_EQ(c.exits.tp_pct, d.exits.tp_pct);
+  CHECK_EQ(c.exits.timeout_slots, d.exits.timeout_slots);
+  CHECK_EQ(c.exits.exit_priority_multiplier, d.exits.exit_priority_multiplier);
+  CHECK_EQ(c.risk.max_concurrent_positions, d.risk.max_concurrent_positions);
+  CHECK_EQ(c.risk.max_loss_sol, d.risk.max_loss_sol);
+  CHECK_EQ(c.routing.agave.cu_price_mode, d.routing.agave.cu_price_mode);
   CHECK_EQ(c.exits.take_profit_slippage_tiers.size(), size_t(3));
   CHECK_EQ(c.sender.url, d.sender.url);
   CHECK_EQ(c.sender.tip_accounts.size(), size_t(10));
-  CHECK_EQ(c.racer.default_virtual_quote_lamports, uint64_t(17'584'492'770ULL));
+  CHECK_EQ(c.curve.default_virtual_quote_lamports, uint64_t(17'584'492'770ULL));
   CHECK(!c.jito.enabled);
   CHECK_EQ(c.sender.retry_429_ms, d.sender.retry_429_ms);
   CHECK_EQ(c.sender.max_429_retries, d.sender.max_429_retries);
@@ -255,7 +256,7 @@ TEST(config_example_parses_to_defaults) {
   CHECK_EQ(c.entry.priority_multiplier, d.entry.priority_multiplier);
   bool threw = false;
   try {
-    auto kv = parse_toml("[entry]\nsize_wallet_pctt = 3\n");
+    auto kv = parse_toml("[entry]\nsize_soll = 3\n");
     (void)kv;
     // unknown keys are rejected by load_config, not parse_toml
   } catch (...) { threw = true; }

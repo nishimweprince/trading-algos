@@ -1,5 +1,6 @@
-// End-to-end logic-thread tests over synthetic frames: create -> band -> fire ->
-// migrate -> buy packet -> wallet fill -> mark -> exit -> sell fill -> close.
+// End-to-end logic-thread tests over synthetic frames, curve-in, migrate-out:
+// create -> band (entry range) -> curve buy packet -> wallet fill -> curve complete ->
+// pool push + migrate -> slot timeout / take-profit -> PumpSwap sell fill -> close.
 #include <sodium.h>
 
 #include <algorithm>
@@ -16,7 +17,6 @@
 #include "logic/engine.hpp"
 #include "logic/exit_fsm.hpp"
 #include "aux/aux.hpp"
-#include "sol/lighthouse.hpp"
 #include "sol/constants.hpp"
 #include "test.hpp"
 
@@ -32,16 +32,26 @@ uint64_t test_mono() { return g_mono; }
 
 std::string b58s(const Pubkey& k) { return b58(k); }
 
-std::vector<uint8_t> curve_data(uint64_t vt, uint64_t vs, uint64_t real, bool complete, const Pubkey& creator) {
+constexpr uint64_t STD_GAP = 279'900'000'000'000ULL;  // virtual - real tokens on a standard curve
+constexpr uint64_t NEAR = 9'000'000'000'000ULL;       // ~3.6 SOL to complete: inside the 4 SOL entry range
+constexpr uint64_t ADMIT = 11'500'000'000'000ULL;     // ~4.6 SOL: admitted (<= 5), outside the entry range
+
+/** A standard pump.fun curve with `real` tokens left (k = 30 SOL x 1.073B tokens). */
+std::vector<uint8_t> curve_data(uint64_t real, bool complete, const Pubkey& creator, bool mayhem = false,
+                                const Pubkey* quote_mint = nullptr) {
+  uint64_t vt = real + STD_GAP;
+  uint64_t vs = uint64_t(30e9 * 1.073e15 / double(vt));
   std::vector<uint8_t> d(151, 0);
   std::memcpy(d.data(), disc::BONDING_CURVE, 8);
   wr_u64(d.data() + 8, vt);
   wr_u64(d.data() + 16, vs);
-  wr_u64(d.data() + 24, real);
-  wr_u64(d.data() + 32, complete ? 0 : 50'000'000'000ULL);
+  wr_u64(d.data() + 24, complete ? 0 : real);
+  wr_u64(d.data() + 32, complete ? 85'000'000'000ULL : vs - 30'000'000'000ULL);
   wr_u64(d.data() + 40, 1'000'000'000'000'000ULL);
   d[48] = complete ? 1 : 0;
   std::memcpy(d.data() + 49, creator.data(), 32);
+  d[81] = mayhem ? 1 : 0;
+  if (quote_mint) std::memcpy(d.data() + 83, quote_mint->data(), 32);
   return d;
 }
 
@@ -65,8 +75,10 @@ struct Rig {
     AmmConfig amm;
     auto gc = b64bytes(g["accounts"]["globalConfig"]);
     auto fc = b64bytes(g["accounts"]["feeConfig"]);
+    auto pg = b64bytes(curve_golden()["accounts"]["pumpGlobal"]);
     decode_global_config(gc.data(), gc.size(), amm);
     decode_fee_config(fc.data(), fc.size(), amm);
+    decode_pump_global(pg.data(), pg.size(), amm);
     amm.valid = true;
     sh->amm.store(amm);
     BlockhashSnap bh;
@@ -107,10 +119,10 @@ struct Rig {
     feed(tx_frame(t));
   }
 
-  void band(uint64_t real_tokens) {
-    // vT 280e12 / vS 80e9: completion cost of `real` = 1e12 is ~0.29 SOL.
-    feed(account_frame("band0", curve, prog::PUMP_FUN, curve_data(280'000'000'000'000ULL, 80'000'000'000ULL, real_tokens, false, creator), slot));
+  void band(uint64_t real_tokens, bool mayhem = false, const Pubkey* quote_mint = nullptr) {
+    feed(account_frame("band0", curve, prog::PUMP_FUN, curve_data(real_tokens, false, creator, mayhem, quote_mint), slot));
   }
+  void complete() { feed(account_frame("band0", curve, prog::PUMP_FUN, curve_data(0, true, creator), slot)); }
 
   void pool_push() {
     feed(account_frame("watch", pool, prog::PUMP_SWAP, b64bytes(golden()["accounts"]["pool"]), slot));
@@ -118,11 +130,12 @@ struct Rig {
 
   /** The pool push usually lands a few ms before the migrate tx; `with_pool` sends it first. */
   void migrate(uint64_t base, uint64_t quote, uint8_t sig_seed = 2, bool with_pool = true) {
+    ++slot;
     if (with_pool) pool_push();
     TxSpec t;
     t.filters = {"migrate"};
     t.sig = make_sig(sig_seed);
-    t.slot = ++slot;
+    t.slot = slot;
     t.keys = {prog::MIGRATION_AUTHORITY};
     std::string pf = b58s(prog::PUMP_FUN);
     t.logs = {"Program " + pf + " invoke [1]", "Program log: Instruction: MigrateV2", "Program " + pf + " success"};
@@ -131,12 +144,16 @@ struct Rig {
     feed(tx_frame(t));
   }
 
-  void wallet_fill(const Signature& sig, uint64_t pre, uint64_t post, uint64_t tok_pre, uint64_t tok_post, bool failed = false) {
+  void tip(uint64_t s) { feed(slot_frame(s)); }
+
+  void wallet_fill(const Signature& sig, uint64_t pre, uint64_t post, uint64_t tok_pre, uint64_t tok_post, bool failed = false,
+                   const std::string& err = "x") {
     TxSpec t;
     t.filters = {"wallet"};
     t.sig = sig;
     t.slot = ++slot;
     t.failed = failed;
+    t.err = err;
     t.keys = {kp.pubkey()};
     t.pre = {pre};
     t.post = {post};
@@ -161,6 +178,12 @@ const Event* find(const std::vector<Event>& es, Ev t, const char* text = nullptr
   return nullptr;
 }
 
+int count(const std::vector<Event>& es, Ev t, const char* text = nullptr) {
+  int n = 0;
+  for (auto& e : es) n += e.type == t && (!text || std::string(e.text) == text);
+  return n;
+}
+
 bool verify_packet(const Packet& pk, const Pubkey& signer) {
   std::vector<uint8_t> tx;
   if (!b64_decode(std::string_view(pk.b64, pk.b64_len), tx)) return false;
@@ -169,314 +192,321 @@ bool verify_packet(const Packet& pk, const Pubkey& signer) {
   return crypto_sign_ed25519_verify_detached(tx.data() + 1, tx.data() + 65, tx.size() - 65, signer.data()) == 0;
 }
 
+/** Program id of the swap instruction in a signed packet: is this a curve or a PumpSwap tx? */
+bool packet_uses(const Packet& pk, const Pubkey& program) {
+  std::vector<uint8_t> tx;
+  if (!b64_decode(std::string_view(pk.b64, pk.b64_len), tx)) return false;
+  return std::search(tx.begin(), tx.end(), program.begin(), program.end()) != tx.end();
+}
+
+constexpr uint64_t BUY_PRE = 1'000'000'000, BUY_POST = 945'000'000;  // 0.05 SOL + fees + rent out
+
+/** Curve buy sent and filled: the position sits in the curve phase. */
+void open_on_curve(Rig& r) {
+  r.create();
+  r.band(NEAR);
+  Packet pk;
+  CHECK(r.pop_packet(pk));
+  const Position& p = r.eng->position(0);
+  r.wallet_fill(p.buy_sig, BUY_PRE, BUY_POST, 0, p.expected_base);
+  CHECK(p.state == PosState::Open);
+  CHECK(p.phase == Phase::Curve);
+}
+
+/** On the curve, then complete, then migrated: the pool phase, before the timeout. */
+void open_in_pool(Rig& r, uint64_t quote = 67'410'000'000ULL) {
+  open_on_curve(r);
+  r.complete();
+  r.migrate(206'900'000'000'000ULL, quote);
+  CHECK(r.eng->position(0).phase == Phase::Pool);
+}
+
 }  // namespace
 
-TEST(engine_full_round_trip) {
+TEST(engine_curve_round_trip) {
   Rig r;
   r.create();
-  r.band(1'000'000'000'000ULL);
+  r.band(ADMIT);  // admitted, outside the entry range: no buy yet
   const CurveSlot* c = r.eng->curve(r.curve);
   CHECK(c != nullptr);
   if (!c) return;
   CHECK(c->mint_known);
-  CHECK(c->fired);
   CHECK(c->keys_ready);
   CHECK(c->fee == TransferFee::None);  // proven by the create logs
   CHECK(c->keys.pool == r.pool);
-  CHECK(r.sh->watch_cmds.size() == 4);  // pool, both vaults, and the pool's txs (rival profiling)
-
-  r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
   Packet pk;
+  CHECK(!r.pop_packet(pk));
+
+  r.band(NEAR);
   CHECK(r.pop_packet(pk));
   CHECK(pk.side == Side::Buy);
   CHECK(verify_packet(pk, r.kp.pubkey()));
+  CHECK(packet_uses(pk, prog::PUMP_FUN));
   const Position& p = r.eng->position(0);
   CHECK(p.state == PosState::BuySent);
-  CHECK_EQ(p.size_lamports, uint64_t(150'000'000));  // 15 % of 1 SOL
-  CHECK(r.eng->reserved_lamports() > p.size_lamports);
+  CHECK(p.phase == Phase::Curve);
+  CHECK(p.size_lamports <= 50'000'000 && p.size_lamports > 49'000'000);  // entry.size_sol, fee included
+  CHECK_EQ(p.max_quote, p.size_lamports + uint64_t(double(p.size_lamports) * 0.10));
+  CHECK(r.sh->watch_cmds.size() == 4);  // pool, both vaults, and the pool's txs
   auto es = r.events();
   CHECK(find(es, Ev::Decision, "buy") != nullptr);
-  CHECK(find(es, Ev::Order) != nullptr);
+  const Event* o = find(es, Ev::Order, "curve");
+  CHECK(o && o->b == r.curve);
 
-  // Fill: 0.16 SOL out, expected_base tokens in.
   uint64_t base = p.expected_base;
-  r.wallet_fill(p.buy_sig, 1'000'000'000, 840'000'000, 0, base);
-  CHECK(r.eng->position(0).state == PosState::Open);
-  CHECK_EQ(r.eng->position(0).base_amount, base);
-  CHECK(r.eng->position(0).entry_price > 0);
+  r.wallet_fill(p.buy_sig, BUY_PRE, BUY_POST, 0, base);
+  CHECK(p.state == PosState::Open);
+  CHECK_EQ(p.base_amount, base);
+  CHECK(p.entry_price > 0);
   CHECK_EQ(r.eng->reserved_lamports(), uint64_t(0));
-  CHECK_EQ(r.eng->wallet_lamports(), uint64_t(840'000'000));
-  es = r.events();
-  CHECK(find(es, Ev::PositionOpen) != nullptr);
+  CHECK(find(r.events(), Ev::PositionOpen) != nullptr);
 
-  // Quote vault triples -> far above +50 % -> TP1 full exit.
-  r.feed(account_frame("watch", r.quote_vault, prog::TOKEN, token_account(3 * 67'410'000'000ULL), r.slot));
+  r.complete();
+  CHECK(p.phase == Phase::AwaitMigrate);
+  CHECK(!r.pop_packet(pk));  // nothing trades between completion and the migrate
+
+  r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
+  uint64_t migrate_slot = r.slot;
+  CHECK(p.phase == Phase::Pool);
+  CHECK_EQ(p.migrate_slot, migrate_slot);
+  CHECK(p.pool_seen);
+  CHECK_EQ(p.base_res, uint64_t(206'900'000'000'000ULL));
+  CHECK(!r.pop_packet(pk));  // tp off; the timeout has not come
+
+  r.tip(migrate_slot + uint64_t(r.cfg.exits.timeout_slots) - 1);
+  r.eng->poll(g_mono);
+  CHECK(!r.pop_packet(pk));
+  r.tip(migrate_slot + uint64_t(r.cfg.exits.timeout_slots));
+  r.eng->poll(g_mono);
   Packet sell;
   CHECK(r.pop_packet(sell));
   CHECK(sell.side == Side::Sell);
   CHECK(verify_packet(sell, r.kp.pubkey()));
-  CHECK(r.eng->position(0).state == PosState::SellSent);
-  es = r.events();
-  CHECK(find(es, Ev::Order, "TAKE_PROFIT_1") != nullptr);
+  CHECK(packet_uses(sell, prog::PUMP_SWAP));
+  CHECK(p.state == PosState::SellSent);
+  CHECK(find(r.events(), Ev::Order, "POOL_TIMEOUT") != nullptr);
 
-  r.wallet_fill(sell.sig, 840'000'000, 1'100'000'000, base, 0);
-  CHECK(r.eng->position(0).state == PosState::Empty);
+  r.wallet_fill(sell.sig, BUY_POST, 1'010'000'000, base, 0);
+  CHECK(p.state == PosState::Empty);
   es = r.events();
-  const Event* close = find(es, Ev::PositionClose);
+  const Event* close = find(es, Ev::PositionClose, "POOL_TIMEOUT");
   CHECK(close != nullptr);
   if (close) {
-    CHECK_EQ(std::string(close->text), std::string("TAKE_PROFIT_1"));
-    CHECK_EQ(close->i[0], int64_t(1'100'000'000 - 840'000'000) - int64_t(160'000'000));
+    CHECK_EQ(close->i[0], int64_t(1'010'000'000 - BUY_POST) - int64_t(BUY_PRE - BUY_POST));
+    CHECK_EQ(close->i[5], int64_t(Phase::Pool));
   }
-  // Watches released by the position; the curve still holds its own.
-  CHECK(r.eng->curve(r.curve) != nullptr);
+  CHECK_EQ(r.eng->realized_pnl(), int64_t(10'000'000));
 }
 
-TEST(engine_pool_push_triggers_first) {
-  Rig r;
-  r.create();
-  r.band(1'000'000'000'000ULL);
-  r.pool_push();
-  r.feed(account_frame("watch", r.base_vault, prog::TOKEN_2022, token_account(206'900'000'000'000ULL), r.slot));
-  Packet pk;
-  CHECK(!r.pop_packet(pk));  // quote vault still missing
-  r.feed(account_frame("watch", r.quote_vault, prog::TOKEN, token_account(67'410'000'000ULL), r.slot));
-  CHECK(r.pop_packet(pk));
-  auto es = r.events();
-  const Event* d = find(es, Ev::Decision, "buy");
-  CHECK(d != nullptr);
-  if (d) CHECK_EQ(d->i[2], int64_t(1));  // TriggerSrc::PoolPush
-  // The migrate tx arriving after must not trigger a second buy.
-  r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
-  CHECK(!r.pop_packet(pk));
-}
-
-TEST(engine_stale_pool_vetoes) {
-  {
-    Rig r;  // migrate seen, but the pool push arrives past max_migrate_age_slots and grace
-    r.create();
-    r.band(1'000'000'000'000ULL);
-    r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL, 2, /*with_pool=*/false);
-    Packet pk;
-    CHECK(!r.pop_packet(pk));
-    r.slot += uint64_t(r.cfg.screen.max_migrate_age_slots) + 10;
-    r.feed(slot_frame(r.slot));
-    g_mono += uint64_t(r.cfg.screen.migrate_grace_ms + 1) * 1'000'000ULL;  // past wall-clock grace
-    r.pool_push();
-    r.feed(account_frame("watch", r.base_vault, prog::TOKEN_2022, token_account(206'900'000'000'000ULL), r.slot));
-    r.feed(account_frame("watch", r.quote_vault, prog::TOKEN, token_account(67'410'000'000ULL), r.slot));
-    CHECK(!r.pop_packet(pk));
-    CHECK(find(r.events(), Ev::Decision, "stale_pool") != nullptr);
-  }
-  {
-    Rig r;  // late pool_push past slot age but still inside migrate_grace_ms: buy
-    r.create();
-    r.band(1'000'000'000'000ULL);
-    r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL, 2, /*with_pool=*/false);
-    Packet pk;
-    CHECK(!r.pop_packet(pk));
-    r.slot += uint64_t(r.cfg.screen.max_migrate_age_slots) + 10;
-    r.feed(slot_frame(r.slot));
-    // wall clock still inside grace (g_mono unchanged)
-    r.pool_push();
-    r.feed(account_frame("watch", r.base_vault, prog::TOKEN_2022, token_account(206'900'000'000'000ULL), r.slot));
-    r.feed(account_frame("watch", r.quote_vault, prog::TOKEN, token_account(67'410'000'000ULL), r.slot));
-    CHECK(r.pop_packet(pk));
-    CHECK(pk.side == Side::Buy);
-    CHECK(find(r.events(), Ev::Decision, "buy") != nullptr);
-  }
-  {
-    Rig r;  // never seen incomplete and never seen migrating: a pre-graduated pool is stale
-    r.create();
-    r.feed(account_frame("band0", r.curve, prog::PUMP_FUN,
-                         curve_data(280'000'000'000'000ULL, 80'000'000'000ULL, 206'900'000'000'000ULL, true, r.creator),
-                         r.slot));
-    r.pool_push();
-    r.feed(account_frame("watch", r.base_vault, prog::TOKEN_2022, token_account(206'900'000'000'000ULL), r.slot));
-    r.feed(account_frame("watch", r.quote_vault, prog::TOKEN, token_account(67'410'000'000ULL), r.slot));
-    Packet pk;
-    CHECK(!r.pop_packet(pk));
-    CHECK(find(r.events(), Ev::Decision, "stale_pool") != nullptr);
-  }
-}
-
-TEST(engine_migrate_waits_for_pool_push) {
-  {
-    Rig r;  // pool push a moment after the migrate tx: priced on the pool's own virtual reserve
-    r.create();
-    r.band(1'000'000'000'000ULL);
-    r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL, 2, /*with_pool=*/false);
-    Packet pk;
-    CHECK(!r.pop_packet(pk));
-    r.pool_push();
-    CHECK(r.pop_packet(pk));
-    const Event* d = find(r.events(), Ev::Decision, "buy");
-    CHECK(d != nullptr);
-    if (d) CHECK(std::abs(d->d[4] - 17.58449277) < 1e-6);
-  }
-  {
-    Rig r;  // no pool push at all: fall back to the default after pool_push_wait_ms
-    r.create();
-    r.band(1'000'000'000'000ULL);
-    r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL, 2, /*with_pool=*/false);
-    Packet pk;
-    r.eng->poll(g_mono);
-    CHECK(!r.pop_packet(pk));
-    uint64_t saved = g_mono;
-    g_mono += uint64_t(r.cfg.racer.pool_push_wait_ms + 1) * 1'000'000ULL;
-    r.eng->poll(g_mono);
-    CHECK(r.pop_packet(pk));
-    const Event* d = find(r.events(), Ev::Decision, "buy");
-    CHECK(d != nullptr);
-    if (d) CHECK_EQ(d->i[2], int64_t(2));  // PoolWaitTimeout
-    g_mono = saved;
-  }
-}
-
-TEST(engine_vetoes) {
-  {
-    Rig r;  // pool pumped inside the migrate slot
-    r.create();
-    r.band(1'000'000'000'000ULL);
-    r.migrate(150'000'000'000'000ULL, 150'000'000'000ULL);
-    Packet pk;
-    CHECK(!r.pop_packet(pk));
-    CHECK(find(r.events(), Ev::Decision, "pool_above_max") != nullptr);
-  }
-  {
-    Rig r;  // admitted but never cheap enough to fire
-    r.create();
-    r.band(9'000'000'000'000ULL);  // ~2.7 SOL to complete: admitted, not fired
-    const CurveSlot* c = r.eng->curve(r.curve);
-    CHECK(c && !c->fired);
-    r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
-    Packet pk;
-    CHECK(!r.pop_packet(pk));
-    CHECK(find(r.events(), Ev::Decision, "not_fired") != nullptr);
-  }
-  {
-    Rig r;  // kill file
-    r.sh->kill_file = true;
-    r.create();
-    r.band(1'000'000'000'000ULL);
-    r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
-    Packet pk;
-    CHECK(!r.pop_packet(pk));
-    CHECK(find(r.events(), Ev::Decision, "kill") != nullptr);
-  }
-  {
-    Rig r;  // T22 fee Unknown: soft-veto, then ReadMint None → buy (does not latch traded)
-    r.band(1'000'000'000'000ULL);  // no create: resolve goes to aux
-    AuxReq req;
-    CHECK(r.sh->aux_reqs.try_pop(req));
-    CHECK(req.op == AuxOp::ResolveCurve);
-    AuxResp a;
-    a.op = AuxOp::ResolveCurve;
-    a.ok = true;
-    a.curve = r.curve;
-    a.mint = r.mint;
-    a.token_program = prog::TOKEN_2022;
-    a.mint_info.fee = TransferFee::Unknown;
-    r.sh->aux_resps.push(a);
-    r.eng->poll(g_mono);
-    r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
-    Packet pk;
-    CHECK(!r.pop_packet(pk));
-    CHECK(find(r.events(), Ev::Decision, "t22_fee_unverified") != nullptr);
-    const CurveSlot* c = r.eng->curve(r.curve);
-    CHECK(c && !c->traded);
-    // Drain the ReadMint request queued by the soft veto / set_mint, answer with None.
-    while (r.sh->aux_reqs.try_pop(req)) {
+TEST(engine_entry_vetoes) {
+  struct Case {
+    const char* verdict;
+    void (*setup)(Rig&);
+  };
+  const Pubkey usdc = parse_pubkey("EPjFWdd5AufqSSqM2qN1xzybapC8G4wEGGkZwyTDt1v");
+  static Pubkey s_usdc;
+  s_usdc = usdc;
+  for (const char* want : {"mayhem", "quote_not_sol", "blacklist", "kill", "insufficient_balance"}) {
+    Rig r;
+    std::string w = want;
+    if (w == "blacklist") r.cfg.screen.blacklist_creators = {b58(r.creator)};
+    if (w == "blacklist") {
+      r.eng = std::make_unique<Engine>(r.cfg, *r.sh, r.kp, nullptr);
+      r.eng->set_clocks(&test_wall, &test_mono);
+      r.eng->set_wallet_lamports(1'000'000'000, 1);
     }
-    AuxResp fee;
-    fee.op = AuxOp::ReadMint;
-    fee.ok = true;
-    fee.curve = r.curve;
-    fee.mint = r.mint;
-    fee.token_program = prog::TOKEN_2022;
-    fee.mint_info.fee = TransferFee::None;
-    r.sh->aux_resps.push(fee);
-    r.eng->poll(g_mono);
-    CHECK(r.pop_packet(pk));
-    CHECK(pk.side == Side::Buy);
-    CHECK(find(r.events(), Ev::Decision, "buy") != nullptr);
-  }
-  {
-    Rig r;  // T22 fee still Unknown after t22_fee_wait_ms: latch
-    r.cfg.screen.t22_fee_wait_ms = 50;
-    r.band(1'000'000'000'000ULL);
-    AuxReq req;
-    CHECK(r.sh->aux_reqs.try_pop(req));
-    AuxResp a;
-    a.op = AuxOp::ResolveCurve;
-    a.ok = true;
-    a.curve = r.curve;
-    a.mint = r.mint;
-    a.token_program = prog::TOKEN_2022;
-    a.mint_info.fee = TransferFee::Unknown;
-    r.sh->aux_resps.push(a);
-    r.eng->poll(g_mono);
-    r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL, 2, /*with_pool=*/false);
+    if (w == "kill") r.sh->kill_file.store(true);
+    if (w == "insufficient_balance") r.eng->set_wallet_lamports(10'000'000, 2);
+    r.create();
+    if (w == "mayhem") r.band(NEAR, true);
+    else if (w == "quote_not_sol") r.band(NEAR, false, &s_usdc);
+    else r.band(NEAR);
     Packet pk;
-    CHECK(!r.pop_packet(pk));  // awaiting pool
-    g_mono += uint64_t(r.cfg.screen.t22_fee_wait_ms + 1) * 1'000'000ULL;
-    r.pool_push();
-    r.feed(account_frame("watch", r.base_vault, prog::TOKEN_2022, token_account(206'900'000'000'000ULL), r.slot));
-    r.feed(account_frame("watch", r.quote_vault, prog::TOKEN, token_account(67'410'000'000ULL), r.slot));
     CHECK(!r.pop_packet(pk));
-    CHECK(find(r.events(), Ev::Decision, "t22_fee_unverified") != nullptr);
-    const CurveSlot* c = r.eng->curve(r.curve);
-    CHECK(c && c->traded);  // hard latch after wait
+    auto es = r.events();
+    if (!find(es, Ev::Decision, want)) {
+      std::fprintf(stderr, "  missing veto %s\n", want);
+      ++failures();
+    }
+    CHECK(r.eng->position(0).state == PosState::Empty);
   }
 }
 
-TEST(engine_failed_buy_releases_reservation) {
+TEST(engine_soft_veto_logs_once_and_retries) {
   Rig r;
+  r.sh->kill_file.store(true);
   r.create();
-  r.band(1'000'000'000'000ULL);
-  r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
+  r.band(NEAR);
+  r.band(NEAR - 1'000'000'000);
+  r.band(NEAR - 2'000'000'000);
+  CHECK_EQ(count(r.events(), Ev::Decision, "kill"), 1);  // one row per change, not per update
+  r.sh->kill_file.store(false);
+  r.band(NEAR - 3'000'000'000);
   Packet pk;
-  CHECK(r.pop_packet(pk));
-  Signature sig = r.eng->position(0).buy_sig;
-  r.wallet_fill(sig, 1'000'000'000, 999'990'000, 0, 0, /*failed=*/true);
-  CHECK(r.eng->position(0).state == PosState::Empty);
-  CHECK_EQ(r.eng->reserved_lamports(), uint64_t(0));
-  const Event* c = find(r.events(), Ev::PositionClose, "buy_failed");
-  CHECK(c != nullptr);
+  CHECK(r.pop_packet(pk));  // soft: retried once KILL is gone
+  CHECK(find(r.events(), Ev::Decision, "buy") != nullptr);
+  r.band(NEAR - 4'000'000'000);
+  CHECK(!r.pop_packet(pk));  // traded: one buy per curve
 }
 
-TEST(engine_time_stop_and_exit_retries) {
+TEST(engine_curve_stall_sells_on_curve) {
   Rig r;
-  // Isolate TIME_STOP from the faster stall / dead-money / dump cuts.
-  r.cfg.exits.stall_enabled = false;
-  r.cfg.exits.dead_money_enabled = false;
-  r.cfg.exits.liquidity_dump_pct = 0;
-  r.create();
-  r.band(1'000'000'000'000ULL);
-  r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
-  Packet pk;
-  CHECK(r.pop_packet(pk));
+  open_on_curve(r);
   const Position& p = r.eng->position(0);
-  r.wallet_fill(p.buy_sig, 1'000'000'000, 840'000'000, 0, p.expected_base);
-  CHECK(p.state == PosState::Open);
+  r.events();
+  g_wall += int64_t(r.cfg.curve.max_hold_s * 1000) - 1;
   r.eng->poll(g_mono);
-  CHECK(!r.pop_packet(pk));  // nothing to do yet
-  g_wall += 11 * 60'000;     // past the time stop
+  Packet pk;
+  CHECK(!r.pop_packet(pk));
+  g_wall += 2;
   r.eng->poll(g_mono);
   CHECK(r.pop_packet(pk));
   CHECK(pk.side == Side::Sell);
-  CHECK(find(r.events(), Ev::Order, "TIME_STOP") != nullptr);
-  // Unconfirmed: retries on the exit timer with the next slippage tier, then latches the kill.
-  for (int i = 1; i < r.cfg.exits.max_exit_attempts; ++i) {
-    g_mono += uint64_t(r.cfg.exits.exit_retry_ms + 1) * 1'000'000ULL;
-    r.eng->poll(g_mono);
-    CHECK(r.pop_packet(pk));
-  }
+  CHECK(packet_uses(pk, prog::PUMP_FUN));
+  CHECK(!packet_uses(pk, prog::PUMP_SWAP));
+  CHECK(p.sell_phase == Phase::Curve);
+  CHECK(find(r.events(), Ev::Order, "CURVE_STALL") != nullptr);
+  r.wallet_fill(pk.sig, BUY_POST, 990'000'000, p.base_amount, 0);
+  CHECK(p.state == PosState::Empty);
+  auto es = r.events();
+  const Event* c = find(es, Ev::PositionClose, "CURVE_STALL");
+  CHECK(c != nullptr);
+  if (c) CHECK_EQ(c->i[5], int64_t(Phase::Curve));
+  g_wall -= int64_t(r.cfg.curve.max_hold_s * 1000) + 1;
+}
+
+TEST(engine_curve_abort_on_selloff) {
+  Rig r;
+  r.cfg.curve.abort_remaining_sol = 4.5;
+  open_on_curve(r);
+  r.events();
+  r.band(NEAR + 4'000'000'000'000ULL);  // holders dump: ~5.2 SOL to complete again
+  Packet pk;
+  CHECK(r.pop_packet(pk));
+  CHECK(packet_uses(pk, prog::PUMP_FUN));
+  CHECK(find(r.events(), Ev::Order, "CURVE_ABORT") != nullptr);
+}
+
+TEST(engine_buy_meets_completed_curve) {
+  Rig r;
+  r.create();
+  r.band(NEAR);
+  Packet pk;
+  CHECK(r.pop_packet(pk));
+  const Position& p = r.eng->position(0);
+  r.wallet_fill(p.buy_sig, BUY_PRE, BUY_PRE - 760'000, 0, 0, true, custom_ix_error(3, 6005));
+  CHECK(p.state == PosState::Empty);
+  CHECK(!r.eng->killed());
+  CHECK_EQ(r.eng->reserved_lamports(), uint64_t(0));
+  auto es = r.events();
+  CHECK(find(es, Ev::PositionClose, "complete_before_land") != nullptr);
+  CHECK(find(es, Ev::Fill, "curve_complete") != nullptr);
+}
+
+TEST(engine_curve_sell_meets_completion_then_sells_in_pool) {
+  Rig r;
+  open_on_curve(r);
+  const Position& p = r.eng->position(0);
+  g_wall += int64_t(r.cfg.curve.max_hold_s * 1000) + 1;
+  r.eng->poll(g_mono);
+  Packet stall;
+  CHECK(r.pop_packet(stall));
+  // The curve completed first: the curve sell fails 6005. No retry, no attempt counted: wait for the migrate.
+  r.wallet_fill(stall.sig, BUY_POST, BUY_POST - 760'000, p.base_amount, p.base_amount, true, custom_ix_error(2, 6005));
+  CHECK(p.phase == Phase::AwaitMigrate);
+  CHECK(p.state == PosState::Open);
+  CHECK_EQ(p.sell_attempts, 0);
+  Packet pk;
+  CHECK(!r.pop_packet(pk));
+  r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
+  r.tip(r.slot + uint64_t(r.cfg.exits.timeout_slots));
+  r.eng->poll(g_mono);
+  CHECK(r.pop_packet(pk));
+  CHECK(packet_uses(pk, prog::PUMP_SWAP));
+  g_wall -= int64_t(r.cfg.curve.max_hold_s * 1000) + 1;
+}
+
+TEST(engine_unconfirmed_curve_sell_restarts_after_completion) {
+  Rig r;
+  open_on_curve(r);
+  const Position& p = r.eng->position(0);
+  g_wall += int64_t(r.cfg.curve.max_hold_s * 1000) + 1;
+  r.eng->poll(g_mono);
+  Packet stall;
+  CHECK(r.pop_packet(stall));
+  r.complete();  // seen before the sell's fate
+  CHECK(p.phase == Phase::AwaitMigrate);
   g_mono += uint64_t(r.cfg.exits.exit_retry_ms + 1) * 1'000'000ULL;
   r.eng->poll(g_mono);
+  CHECK(p.state == PosState::Open);  // no curve resend into a completed curve
+  Packet pk;
   CHECK(!r.pop_packet(pk));
+  g_wall -= int64_t(r.cfg.curve.max_hold_s * 1000) + 1;
+}
+
+TEST(engine_pool_take_profit_on_migrate) {
+  Rig r;
+  r.cfg.exits.tp_pct = 5;
+  open_on_curve(r);
+  r.complete();
+  r.events();
+  // The racers' buys are already in the migrate slot's vault: the pool marks far above entry.
+  r.migrate(180'000'000'000'000ULL, 95'000'000'000ULL);
+  Packet pk;
+  CHECK(r.pop_packet(pk));
+  CHECK(packet_uses(pk, prog::PUMP_SWAP));
+  auto es = r.events();
+  const Event* o = find(es, Ev::Order, "POOL_TP");
+  CHECK(o != nullptr);
+  if (o) CHECK(o->d[1] >= 5.0);
+}
+
+TEST(engine_migrate_without_pool_push_uses_default_virtual) {
+  Rig r;
+  open_on_curve(r);
+  r.complete();
+  r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL, 2, /*with_pool=*/false);
+  const Position& p = r.eng->position(0);
+  CHECK(p.phase == Phase::Pool);
+  CHECK(!p.pool_seen);
+  CHECK_EQ(p.virtual_quote, r.cfg.curve.default_virtual_quote_lamports);
+  CHECK(p.marked);
+}
+
+TEST(engine_await_timeout_hands_off) {
+  Rig r;
+  r.cfg.jupiter.enabled = true;
+  r.cfg.jupiter.api_key = "test";
+  open_on_curve(r);
+  r.complete();
+  const Position& p = r.eng->position(0);
+  g_wall += int64_t(r.cfg.curve.migrate_wait_s * 1000) + 1;
+  r.eng->poll(g_mono);
   CHECK(r.eng->killed());
-  g_wall -= 11 * 60'000;
+  CHECK(p.jupiter_pending);
+  AuxReq q;
+  bool got = false;
+  while (r.sh->aux_reqs.try_pop(q)) got = got || q.op == AuxOp::JupiterSell;
+  CHECK(got);
+  g_wall -= int64_t(r.cfg.curve.migrate_wait_s * 1000) + 1;
+}
+
+TEST(engine_max_loss_latches_kill) {
+  Rig r;
+  r.cfg.risk.max_loss_sol = 0.03;
+  open_in_pool(r);
+  r.tip(r.slot + 10);
+  r.eng->poll(g_mono);
+  Packet sell;
+  CHECK(r.pop_packet(sell));
+  // Sold for 0.015 SOL: -0.04 SOL on the round trip.
+  r.wallet_fill(sell.sig, BUY_POST, BUY_POST + 15'000'000, r.eng->position(0).base_amount, 0);
+  CHECK(r.eng->position(0).state == PosState::Empty);
+  CHECK(r.eng->realized_pnl() < -30'000'000);
+  CHECK(r.eng->killed());
+  auto es = r.events();
+  const Event* k = find(es, Ev::Kill);
+  CHECK(k && std::string(k->text) == "max_loss");
 }
 
 namespace {
@@ -495,23 +525,21 @@ SendResult ack(const Signature& sig, Side side, uint8_t pos, int status, bool de
   return r;
 }
 
-void open_position(Rig& r) {
-  r.create();
-  r.band(1'000'000'000'000ULL);
-  r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
-  Packet pk;
-  CHECK(r.pop_packet(pk));
-  const Position& p = r.eng->position(0);
-  r.wallet_fill(p.buy_sig, 1'000'000'000, 840'000'000, 0, p.expected_base);
-  CHECK(p.state == PosState::Open);
+/** In the pool, past the timeout: the sell is out. */
+Packet pool_sell(Rig& r) {
+  open_in_pool(r);
+  r.tip(r.slot + 10);
+  r.eng->poll(g_mono);
+  Packet sell;
+  CHECK(r.pop_packet(sell));
+  return sell;
 }
 }  // namespace
 
 TEST(engine_rate_limited_ack_keeps_state) {
   Rig r;
   r.create();
-  r.band(1'000'000'000'000ULL);
-  r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
+  r.band(NEAR);
   Packet pk;
   CHECK(r.pop_packet(pk));
   const Position& p = r.eng->position(0);
@@ -523,20 +551,6 @@ TEST(engine_rate_limited_ack_keeps_state) {
   const Event* a = find(es, Ev::SendAck);
   CHECK(a != nullptr);
   if (a) CHECK_EQ(a->i[7], int64_t(1));
-
-  r.wallet_fill(p.buy_sig, 1'000'000'000, 840'000'000, 0, p.expected_base);
-  CHECK(p.state == PosState::Open);
-  g_wall += 11 * 60'000;  // time stop
-  r.eng->poll(g_mono);
-  Packet sell;
-  CHECK(r.pop_packet(sell));
-  CHECK(r.sh->send_results.push(ack(sell.sig, Side::Sell, 0, 429, false, true)));
-  r.eng->poll(g_mono);
-  CHECK(p.state == PosState::SellSent);
-  CHECK_EQ(p.sell_attempts, 0);
-  CHECK(!r.pop_packet(pk));
-  CHECK(!r.eng->killed());
-  g_wall -= 11 * 60'000;
 }
 
 // 2026-10-13: a definitive send rejection (e.g. "no sender connection") re-sent at
@@ -544,12 +558,8 @@ TEST(engine_rate_limited_ack_keeps_state) {
 // unsigned age underflowed and the exit timer re-sent it again: 6 attempts in ~1 ms.
 TEST(engine_rejected_sell_resends_once) {
   Rig r;
-  open_position(r);
+  Packet sell = pool_sell(r);
   const Position& p = r.eng->position(0);
-  g_wall += 11 * 60'000;
-  r.eng->poll(g_mono);
-  Packet sell;
-  CHECK(r.pop_packet(sell));
   r.events();
   r.eng->set_clocks(&test_wall, &ticking_mono);
   uint64_t now = g_mono;  // taken before the drain, as run() does
@@ -570,31 +580,37 @@ TEST(engine_rejected_sell_resends_once) {
   CHECK_EQ(p.sell_attempts, 1);
   CHECK(!r.eng->killed());
   r.eng->set_clocks(&test_wall, &test_mono);
-  g_wall -= 11 * 60'000;
+}
+
+TEST(engine_exit_retries_then_kill) {
+  Rig r;
+  Packet sell = pool_sell(r);
+  (void)sell;
+  Packet pk;
+  for (int i = 1; i < r.cfg.exits.max_exit_attempts; ++i) {
+    g_mono += uint64_t(r.cfg.exits.exit_retry_ms + 1) * 1'000'000ULL;
+    r.eng->poll(g_mono);
+    CHECK(r.pop_packet(pk));
+  }
+  g_mono += uint64_t(r.cfg.exits.exit_retry_ms + 1) * 1'000'000ULL;
+  r.eng->poll(g_mono);
+  CHECK(!r.pop_packet(pk));
+  CHECK(r.eng->killed());
 }
 
 TEST(engine_fill_records_landing) {
   Rig r;
-  r.feed(slot_frame(r.slot));  // processed tip = trigger slot
+  r.tip(r.slot);  // processed tip = trigger slot
   r.create();
-  r.band(1'000'000'000'000ULL);
-  r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
+  r.band(NEAR);
   Packet pk;
   CHECK(r.pop_packet(pk));
   const Position& p = r.eng->position(0);
   CHECK_EQ(p.order_slot, uint64_t(100));
   uint64_t land = 102;
   r.feed(slot_frame(land, 3));  // first shred of the landing slot
-  CHECK_EQ(r.eng->last_slot(), uint64_t(100));
   g_mono += 40'000'000;
   r.feed(slot_frame(land, 4));  // completed
-  // Two other swaps write the quote vault, then ours, then one more.
-  Signature other1 = make_sig(40), other2 = make_sig(41), other3 = make_sig(42);
-  r.feed(account_frame("watch", r.quote_vault, prog::TOKEN, token_account(67'500'000'000ULL), land, &other1));
-  r.feed(account_frame("watch", r.quote_vault, prog::TOKEN, token_account(67'600'000'000ULL), land, &other2));
-  r.feed(account_frame("watch", r.quote_vault, prog::TOKEN, token_account(67'700'000'000ULL), land, &p.buy_sig));
-  r.feed(account_frame("watch", r.quote_vault, prog::TOKEN, token_account(67'800'000'000ULL), land, &other3));
-  CHECK_EQ(p.writes_ahead, int64_t(2));
   g_mono += 10'000'000;
   r.events();
   TxSpec t;
@@ -603,8 +619,8 @@ TEST(engine_fill_records_landing) {
   t.slot = land;
   t.index = 7;
   t.keys = {r.kp.pubkey()};
-  t.pre = {1'000'000'000};
-  t.post = {840'000'000};
+  t.pre = {BUY_PRE};
+  t.post = {BUY_POST};
   t.post_tokens = {{r.mint_s, r.user_s, r.t22_s, p.expected_base}};
   r.feed(tx_frame(t));
   CHECK(p.state == PosState::Open);
@@ -616,7 +632,6 @@ TEST(engine_fill_records_landing) {
   CHECK_EQ(f->i[6], int64_t(2));
   CHECK_EQ(f->i[7], int64_t(50'000'000));  // first shred -> seen
   CHECK(std::fabs(f->d[2] - 10.0) < 1e-9);  // completed -> seen, ms
-  CHECK_EQ(f->d[1], 2.0);
   CHECK_EQ(f->d[5], 1.0);
 }
 
@@ -624,27 +639,20 @@ TEST(engine_fill_records_landing) {
 // buy and closed the token account; exits then failed (AccountNotInitialized) to the kill.
 TEST(engine_follows_external_sell) {
   Rig r;
-  open_position(r);
+  open_on_curve(r);
   const Position& p = r.eng->position(0);
   uint64_t base = p.base_amount;
   r.events();
-  // A close-account-style tx touching nothing we hold changes nothing.
-  r.wallet_fill(make_sig(50), 840'000'000, 842'000'000, 0, 0);
+  r.wallet_fill(make_sig(50), BUY_POST, BUY_POST + 2'000'000, 0, 0);
   CHECK(p.state == PosState::Open);
   CHECK_EQ(p.base_amount, base);
-  // Someone else sells a third.
-  r.wallet_fill(make_sig(51), 842'000'000, 892'000'000, base, base - base / 3);
+  r.wallet_fill(make_sig(51), BUY_POST, BUY_POST + 20'000'000, base, base - base / 3);
   CHECK(p.state == PosState::Open);
   CHECK_EQ(p.base_amount, base - base / 3);
-  CHECK_EQ(p.sol_received, int64_t(50'000'000));
   CHECK(find(r.events(), Ev::PositionUpdate) != nullptr);
-  // Then the rest: the position closes without a single sell of ours.
-  r.wallet_fill(make_sig(52), 892'000'000, 992'000'000, base - base / 3, 0);
+  r.wallet_fill(make_sig(52), BUY_POST, BUY_POST + 30'000'000, base - base / 3, 0);
   CHECK(p.state == PosState::Empty);
-  const auto es = r.events();
-  const Event* c = find(es, Ev::PositionClose, "external_sell");
-  CHECK(c != nullptr);
-  if (c) CHECK_EQ(c->i[3], int64_t(150'000'000));
+  CHECK(find(r.events(), Ev::PositionClose, "external_sell") != nullptr);
   Packet pk;
   CHECK(!r.pop_packet(pk));
   CHECK(!r.eng->killed());
@@ -652,32 +660,22 @@ TEST(engine_follows_external_sell) {
 
 TEST(engine_external_sell_while_selling) {
   Rig r;
-  open_position(r);
+  Packet sell = pool_sell(r);
   const Position& p = r.eng->position(0);
   uint64_t base = p.base_amount;
-  g_wall += 11 * 60'000;  // time stop
-  r.eng->poll(g_mono);
-  Packet sell;
-  CHECK(r.pop_packet(sell));
-  CHECK(p.state == PosState::SellSent);
-  r.wallet_fill(make_sig(53), 840'000'000, 990'000'000, base, 0);
+  r.wallet_fill(make_sig(53), BUY_POST, 990'000'000, base, 0);
   CHECK(p.state == PosState::Empty);
   // Our own sell then fails on-chain: ignored, no retry, no kill.
   r.wallet_fill(sell.sig, 990'000'000, 989'600'000, 0, 0, /*failed=*/true);
   Packet pk;
   CHECK(!r.pop_packet(pk));
   CHECK(!r.eng->killed());
-  g_wall -= 11 * 60'000;
 }
 
 TEST(engine_sell_429_holds_exit_timer) {
   Rig r;
-  open_position(r);
+  Packet sell = pool_sell(r);
   const Position& p = r.eng->position(0);
-  g_wall += 11 * 60'000;
-  r.eng->poll(g_mono);
-  Packet sell;
-  CHECK(r.pop_packet(sell));
   const uint64_t ms = 1'000'000ULL;
   g_mono += 1000 * ms;  // exec's first 429 resend is due about now
   CHECK(r.sh->send_results.push(ack(sell.sig, Side::Sell, 0, 429, false, true)));
@@ -692,108 +690,20 @@ TEST(engine_sell_429_holds_exit_timer) {
   r.eng->poll(g_mono);
   CHECK(r.pop_packet(pk));
   CHECK_EQ(int(pk.attempt), 1);
-  g_wall -= 11 * 60'000;
 }
 
-TEST(exit_fsm_matches_engine_ts) {
+TEST(exit_rules) {
   Config c;
-  Config::Exits x = c.exits;
-  ExitState s;
-  exit_init(s, 1.0, 0, x);
-  CHECK(evaluate_exit(s, 0.5, 1000, x).trigger == ExitTrigger::StopLoss);  // hard stop 22 %
-  // +50 % is below TP1 (55 %) so TP0 banks half.
-  ExitDecision d0 = evaluate_exit(s, 1.5, 1000, x);
-  CHECK(d0.trigger == ExitTrigger::TakeProfit0);
-  CHECK_EQ(d0.sell_fraction, 0.5);
-  CHECK(evaluate_exit(s, 1.6, 1000, x).trigger == ExitTrigger::TakeProfit1);
-  x.stall_enabled = false;
-  x.dead_money_enabled = false;
-  exit_init(s, 1.0, 0, x);
-  CHECK(evaluate_exit(s, 1.2, int64_t(x.time_stop_minutes * 60'000), x).trigger == ExitTrigger::TimeStop);
-
-  x.hard_stop_pct = 20;
-  exit_init(s, 1.0, 0, x);
-  CHECK(evaluate_exit(s, 0.8, 1000, x).trigger == ExitTrigger::StopLoss);
-
-  x.trailing_arm_pct = 20;
-  x.tp1_pct = 1000;
-  x.tp0_enabled = false;
-  exit_init(s, 1.0, 0, x);
-  exit_observe(s, 1.3, 500, x);
-  CHECK(s.trailing_armed);
-  CHECK(evaluate_exit(s, 1.3 * 0.87, 1000, x).trigger == ExitTrigger::TrailingStop);  // 12 % gap
-
-  x = c.exits;
-  x.stall_enabled = false;
-  x.dead_money_enabled = false;
-  x.liquidity_dump_pct = 0;
-  exit_init(s, 1.0, 0, x);
-  ExitDecision d = evaluate_exit(s, 1.25, 1000, x);
-  CHECK(d.trigger == ExitTrigger::TakeProfit0);
-  CHECK_EQ(d.sell_fraction, 0.5);
-  exit_on_fill(s, ExitTrigger::TakeProfit0, x);
-  CHECK(s.tp0_done);
-  CHECK_EQ(s.stop_price, 1.05);  // tp0_move_stop_to_pct = 5
-
-  // Quote vault dump: peak 100, last 84 → −16 % ≤ −15 %.
-  exit_init(s, 1.0, 0, x);
-  x.liquidity_dump_pct = 15;
-  exit_observe_quote(s, 100);
-  exit_observe_quote(s, 84);
-  CHECK(evaluate_exit(s, 1.0, 1000, x).trigger == ExitTrigger::LiquidityDump);
-
-  // Stall: no new high for stall_sec after stall_arm_sec.
-  x.liquidity_dump_pct = 0;
-  x.stall_enabled = true;
-  x.stall_arm_sec = 45;
-  x.stall_sec = 45;
-  exit_init(s, 1.0, 0, x);
-  CHECK(evaluate_exit(s, 1.0, 44'000, x).trigger == ExitTrigger::None);
-  CHECK(evaluate_exit(s, 1.0, 90'000, x).trigger == ExitTrigger::Stall);
-}
-
-TEST(engine_liquidity_dump_sells) {
-  Rig r;
-  r.cfg.exits.stall_enabled = false;
-  r.cfg.exits.dead_money_enabled = false;
-  r.cfg.exits.hard_stop_pct = 100;  // dump must beat a disabled stop
-  r.cfg.exits.tp0_enabled = false;
-  r.cfg.exits.tp1_pct = 1000;
-  r.cfg.exits.trailing_arm_pct = 1000;
-  open_position(r);
-  const Position& p = r.eng->position(0);
-  // Peak at the migrate quote, then dump 20 % of the vault SOL.
-  r.feed(account_frame("watch", r.quote_vault, prog::TOKEN, token_account(67'410'000'000ULL), r.slot));
-  Packet pk;
-  CHECK(!r.pop_packet(pk));
-  r.feed(account_frame("watch", r.quote_vault, prog::TOKEN, token_account(uint64_t(67'410'000'000ULL * 0.80)), r.slot));
-  CHECK(r.pop_packet(pk));
-  CHECK(pk.side == Side::Sell);
-  CHECK(find(r.events(), Ev::Order, "LIQUIDITY_DUMP") != nullptr);
-  CHECK(p.state == PosState::SellSent);
-}
-
-TEST(engine_stall_sells) {
-  Rig r;
-  r.cfg.exits.dead_money_enabled = false;
-  r.cfg.exits.liquidity_dump_pct = 0;
-  r.cfg.exits.tp0_enabled = false;
-  r.cfg.exits.tp1_pct = 1000;
-  r.cfg.exits.trailing_arm_pct = 1000;
-  r.cfg.exits.stall_enabled = true;
-  r.cfg.exits.stall_arm_sec = 45;
-  r.cfg.exits.stall_sec = 45;
-  open_position(r);
-  Packet pk;
-  g_wall += 44'000;
-  r.eng->poll(g_mono);
-  CHECK(!r.pop_packet(pk));
-  g_wall += 46'000;  // past arm + stall with no new high
-  r.eng->poll(g_mono);
-  CHECK(r.pop_packet(pk));
-  CHECK(pk.side == Side::Sell);
-  CHECK(find(r.events(), Ev::Order, "STALL") != nullptr);
-  g_wall -= 90'000;
+  CHECK(evaluate_curve_exit(0, 3.0, c.curve) == ExitTrigger::None);
+  CHECK(evaluate_curve_exit(c.curve.max_hold_s, 3.0, c.curve) == ExitTrigger::CurveStall);
+  c.curve.abort_remaining_sol = 4.5;
+  CHECK(evaluate_curve_exit(0, 5.0, c.curve) == ExitTrigger::CurveAbort);
+  CHECK(evaluate_pool_exit(50, 100, 100, c.exits) == ExitTrigger::None);  // tp off by default
+  CHECK(evaluate_pool_exit(0, 103, 100, c.exits) == ExitTrigger::PoolTimeout);
+  c.exits.tp_pct = 5;
+  CHECK(evaluate_pool_exit(5, 100, 100, c.exits) == ExitTrigger::PoolTakeProfit);
+  CHECK(is_protective(ExitTrigger::PoolTimeout));
+  CHECK(!is_protective(ExitTrigger::PoolTakeProfit));
 }
 
 namespace {
@@ -823,68 +733,29 @@ const Event* route_for(const std::vector<Event>& es, Side side) {
 
 TEST(engine_routes_by_leader_class) {
   Pubkey leader = parse_pubkey("D2L6yPZ2FmmmTKPgzaMKdhu6EWZcTpLy1Vhx8uvZe7NZ");
-  struct Want {
-    LeaderClass cls;
-    uint64_t cu_price;
-  };
-  // estimate 1.2M; Agave beats the rivals' 3M; BAM and Firedancer bid the estimate (no rival price for them).
-  for (Want w : {Want{LeaderClass::Agave, 3'000'000}, Want{LeaderClass::Bam, 1'200'000}, Want{LeaderClass::Firedancer, 1'200'000}}) {
+  for (LeaderClass cls : {LeaderClass::Agave, LeaderClass::Bam, LeaderClass::Firedancer}) {
     Rig r;
-    auto table = uniform_table(w.cls, leader);
+    auto table = uniform_table(cls, leader);
     r.sh->leaders.store(table.get());
-    publish_routes(r, 1'200'000, 3'000'000);
+    publish_routes(r, 1'200'000);
     r.create();
-    r.band(1'000'000'000'000ULL);
-    r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
+    r.band(NEAR);
     Packet pk;
     CHECK(r.pop_packet(pk));
-    CHECK(!pk.jito);  // jito.enabled is off; BAM never routes through the block engine
+    CHECK(!pk.jito);
     auto es = r.events();
     const Event* rt = route_for(es, Side::Buy);
     CHECK(rt != nullptr);
-    if (!rt) continue;
-    CHECK_EQ(rt->i[0], int64_t(w.cls));
-    CHECK_EQ(rt->i[1], int64_t(w.cu_price));
-    CHECK_EQ(rt->i[2], int64_t(r.cfg.entry.cu_limit));  // no measured samples yet
-    CHECK_EQ(rt->i[4], int64_t(1));                     // the vault guard
-    CHECK_EQ(rt->i[7], int64_t(1));
-    CHECK(rt->a == leader);
-    CHECK(rt->sig == pk.sig);
-    const Event* o = find(es, Ev::Order);
-    CHECK(o && o->i[4] == int64_t(w.cu_price));
+    if (rt) {
+      CHECK_EQ(rt->i[0], int64_t(cls));
+      CHECK_EQ(rt->i[1], int64_t(1'200'000));  // estimate on every class (no beat_rivals by default)
+      CHECK_EQ(rt->i[2], int64_t(r.cfg.entry.cu_limit));
+      CHECK_EQ(rt->i[7], int64_t(1));
+      CHECK(rt->a == leader);
+      CHECK(rt->sig == pk.sig);
+    }
     r.sh->leaders.store(nullptr);
   }
-}
-
-TEST(engine_bam_exit_bids_high) {
-  // BAM buys at the floor here, yet the take-profit sell still pays estimate x exit multiplier.
-  Rig r;
-  r.cfg.routing.bam.cu_price_mode = "floor";
-  auto table = uniform_table(LeaderClass::Bam, parse_pubkey("D2L6yPZ2FmmmTKPgzaMKdhu6EWZcTpLy1Vhx8uvZe7NZ"));
-  r.sh->leaders.store(table.get());
-  publish_routes(r, 1'200'000);
-  r.create();
-  r.band(1'000'000'000'000ULL);
-  r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
-  Packet pk;
-  CHECK(r.pop_packet(pk));
-  const Position& p = r.eng->position(0);
-  r.wallet_fill(p.buy_sig, 1'000'000'000, 840'000'000, 0, p.expected_base);
-  r.feed(account_frame("watch", r.quote_vault, prog::TOKEN, token_account(3 * 67'410'000'000ULL), r.slot));
-  Packet sell;
-  CHECK(r.pop_packet(sell));
-  CHECK(sell.side == Side::Sell);
-  CHECK(!sell.jito);
-  auto es = r.events();
-  const Event* buy = route_for(es, Side::Buy);
-  const Event* rt = route_for(es, Side::Sell);
-  CHECK(buy && buy->i[1] == int64_t(r.cfg.fees.cu_price_floor));
-  CHECK(rt != nullptr);
-  if (rt) {
-    CHECK_EQ(rt->i[0], int64_t(LeaderClass::Bam));
-    CHECK_EQ(rt->i[1], int64_t(1'200'000 * r.cfg.exits.exit_priority_multiplier));
-  }
-  r.sh->leaders.store(nullptr);
 }
 
 TEST(engine_routing_fallbacks) {
@@ -892,8 +763,7 @@ TEST(engine_routing_fallbacks) {
   Rig r;
   r.sh->cu_price.store(700'000);
   r.create();
-  r.band(1'000'000'000'000ULL);
-  r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
+  r.band(NEAR);
   Packet pk;
   CHECK(r.pop_packet(pk));
   auto es = r.events();
@@ -907,64 +777,19 @@ TEST(engine_routing_fallbacks) {
   }
 }
 
-TEST(engine_guard_revert_is_beaten) {
-  Pubkey rival = parse_pubkey("9bnz4RShgq1hAnLnZbP8kbgBg1kEmcJBYQq3gQbmnSta");
-  for (int which = 0; which < 2; ++which) {  // 0: vault guard, 1: rival guard
-    Rig r;
-    RivalSet rs;
-    rs.wallets[0] = rival;
-    rs.n = 1;
-    r.sh->rivals.store(rs);
-    r.create();
-    r.band(1'000'000'000'000ULL);
-    const CurveSlot* c = r.eng->curve(r.curve);
-    CHECK(c && c->n_rivals == 1);
-    if (c) CHECK(c->rival_atas[0] == ata(rival, r.mint, prog::TOKEN_2022));
-    r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
-    Packet pk;
-    CHECK(r.pop_packet(pk));
-    const Position& p = r.eng->position(0);
-    CHECK_EQ(int(p.guards.count()), 2);
-    CHECK_EQ(int(p.guard_ix0), 2);
-    CHECK_EQ(p.guards.max_quote_vault, uint64_t(67'410'000'000ULL + 67'410'000'000ULL / 10'000 * 50));
-    r.events();
-    TxSpec t;
-    t.filters = {"wallet"};
-    t.sig = pk.sig;
-    t.slot = ++r.slot;
-    t.failed = true;
-    t.err = custom_ix_error(uint8_t(2 + which), lighthouse::ERR_ASSERTION_FAILED);
-    t.keys = {r.kp.pubkey()};
-    t.pre = {1'000'000'000};
-    t.post = {1'000'000'000 - 400'000};
-    r.feed(tx_frame(t));
-    CHECK(p.state == PosState::Empty);
-    CHECK(!r.eng->killed());
-    CHECK_EQ(r.eng->reserved_lamports(), uint64_t(0));
-    auto es = r.events();
-    const Event* f = find(es, Ev::Fill, which ? "guard_rival" : "guard_vault");
-    CHECK(f != nullptr);
-    if (f) CHECK(which ? f->c == rival : is_zero(f->c));
-    CHECK(find(es, Ev::PositionClose, which ? "beaten_rival" : "beaten_vault") != nullptr);
-  }
-}
-
-TEST(engine_sheds_rival_guards_that_dont_fit) {
-  // No tips in the test config: the widest buy + vault guard has room for exactly one rival guard.
+TEST(engine_exits_price_at_exit_multiplier) {
   Rig r;
-  RivalSet rs;
-  for (uint8_t i = 0; i < 3; ++i) rs.wallets[rs.n++] = Keypair::from_seed(std::vector<uint8_t>(32, uint8_t(90 + i)).data()).pubkey();
-  r.cfg.lighthouse.max_rivals = 3;
-  r.sh->rivals.store(rs);
-  r.create();
-  r.band(1'000'000'000'000ULL);
-  const CurveSlot* c = r.eng->curve(r.curve);
-  CHECK(c && c->n_rivals == 1);
-  r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
-  Packet pk;
-  CHECK(r.pop_packet(pk));
-  CHECK(verify_packet(pk, r.kp.pubkey()));
-  CHECK_EQ(int(r.eng->position(0).guards.count()), 2);
+  r.cfg.exits.exit_priority_multiplier = 1;
+  publish_routes(r, 1'200'000);
+  Packet sell = pool_sell(r);
+  (void)sell;
+  auto es = r.events();
+  const Event* rt = route_for(es, Side::Sell);
+  CHECK(rt != nullptr);
+  if (rt) {
+    CHECK_EQ(rt->i[1], int64_t(1'200'000));
+    CHECK_EQ(rt->i[2], int64_t(r.cfg.exits.cu_limit));
+  }
 }
 
 TEST(engine_measures_buy_cu) {
@@ -972,8 +797,7 @@ TEST(engine_measures_buy_cu) {
   r.cfg.routing.cu_samples_min = 1;
   publish_routes(r, 1'000'000);
   r.create();
-  r.band(1'000'000'000'000ULL);
-  r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
+  r.band(NEAR);
   Packet pk;
   CHECK(r.pop_packet(pk));
   const Position& p = r.eng->position(0);
@@ -982,21 +806,17 @@ TEST(engine_measures_buy_cu) {
   t.sig = pk.sig;
   t.slot = ++r.slot;
   t.keys = {r.kp.pubkey()};
-  t.pre = {1'000'000'000};
-  t.post = {840'000'000};
+  t.pre = {BUY_PRE};
+  t.post = {BUY_POST};
   t.post_tokens = {{r.mint_s, r.user_s, r.t22_s, p.expected_base}};
-  t.cu_consumed = 100'000;
+  t.cu_consumed = 90'000;
   r.feed(tx_frame(t));
-  CHECK_EQ(r.eng->measured_cu_limit(), uint32_t(115'000));  // + cu_limit_margin_pct
+  CHECK_EQ(r.eng->measured_cu_limit(), uint32_t(103'500));  // + cu_limit_margin_pct
 }
 
 TEST(engine_records_rival_txs) {
   Rig r;
-  r.create();
-  r.band(1'000'000'000'000ULL);
-  r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
-  Packet pk;
-  CHECK(r.pop_packet(pk));
+  open_in_pool(r);
   r.events();
   uint64_t migrate_slot = r.slot;
   Pubkey rival = parse_pubkey("9bnz4RShgq1hAnLnZbP8kbgBg1kEmcJBYQq3gQbmnSta");
@@ -1021,42 +841,24 @@ TEST(engine_records_rival_txs) {
   rival_tx(r.kp.pubkey(), migrate_slot, 61);                                     // ours: not a rival
   rival_tx(rival, migrate_slot + uint64_t(r.cfg.routing.rival_window_slots) + 1, 62);  // after the window
   auto es = r.events();
-  int n = 0;
-  for (auto& e : es) n += e.type == Ev::RivalTx;
-  CHECK_EQ(n, 1);
+  CHECK_EQ(count(es, Ev::RivalTx), 1);
   const Event* e = find(es, Ev::RivalTx);
   CHECK(e != nullptr);
   if (!e) return;
   CHECK(e->a == rival);
   CHECK(e->b == r.pool);
-  CHECK(e->c == tip);
-  CHECK_EQ(e->i[0], int64_t(7));
-  CHECK_EQ(e->i[1], int64_t(4'000'000));
-  CHECK_EQ(e->i[2], int64_t(150'000));
-  CHECK_EQ(e->i[3], int64_t(2'000'000));
-  CHECK_EQ(e->i[4], int64_t(1'000'000'000));
+  CHECK_EQ(e->i[4], int64_t(1'000'000'000));  // a buy we sell into
   CHECK_EQ(e->i[6], int64_t(0));
-  CHECK_EQ(e->i[7], int64_t(90'000));
-  CHECK_EQ(e->d[0], 3.0);  // an unlisted tip account: "other"
 }
 
 namespace {
 
-/** Buy, fill, take-profit sell, and have that sell fail on chain: with max_exit_attempts = 1 the exits are spent. */
+/** Pool sell that fails on chain with max_exit_attempts = 1: the native exits are spent. */
 Packet exhaust_exits(Rig& r) {
   r.cfg.exits.max_exit_attempts = 1;
-  r.create();
-  r.band(1'000'000'000'000ULL);
-  r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
-  Packet pk;
-  CHECK(r.pop_packet(pk));
+  Packet sell = pool_sell(r);
   const Position& p = r.eng->position(0);
-  r.wallet_fill(p.buy_sig, 1'000'000'000, 840'000'000, 0, p.expected_base);
-  r.feed(account_frame("watch", r.quote_vault, prog::TOKEN, token_account(3 * 67'410'000'000ULL), r.slot));
-  Packet sell;
-  CHECK(r.pop_packet(sell));
-  CHECK(sell.side == Side::Sell);
-  r.wallet_fill(sell.sig, 840'000'000, 839'990'000, p.base_amount, p.base_amount, true);
+  r.wallet_fill(sell.sig, BUY_POST, BUY_POST - 10'000, p.base_amount, p.base_amount, true);
   return sell;
 }
 
@@ -1082,61 +884,23 @@ TEST(engine_jupiter_takes_exhausted_exits) {
   CHECK(pop_jupiter_req(r, q));
   CHECK(q.mint == r.mint);
   CHECK_EQ(q.amount, p.base_amount);
-
-  // No route: retried 5 s later, as a new attempt.
-  AuxResp no;
-  no.op = AuxOp::JupiterSell;
-  no.pos = q.pos;
-  no.mint = q.mint;
-  CHECK(r.sh->aux_resps.push(no));
-  r.eng->poll(g_mono);
-  CHECK(!pop_jupiter_req(r, q));
-  g_mono += 5'000'000'001ULL;
-  r.eng->poll(g_mono);
-  CHECK(pop_jupiter_req(r, q));
-  CHECK_EQ(int(p.jupiter_attempts), 2);
-
-  // Sent: the stream's fill of that signature closes the position.
-  AuxResp ok = no;
-  ok.ok = true;
-  ok.sig = make_sig(77);
-  ok.out_lamports = 250'000'000;
-  CHECK(r.sh->aux_resps.push(ok));
-  r.eng->poll(g_mono);
-  CHECK(find(r.events(), Ev::Order, "jupiter TAKE_PROFIT_1") != nullptr);
-  r.wallet_fill(ok.sig, 839'990'000, 1'089'000'000, p.base_amount, 0);
-  CHECK(p.state == PosState::Empty);
-  auto es = r.events();
-  CHECK(find(es, Ev::PositionClose, "jupiter_exit") != nullptr);
-}
-
-TEST(engine_jupiter_gives_up_after_max_attempts) {
-  Rig r;
-  r.cfg.jupiter.enabled = true;
-  r.cfg.jupiter.api_key = "test";
-  r.cfg.jupiter.max_attempts = 1;
-  exhaust_exits(r);
-  const Position& p = r.eng->position(0);
-  AuxReq q;
-  CHECK(pop_jupiter_req(r, q));
-  // Sent, then failed on chain: no attempt left, so the operator sells it.
   AuxResp ok;
   ok.op = AuxOp::JupiterSell;
   ok.pos = q.pos;
   ok.mint = q.mint;
   ok.ok = true;
-  ok.sig = make_sig(78);
+  ok.sig = make_sig(77);
+  ok.out_lamports = 50'000'000;
   CHECK(r.sh->aux_resps.push(ok));
   r.eng->poll(g_mono);
-  r.wallet_fill(ok.sig, 839'990'000, 839'980'000, p.base_amount, p.base_amount, true);
-  r.eng->poll(g_mono);
-  CHECK(p.state == PosState::Open);
-  CHECK(!p.jupiter_pending);
-  CHECK(!pop_jupiter_req(r, q));
+  CHECK(find(r.events(), Ev::Order, "jupiter POOL_TIMEOUT") != nullptr);
+  r.wallet_fill(ok.sig, BUY_POST, 995'000'000, p.base_amount, 0);
+  CHECK(p.state == PosState::Empty);
+  CHECK(find(r.events(), Ev::PositionClose, "jupiter_exit") != nullptr);
 }
 
 TEST(engine_exhausted_exits_without_jupiter_hand_off) {
-  Rig r;  // no JUPITER_API_KEY: jupiter.enabled stays as load_config leaves it, off
+  Rig r;
   r.cfg.jupiter.enabled = false;
   exhaust_exits(r);
   const Position& p = r.eng->position(0);
@@ -1146,9 +910,46 @@ TEST(engine_exhausted_exits_without_jupiter_hand_off) {
   CHECK(!pop_jupiter_req(r, q));
 }
 
-// Not an assertion of speed (CI boxes vary): prints the in-process trigger latency,
-// migrate frame in -> signed packet queued, on the real clocks.
-TEST(bench_trigger_latency) {
+TEST(engine_restores_each_phase) {
+  for (Phase ph : {Phase::Curve, Phase::AwaitMigrate, Phase::Pool}) {
+    Rig r;
+    r.tip(r.slot);
+    RestoredPosition rp;
+    rp.curve = r.curve;
+    rp.mint = r.mint;
+    rp.creator = r.creator;
+    rp.token_program = prog::TOKEN_2022;
+    rp.base_amount = rp.base_bought = 120'000'000'000ULL;
+    rp.entry_price = 4.0e-7;
+    rp.sol_spent = 50'000'000;
+    rp.opened_ms = g_wall;
+    rp.phase = ph;
+    Curve c;
+    auto cd = curve_data(NEAR, false, r.creator);
+    decode_curve(cd.data(), cd.size(), c);
+    rp.curve_state = c;
+    rp.base_res = 206'900'000'000'000ULL;
+    rp.quote_res = 67'410'000'000ULL;
+    rp.virtual_quote = 17'584'492'770ULL;
+    CHECK(r.eng->restore_position(rp));
+    const Position& p = r.eng->position(0);
+    CHECK(p.phase == ph);
+    CHECK(p.marked || ph == Phase::AwaitMigrate);
+    r.eng->poll(g_mono);
+    Packet pk;
+    bool sold = r.pop_packet(pk);
+    // Restored in the pool: the timeout is long past, so it sells at once. Elsewhere it waits.
+    CHECK_EQ(sold, ph == Phase::Pool);
+    if (ph == Phase::Curve) {
+      r.complete();
+      CHECK(p.phase == Phase::AwaitMigrate);
+    }
+  }
+}
+
+// Not an assertion of speed (CI boxes vary): prints the in-process entry latency,
+// curve frame in -> signed curve buy queued, on the real clocks.
+TEST(bench_entry_latency) {
   std::vector<double> us;
   for (int i = 0; i < 40; ++i) {
     Rig r;
@@ -1158,17 +959,8 @@ TEST(bench_trigger_latency) {
     bh.fetched_ns = pd::now_ns();
     r.sh->blockhash.store(bh);
     r.create();
-    r.band(1'000'000'000'000ULL);
-    r.pool_push();
-    TxSpec t;
-    t.filters = {"migrate"};
-    t.sig = make_sig(uint8_t(9 + i));
-    t.keys = {prog::MIGRATION_AUTHORITY};
-    std::string pf = b58(prog::PUMP_FUN);
-    t.logs = {"Program " + pf + " invoke [1]", "Program log: Instruction: MigrateV2", "Program " + pf + " success"};
-    t.pre_tokens = {{r.mint_s, r.curve_s, r.t22_s, 206'900'000'000'000ULL}};
-    t.post_tokens = {{r.mint_s, r.pool_s, r.t22_s, 206'900'000'000'000ULL}, {r.wsol_s, r.pool_s, r.token_s, 67'410'000'000ULL}};
-    std::string frame = tx_frame(t);
+    r.band(ADMIT);
+    std::string frame = account_frame("band0", r.curve, prog::PUMP_FUN, curve_data(NEAR, false, r.creator), r.slot);
     uint64_t t0 = pd::now_ns();
     r.eng->on_frame(reinterpret_cast<const uint8_t*>(frame.data()), frame.size(), t0);
     Packet pk;
@@ -1176,7 +968,7 @@ TEST(bench_trigger_latency) {
     us.push_back(double(pk.t_signed_ns - t0) / 1000.0);
   }
   std::sort(us.begin(), us.end());
-  std::printf("  trigger latency (frame -> signed packet queued): p50 %.1f us, p90 %.1f us, max %.1f us\n",
+  std::printf("  entry latency (curve frame -> signed buy queued): p50 %.1f us, p90 %.1f us, max %.1f us\n",
               us[us.size() / 2], us[us.size() * 9 / 10], us.back());
 }
 
@@ -1192,8 +984,7 @@ TEST(writer_persists_positions_for_restore) {
   auto flush = [&] { for (auto& e : r.events()) w.write(e); };
 
   r.create();
-  r.band(1'000'000'000'000ULL);
-  r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
+  r.band(NEAR);
   Packet pk;
   CHECK(r.pop_packet(pk));
   flush();
@@ -1203,22 +994,26 @@ TEST(writer_persists_positions_for_restore) {
     CHECK(pending[0].mint == r.mint);
     CHECK_EQ(pending[0].entry_price, 0.0);
     CHECK(pending[0].token_program == prog::TOKEN_2022);
+    CHECK(pending[0].creator == r.creator);
   }
   const Position& p = r.eng->position(0);
   uint64_t base = p.expected_base;
-  r.wallet_fill(p.buy_sig, 1'000'000'000, 840'000'000, 0, base);
+  r.wallet_fill(p.buy_sig, BUY_PRE, BUY_POST, 0, base);
   flush();
   auto open = w.open_positions();
   CHECK_EQ(open.size(), size_t(1));
   if (!open.empty()) {
     CHECK_EQ(open[0].base_amount, base);
     CHECK(open[0].entry_price > 0);
-    CHECK(open[0].creator == r.creator);
+    CHECK(open[0].curve == r.curve);
   }
-  r.feed(account_frame("watch", r.quote_vault, prog::TOKEN, token_account(3 * 67'410'000'000ULL), r.slot));
+  r.complete();
+  r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
+  r.tip(r.slot + 10);
+  r.eng->poll(g_mono);
   Packet sell;
   CHECK(r.pop_packet(sell));
-  r.wallet_fill(sell.sig, 840'000'000, 1'100'000'000, base, 0);
+  r.wallet_fill(sell.sig, BUY_POST, 1'000'000'000, base, 0);
   flush();
   CHECK(w.open_positions().empty());
   if (std::getenv("PD_KEEP_TEST_DB")) std::printf("  kept %s\n", r.cfg.storage.db_path.c_str());

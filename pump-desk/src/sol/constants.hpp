@@ -33,6 +33,11 @@ struct Derived {
   Pubkey event_authority;      // PumpSwap ["__event_authority"]
   Pubkey global_volume_acc;    // PumpSwap ["global_volume_accumulator"]
   Pubkey fee_config;           // PumpFee ["fee_config", PUMP_SWAP]
+  // pump.fun bonding-curve program (@pump-fun/pump-sdk 4.2.0 pumpIdl buy/sell accounts)
+  Pubkey pump_global;              // PumpFun ["global"]
+  Pubkey pump_event_authority;     // PumpFun ["__event_authority"]
+  Pubkey pump_global_volume_acc;   // PumpFun ["global_volume_accumulator"]
+  Pubkey pump_fee_config;          // PumpFee ["fee_config", PUMP_FUN]
 };
 
 const Derived& derived();
@@ -47,6 +52,7 @@ inline constexpr uint8_t POOL[8] = {241, 154, 109, 4, 17, 177, 109, 188};
 inline constexpr uint8_t GLOBAL_CONFIG[8] = {149, 8, 156, 202, 160, 252, 176, 217};
 inline constexpr uint8_t FEE_CONFIG[8] = {143, 52, 146, 187, 219, 123, 76, 155};
 inline constexpr uint8_t BONDING_CURVE[8] = {23, 183, 248, 55, 96, 216, 172, 96};
+inline constexpr uint8_t PUMP_GLOBAL[8] = {167, 232, 232, 177, 200, 108, 114, 127};  // account:Global (pump.fun)
 }  // namespace disc
 
 }  // namespace pd

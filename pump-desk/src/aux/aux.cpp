@@ -84,13 +84,15 @@ RoutePolicy make_route_policy(const Config& cfg, uint64_t estimate, const uint64
 
 void refresh_amm_config(Rpc& rpc, Shared& sh) {
   const Derived& d = derived();
-  auto accts = rpc.multiple_accounts({d.global_config, d.fee_config});
-  if (accts.size() != 2 || !accts[0]) throw std::runtime_error("PumpSwap global config not found");
+  auto accts = rpc.multiple_accounts({d.global_config, d.fee_config, d.pump_global});
+  if (accts.size() != 3 || !accts[0]) throw std::runtime_error("PumpSwap global config not found");
   AmmConfig cfg;
   if (!decode_global_config(accts[0]->data.data(), accts[0]->data.size(), cfg))
     throw std::runtime_error("PumpSwap global config did not decode");
   if (accts[1] && !decode_fee_config(accts[1]->data.data(), accts[1]->data.size(), cfg))
     throw std::runtime_error("PumpSwap fee config did not decode");
+  if (!accts[2] || !decode_pump_global(accts[2]->data.data(), accts[2]->data.size(), cfg))
+    throw std::runtime_error("pump.fun global did not decode");
   cfg.valid = true;
   sh.amm.store(cfg);
 }
@@ -138,7 +140,7 @@ void run_aux_fast(const Config& cfg, Shared& sh, const Pubkey& wallet, Logger& l
       }
       if (now >= next_fee) {
         next_fee = now + uint64_t(cfg.fees.refresh_ms) * 1'000'000ULL;
-        uint64_t est = rpc.priority_fee_estimate({prog::PUMP_SWAP, prog::WSOL}, cfg.fees.priority_level.c_str());
+        uint64_t est = rpc.priority_fee_estimate({prog::PUMP_FUN, prog::PUMP_SWAP}, cfg.fees.priority_level.c_str());
         if (est) {
           est = std::max(cfg.fees.cu_price_floor, std::min(cfg.fees.cu_price_cap, est));
           sh.cu_price.store(est);
@@ -156,7 +158,7 @@ void run_aux_fast(const Config& cfg, Shared& sh, const Pubkey& wallet, Logger& l
             std::ifstream f(cfg.routing.rivals_path);
             std::stringstream ss;
             ss << f.rdbuf();
-            rivals = parse_rivals(ss.str(), wallet, size_t(cfg.lighthouse.max_rivals));
+            rivals = parse_rivals(ss.str(), wallet, size_t(cfg.routing.max_rivals));
           }
           sh.rivals.store(rivals.set);
           log.info("rivals: " + std::to_string(rivals.set.n) + " guarded, beat cu_price agave " +

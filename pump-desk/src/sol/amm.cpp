@@ -39,6 +39,22 @@ bool decode_global_config(const uint8_t* d, size_t n, AmmConfig& c) {
   return true;
 }
 
+bool decode_pump_global(const uint8_t* d, size_t n, AmmConfig& c) {
+  // pump-sdk 4.2.0 Global: fee_recipient @41 | fee_basis_points @105 | creator_fee_basis_points @154
+  // | fee_recipients[7] @162 | reserved_fee_recipient @483 | reserved_fee_recipients[7] @516
+  // | buyback_fee_recipients[8] @741
+  if (n < 997 || std::memcmp(d, disc::PUMP_GLOBAL, 8) != 0) return false;
+  c.curve_protocol_bps = rd_u64(d + 105);
+  c.curve_creator_bps = rd_u64(d + 154);
+  std::memcpy(c.curve_recipients[0].data(), d + 41, 32);
+  for (int i = 0; i < 7; ++i) std::memcpy(c.curve_recipients[i + 1].data(), d + 162 + 32 * i, 32);
+  std::memcpy(c.curve_reserved_recipients[0].data(), d + 483, 32);
+  for (int i = 0; i < 7; ++i) std::memcpy(c.curve_reserved_recipients[i + 1].data(), d + 516 + 32 * i, 32);
+  for (int i = 0; i < 8; ++i) std::memcpy(c.curve_buyback_recipients[i].data(), d + 741 + 32 * i, 32);
+  c.curve_valid = true;
+  return true;
+}
+
 bool decode_fee_config(const uint8_t* d, size_t n, AmmConfig& c) {
   if (n < 69 || std::memcmp(d, disc::FEE_CONFIG, 8) != 0) return false;
   // bump u8 @8 | admin @9 | flat_fees @41 (3 x u64) | fee_tiers vec @65 | stable_fee_tiers vec | exotic
