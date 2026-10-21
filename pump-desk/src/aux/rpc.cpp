@@ -2,6 +2,8 @@
 
 #include <simdjson.h>
 
+#include <algorithm>
+#include <cstdlib>
 #include <stdexcept>
 
 #include "core/base58.hpp"
@@ -136,6 +138,25 @@ std::vector<std::optional<RpcAccount>> Rpc::multiple_accounts(const std::vector<
 std::optional<RpcAccount> Rpc::account(const Pubkey& key, const char* commitment) {
   auto v = multiple_accounts({key}, commitment);
   return v.empty() ? std::nullopt : v[0];
+}
+
+std::vector<std::pair<Pubkey, uint64_t>> Rpc::token_largest_accounts(const Pubkey& mint, uint64_t& slot,
+                                                                     const char* commitment) {
+  std::string body = call("getTokenLargestAccounts", "[\"" + b58(mint) + "\",{\"commitment\":\"" + commitment + "\"}]");
+  simdjson::dom::parser p;
+  element r = p.parse(body)["result"];
+  slot = u64_of(r["context"]["slot"]);
+  std::vector<std::pair<Pubkey, uint64_t>> out;
+  simdjson::dom::array arr = r["value"];
+  for (element v : arr) {
+    std::string_view address, amount;
+    Pubkey k;
+    if (v["address"].get(address) != simdjson::SUCCESS || !b58_decode32(address, k)) continue;
+    if (v["amount"].get(amount) != simdjson::SUCCESS) continue;  // raw amount, a decimal string
+    out.emplace_back(k, std::strtoull(std::string(amount).c_str(), nullptr, 10));
+  }
+  std::sort(out.begin(), out.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+  return out;
 }
 
 std::pair<uint64_t, uint64_t> Rpc::balance(const Pubkey& key, const char* commitment) {

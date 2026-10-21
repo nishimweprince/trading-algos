@@ -1,56 +1,29 @@
 #pragma once
-// Exit-trigger evaluation, ported from pump-fun/src/exits/engine.ts
-// (evaluateExit) and the state updates in src/positions/position.ts.
-// LiquidityDump / Stall are pump-desk extensions for post-migrate vault dumps
-// and stalled climbers.
+// Exit rules of curve-in, migrate-out. A position lives in one phase at a time:
+//   Curve        bought on the bonding curve, not complete yet: stall / abort sell back on the curve
+//   AwaitMigrate curve complete: nothing can trade until the migrate creates the pool
+//   Pool         migrated: take profit over entry, else sell timeout_slots after the migrate slot
 #include <cstdint>
 
 #include "core/config.hpp"
 
 namespace pd {
 
-enum class ExitTrigger : uint8_t {
-  None,
-  StopLoss,
-  TrailingStop,
-  LiquidityDump,
-  Stall,
-  TimeStop,
-  DeadMoney,
-  TakeProfit0,
-  TakeProfit1,
-  TakeProfit2
-};
+enum class Phase : uint8_t { Curve, AwaitMigrate, Pool };
+
+enum class ExitTrigger : uint8_t { None, CurveStall, CurveAbort, AwaitTimeout, PoolTakeProfit, PoolTimeout };
 
 const char* exit_trigger_name(ExitTrigger t);
-/** Protective exits use the protective slippage tiers; take-profits the TP tiers. */
+const char* phase_name(Phase p);
+/** Protective exits use the protective slippage tiers; the take-profit the TP tiers. */
 bool is_protective(ExitTrigger t);
-
-struct ExitState {
-  double entry_price = 0;
-  int64_t opened_ms = 0;
-  double high_water = 0;
-  int64_t high_water_ms = 0;     // wall ms of the last new high (for STALL)
-  uint64_t peak_quote_res = 0;   // peak pool quote vault since open
-  uint64_t last_quote_res = 0;   // latest quote vault (for LIQUIDITY_DUMP)
-  bool tp0_done = false, tp1_done = false, trailing_armed = false, high_volatility = false;
-  double stop_price = 0;
-};
-
-struct ExitDecision {
-  ExitTrigger trigger = ExitTrigger::None;
-  double sell_fraction = 0;  // of the ORIGINAL position; >= 1 = the full remainder
-};
 
 inline double gain_pct(double entry, double price) { return entry <= 0 ? 0 : (price / entry - 1) * 100; }
 
-void exit_init(ExitState& s, double entry_price, int64_t opened_ms, const Config::Exits& cfg);
-/** High-water mark, trailing arm, and stall clock. */
-void exit_observe(ExitState& s, double price, int64_t now_ms, const Config::Exits& cfg);
-/** Track peak and current quote vault for LiquidityDump. */
-void exit_observe_quote(ExitState& s, uint64_t quote_res);
-ExitDecision evaluate_exit(const ExitState& s, double price, int64_t now_ms, const Config::Exits& cfg);
-/** After a take-profit fill lands: mark it done and move the stop. */
-void exit_on_fill(ExitState& s, ExitTrigger t, const Config::Exits& cfg);
+/** Curve phase: held `held_s` since the buy filled; `remaining_sol` = completion cost now. */
+ExitTrigger evaluate_curve_exit(double held_s, double remaining_sol, const Config::Curves& cfg);
+
+/** Pool phase: `gain` over entry at the current mark; `slot` = processed tip. */
+ExitTrigger evaluate_pool_exit(double gain, uint64_t slot, uint64_t migrate_slot, const Config::Exits& cfg);
 
 }  // namespace pd

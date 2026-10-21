@@ -105,7 +105,7 @@ struct RivalSet {
 };
 
 // --- logic <-> aux --------------------------------------------------------------
-enum class AuxOp : uint8_t { ResolveCurve, ReadMint, ResolveSig, JupiterSell };
+enum class AuxOp : uint8_t { ResolveCurve, ReadMint, ResolveSig, JupiterSell, ReadHolders };
 
 struct AuxReq {
   AuxOp op = AuxOp::ResolveCurve;
@@ -116,6 +116,10 @@ struct AuxReq {
   uint8_t pos = 0;
   uint64_t deadline_ms = 0;
   uint64_t amount = 0;  // JupiterSell: raw tokens to sell
+  // ReadHolders: the mint's top-k token accounts, without the curve's own and ours (exclude).
+  Pubkey creator{}, token_program{};
+  Pubkey exclude[2]{};
+  uint8_t top_k = 0;
 };
 
 struct AuxResp {
@@ -136,6 +140,8 @@ struct AuxResp {
   // JupiterSell: the sent tx's signature in `sig`, the quoted SOL out, or why nothing was sent.
   uint64_t out_lamports = 0;
   char error[96] = {0};
+  // ReadHolders: tokens of the top-k holders, the creator's ATA, and the read's context slot.
+  uint64_t holder_tokens = 0, creator_tokens = 0, holders_slot = 0;
 };
 
 /** aux -> logic: periodic authoritative balance. */

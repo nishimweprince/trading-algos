@@ -204,6 +204,7 @@ TEST(leaders_classify_and_table) {
 
 TEST(route_policy_modes) {
   Config c;
+  c.routing.agave.cu_price_mode = c.routing.bam.cu_price_mode = c.routing.firedancer.cu_price_mode = "beat_rivals";
   c.fees.cu_price_floor = 100'000;
   c.fees.cu_price_cap = 5'000'000;
   c.sender.tip_lamports = 5000;

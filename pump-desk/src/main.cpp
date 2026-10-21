@@ -1,11 +1,11 @@
-// pump-desk: live PumpSwap migration racer.
+// pump-desk: live curve-in, migrate-out trader on pump.fun.
 //
 //   pump-desk [--config pump-desk.toml] [--preflight]
 //
-// There is no dry-run. --preflight runs the boot checks (RPC, PumpSwap
-// configs, a simulated guarded buy on a known canonical pool, a Lighthouse
-// assertion that must fail, Sender connectivity) and exits without subscribing
-// or trading.
+// There is no dry-run. --preflight runs the boot checks (RPC, PumpSwap and
+// pump.fun configs, a simulated PumpSwap buy on a known canonical pool, a
+// simulated curve buy that must reach the program's curve-complete check,
+// Sender connectivity) and exits without subscribing or trading.
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -30,7 +30,7 @@
 #include "sol/constants.hpp"
 #include "sol/crypto.hpp"
 #include "sol/layouts.hpp"
-#include "sol/lighthouse.hpp"
+#include "sol/curve.hpp"
 #include "sol/swap.hpp"
 #include "stream/ingest.hpp"
 
@@ -70,10 +70,24 @@ PoolRead read_pool(Rpc& rpc, const Pubkey& pool_key, const Pubkey& mint) {
   return r;
 }
 
+struct CurveRead {
+  bool exists = false;
+  Curve curve;
+};
+
+CurveRead read_curve(Rpc& rpc, const Pubkey& mint) {
+  CurveRead r;
+  auto acct = rpc.account(pda({std::string_view("bonding-curve"), mint}, prog::PUMP_FUN));
+  if (acct && decode_curve(acct->data.data(), acct->data.size(), r.curve)) r.exists = true;
+  return r;
+}
+
 /**
- * Build and simulate a small buy on the seed pool with the exact code the
- * trigger uses. Any program error means the hand-rolled bytes no longer match
- * the deployed program: refuse to start.
+ * Two simulations with the exact builders the engine uses; any unexpected program
+ * error means the hand-rolled bytes no longer match the deployed programs: refuse to start.
+ *  1. A small PumpSwap buy on the seed pool (the pool-side keys every exit uses).
+ *  2. A curve buy on the seed mint's (migrated) bonding curve. It must fail with pump's
+ *     BondingCurveComplete / AlreadyMigrated: every account passed the program's constraints.
  */
 void self_check(Rpc& rpc, Shared& sh, const Keypair& kp, const Config& cfg, Logger& log) {
   PoolRead pr = read_pool(rpc, SEED_POOL, SEED_MINT);
@@ -85,49 +99,40 @@ void self_check(Rpc& rpc, Shared& sh, const Keypair& kp, const Config& cfg, Logg
     throw std::runtime_error("self-check: derived pool keys do not match the chain");
   AmmConfig amm;
   sh.amm.load(amm);
-  if (!amm.valid) throw std::runtime_error("self-check: no PumpSwap config");
+  if (!amm.valid || !amm.curve_valid) throw std::runtime_error("self-check: no PumpSwap / pump.fun config");
   FeeBps fees = compute_fees_bps(amm, true, pr.supply, pr.base, pr.quote + pr.pool.virtual_quote, pr.pool.mayhem,
                                  pr.pool.creator_fee_bps);
   BuyQuote q = buy_quote_input(1'000'000, cfg.entry.slippage_pct, pr.base, pr.quote, pr.pool.virtual_quote, fees,
                                is_zero(pr.pool.coin_creator));
   if (!q.ok) throw std::runtime_error("self-check: quote failed");
   TxParams p;
-  p.cu_limit = cfg.entry.cu_limit;
+  p.cu_limit = cfg.exits.cu_limit;
   p.cu_price = cfg.fees.cu_price_floor;
   p.tips[0] = Tip{parse_pubkey(cfg.sender.tip_accounts.at(0)), cfg.sender.tip_lamports};
   p.n_tips = 1;
-  // The live guard: the quote vault may not have grown past what we priced (+ tolerance).
-  BuyGuards guards;
-  guards.vault = cfg.lighthouse.enabled && cfg.lighthouse.vault_guard;
-  guards.max_quote_vault = pr.quote + pr.quote / 10'000 * uint64_t(cfg.lighthouse.vault_tolerance_bps);
   IxList ixs;
-  buy_ixs(ixs, u, k, amm, p, q.base_out, q.max_quote, &guards);
+  buy_ixs(ixs, u, k, amm, p, q.base_out, q.max_quote);
   BlockhashSnap bh;
   sh.blockhash.load(bh);
   SignedTx tx;
   if (!build_signed_tx(kp, ixs, bh.hash, tx)) throw std::runtime_error("self-check: tx too large");
   std::string err = rpc.simulate(b64(tx.bytes, tx.len));
-  if (!err.empty()) throw std::runtime_error("self-check: simulated buy failed: " + err);
-  log.info("self-check ok: simulated buy on " + b58(SEED_POOL) + " (" + std::to_string(tx.len) + " bytes, " +
-           std::to_string(int(guards.count())) + " guard(s), " + std::to_string(q.base_out) + " base for <= " +
-           std::to_string(q.max_quote) + " lamports)");
-  if (!cfg.lighthouse.enabled) return;
-  // Both assertion kinds must decode on chain, and a false one must abort with AssertionFailed (0x1771):
-  // proof the guards can revert a buy, not just ride along.
-  IxList fail;
-  ix::cu_limit(fail, 20'000);
-  lighthouse::assert_lamports(fail, pda({std::string_view("pump-desk-absent"), kp.pubkey()}, prog::SYSTEM),
-                              lighthouse::IntOp::Equal, 0);
-  lighthouse::assert_token_amount(fail, pr.pool.quote_vault, lighthouse::IntOp::GreaterThan, pr.quote * 4 + 1'000'000'000'000ULL);
-  if (!build_signed_tx(kp, fail, bh.hash, tx)) throw std::runtime_error("self-check: guard tx too large");
+  if (!err.empty()) throw std::runtime_error("self-check: simulated PumpSwap buy failed: " + err);
+  log.info("self-check ok: simulated PumpSwap buy on " + b58(SEED_POOL) + " (" + std::to_string(tx.len) + " bytes)");
+
+  CurveRead cr = read_curve(rpc, SEED_MINT);
+  if (!cr.exists) throw std::runtime_error("self-check: seed bonding curve not found");
+  CurveKeys ck;
+  derive_curve_keys(kp.pubkey(), SEED_MINT, pr.token_program, cr.curve.creator, cr.curve.mayhem, cr.curve.cashback, ck);
+  p.cu_limit = cfg.entry.cu_limit;
+  curve_buy_ixs(ixs, kp.pubkey(), ck, amm, p, 1'000'000, 1'000'000, cfg.curve.partial_fill);
+  if (!build_signed_tx(kp, ixs, bh.hash, tx)) throw std::runtime_error("self-check: curve tx too large");
   err = rpc.simulate(b64(tx.bytes, tx.len));
-  if (err.find("6001") == std::string::npos && err.find("0x1771") == std::string::npos)
-    throw std::runtime_error("self-check: a false Lighthouse assertion did not fail with AssertionFailed: " +
+  // {"InstructionError":[n,{"Custom":6005}]}: BondingCurveComplete (6081: BondingCurveAlreadyMigrated).
+  if (err.find("6005") == std::string::npos && err.find("6081") == std::string::npos)
+    throw std::runtime_error("self-check: a curve buy on a migrated curve did not stop at the completion check: " +
                              (err.empty() ? std::string("it passed") : err));
-  // {"InstructionError":[2,{"Custom":6001}]}: index 1 (the lamports assertion) passed, index 2 failed.
-  if (err.find("[2,") == std::string::npos)
-    throw std::runtime_error("self-check: the Lighthouse lamports assertion failed where it must pass: " + err);
-  log.info("self-check ok: Lighthouse assertions decode, and a false one reverts with AssertionFailed");
+  log.info("self-check ok: curve buy accounts pass pump.fun's constraints (" + std::to_string(tx.len) + " bytes)");
 }
 
 void restore_positions(Rpc& rpc, Writer& writer, Engine& eng, const Keypair& kp, Logger& log) {
@@ -142,25 +147,42 @@ void restore_positions(Rpc& rpc, Writer& writer, Engine& eng, const Keypair& kp,
         log.warn("restored position " + b58(r.mint) + " holds no tokens: closed in the database");
         continue;
       }
-      UserKeys u;
-      derive_user_keys(kp.pubkey(), u);
-      SwapKeys k;
-      derive_swap_keys(u, r.mint, r.token_program, r.creator, r.cashback, r.mayhem, k);
-      PoolRead pr = read_pool(rpc, k.pool, r.mint);
-      r.base_amount = held;
-      r.base_res = pr.base;
-      r.quote_res = pr.quote;
-      r.virtual_quote = pr.pool.virtual_quote;
-      if (!is_zero(pr.pool.coin_creator)) r.creator = pr.pool.coin_creator;
       if (is_zero(r.curve)) r.curve = pda({std::string_view("bonding-curve"), r.mint}, prog::PUMP_FUN);
+      r.base_amount = held;
+      // Where the position stands now: still on the curve, waiting for the migrate, or in the pool.
+      CurveRead cr = read_curve(rpc, r.mint);
+      double mark = 0;
+      if (cr.exists && !cr.curve.complete) {
+        r.phase = Phase::Curve;
+        r.curve_state = cr.curve;
+        if (!is_zero(cr.curve.creator)) r.creator = cr.curve.creator;
+        mark = curve_price_sol(cr.curve);
+      } else {
+        UserKeys u;
+        derive_user_keys(kp.pubkey(), u);
+        SwapKeys k;
+        derive_swap_keys(u, r.mint, r.token_program, r.creator, r.cashback, r.mayhem, k);
+        try {
+          PoolRead pr = read_pool(rpc, k.pool, r.mint);
+          r.phase = Phase::Pool;
+          r.base_res = pr.base;
+          r.quote_res = pr.quote;
+          r.virtual_quote = pr.pool.virtual_quote;
+          if (!is_zero(pr.pool.coin_creator)) r.creator = pr.pool.coin_creator;
+          mark = pool_price_sol(pr.base, pr.quote, pr.pool.virtual_quote);
+        } catch (const std::exception&) {
+          r.phase = Phase::AwaitMigrate;  // complete, no pool yet
+          if (cr.exists) mark = curve_price_sol(cr.curve);
+        }
+      }
       if (r.entry_price <= 0) {
         // The buy was in flight at shutdown and landed: adopt it at the current mark.
-        r.entry_price = pool_price_sol(pr.base, pr.quote, pr.pool.virtual_quote);
+        r.entry_price = mark;
         r.base_bought = held;
         log.warn("adopting " + b58(r.mint) + ": buy landed after the last run stopped; entry = current mark, cost unknown");
       }
       if (!eng.restore_position(r)) log.error("no free slot to restore " + b58(r.mint));
-      else log.info("restored open position " + b58(r.mint) + " base=" + std::to_string(held));
+      else log.info("restored open position " + b58(r.mint) + " (" + phase_name(r.phase) + ") base=" + std::to_string(held));
     } catch (const std::exception& e) {
       log.error("restore " + b58(r.mint) + " failed: " + e.what() + " — sell it manually");
     }
@@ -210,7 +232,7 @@ int main(int argc, char** argv) {
     }
     AmmConfig amm;
     sh->amm.load(amm);
-    if (amm.disable_flags & (1u << 3)) throw std::runtime_error("PumpSwap buys are disabled on chain");
+    if (amm.disable_flags & (1u << 4)) throw std::runtime_error("PumpSwap sells are disabled on chain");
     auto [lamports, bal_slot] = rpc.balance(kp.pubkey());
     log.info("wallet balance " + std::to_string(double(lamports) / 1e9) + " SOL");
     if (lamports < 10'000'000) log.warn("wallet holds < 0.01 SOL: every entry will be vetoed");

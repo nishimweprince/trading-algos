@@ -1,5 +1,6 @@
-# pump-desk configuration. Every key is optional; the values below are the
-# defaults (the live pump-fun config.yaml of 2026-10-06 and the racer schema).
+# pump-desk configuration. Every key is optional; the values below are the defaults.
+# Strategy: curve-in, migrate-out. Buy the last part of a pump.fun bonding curve, hold
+# through completion and the migrate, sell into the first PumpSwap slots after it.
 # Secrets come from the environment, never this file:
 #   HELIUS_GRPC_URL, HELIUS_GRPC_TOKEN, HELIUS_HTTP_URL, WALLET_PRIVATE_KEY
 #   (optional) SENDER_URL, JITO_URL
@@ -22,70 +23,58 @@ amm_config_refresh_ms = 30000
 balance_refresh_ms = 30000
 timeout_ms = 5000
 
-[racer]
-admit_cost_sol = 5            # track curves this close to completing
-max_completion_cost_sol = 0.5 # fire (arm the buy) at or below this
-curve_fee_bps = 125
+[curve]
+admit_cost_sol = 5            # track curves this close to completing (stream.band_values must cover it)
+fee_bps = 125                 # floor on the curve fee used in quotes (the pump.fun Global may say more)
 track_window_minutes = 120
 complete_no_pool_sec = 120
-pool_push_wait_ms = 20        # migrate tx first: wait this long for the pool push (true virtual reserve)
-default_virtual_quote_lamports = 17584492770
+default_virtual_quote_lamports = 17584492770  # PumpSwap virtual quote until the pool push lands
+entry_max_remaining_sol = 4   # buy once completing the curve costs at most this ...
+entry_min_remaining_sol = 0   # ... and more than this
+allow_mayhem = false          # mayhem pools open with almost no liquidity
+max_hold_s = 30               # not complete this long after the buy: sell back on the curve (CURVE_STALL)
+abort_remaining_sol = 0       # completion cost climbs past this: sell on the curve (CURVE_ABORT); 0 = off
+migrate_wait_s = 30           # complete but no migrate this long: the exit goes to Jupiter (AWAIT_TIMEOUT)
+partial_fill = true           # a buy that meets fewer tokens than it asked fills the rest (else pump error 6021)
+# Overhang: price drop if the top-k holders (not the curve, not us) sold everything on the curve.
+# Always read and logged on decision rows; vetoes only when overhang_max_drop_pct > 0 (pick it from
+# research/replay_curve.py's overhang diagnostic, only if the replay gate passes).
+overhang_top_k = 10           # holders summed (getTokenLargestAccounts gives at most 20); 0 = no reads
+overhang_max_drop_pct = 0     # veto (soft) entries above this drop; 0 = off
+overhang_refresh_ms = 2000    # re-read an untraded curve's holders this often
+overhang_max_age_ms = 5000    # an older read counts as unknown: soft veto overhang_unknown when on
 
 [screen]
-min_pool_sol = 25             # real SOL in the quote vault
-max_pool_sol = 100            # above: pumped inside the migrate slot
-max_buy_impact_pct = 3
 require_pump_suffix = true
-max_migrate_age_slots = 75    # stale_pool veto past this (~30 s at 400 ms/slot); 0 = off. A pool never seen migrating and never seen incomplete is always stale.
-migrate_grace_ms = 5000       # after migrate/pool-ready, skip slot-age stale for this long (late pool_push)
-t22_fee_wait_ms = 2000        # soft t22_fee_unverified (retry) until then; then latch
 blacklist_mints = []
 blacklist_creators = []
 
 [entry]
-size_wallet_pct = 15          # of the available (unreserved) balance, compounding
-min_size_sol = 0.005
-max_size_sol = 0              # 0 = no cap
-slippage_pct = 30
-cu_limit = 250000
+size_sol = 0.05               # fixed SOL per curve buy
+slippage_pct = 10             # max_sol_cost = quoted cost x (1 + this)
+cu_limit = 150000             # until routing.cu_samples_min buys have landed (then measured)
 priority_multiplier = 1       # on the CU price for buys (exits use exit_priority_multiplier)
 
 [exits]
-# Migration ladder: bank half early, trail the rest, cut dumps / stalls / dead money.
-tp0_enabled = true
-tp0_pct = 25
-tp0_sell_fraction = 0.5
-tp0_move_stop_to_pct = 5      # lock stop above entry after TP0
-tp1_pct = 55
-tp1_sell_fraction = 1
-tp2_pct = 100
-trailing_arm_pct = 15         # arm once MFE clears this; trail runners that miss TP1
-trailing_gap_pct = 12
-trailing_gap_high_vol_pct = 6
-hard_stop_pct = 22            # 100 = no stop loss
-tp1_move_stop_to_pct = 20
-time_stop_minutes = 6         # last-resort backstop if nothing else fired
-dead_money_enabled = true
-dead_money_minutes = 2
-dead_money_max_mfe_pct = 8    # never moved → free the slot
-liquidity_dump_pct = 15       # quote vault ≤ 85% of peak → LIQUIDITY_DUMP; 0 = off
-stall_enabled = true
-stall_arm_sec = 45            # min age before STALL can fire
-stall_sec = 45                # no new high for this long → STALL
+# After the migrate: POOL_TP once the mark is tp_pct over entry, else POOL_TIMEOUT
+# timeout_slots after the migrate slot (0 = sell at once).
+tp_pct = 0                    # 0 = off
+timeout_slots = 3
 protective_slippage_tiers = [20, 90]
 take_profit_slippage_tiers = [8, 20, 90]
 exit_retry_ms = 1500
-max_exit_attempts = 6         # then the kill latches (entries stop; exits are yours)
-exit_priority_multiplier = 2
-cu_limit = 200000
+max_exit_attempts = 6         # then the kill latches (entries stop) and Jupiter, else the operator, sells
+exit_priority_multiplier = 1
+cu_limit = 150000
 
 [risk]
-max_concurrent_positions = 2
+max_concurrent_positions = 1
 gas_headroom_sol = 0.003
 wallet_floor_sol = 0
 kill_file = "KILL"            # touch it to stop new entries; rm to resume
 buy_confirm_timeout_ms = 4000
 sent_resolve_ms = 90000
+max_loss_sol = 0.06           # realized loss since boot that latches the kill (no new entries); 0 = off
 
 [fees]
 cu_price_default = 1000000    # micro-lamports/CU until the first Helius estimate
@@ -115,8 +104,7 @@ tip_lamports = 10000
 
 # Leader-aware routing. aux-leaders classifies every slot's leader:
 #   agave       Agave / Jito without BAM: priority (CU price) decides ordering
-#   bam         BAM: arrival at the BAM node decides across ~20 ms auctions; inside one auction,
-#               where racers reacting to the same migrate meet, ranking is likely by fee
+#   bam         BAM: arrival at the BAM node decides across ~20 ms auctions
 #   firedancer  Firedancer / Frankendancer (version 0.x): fee per requested CU decides
 # Buys are priced for the leader of (processed tip + lookahead_slots).
 [routing]
@@ -128,6 +116,7 @@ rivals_path = "data/rivals.json"  # written by pump-desk-report --rivals (pump-d
 rival_window_slots = 4            # stream every pool tx up to migrate slot + 4 (rival_txs view)
 cu_limit_margin_pct = 15          # measured CU limit = max of the last 32 landed buys + this
 cu_samples_min = 8                # until then: entry.cu_limit
+max_rivals = 3                    # wallets kept from rivals.json (beat_rivals pricing)
 
 # cu_price_mode: estimate (Helius x multipliers) | floor (fees.cu_price_floor) |
 # beat_rivals (max of estimate and rivals.json's p90 + 1 for this class, capped at fees.cu_price_cap)
@@ -135,7 +124,7 @@ cu_samples_min = 8                # until then: entry.cu_limit
 # own: a sell's price never follows the buy's (a floor-priced buy class still exits at a high bid).
 # cu_limit 0 = measured. sender_tip_lamports 0 = sender.tip_lamports. jito needs jito.enabled.
 [routing.agave]
-cu_price_mode = "beat_rivals"
+cu_price_mode = "estimate"
 cu_price_multiplier = 1
 exit_cu_price_mode = "estimate"
 cu_limit = 0
@@ -143,7 +132,7 @@ sender_tip_lamports = 0
 jito = false
 
 [routing.bam]
-cu_price_mode = "beat_rivals"     # send at once (next auction) and bid high to win inside it
+cu_price_mode = "estimate"
 cu_price_multiplier = 1
 exit_cu_price_mode = "estimate"
 cu_limit = 0
@@ -151,24 +140,14 @@ sender_tip_lamports = 0
 jito = false                      # a Jito bundle/tx takes the block-engine hop (~+50 ms)
 
 [routing.firedancer]
-cu_price_mode = "beat_rivals"
+cu_price_mode = "estimate"
 cu_price_multiplier = 1
 exit_cu_price_mode = "estimate"
 cu_limit = 0                      # tight measured limit raises fee per requested CU
 sender_tip_lamports = 0
 jito = false
 
-# Lighthouse assertions ahead of every buy: if someone landed first the tx reverts
-# (~700 CU each) instead of filling up to entry.slippage_pct worse. Reverts close as
-# beaten_vault / beaten_rival, never retry, never count toward the kill latch.
-[lighthouse]
-enabled = true
-vault_guard = true                # pool quote vault must be <= what we priced + tolerance
-vault_tolerance_bps = 50
-rival_guard = true                # rivals.json guard wallets must not hold the mint yet
-max_rivals = 3                    # each costs ~48 bytes; guards that don't fit one packet are dropped
-
-# Exit of last resort. When the PumpSwap sell is exhausted (exits.max_exit_attempts), the kill
+# Exit of last resort. When the native sells are exhausted (exits.max_exit_attempts), the kill
 # still latches (no new entries), but the position is sold through Jupiter's Swap API (any pool it
 # indexes) instead of waiting for the operator. Needs JUPITER_API_KEY in .env; off without it.
 [jupiter]

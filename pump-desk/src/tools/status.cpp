@@ -202,7 +202,7 @@ std::string status_json(const std::string& path, int hours, int& http) {
 
   Stmt live;
   if (!prepare(db.p,
-               "SELECT ts, slot, i0, i1, i2, i3, i4, i5, i6, i7, d0, d1, d2, d3, d4 "
+               "SELECT ts, slot, i0, i1, i2, i3, i4, i5, i6, i7, d0, d1, d2, d3, d4, d5 "
                "FROM events WHERE type='stats' ORDER BY ts DESC LIMIT 1",
                live, err)) {
     http = 500;
@@ -242,15 +242,16 @@ std::string status_json(const std::string& path, int hours, int& http) {
     j.n("wallet_lamports", col_i(live.s, 6));
     j.n("reserved_lamports", col_i(live.s, 7));
     j.n("unresolved", col_i(live.s, 8));
+    j.f("realized_pnl_sol", col_d(live.s, 15));
     live_json = j.done();
   }
 
   // Indexed counts on events(type, ts). Decisions whose verdict is not "buy"
-  // are the vetoes, including screen rejects and the not-fired path.
+  // are the vetoes (screen rejects, soft vetoes once per change).
   Stmt counts;
   if (!prepare(db.p,
                "SELECT"
-               " (SELECT COUNT(*) FROM events WHERE type='curve_fire' AND ts>=?1),"
+               " (SELECT COUNT(*) FROM events WHERE type='curve_admit' AND ts>=?1),"
                " (SELECT COUNT(*) FROM events WHERE type='migrate' AND ts>=?1),"
                " (SELECT COUNT(*) FROM events WHERE type='decision' AND ts>=?1),"
                " (SELECT COUNT(*) FROM events WHERE type='decision' AND IFNULL(text,'')!='buy' AND ts>=?1),"
@@ -296,8 +297,9 @@ std::string status_json(const std::string& path, int hours, int& http) {
        "SELECT i6 FROM events WHERE type='fill' AND i0=0 AND i1=1 AND d5=1 AND i6>=0 AND ts>=?1 ORDER BY ts DESC LIMIT 200", 1},
       {"tx_index",
        "SELECT i5 FROM events WHERE type='fill' AND i0=0 AND i1=1 AND d5=1 AND i5>=0 AND ts>=?1 ORDER BY ts DESC LIMIT 200", 1},
-      {"writes_ahead",
-       "SELECT d1 FROM events WHERE type='fill' AND i0=0 AND i1=1 AND d5=1 AND d1>=0 AND ts>=?1 ORDER BY ts DESC LIMIT 200", 1},
+      {"migrate_to_sell",
+       "SELECT f.slot - u.slot FROM events f JOIN events u ON u.type='position_update' AND u.i2=2 AND u.a=f.a"
+       " WHERE f.type='fill' AND f.i0=1 AND f.i1=1 AND f.ts>=?1 ORDER BY f.ts DESC LIMIT 200", 1},
       {"shred_to_seen_ms",
        "SELECT i7 FROM events WHERE type='fill' AND i1=1 AND d5=1 AND i7!=0 AND ts>=?1 ORDER BY ts DESC LIMIT 200", 1e-6},
   };
@@ -318,7 +320,7 @@ std::string status_json(const std::string& path, int hours, int& http) {
   }
 
   Js window;
-  window.n("fires", col_i(counts.s, 0));
+  window.n("admits", col_i(counts.s, 0));
   window.n("migrates", col_i(counts.s, 1));
   window.n("decisions", col_i(counts.s, 2));
   window.n("vetoes", col_i(counts.s, 3));
@@ -419,7 +421,7 @@ std::string status_json(const std::string& path, int hours, int& http) {
   };
   std::string routing_json, rivals_json;
   bool routing_ok = rows_json(
-      "SELECT r.text, COUNT(*), COALESCE(SUM(f.i1 = 1), 0), COALESCE(SUM(f.text LIKE 'guard_%'), 0),"
+      "SELECT r.text, COUNT(*), COALESCE(SUM(f.i1 = 1), 0), COALESCE(SUM(f.text = 'curve_complete'), 0),"
       " AVG(CASE WHEN f.i1 = 1 AND f.d5 = 1 AND f.i6 >= 0 THEN f.i6 END), AVG(r.i1)"
       " FROM events r LEFT JOIN events f ON f.type='fill' AND f.sig=r.sig"
       " WHERE r.type='route' AND r.i5=0 AND r.ts>=?1 GROUP BY r.text ORDER BY 2 DESC",
@@ -427,19 +429,17 @@ std::string status_json(const std::string& path, int hours, int& http) {
         row.str("class", col_s(st, 0));
         row.n("buys", col_i(st, 1));
         row.n("landed", col_i(st, 2));
-        row.n("beaten", col_i(st, 3));
+        row.n("completed_first", col_i(st, 3));
         if (sqlite3_column_type(st, 4) == SQLITE_NULL) row.nul("avg_slots");
         else row.f("avg_slots", col_d(st, 4));
         row.f("avg_cu_price", col_d(st, 5));
       },
       routing_json);
   bool rivals_ok = routing_ok && rows_json(
-      "SELECT r.a, COUNT(DISTINCT r.b), COUNT(*) FROM events r"
-      " JOIN events o ON o.type='order' AND o.i0=0 AND o.b=r.b"
-      " LEFT JOIN events f ON f.type='fill' AND f.i0=0 AND f.sig=o.sig AND f.d5=1 AND f.i6>=0"
-      " WHERE r.type='rival_tx' AND r.i4>0 AND r.d1<0.5 AND r.ts>=?1"
-      " AND (f.id IS NULL OR r.slot < f.slot OR (r.slot = f.slot AND r.i0 >= 0 AND f.i5 >= 0 AND r.i0 < f.i5))"
-      " GROUP BY r.a ORDER BY 2 DESC, 3 DESC LIMIT 5",
+      // The buyers we sell into: pool buys in the first slots after our migrates.
+      "SELECT a, COUNT(DISTINCT b), COUNT(*) FROM events"
+      " WHERE type='rival_tx' AND i4>0 AND d1<0.5 AND ts>=?1"
+      " GROUP BY a ORDER BY 2 DESC, 3 DESC LIMIT 5",
       [](sqlite3_stmt* st, Js& row) {
         row.str("wallet", col_s(st, 0));
         row.n("pools", col_i(st, 1));
@@ -572,7 +572,7 @@ const char kPage[] = R"page(<!DOCTYPE html>
     <div id="routing"></div>
   </section>
   <section>
-    <h2>Landing ahead of us</h2>
+    <h2>Buying our pools after the migrate</h2>
     <div id="rivals"></div>
   </section>
   <section>
@@ -696,6 +696,7 @@ function render(j) {
       ["Slot", num(live.slot)],
       ["Curves", num(live.curves)],
       ["Open positions", num(live.positions)],
+      ["P&L since boot", (Number(live.realized_pnl_sol) || 0).toFixed(4) + " SOL"],
       ["Unresolved curves", num(live.unresolved)],
       ["Frames", num(live.frames)],
       ["Reconnects", num(live.reconnects)],
@@ -704,7 +705,7 @@ function render(j) {
     ]);
   }
   fill(document.getElementById("window"), [
-    ["Fires", num(w.fires || 0)],
+    ["Curves admitted", num(w.admits || 0)],
     ["Migrates", num(w.migrates || 0)],
     ["Decisions", num(w.decisions || 0)],
     ["Vetoes", num(w.vetoes || 0)],
@@ -716,7 +717,7 @@ function render(j) {
     ["Buy sent \u2192 seen", lat(w.buy_fill_ms, "ms")],
     ["Slots to land", lat(w.slots_to_land, "")],
     ["Block index", lat(w.tx_index, "")],
-    ["Pool writes ahead", lat(w.writes_ahead, "")],
+    ["Migrate \u2192 sell", lat(w.migrate_to_sell, "slots")],
     ["First shred \u2192 seen", lat(w.shred_to_seen_ms, "ms")]
   ]);
   const pos = document.getElementById("positions");
@@ -746,10 +747,10 @@ function render(j) {
     pos.append(table);
   }
   table(document.getElementById("routing"), j.routing || [], "No buys in this window",
-    ["Leader", "Buys", "Landed", "Beaten", "Slots to land", "CU price"],
-    (r) => [r["class"], num(r.buys), num(r.landed), num(r.beaten),
+    ["Leader", "Buys", "Landed", "Completed first", "Slots to land", "CU price"],
+    (r) => [r["class"], num(r.buys), num(r.landed), num(r.completed_first),
             r.avg_slots === null ? "\u2014" : Number(r.avg_slots).toFixed(2), num(Math.round(r.avg_cu_price || 0))]);
-  table(document.getElementById("rivals"), j.rivals || [], "Nobody landed ahead of our buys",
+  table(document.getElementById("rivals"), j.rivals || [], "No pool buys seen after our migrates",
     ["Wallet", "Pools", "Txs"], (r) => [r.wallet, num(r.pools), num(r.txs)]);
   const box = document.getElementById("errors");
   box.replaceChildren();

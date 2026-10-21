@@ -1,6 +1,5 @@
 #pragma once
-// Runtime configuration. Defaults mirror the live pump-fun config.yaml
-// (2026-10-06 operator settings) and the racer schema defaults.
+// Runtime configuration. Defaults are the curve-in, migrate-out pilot settings (2026-10-21).
 #include <cstdint>
 #include <map>
 #include <string>
@@ -29,71 +28,65 @@ struct Config {
     int timeout_ms = 5000;
   } rpc;
 
-  struct Racer {
-    double admit_cost_sol = 5.0;
-    double max_completion_cost_sol = 0.5;
-    int curve_fee_bps = 125;
+  /**
+   * Curve-in, migrate-out: buy the last part of a bonding curve, hold through
+   * completion and the migrate, sell into the first PumpSwap slots.
+   */
+  struct Curves {
+    double admit_cost_sol = 5.0;   // track curves this close to completing
+    int fee_bps = 125;             // floor on the curve fee used for quotes (Global may say more)
     int track_window_minutes = 120;
     int complete_no_pool_sec = 120;
-    /**
-     * The pool account carries the true virtual quote reserve (it varies per pool:
-     * 15.3-17.6 SOL seen, 0 on mayhem pools). When the migrate tx beats the pool
-     * push, wait this long for it before pricing off the default below.
-     */
-    int pool_push_wait_ms = 20;
+    /** PumpSwap virtual quote reserve when the pool push has not arrived (0 on mayhem pools). */
     uint64_t default_virtual_quote_lamports = 17'584'492'770ULL;
     int max_curves = 8192;
-  } racer;
+    double entry_max_remaining_sol = 4.0;  // buy once completion costs at most this
+    double entry_min_remaining_sol = 0.0;  // ... and more than this
+    bool allow_mayhem = false;             // mayhem pools open with almost no liquidity
+    double max_hold_s = 30;                // not complete this long after the buy: sell back on the curve
+    double abort_remaining_sol = 0;        // completion cost climbs past this: sell on the curve; 0 = off
+    double migrate_wait_s = 30;            // complete but no migrate this long: hand to Jupiter
+    bool partial_fill = true;              // pump buy fills the remaining tokens instead of failing 6021
+    // Overhang: the price drop if the top-k holders sold on the curve (aux getTokenLargestAccounts).
+    int overhang_top_k = 10;               // holders summed; 0 = no reads
+    double overhang_max_drop_pct = 0;      // veto entries above this drop; 0 = off (still logged)
+    int overhang_refresh_ms = 2000;        // re-read an untraded curve's holders this often
+    int overhang_max_age_ms = 5000;        // an older read counts as unknown (overhang_unknown)
+  } curve;
 
   struct Screen {
-    double min_pool_sol = 25;
-    double max_pool_sol = 100;
-    double max_buy_impact_pct = 3;
     bool require_pump_suffix = true;
-    int max_migrate_age_slots = 75;  // stale_pool past this (~30 s); 0 = no age check
-    int migrate_grace_ms = 5000;     // wall-clock grace after migrate/pool-ready: skip slot-age stale
-    int t22_fee_wait_ms = 2000;      // soft t22_fee_unverified until then; then latch
     std::vector<std::string> blacklist_mints;
     std::vector<std::string> blacklist_creators;
   } screen;
 
   struct Entry {
-    double size_wallet_pct = 15;
-    double min_size_sol = 0.005;
-    double max_size_sol = 0;  // 0 = no cap
-    double slippage_pct = 30;
-    uint32_t cu_limit = 250000;
+    double size_sol = 0.05;          // fixed SOL per curve buy
+    double slippage_pct = 10;        // max_sol_cost = size * (1 + this)
+    uint32_t cu_limit = 150000;      // until routing.cu_samples_min buys have landed
     double priority_multiplier = 1;  // on the CU price for buys, like exits.exit_priority_multiplier
   } entry;
 
+  /** After the migrate: take profit at tp_pct over entry, else sell timeout_slots after the migrate slot. */
   struct Exits {
-    bool tp0_enabled = true;
-    double tp0_pct = 25, tp0_sell_fraction = 0.5, tp0_move_stop_to_pct = 5;
-    double tp1_pct = 55, tp1_sell_fraction = 1, tp2_pct = 100;
-    double trailing_arm_pct = 15, trailing_gap_pct = 12, trailing_gap_high_vol_pct = 6;
-    double hard_stop_pct = 22, tp1_move_stop_to_pct = 20;
-    double time_stop_minutes = 6;
-    bool dead_money_enabled = true;
-    double dead_money_minutes = 2, dead_money_max_mfe_pct = 8;
-    double liquidity_dump_pct = 15;  // quote vault ≤ peak*(1-pct/100); 0 = off
-    bool stall_enabled = true;
-    double stall_arm_sec = 45;  // min age before stall can fire
-    double stall_sec = 45;      // no new high for this long → STALL
+    double tp_pct = 0;  // 0 = off
+    int timeout_slots = 3;
     std::vector<double> protective_slippage_tiers{20, 90};
     std::vector<double> take_profit_slippage_tiers{8, 20, 90};
     int exit_retry_ms = 1500;
     int max_exit_attempts = 6;
-    double exit_priority_multiplier = 2;
-    uint32_t cu_limit = 200000;
+    double exit_priority_multiplier = 1;
+    uint32_t cu_limit = 150000;
   } exits;
 
   struct Risk {
-    int max_concurrent_positions = 2;
+    int max_concurrent_positions = 1;
     double gas_headroom_sol = 0.003;
     double wallet_floor_sol = 0;
     std::string kill_file = "KILL";
     int buy_confirm_timeout_ms = 4000;
     int sent_resolve_ms = 90000;
+    double max_loss_sol = 0.06;  // realized loss since boot that latches the kill; 0 = off
   } risk;
 
   struct Fees {
@@ -142,20 +135,11 @@ struct Config {
     int rival_window_slots = 4;     // record pool txs up to migrate slot + this
     double cu_limit_margin_pct = 15;
     int cu_samples_min = 8;         // measured CU needs this many buy fills, else entry.cu_limit
-    // Agave/Jito: priority decides. BAM: arrival decides across auctions; within one ~20 ms
-    // auction (where racers reacting to the same migrate meet) ranking is likely by fee, so bid high.
+    int max_rivals = 3;             // wallets kept from the rivals file
+    // Agave/Jito: priority decides. BAM: arrival decides across ~20 ms auctions.
     // Firedancer: fee per requested CU decides.
-    RouteClass agave{"beat_rivals"}, bam{"beat_rivals"}, firedancer{"beat_rivals"};
+    RouteClass agave, bam, firedancer;
   } routing;
-
-  /** Lighthouse assertions in front of every buy. */
-  struct Lighthouse {
-    bool enabled = true;
-    bool vault_guard = true;       // revert if the pool quote vault grew past what we priced
-    int vault_tolerance_bps = 50;
-    bool rival_guard = true;       // revert if a listed rival already holds the mint
-    int max_rivals = 3;            // <= MAX_RIVALS (sol/swap.hpp)
-  } lighthouse;
 
   /** Jupiter Swap API: sells a position the PumpSwap exits could not (exits.max_exit_attempts). */
   struct Jupiter {

@@ -134,26 +134,17 @@ Config load_config(const std::string& path) {
   G(stream, silence_reconnect_ms);
   G(rpc, http_url); G(rpc, blockhash_refresh_ms); G(rpc, amm_config_refresh_ms); G(rpc, balance_refresh_ms);
   G(rpc, timeout_ms);
-  G(racer, admit_cost_sol); G(racer, max_completion_cost_sol); G(racer, curve_fee_bps);
-  G(racer, track_window_minutes); G(racer, complete_no_pool_sec); G(racer, pool_push_wait_ms);
-  G(racer, default_virtual_quote_lamports);
-  G(racer, max_curves);
-  G(screen, min_pool_sol); G(screen, max_pool_sol); G(screen, max_buy_impact_pct); G(screen, require_pump_suffix);
-  G(screen, max_migrate_age_slots); G(screen, migrate_grace_ms); G(screen, t22_fee_wait_ms);
-  G(screen, blacklist_mints); G(screen, blacklist_creators);
-  G(entry, size_wallet_pct); G(entry, min_size_sol); G(entry, max_size_sol); G(entry, slippage_pct); G(entry, cu_limit);
-  G(entry, priority_multiplier);
-  G(exits, tp0_enabled); G(exits, tp0_pct); G(exits, tp0_sell_fraction); G(exits, tp0_move_stop_to_pct);
-  G(exits, tp1_pct); G(exits, tp1_sell_fraction); G(exits, tp2_pct); G(exits, trailing_arm_pct);
-  G(exits, trailing_gap_pct); G(exits, trailing_gap_high_vol_pct); G(exits, hard_stop_pct);
-  G(exits, tp1_move_stop_to_pct); G(exits, time_stop_minutes); G(exits, dead_money_enabled);
-  G(exits, dead_money_minutes); G(exits, dead_money_max_mfe_pct); G(exits, liquidity_dump_pct);
-  G(exits, stall_enabled); G(exits, stall_arm_sec); G(exits, stall_sec);
-  G(exits, protective_slippage_tiers);
-  G(exits, take_profit_slippage_tiers); G(exits, exit_retry_ms); G(exits, max_exit_attempts);
-  G(exits, exit_priority_multiplier); G(exits, cu_limit);
+  G(curve, admit_cost_sol); G(curve, fee_bps); G(curve, track_window_minutes); G(curve, complete_no_pool_sec);
+  G(curve, default_virtual_quote_lamports); G(curve, max_curves); G(curve, entry_max_remaining_sol);
+  G(curve, entry_min_remaining_sol); G(curve, allow_mayhem); G(curve, max_hold_s); G(curve, abort_remaining_sol);
+  G(curve, migrate_wait_s); G(curve, partial_fill); G(curve, overhang_top_k); G(curve, overhang_max_drop_pct);
+  G(curve, overhang_refresh_ms); G(curve, overhang_max_age_ms);
+  G(screen, require_pump_suffix); G(screen, blacklist_mints); G(screen, blacklist_creators);
+  G(entry, size_sol); G(entry, slippage_pct); G(entry, cu_limit); G(entry, priority_multiplier);
+  G(exits, tp_pct); G(exits, timeout_slots); G(exits, protective_slippage_tiers); G(exits, take_profit_slippage_tiers);
+  G(exits, exit_retry_ms); G(exits, max_exit_attempts); G(exits, exit_priority_multiplier); G(exits, cu_limit);
   G(risk, max_concurrent_positions); G(risk, gas_headroom_sol); G(risk, wallet_floor_sol); G(risk, kill_file);
-  G(risk, buy_confirm_timeout_ms); G(risk, sent_resolve_ms);
+  G(risk, buy_confirm_timeout_ms); G(risk, sent_resolve_ms); G(risk, max_loss_sol);
   G(fees, cu_price_default); G(fees, cu_price_floor); G(fees, cu_price_cap); G(fees, refresh_ms);
   G(fees, priority_level);
   G(sender, url); G(sender, swqos_only); G(sender, tip_lamports); G(sender, exit_tip_lamports);
@@ -162,7 +153,7 @@ Config load_config(const std::string& path) {
   G(jito, enabled); G(jito, url); G(jito, tip_lamports); G(jito, tip_accounts);
   G(routing, enabled); G(routing, lookahead_slots); G(routing, bam_validators_path);
   G(routing, cluster_nodes_refresh_s); G(routing, rivals_path); G(routing, rival_window_slots);
-  G(routing, cu_limit_margin_pct); G(routing, cu_samples_min);
+  G(routing, cu_limit_margin_pct); G(routing, cu_samples_min); G(routing, max_rivals);
   for (auto [name, rc] : {std::pair{"agave", &c.routing.agave}, {"bam", &c.routing.bam}, {"firedancer", &c.routing.firedancer}}) {
     std::string sec = std::string("routing.") + name + ".";
     r.get(sec + "cu_price_mode", rc->cu_price_mode);
@@ -172,8 +163,6 @@ Config load_config(const std::string& path) {
     r.get(sec + "sender_tip_lamports", rc->sender_tip_lamports);
     r.get(sec + "jito", rc->jito);
   }
-  G(lighthouse, enabled); G(lighthouse, vault_guard); G(lighthouse, vault_tolerance_bps); G(lighthouse, rival_guard);
-  G(lighthouse, max_rivals);
   G(jupiter, enabled); G(jupiter, url); G(jupiter, slippage_bps); G(jupiter, max_attempts); G(jupiter, confirm_ms);
   G(jupiter, max_priority_lamports);
   G(threads, ingest_cpu); G(threads, logic_cpu); G(threads, exec_cpu); G(threads, aux_cpu);
@@ -218,18 +207,24 @@ Config load_config(const std::string& path) {
     if (l != "Min" && l != "Low" && l != "Medium" && l != "High" && l != "VeryHigh" && l != "UnsafeMax")
       throw std::runtime_error("config: fees.priority_level must be Min|Low|Medium|High|VeryHigh|UnsafeMax");
   }
-  if (c.entry.size_wallet_pct <= 0 || c.entry.size_wallet_pct > 100) throw std::runtime_error("config: entry.size_wallet_pct");
+  if (c.entry.size_sol <= 0) throw std::runtime_error("config: entry.size_sol must be > 0");
+  if (c.entry.slippage_pct < 0 || c.entry.slippage_pct > 100) throw std::runtime_error("config: entry.slippage_pct must be 0..100");
   if (c.exits.protective_slippage_tiers.empty() || c.exits.take_profit_slippage_tiers.empty())
     throw std::runtime_error("config: exit slippage tiers must not be empty");
-  if (c.exits.liquidity_dump_pct < 0 || c.exits.liquidity_dump_pct > 100)
-    throw std::runtime_error("config: exits.liquidity_dump_pct must be 0..100");
-  if (c.exits.stall_arm_sec < 0 || c.exits.stall_sec < 0)
-    throw std::runtime_error("config: exits.stall_arm_sec / stall_sec must be >= 0");
+  if (c.exits.tp_pct < 0 || c.exits.timeout_slots < 0) throw std::runtime_error("config: exits.tp_pct / timeout_slots must be >= 0");
+  if (c.curve.entry_max_remaining_sol <= 0 || c.curve.entry_min_remaining_sol < 0 ||
+      c.curve.entry_min_remaining_sol >= c.curve.entry_max_remaining_sol || c.curve.entry_max_remaining_sol > c.curve.admit_cost_sol)
+    throw std::runtime_error("config: curve.entry_min_remaining_sol < entry_max_remaining_sol <= admit_cost_sol");
+  if (c.curve.max_hold_s <= 0 || c.curve.migrate_wait_s <= 0 || c.curve.abort_remaining_sol < 0)
+    throw std::runtime_error("config: curve.max_hold_s / migrate_wait_s must be > 0, abort_remaining_sol >= 0");
+  if (c.curve.overhang_top_k < 0 || c.curve.overhang_top_k > 20 || c.curve.overhang_max_drop_pct < 0 ||
+      c.curve.overhang_max_drop_pct > 100 || c.curve.overhang_refresh_ms <= 0 || c.curve.overhang_max_age_ms <= 0)
+    throw std::runtime_error("config: curve.overhang_top_k 0..20, overhang_max_drop_pct 0..100, overhang_*_ms > 0");
+  if (c.curve.overhang_max_drop_pct > 0 && c.curve.overhang_top_k == 0)
+    throw std::runtime_error("config: curve.overhang_max_drop_pct needs overhang_top_k > 0");
+  if (c.risk.max_loss_sol < 0) throw std::runtime_error("config: risk.max_loss_sol must be >= 0");
   if (c.risk.max_concurrent_positions < 1 || c.risk.max_concurrent_positions > 8)
     throw std::runtime_error("config: risk.max_concurrent_positions must be 1..8");
-  if (c.screen.max_migrate_age_slots < 0) throw std::runtime_error("config: screen.max_migrate_age_slots must be >= 0");
-  if (c.screen.migrate_grace_ms < 0) throw std::runtime_error("config: screen.migrate_grace_ms must be >= 0");
-  if (c.screen.t22_fee_wait_ms < 0) throw std::runtime_error("config: screen.t22_fee_wait_ms must be >= 0");
   if (c.jupiter.slippage_bps < 1 || c.jupiter.slippage_bps > 10000 || c.jupiter.max_attempts < 0 || c.jupiter.max_attempts > 20 ||
       c.jupiter.confirm_ms < 1000)
     throw std::runtime_error("config: jupiter.slippage_bps 1..10000, max_attempts 0..20, confirm_ms >= 1000");
@@ -250,9 +245,7 @@ Config load_config(const std::string& path) {
     if (rc->sender_tip_lamports && !c.sender.swqos_only && rc->sender_tip_lamports < 1'000'000)
       throw std::runtime_error(sec + ".sender_tip_lamports must be >= 1000000 without swqos_only");
   }
-  if (c.lighthouse.max_rivals < 0 || c.lighthouse.max_rivals > int(MAX_RIVALS))
-    throw std::runtime_error("config: lighthouse.max_rivals must be 0.." + std::to_string(MAX_RIVALS));
-  if (c.lighthouse.vault_tolerance_bps < 0) throw std::runtime_error("config: lighthouse.vault_tolerance_bps must be >= 0");
+  if (c.routing.max_rivals < 0 || c.routing.max_rivals > 16) throw std::runtime_error("config: routing.max_rivals must be 0..16");
   return c;
 }
 

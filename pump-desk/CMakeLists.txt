@@ -32,6 +32,7 @@ add_library(pdcore STATIC
   src/core/config.cpp
   src/sol/amm.cpp
   src/sol/constants.cpp
+  src/sol/curve.cpp
   src/sol/crypto.cpp
   src/sol/lighthouse.cpp
   src/sol/swap.cpp
