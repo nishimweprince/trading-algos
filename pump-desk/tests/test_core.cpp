@@ -1,3 +1,6 @@
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <thread>
 
 #include "core/base58.hpp"
@@ -254,6 +257,29 @@ TEST(config_example_parses_to_defaults) {
   CHECK_EQ(c.sender.max_429_retries, d.sender.max_429_retries);
   CHECK_EQ(c.fees.priority_level, d.fees.priority_level);
   CHECK_EQ(c.entry.priority_multiplier, d.entry.priority_multiplier);
+  CHECK_EQ(c.curve.overhang_top_k, d.curve.overhang_top_k);
+  CHECK_EQ(c.curve.overhang_max_drop_pct, d.curve.overhang_max_drop_pct);
+  CHECK_EQ(c.curve.overhang_refresh_ms, d.curve.overhang_refresh_ms);
+  CHECK_EQ(c.curve.overhang_max_age_ms, d.curve.overhang_max_age_ms);
+  {
+    // An out-of-range overhang threshold refuses the start.
+    std::ifstream in(std::string(PD_FIXTURE_DIR) + "/../../config.example.toml");
+    std::stringstream ss;
+    ss << in.rdbuf();
+    std::string text = ss.str();
+    const std::string from = "overhang_max_drop_pct = 0 ";
+    size_t at = text.find(from);
+    CHECK(at != std::string::npos);
+    text.replace(at, from.size(), "overhang_max_drop_pct = 120 ");
+    std::string path = (std::filesystem::temp_directory_path() / "pd_overhang_bad.toml").string();
+    std::ofstream(path) << text;
+    bool rejected = false;
+    try {
+      load_config(path);
+    } catch (const std::exception&) { rejected = true; }
+    std::filesystem::remove(path);
+    CHECK(rejected);
+  }
   bool threw = false;
   try {
     auto kv = parse_toml("[entry]\nsize_soll = 3\n");

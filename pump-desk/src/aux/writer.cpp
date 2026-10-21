@@ -109,7 +109,9 @@ std::string event_json(const Event& e) {
     case Ev::Decision:
       j.str("verdict", escape(e.text)).str("mint", key_or_empty(e.a)).str("curve", key_or_empty(e.b))
           .d("size_sol", e.d[0]).d("curve_real_sol", e.d[1]).d("completion_cost_sol", e.d[3])
-          .i("recv_to_decide_ns", e.i[0]).i("recv_to_queued_ns", e.i[1]).i("real_tokens", e.i[4]).i("tokens", e.i[5]);
+          .i("recv_to_decide_ns", e.i[0]).i("recv_to_queued_ns", e.i[1]).i("real_tokens", e.i[4]).i("tokens", e.i[5])
+          .d("overhang_drop_pct", e.d[2]).d("overhang_age_ms", e.d[4]).i("holder_tokens", e.i[2])
+          .i("creator_tokens", e.i[3]);
       break;
     case Ev::Order:
       j.str("side", e.i[0] == 0 ? "buy" : "sell").str("sig", sig_or_empty(e.sig)).str("mint", b58(e.a)).str("venue", key_or_empty(e.b))
@@ -200,7 +202,8 @@ void Writer::open() {
   DROP VIEW IF EXISTS decisions;
   CREATE VIEW decisions AS SELECT ts, slot, text AS verdict, a AS mint, b AS curve, d0 AS size_sol,
     d1 AS curve_real_sol, d3 AS completion_cost_sol, i0 AS recv_to_decide_ns, i1 AS recv_to_queued_ns,
-    i4 AS real_tokens, i5 AS tokens FROM events WHERE type='decision';
+    i4 AS real_tokens, i5 AS tokens, d2 AS overhang_drop_pct, d4 AS overhang_age_ms, i2 AS holder_tokens,
+    i3 AS creator_tokens FROM events WHERE type='decision';
   CREATE VIEW IF NOT EXISTS orders AS SELECT ts, slot, CASE i0 WHEN 0 THEN 'buy' ELSE 'sell' END AS side, sig, a AS mint,
     i1 AS amount, i2 AS bound, i3 AS expected, i4 AS cu_price, i5 AS tip, i6 AS attempt, i7 AS recv_to_signed_ns,
     text AS reason FROM events WHERE type='order';

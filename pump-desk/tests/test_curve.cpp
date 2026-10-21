@@ -150,6 +150,16 @@ TEST(curve_quotes_match_sdk) {
   }
 }
 
+TEST(curve_overhang_drop_matches_replay) {
+  // Same vector as research/test_replay_curve.py (overhang_drop_pct).
+  Curve c;
+  c.virtual_token = 289'900'000'000'000ULL;
+  CHECK(std::fabs(overhang_drop_pct(c, 100'000'000'000'000ULL) - 44.71720904098031) < 1e-9);
+  CHECK_EQ(overhang_drop_pct(c, 0), 0.0);
+  c.virtual_token = 0;
+  CHECK_EQ(overhang_drop_pct(c, 1), 0.0);
+}
+
 TEST(curve_buy_caps_at_remaining_tokens) {
   Curve c;
   c.virtual_token = 280'000'000'000'000ULL;

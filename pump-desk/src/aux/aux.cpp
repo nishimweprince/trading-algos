@@ -18,6 +18,7 @@
 #include "core/base64.hpp"
 #include "core/sys.hpp"
 #include "sol/constants.hpp"
+#include "sol/crypto.hpp"
 #include "sol/layouts.hpp"
 
 namespace pd {
@@ -268,6 +269,27 @@ void run_aux_req(const Config& cfg, Shared& sh, const Keypair& kp, Logger& log) 
           }
         } else if (d.req.op == AuxOp::ReadMint) {
           r.ok = read_mint(rpc, d.req.mint, r);
+          respond(r);
+        } else if (d.req.op == AuxOp::ReadHolders) {
+          // One attempt: a stale holder read is worth nothing, logic asks again on its refresh.
+          try {
+            uint64_t slot = 0;
+            auto top = rpc.token_largest_accounts(d.req.mint, slot);
+            Pubkey creator_ata = is_zero(d.req.creator) ? Pubkey{} : ata(d.req.creator, d.req.mint, d.req.token_program);
+            int n = 0;
+            for (auto& [account, amount] : top) {
+              if (account == d.req.exclude[0] || account == d.req.exclude[1]) continue;
+              if (!is_zero(creator_ata) && account == creator_ata) r.creator_tokens = amount;
+              if (n < d.req.top_k) {
+                r.holder_tokens += amount;
+                ++n;
+              }
+            }
+            r.holders_slot = slot;
+            r.ok = true;
+          } catch (const std::exception& e) {
+            log.warn("holders " + b58(d.req.mint) + ": " + e.what());
+          }
           respond(r);
         } else if (d.req.op == AuxOp::JupiterSell) {
           // One attempt per request: logic decides on retries (jupiter.max_attempts).

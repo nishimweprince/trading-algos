@@ -47,6 +47,11 @@ struct Config {
     double abort_remaining_sol = 0;        // completion cost climbs past this: sell on the curve; 0 = off
     double migrate_wait_s = 30;            // complete but no migrate this long: hand to Jupiter
     bool partial_fill = true;              // pump buy fills the remaining tokens instead of failing 6021
+    // Overhang: the price drop if the top-k holders sold on the curve (aux getTokenLargestAccounts).
+    int overhang_top_k = 10;               // holders summed; 0 = no reads
+    double overhang_max_drop_pct = 0;      // veto entries above this drop; 0 = off (still logged)
+    int overhang_refresh_ms = 2000;        // re-read an untraded curve's holders this often
+    int overhang_max_age_ms = 5000;        // an older read counts as unknown (overhang_unknown)
   } curve;
 
   struct Screen {

@@ -55,6 +55,10 @@ struct CurveSlot {
   bool pool_seen = false;
   Pool pool;
   char last_veto[24] = {0};  // the last soft veto emitted (one decision row per change, not per update)
+  // Overhang: top-k holder tokens and the creator's, from the latest aux ReadHolders.
+  uint64_t holder_tokens = 0, creator_tokens = 0;
+  int64_t holders_ms = 0, holders_req_ms = 0;  // wall ms of the last read / request (0 = none)
+  bool holders_pending = false;
 };
 
 struct Launch {
@@ -177,6 +181,10 @@ class Engine {
   void set_mint(CurveSlot& s, const Pubkey& mint, const Pubkey& token_program, TransferFee fee, uint64_t supply);
   /** Queue an aux ReadMint when T22 fee is still Unknown. */
   void request_mint_fee(CurveSlot& s);
+  /** Queue an aux ReadHolders for an untraded curve, at most every overhang_refresh_ms. */
+  void request_holders(CurveSlot& s);
+  /** A holder read younger than overhang_max_age_ms. */
+  bool holders_fresh(const CurveSlot& s) const;
   /** Pool and curve keys, once the mint and its token program are known. Watches nothing. */
   void prepare_keys(CurveSlot& s);
   void drop_curve(const Pubkey& key);

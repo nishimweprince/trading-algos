@@ -200,6 +200,8 @@ void Engine::on_curve(const AccountView& a) {
   }
   if (!s->traded && !c.complete && cost > cfg_.curve.entry_min_remaining_sol && cost <= cfg_.curve.entry_max_remaining_sol)
     try_enter(*s, last_frame_ns_);
+  // After the entry so the read never delays a buy; it serves the next update.
+  if (!s->traded && !c.complete) request_holders(*s);
 }
 
 CurveSlot* Engine::admit(const Pubkey& key, const Curve& c, const AccountView& a) {
@@ -279,6 +281,31 @@ void Engine::request_mint_fee(CurveSlot& s) {
   r.curve = s.curve;
   r.mint = s.mint;
   sh_.aux_reqs.push(r);
+}
+
+void Engine::request_holders(CurveSlot& s) {
+  if (cfg_.curve.overhang_top_k <= 0 || !s.keys_ready) return;
+  int64_t now = wall_ms_();
+  // A pending read whose answer never came (aux gave up) stops blocking after 10 s.
+  if (s.holders_req_ms && (now - s.holders_req_ms < cfg_.curve.overhang_refresh_ms ||
+                           (s.holders_pending && now - s.holders_req_ms < 10'000)))
+    return;
+  AuxReq r;
+  r.op = AuxOp::ReadHolders;
+  r.curve = s.curve;
+  r.mint = s.mint;
+  r.creator = s.creator;
+  r.token_program = s.token_program;
+  r.exclude[0] = s.ckeys.associated_bonding_curve;
+  r.exclude[1] = s.ckeys.user_ata;
+  r.top_k = uint8_t(cfg_.curve.overhang_top_k);
+  if (!sh_.aux_reqs.push(r)) return;
+  s.holders_pending = true;
+  s.holders_req_ms = now;
+}
+
+bool Engine::holders_fresh(const CurveSlot& s) const {
+  return s.holders_ms > 0 && wall_ms_() - s.holders_ms <= cfg_.curve.overhang_max_age_ms;
 }
 
 void Engine::prepare_keys(CurveSlot& s) {
@@ -648,6 +675,14 @@ void Engine::try_enter(CurveSlot& s, uint64_t recv_ns) {
     veto = "t22_fee_unverified";
     request_mint_fee(s);
     soft = true;
+  } else if (cfg_.curve.overhang_max_drop_pct > 0 && !holders_fresh(s)) {
+    veto = "overhang_unknown";
+    request_holders(s);
+    soft = true;
+  } else if (cfg_.curve.overhang_max_drop_pct > 0 &&
+             overhang_drop_pct(s.state, s.holder_tokens) > cfg_.curve.overhang_max_drop_pct) {
+    veto = "overhang";
+    soft = true;
   } else if (held) veto = "held";
   else if (active_positions() >= max_positions_ || free_position() < 0) {
     veto = "max_concurrent";
@@ -763,6 +798,12 @@ void Engine::decide(CurveSlot& s, const char* verdict, bool soft, uint64_t size,
   d->i[1] = int64_t(now_ns_() - recv_ns); // frame arrival -> packet queued (or veto)
   d->i[4] = int64_t(s.state.real_token);
   d->i[5] = int64_t(tokens);
+  // Overhang, logged whether or not it vetoes: drop -1 and age -1 when there is no fresh read.
+  bool fresh = holders_fresh(s);
+  d->d[2] = fresh ? overhang_drop_pct(s.state, s.holder_tokens) : -1.0;
+  d->d[4] = s.holders_ms > 0 ? double(wall_ms_() - s.holders_ms) : -1.0;
+  d->i[2] = int64_t(s.holder_tokens);
+  d->i[3] = int64_t(s.creator_tokens);
   std::snprintf(d->text, sizeof d->text, "%s", verdict);
   emit();
   if (std::strcmp(verdict, "buy") != 0) sh_.counters.vetoes.fetch_add(1, std::memory_order_relaxed);
@@ -1381,6 +1422,18 @@ void Engine::drain_queues(uint64_t now) {
       // Fee just resolved (or mint landed): retry a soft-vetoed entry without waiting for the next curve update.
       if (!s->traded && !s->complete && s->cost_sol > cfg_.curve.entry_min_remaining_sol &&
           s->cost_sol <= cfg_.curve.entry_max_remaining_sol)
+        try_enter(*s, last_frame_ns_);
+    } else if (a.op == AuxOp::ReadHolders) {
+      CurveSlot* s = curves_.find(a.curve);
+      if (!s) continue;
+      s->holders_pending = false;
+      if (!a.ok) continue;
+      s->holder_tokens = a.holder_tokens;
+      s->creator_tokens = a.creator_tokens;
+      s->holders_ms = wall_ms_();
+      // An entry held back for want of (or by) the overhang: decide again on the new read.
+      if (!s->traded && !s->complete && std::strncmp(s->last_veto, "overhang", 8) == 0 &&
+          s->cost_sol > cfg_.curve.entry_min_remaining_sol && s->cost_sol <= cfg_.curve.entry_max_remaining_sol)
         try_enter(*s, last_frame_ns_);
     } else if (a.op == AuxOp::ResolveSig) {
       Position& p = positions_[a.pos];

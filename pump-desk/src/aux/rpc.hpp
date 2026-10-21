@@ -59,6 +59,9 @@ class Rpc {
   Blockhash latest_blockhash(const char* commitment = "confirmed");
   std::vector<std::optional<RpcAccount>> multiple_accounts(const std::vector<Pubkey>& keys, const char* commitment = "confirmed");
   std::optional<RpcAccount> account(const Pubkey& key, const char* commitment = "confirmed");
+  /** getTokenLargestAccounts: (token account, raw amount), largest first; `slot` = context slot. */
+  std::vector<std::pair<Pubkey, uint64_t>> token_largest_accounts(const Pubkey& mint, uint64_t& slot,
+                                                                  const char* commitment = "confirmed");
   /** {lamports, context slot} */
   std::pair<uint64_t, uint64_t> balance(const Pubkey& key, const char* commitment = "confirmed");
   RpcTransaction transaction(const std::string& sig_b58, const char* commitment = "confirmed");

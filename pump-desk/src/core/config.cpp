@@ -137,7 +137,8 @@ Config load_config(const std::string& path) {
   G(curve, admit_cost_sol); G(curve, fee_bps); G(curve, track_window_minutes); G(curve, complete_no_pool_sec);
   G(curve, default_virtual_quote_lamports); G(curve, max_curves); G(curve, entry_max_remaining_sol);
   G(curve, entry_min_remaining_sol); G(curve, allow_mayhem); G(curve, max_hold_s); G(curve, abort_remaining_sol);
-  G(curve, migrate_wait_s); G(curve, partial_fill);
+  G(curve, migrate_wait_s); G(curve, partial_fill); G(curve, overhang_top_k); G(curve, overhang_max_drop_pct);
+  G(curve, overhang_refresh_ms); G(curve, overhang_max_age_ms);
   G(screen, require_pump_suffix); G(screen, blacklist_mints); G(screen, blacklist_creators);
   G(entry, size_sol); G(entry, slippage_pct); G(entry, cu_limit); G(entry, priority_multiplier);
   G(exits, tp_pct); G(exits, timeout_slots); G(exits, protective_slippage_tiers); G(exits, take_profit_slippage_tiers);
@@ -216,6 +217,11 @@ Config load_config(const std::string& path) {
     throw std::runtime_error("config: curve.entry_min_remaining_sol < entry_max_remaining_sol <= admit_cost_sol");
   if (c.curve.max_hold_s <= 0 || c.curve.migrate_wait_s <= 0 || c.curve.abort_remaining_sol < 0)
     throw std::runtime_error("config: curve.max_hold_s / migrate_wait_s must be > 0, abort_remaining_sol >= 0");
+  if (c.curve.overhang_top_k < 0 || c.curve.overhang_top_k > 20 || c.curve.overhang_max_drop_pct < 0 ||
+      c.curve.overhang_max_drop_pct > 100 || c.curve.overhang_refresh_ms <= 0 || c.curve.overhang_max_age_ms <= 0)
+    throw std::runtime_error("config: curve.overhang_top_k 0..20, overhang_max_drop_pct 0..100, overhang_*_ms > 0");
+  if (c.curve.overhang_max_drop_pct > 0 && c.curve.overhang_top_k == 0)
+    throw std::runtime_error("config: curve.overhang_max_drop_pct needs overhang_top_k > 0");
   if (c.risk.max_loss_sol < 0) throw std::runtime_error("config: risk.max_loss_sol must be >= 0");
   if (c.risk.max_concurrent_positions < 1 || c.risk.max_concurrent_positions > 8)
     throw std::runtime_error("config: risk.max_concurrent_positions must be 1..8");

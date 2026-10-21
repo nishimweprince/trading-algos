@@ -871,6 +871,100 @@ bool pop_jupiter_req(Rig& r, AuxReq& out) {
 
 }  // namespace
 
+namespace {
+
+bool pop_holders_req(Rig& r, AuxReq& out) {
+  AuxReq q;
+  bool got = false;
+  while (r.sh->aux_reqs.try_pop(q))
+    if (q.op == AuxOp::ReadHolders) { out = q; got = true; }
+  return got;
+}
+
+void answer_holders(Rig& r, const AuxReq& q, uint64_t holder_tokens, uint64_t creator_tokens = 0) {
+  AuxResp a;
+  a.op = AuxOp::ReadHolders;
+  a.curve = q.curve;
+  a.mint = q.mint;
+  a.ok = true;
+  a.holder_tokens = holder_tokens;
+  a.creator_tokens = creator_tokens;
+  CHECK(r.sh->aux_resps.push(a));
+  r.eng->poll(g_mono);
+}
+
+}  // namespace
+
+TEST(engine_overhang_off_reads_and_logs) {
+  Rig r;
+  r.create();
+  r.band(ADMIT);  // admitted, outside the entry range: the read starts here
+  AuxReq q;
+  CHECK(pop_holders_req(r, q));
+  CHECK(q.mint == r.mint);
+  CHECK(q.creator == r.creator);
+  CHECK_EQ(int(q.top_k), 10);
+  CHECK(q.exclude[0] == ata(r.curve, r.mint, prog::TOKEN_2022));    // the curve's own tokens
+  CHECK(q.exclude[1] == ata(r.kp.pubkey(), r.mint, prog::TOKEN_2022));  // ours
+  r.band(ADMIT - 1'000'000'000);
+  CHECK(!pop_holders_req(r, q));  // pending, and inside the refresh interval
+  answer_holders(r, q, 100'000'000'000'000ULL, 40'000'000'000'000ULL);
+  r.band(NEAR);
+  Packet pk;
+  CHECK(r.pop_packet(pk));  // off: the overhang never vetoes
+  auto es = r.events();
+  const Event* d = find(es, Ev::Decision, "buy");
+  CHECK(d != nullptr);
+  if (d) {
+    Curve c;
+    c.virtual_token = NEAR + STD_GAP;
+    CHECK(std::fabs(d->d[2] - overhang_drop_pct(c, 100'000'000'000'000ULL)) < 1e-9);
+    CHECK_EQ(d->i[2], int64_t(100'000'000'000'000LL));
+    CHECK_EQ(d->i[3], int64_t(40'000'000'000'000LL));
+    CHECK(d->d[4] >= 0);
+  }
+}
+
+TEST(engine_overhang_vetoes_until_holders_thin) {
+  Rig r;
+  r.cfg.curve.overhang_max_drop_pct = 35;
+  r.create();
+  r.band(NEAR);
+  Packet pk;
+  CHECK(!r.pop_packet(pk));
+  CHECK(find(r.events(), Ev::Decision, "overhang_unknown") != nullptr);  // no read yet: soft veto
+  AuxReq q;
+  CHECK(pop_holders_req(r, q));
+  answer_holders(r, q, 200'000'000'000'000ULL);  // ~65 % drop
+  CHECK(!r.pop_packet(pk));
+  auto es = r.events();
+  const Event* d = find(es, Ev::Decision, "overhang");
+  CHECK(d != nullptr);
+  if (d) CHECK(d->d[2] > 35);
+  g_wall += r.cfg.curve.overhang_refresh_ms;
+  r.band(NEAR - 1'000'000'000);  // asks again after the refresh interval
+  CHECK(pop_holders_req(r, q));
+  answer_holders(r, q, 10'000'000'000'000ULL);  // the big holder sold: ~6 % drop
+  CHECK(r.pop_packet(pk));  // retried on the read, not on the next curve update
+  CHECK(find(r.events(), Ev::Decision, "buy") != nullptr);
+}
+
+TEST(engine_overhang_stale_read_is_unknown) {
+  Rig r;
+  r.cfg.curve.overhang_max_drop_pct = 35;
+  r.create();
+  r.band(ADMIT);
+  AuxReq q;
+  CHECK(pop_holders_req(r, q));
+  answer_holders(r, q, 1'000'000'000'000ULL);
+  g_wall += r.cfg.curve.overhang_max_age_ms + 1;
+  r.band(NEAR);
+  Packet pk;
+  CHECK(!r.pop_packet(pk));
+  CHECK(find(r.events(), Ev::Decision, "overhang_unknown") != nullptr);
+  CHECK(pop_holders_req(r, q));  // and a fresh read is on its way
+}
+
 TEST(engine_jupiter_takes_exhausted_exits) {
   Rig r;
   r.cfg.jupiter.enabled = true;

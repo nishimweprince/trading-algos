@@ -20,6 +20,7 @@ A live C++ trader on pump.fun bonding curves. It buys the last part of a nearly 
    - blacklist and `pump` suffix
    - SOL-quoted curves only (quote-chain curves are skipped), mayhem curves skipped unless `allow_mayhem`
    - Token-2022 transfer fee proven absent, else vetoed (fail closed)
+   - **overhang** (off by default): the price drop if the top `curve.overhang_top_k` holders sold everything on the curve, `1 − (vtok / (vtok + H))²`. H is read by aux-req (`getTokenLargestAccounts`, minus the curve's own account and ours) every `overhang_refresh_ms` while a curve is admitted and untraded. With `overhang_max_drop_pct > 0`, a drop above it is a soft veto (`overhang`), as is a read older than `overhang_max_age_ms` (`overhang_unknown`). The drop, holder and creator tokens are logged on every decision row either way.
    - one position at a time (`risk.max_concurrent_positions = 1`), never twice on one curve, balance
    Soft vetoes (kill, fee still resolving, balance) retry on the next update and log one decision row per change.
 3. **Buy** `entry.size_sol` (0.05 SOL) on the curve with pump.fun `buy`, built exactly as `@pump-fun/pump-sdk` 4.2.0 does, with `partial_fill` set: a buy that meets fewer tokens than it asked for fills what is left (completing the curve) instead of failing 6021. `max_sol_cost` = the quoted cost × (1 + `entry.slippage_pct`). Native SOL, no WSOL wrap. It watches the pool and both vaults the migrate will create.
@@ -98,6 +99,7 @@ Build only on the VM; grpc++ is not installed on the laptop.
   - net PnL including fees, tips and rent; exit reasons; closes by phase
   - hold: buy fill → migrate, migrate → sell landed (slots)
   - landing and latency percentiles, buys by leader class
+  - overhang at buy: buys bucketed by the overhang drop, with their closes' P&L
   - who buys and who sells our pools after the migrate
 
   Raw data is in the `events` table, the `decisions`, `orders`, `acks`, `fills`, `routes`, `rival_txs`, `migrations` and `closes` views, and `data/events.jsonl`.
@@ -128,7 +130,7 @@ proto/       vendored LaserStream geyser.proto / solana-storage.proto (field ref
 ## Not done / known gaps
 
 - The gRPC ingest (`src/stream/ingest.cpp`) needs grpc++ (brew grpc on the laptop, the VM's build otherwise).
-- **The edge is unproven** (see the status note). Selecting curves that will complete is the open problem; no collapse filter exists yet.
+- **The edge is unproven** (see the status note). Selecting curves that will complete is the open problem. The overhang filter is the first collapse filter. It stays off until `research/replay_curve.py` on holder history (`fetch_curve_paths.py` schema 2) passes its gate with it on. It sees top holders only, not wallets clustered by funder.
 - A held curve that sells off far enough leaves the band filter: its marks stop, and `CURVE_STALL` sells off the last curve state seen (the protective tiers widen the bound on retries).
 - The max-loss latch counts losses since boot; a restart resets it.
 - No Helius Preconfirmations yet: the migrate and our fills come from LaserStream at processed commitment.

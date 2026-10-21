@@ -44,6 +44,15 @@ inline double curve_price_sol(const Curve& c) {
   if (c.virtual_token == 0) return 0.0;
   return (double(c.virtual_sol) / 1e9) / (double(c.virtual_token) / 1e6);
 }
+/**
+ * Overhang: the price drop (%) if `holder_tokens` were sold on the curve, 1 - (vtok / (vtok + H))^2
+ * (fees ignored). Same formula as research/replay_curve.py overhang_drop_pct.
+ */
+inline double overhang_drop_pct(const Curve& c, uint64_t holder_tokens) {
+  if (c.virtual_token == 0) return 0.0;
+  double r = double(c.virtual_token) / (double(c.virtual_token) + double(holder_tokens));
+  return 100.0 * (1.0 - r * r);
+}
 
 /** Append the pump.fun `buy` instruction (+ bonding_curve_v2, buyback recipient). */
 void curve_buy_ix(IxList& l, const Pubkey& user, const CurveKeys& k, const AmmConfig& cfg, const TxParams& p,

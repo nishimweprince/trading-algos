@@ -36,6 +36,13 @@ max_hold_s = 30               # not complete this long after the buy: sell back 
 abort_remaining_sol = 0       # completion cost climbs past this: sell on the curve (CURVE_ABORT); 0 = off
 migrate_wait_s = 30           # complete but no migrate this long: the exit goes to Jupiter (AWAIT_TIMEOUT)
 partial_fill = true           # a buy that meets fewer tokens than it asked fills the rest (else pump error 6021)
+# Overhang: price drop if the top-k holders (not the curve, not us) sold everything on the curve.
+# Always read and logged on decision rows; vetoes only when overhang_max_drop_pct > 0 (pick it from
+# research/replay_curve.py's overhang diagnostic, only if the replay gate passes).
+overhang_top_k = 10           # holders summed (getTokenLargestAccounts gives at most 20); 0 = no reads
+overhang_max_drop_pct = 0     # veto (soft) entries above this drop; 0 = off
+overhang_refresh_ms = 2000    # re-read an untraded curve's holders this often
+overhang_max_age_ms = 5000    # an older read counts as unknown: soft veto overhang_unknown when on
 
 [screen]
 require_pump_suffix = true

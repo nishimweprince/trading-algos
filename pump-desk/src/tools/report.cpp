@@ -199,6 +199,13 @@ int main(int argc, char** argv) {
        "SELECT CASE i5 WHEN 0 THEN 'curve' WHEN 1 THEN 'await_migrate' ELSE 'pool' END, COUNT(*), SUM(i0 > 0),"
        " printf('%.5f', SUM(i0) / 1e9), printf('%.2f', AVG(d1)) FROM events WHERE type='position_close' AND ts >= ?1"
        " GROUP BY 1 ORDER BY 2 DESC");
+  rows("\nOverhang at buy (drop if the top holders sold / buys / closed / wins / net SOL / avg %; unknown = no fresh read):",
+       "SELECT CASE WHEN b.overhang_drop_pct < 0 OR b.overhang_drop_pct IS NULL THEN 'unknown'"
+       " WHEN b.overhang_drop_pct < 20 THEN '0-20%' WHEN b.overhang_drop_pct < 35 THEN '20-35%'"
+       " WHEN b.overhang_drop_pct < 50 THEN '35-50%' WHEN b.overhang_drop_pct < 75 THEN '50-75%' ELSE '75-100%' END,"
+       " COUNT(*), COUNT(c.mint), SUM(c.pnl_lamports > 0), printf('%.5f', SUM(c.pnl_lamports) / 1e9),"
+       " printf('%.2f', AVG(c.pnl_pct)) FROM decisions b LEFT JOIN closes c ON c.mint = b.mint AND c.ts >= b.ts"
+       " WHERE b.verdict = 'buy' AND b.ts >= ?1 GROUP BY 1 ORDER BY 1");
   rows("\nOpen positions:", "SELECT mint, base_amount, printf('%.10f', entry_price), datetime(opened_ms/1000,'unixepoch')"
                             " FROM positions WHERE closed=0 AND opened_ms >= ?1");
 
