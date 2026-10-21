@@ -729,10 +729,9 @@ void Engine::trigger(CurveSlot& s, uint64_t base_res, uint64_t quote_res, uint64
         cfg_.screen.t22_fee_wait_ms > 0 && s.migrated_ns &&
         elapsed(t_decide, s.migrated_ns) < uint64_t(cfg_.screen.t22_fee_wait_ms) * 1'000'000ULL;
     soft = fee_wait || !s.migrated_ns;  // before migrate_ns is stamped, keep retrying
-  } else if (s.pool_seen && s.pool.data_len < POOL_ACCOUNT_NEW_SIZE) {
-    veto = "pool_needs_extend";
-    soft = true;
-  } else if (pool_sol < cfg_.screen.min_pool_sol) veto = "pool_below_min";
+  } else if (s.pool_seen && s.pool.data_len < POOL_ACCOUNT_NEW_SIZE)
+    veto = "pool_needs_extend";  // terminal: extend rarely lands inside the race window
+  else if (pool_sol < cfg_.screen.min_pool_sol) veto = "pool_below_min";
   else if (pool_sol > cfg_.screen.max_pool_sol) veto = "pool_above_max";
   else if (active_positions() >= max_positions_ || free_position() < 0) {
     veto = "max_concurrent";
