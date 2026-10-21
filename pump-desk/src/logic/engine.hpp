@@ -39,6 +39,7 @@ struct CurveSlot {
   B58Key mint_b58, pool_b58;
   bool mint_known = false, resolving = false, fired = false, complete = false, migrated = false, traded = false;
   bool mayhem = false, cashback = false, pump_suffix = false, blacklisted = false;
+  bool seen_incomplete = false;  // observed before completion; pre-graduated curves never set this
   TransferFee fee = TransferFee::Unknown;
   uint64_t mint_supply = 0;
   double cost_sol = 0;

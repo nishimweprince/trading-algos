@@ -164,6 +164,7 @@ void Engine::on_curve(const AccountView& a) {
     if (!s) return;
   }
   s->cost_sol = cost;
+  if (!c.complete) s->seen_incomplete = true;
   s->last_update_ns = now_ns_();
   if (a.txn_signature.size() == 64) std::memcpy(s->last_sig.data(), a.txn_signature.data(), 64);
   if (c.has_creator && is_zero(s->creator)) {
@@ -683,6 +684,10 @@ void Engine::trigger(CurveSlot& s, uint64_t base_res, uint64_t quote_res, uint64
   else if (!have_bh) veto = "blockhash_stale";
   else if (s.blacklisted) veto = "blacklist";
   else if (cfg_.screen.require_pump_suffix && !s.pump_suffix) veto = "no_pump_suffix";
+  else if (cfg_.screen.max_migrate_age_slots > 0 &&
+           ((s.migrate_slot && last_slot_ > s.migrate_slot + uint64_t(cfg_.screen.max_migrate_age_slots)) ||
+            (!s.migrate_slot && !s.seen_incomplete)))
+    veto = "stale_pool";
   else if (s.token_program == prog::TOKEN_2022 && s.fee == TransferFee::Present) veto = "t22_transfer_fee";
   else if (s.token_program == prog::TOKEN_2022 && s.fee != TransferFee::None) veto = "t22_fee_unverified";
   else if (s.pool_seen && s.pool.data_len < POOL_ACCOUNT_NEW_SIZE) veto = "pool_needs_extend";

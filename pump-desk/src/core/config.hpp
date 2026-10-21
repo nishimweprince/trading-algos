@@ -50,6 +50,7 @@ struct Config {
     double max_pool_sol = 100;
     double max_buy_impact_pct = 3;
     bool require_pump_suffix = true;
+    int max_migrate_age_slots = 75;  // stale_pool past this (~30 s); 0 = no age check
     std::vector<std::string> blacklist_mints;
     std::vector<std::string> blacklist_creators;
   } screen;

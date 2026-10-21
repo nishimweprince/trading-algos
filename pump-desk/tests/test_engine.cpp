@@ -251,6 +251,37 @@ TEST(engine_pool_push_triggers_first) {
   CHECK(!r.pop_packet(pk));
 }
 
+TEST(engine_stale_pool_vetoes) {
+  {
+    Rig r;  // migrate seen, but the pool push arrives past max_migrate_age_slots
+    r.create();
+    r.band(1'000'000'000'000ULL);
+    r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL, 2, /*with_pool=*/false);
+    Packet pk;
+    CHECK(!r.pop_packet(pk));
+    r.slot += uint64_t(r.cfg.screen.max_migrate_age_slots) + 10;
+    r.feed(slot_frame(r.slot));
+    r.pool_push();
+    r.feed(account_frame("watch", r.base_vault, prog::TOKEN_2022, token_account(206'900'000'000'000ULL), r.slot));
+    r.feed(account_frame("watch", r.quote_vault, prog::TOKEN, token_account(67'410'000'000ULL), r.slot));
+    CHECK(!r.pop_packet(pk));
+    CHECK(find(r.events(), Ev::Decision, "stale_pool") != nullptr);
+  }
+  {
+    Rig r;  // never seen incomplete and never seen migrating: a pre-graduated pool is stale
+    r.create();
+    r.feed(account_frame("band0", r.curve, prog::PUMP_FUN,
+                         curve_data(280'000'000'000'000ULL, 80'000'000'000ULL, 206'900'000'000'000ULL, true, r.creator),
+                         r.slot));
+    r.pool_push();
+    r.feed(account_frame("watch", r.base_vault, prog::TOKEN_2022, token_account(206'900'000'000'000ULL), r.slot));
+    r.feed(account_frame("watch", r.quote_vault, prog::TOKEN, token_account(67'410'000'000ULL), r.slot));
+    Packet pk;
+    CHECK(!r.pop_packet(pk));
+    CHECK(find(r.events(), Ev::Decision, "stale_pool") != nullptr);
+  }
+}
+
 TEST(engine_migrate_waits_for_pool_push) {
   {
     Rig r;  // pool push a moment after the migrate tx: priced on the pool's own virtual reserve

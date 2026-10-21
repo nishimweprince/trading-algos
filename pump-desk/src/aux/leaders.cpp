@@ -182,7 +182,7 @@ void run_aux_leaders(const Config& cfg, Shared& sh, Logger& log) {
       failures = 0;
     } catch (const std::exception& e) {
       if (++failures % 10 == 1) log.warn(std::string("aux-leaders: ") + e.what());
-      next_epoch = std::min(next_epoch, now + 5'000'000'000ULL);
+      next_epoch = std::min<uint64_t>(next_epoch, now + 5'000'000'000ULL);
     }
     for (int i = 0; i < 10 && !sh.stop.load(std::memory_order_relaxed); ++i)
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
