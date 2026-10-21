@@ -16,6 +16,7 @@ namespace {
 constexpr std::string_view kBinanceFutures = "https://fapi.binance.com";
 constexpr std::string_view kBinanceSpot = "https://api.binance.com";
 constexpr std::string_view kBybit = "https://api.bybit.com";
+constexpr std::string_view kHyperliquidInfo = "https://api.hyperliquid.xyz/info";
 constexpr std::string_view kRecvWindow = "5000";
 
 std::size_t append(void* data, std::size_t size, std::size_t count, void* context) {
@@ -41,6 +42,10 @@ bool api_ok(Venue venue, const HttpResult& result, std::string& error) {
     }
   }
   return true;
+}
+
+HttpResult hyperliquid_info(HttpClient& http, const std::string& body) {
+  return http.post(std::string(kHyperliquidInfo), body, {"Content-Type: application/json"});
 }
 
 }  // namespace
@@ -72,13 +77,27 @@ HttpClient::~HttpClient() {
 }
 
 HttpResult HttpClient::get(const std::string& url, const std::vector<std::string>& headers) {
+  return perform(url, nullptr, headers);
+}
+
+HttpResult HttpClient::post(const std::string& url, const std::string& body, const std::vector<std::string>& headers) {
+  return perform(url, &body, headers);
+}
+
+HttpResult HttpClient::perform(const std::string& url, const std::string* body,
+                               const std::vector<std::string>& headers) {
   HttpResult result;
   auto* curl = static_cast<CURL*>(curl_);
   if (curl == nullptr) { result.error = "curl initialization failed"; return result; }
   curl_slist* list = nullptr;
   for (const auto& header : headers) list = curl_slist_append(list, header.c_str());
   curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-  curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
+  if (body == nullptr) {
+    curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
+  } else {
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body->c_str());
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(body->size()));
+  }
   curl_easy_setopt(curl, CURLOPT_HTTPHEADER, list);
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, append);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, &result.body);
@@ -107,7 +126,19 @@ HttpResult HttpClient::get(const std::string& url, const std::vector<std::string
 
 Credentials load_credentials(Venue venue) {
   if (venue == Venue::binance) return {env("CXA_BINANCE_API_KEY"), env("CXA_BINANCE_API_SECRET")};
+  if (venue == Venue::hyperliquid) return {env("CXA_HL_ADDRESS"), {}};
   return {env("CXA_BYBIT_API_KEY"), env("CXA_BYBIT_API_SECRET")};
+}
+
+bool valid_hyperliquid_address(std::string_view address) noexcept {
+  if (address.size() != 42 || !address.starts_with("0x")) return false;
+  for (const char c : address.substr(2))
+    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) return false;
+  return true;
+}
+
+bool parse_hyperliquid_fees(std::string_view body, std::int64_t& taker_ppm, std::int64_t& maker_ppm) {
+  return json::rate_ppm(body, "\"userCrossRate\"", taker_ppm) && json::rate_ppm(body, "\"userAddRate\"", maker_ppm);
 }
 
 HttpResult signed_get(HttpClient& http, Venue venue, const Credentials& credentials, std::string_view base,
@@ -130,6 +161,15 @@ HttpResult signed_get(HttpClient& http, Venue venue, const Credentials& credenti
 }
 
 bool verify_read_only(HttpClient& http, Venue venue, const Credentials& credentials, std::string& detail) {
+  if (venue == Venue::hyperliquid) {
+    // Shadow never loads a Hyperliquid signing key; the address only selects the fee tier.
+    if (!valid_hyperliquid_address(credentials.key)) {
+      detail = "hyperliquid: CXA_HL_ADDRESS must be a 0x-prefixed 40-hex address";
+      return false;
+    }
+    detail = "hyperliquid: address only (no signing key)";
+    return true;
+  }
   if (!credentials.present()) {
     detail = std::string(venue_name(venue)) + ": API key/secret not set";
     return false;
@@ -179,6 +219,20 @@ bool fetch_fees(HttpClient& http, Venue venue, const Credentials& credentials,
   taker_ppm.assign(basket.size(), 0);
   maker_ppm.assign(basket.size(), 0);
   const auto v = index(venue);
+  if (venue == Venue::hyperliquid) {
+    // Perp fees are per account, not per symbol.
+    const auto result = hyperliquid_info(http, "{\"type\":\"userFees\",\"user\":\"" + credentials.key + "\"}");
+    if (!api_ok(venue, result, error)) return false;
+    std::int64_t taker = 0;
+    std::int64_t maker = 0;
+    if (!parse_hyperliquid_fees(result.body, taker, maker)) {
+      error = "hyperliquid: no userCrossRate/userAddRate in userFees";
+      return false;
+    }
+    taker_ppm.assign(basket.size(), taker);
+    maker_ppm.assign(basket.size(), maker);
+    return true;
+  }
   if (venue == Venue::bybit) {
     const auto result = signed_get(http, venue, credentials, kBybit, "/v5/account/fee-rate", "category=linear");
     if (!api_ok(venue, result, error)) return false;
@@ -216,9 +270,22 @@ bool fetch_fees(HttpClient& http, Venue venue, const Credentials& credentials,
   return true;
 }
 
-bool load_instruments(HttpClient& http, std::vector<Instrument>& basket, std::string& error) {
+bool load_instruments(HttpClient& http, std::vector<Instrument>& basket, std::string& error, Venue peer) {
   const auto binance = http.get(std::string(kBinanceFutures) + "/fapi/v1/exchangeInfo");
   if (!api_ok(Venue::binance, binance, error)) return false;
+  if (peer == Venue::hyperliquid) {
+    const auto meta = hyperliquid_info(http, "{\"type\":\"meta\"}");
+    if (!api_ok(peer, meta, error)) return false;
+    const auto mids = hyperliquid_info(http, "{\"type\":\"allMids\"}");
+    if (!api_ok(peer, mids, error)) return false;
+    for (auto& instrument : basket) {
+      if (!parse_binance_instrument(binance.body, instrument, error) ||
+          !parse_hyperliquid_instrument(meta.body, mids.body, instrument, error) ||
+          !finalize_instrument(instrument, error))
+        return false;
+    }
+    return true;
+  }
   for (std::size_t i = 0; i < basket.size(); ++i) {
     auto& instrument = basket[i];
     if (!parse_binance_instrument(binance.body, instrument, error)) return false;
@@ -235,12 +302,14 @@ bool load_instruments(HttpClient& http, std::vector<Instrument>& basket, std::st
 HttpResult signed_probe(HttpClient& http, Venue venue, const Credentials& credentials) {
   if (venue == Venue::binance)
     return signed_get(http, venue, credentials, kBinanceFutures, "/fapi/v2/balance", "");
+  if (venue == Venue::hyperliquid) return hyperliquid_info(http, "{\"type\":\"exchangeStatus\"}");
   return signed_get(http, venue, credentials, kBybit, "/v5/account/wallet-balance", "accountType=UNIFIED");
 }
 
 HttpResult time_probe(HttpClient& http, Venue venue, std::uint64_t& server_ms) {
-  auto result = venue == Venue::binance ? http.get(std::string(kBinanceFutures) + "/fapi/v1/time")
-                                        : http.get(std::string(kBybit) + "/v5/market/time");
+  auto result = venue == Venue::binance       ? http.get(std::string(kBinanceFutures) + "/fapi/v1/time")
+                : venue == Venue::hyperliquid ? hyperliquid_info(http, "{\"type\":\"exchangeStatus\"}")
+                                              : http.get(std::string(kBybit) + "/v5/market/time");
   server_ms = 0;
   if (result.ok) {
     if (venue == Venue::binance) json::u64(result.body, "\"serverTime\"", server_ms);

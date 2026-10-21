@@ -2,6 +2,7 @@
 
 #include "cxa/json.hpp"
 
+#include <algorithm>
 #include <numeric>
 #include <stdexcept>
 
@@ -33,7 +34,14 @@ std::string_view filter(std::string_view section, std::string_view type) {
 
 }  // namespace
 
-std::vector<Instrument> parse_basket(std::string_view text) {
+std::string hyperliquid_coin(std::string_view binance_symbol) {
+  auto coin = binance_symbol;
+  if (coin.ends_with("USDT")) coin.remove_suffix(4);
+  if (coin.starts_with("1000")) return "k" + std::string(coin.substr(4));
+  return std::string(coin);
+}
+
+std::vector<Instrument> parse_basket(std::string_view text, Venue peer) {
   std::vector<Instrument> basket;
   while (!text.empty()) {
     const auto comma = text.find(',');
@@ -44,10 +52,11 @@ std::vector<Instrument> parse_basket(std::string_view text) {
     const auto first = item.find(':');
     if (first == std::string_view::npos) {
       instrument.name = std::string(item);
-      instrument.symbol = {instrument.name, instrument.name};
+      instrument.symbol = {instrument.name,
+                           peer == Venue::hyperliquid ? hyperliquid_coin(instrument.name) : instrument.name};
     } else {
       const auto second = item.find(':', first + 1);
-      if (second == std::string_view::npos) throw std::invalid_argument("basket entry needs name:binance:bybit");
+      if (second == std::string_view::npos) throw std::invalid_argument("basket entry needs name:binance:peer");
       instrument.name = std::string(item.substr(0, first));
       instrument.symbol = {std::string(item.substr(first + 1, second - first - 1)),
                            std::string(item.substr(second + 1))};
@@ -101,6 +110,46 @@ bool parse_bybit_instrument(std::string_view instruments_info, Instrument& instr
     error = "bybit: incomplete filters for " + name;
     return false;
   }
+  return true;
+}
+
+Price hyperliquid_tick(Price mid, int size_decimals) noexcept {
+  if (mid.raw <= 0) return {};
+  // Power of ten (in raw units) of the mid's leading digit.
+  std::int64_t leading = 1;
+  while (leading <= mid.raw / 10) leading *= 10;
+  const auto five_figures = std::max<std::int64_t>(leading / 10'000, 1);
+  std::int64_t max_decimals = kScale;  // 10^-(6 - szDecimals) in raw units
+  for (int i = 0; i < 6 - size_decimals; ++i) max_decimals /= 10;
+  return Price{std::max(five_figures, max_decimals)};
+}
+
+bool parse_hyperliquid_instrument(std::string_view meta, std::string_view mids, Instrument& instrument,
+                                  std::string& error) {
+  const auto& name = instrument.symbol[index(Venue::hyperliquid)];
+  const auto needle = "\"name\":\"" + name + "\"";
+  const auto pos = meta.find(needle);
+  if (pos == std::string_view::npos) { error = "hyperliquid: unknown coin " + name; return false; }
+  const auto entry = json::enclosing_object(meta, pos);
+  bool delisted = false;
+  if (json::boolean(entry, "\"isDelisted\"", delisted) && delisted) {
+    error = "hyperliquid: " + name + " is delisted";
+    return false;
+  }
+  std::int64_t size_decimals = -1;
+  Price mid;
+  if (!json::i64(entry, "\"szDecimals\"", size_decimals) || size_decimals < 0 || size_decimals > 6 ||
+      !json::decimal(mids, "\"" + name + "\"", mid) || mid.raw <= 0) {
+    error = "hyperliquid: incomplete meta or mid for " + name;
+    return false;
+  }
+  const auto v = index(Venue::hyperliquid);
+  std::int64_t step = kScale;
+  for (std::int64_t i = 0; i < size_decimals; ++i) step /= 10;
+  instrument.step[v] = Quantity{step};
+  instrument.min_qty[v] = Quantity{step};
+  instrument.min_notional[v] = Decimal{10 * kScale};
+  instrument.tick[v] = hyperliquid_tick(mid, static_cast<int>(size_decimals));
   return true;
 }
 

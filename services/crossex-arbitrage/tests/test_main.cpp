@@ -173,6 +173,40 @@ void test_instruments() {
   require(instrument.common_step == d("0.002") && instrument.common_min_qty == d("0.002"), "common step is lcm");
 }
 
+void test_hyperliquid_instruments() {
+  const auto basket = parse_basket("BTCUSDT,1000PEPEUSDT,FTM:FTMUSDT:FTM2", Venue::hyperliquid);
+  require(basket[0].symbol[1] == "BTC" && basket[1].symbol[1] == "kPEPE" && basket[2].symbol[1] == "FTM2",
+          "hyperliquid coin mapping");
+  require(parse_basket("BTCUSDT")[0].symbol[1] == "BTCUSDT", "bybit mapping unchanged");
+  require(hyperliquid_tick(d("83183.5"), 5) == d("1") && hyperliquid_tick(d("0.004564"), 0) == d("0.000001") &&
+              hyperliquid_tick(d("2455.85"), 4) == d("0.1") && hyperliquid_tick(d("1.338"), 0) == d("0.0001"),
+          "tick follows 5 significant figures and 6 - szDecimals decimals");
+  const std::string binance =
+      R"({"symbols":[{"symbol":"BTCUSDT","pair":"BTCUSDT","contractType":"PERPETUAL","status":"TRADING","quoteAsset":"USDT","filters":[{"minPrice":"0.10","filterType":"PRICE_FILTER","tickSize":"0.10"},{"stepSize":"0.001","filterType":"LOT_SIZE","minQty":"0.001"},{"notional":"100","filterType":"MIN_NOTIONAL"}]}]})";
+  const std::string meta =
+      R"({"universe":[{"szDecimals":5,"name":"BTC","maxLeverage":40,"marginTableId":56},{"szDecimals":1,"name":"MATIC","maxLeverage":20,"marginTableId":20,"isDelisted":true},{"szDecimals":0,"name":"kPEPE","maxLeverage":10,"marginTableId":52}],"marginTables":[]})";
+  const std::string mids = R"({"BTC":"83183.5","WBTC":"1.0","kPEPE":"0.004564","MATIC":"0.2"})";
+  Instrument btc = basket[0];
+  std::string error;
+  require(parse_binance_instrument(binance, btc, error) && parse_hyperliquid_instrument(meta, mids, btc, error) &&
+              finalize_instrument(btc, error),
+          "hyperliquid instrument: " + error);
+  require(btc.step[1] == d("0.00001") && btc.tick[1] == d("1") && btc.min_notional[1] == d("10") &&
+              btc.common_step == d("0.001"),
+          "hyperliquid filters");
+  Instrument matic;
+  matic.symbol = {"MATICUSDT", "MATIC"};
+  require(!parse_hyperliquid_instrument(meta, mids, matic, error) && error.find("delisted") != std::string::npos,
+          "delisted coin refused");
+  std::int64_t taker = 0, maker = 0;
+  require(parse_hyperliquid_fees(R"({"feeSchedule":{"cross":"0.00045","add":"0.00015"},"userCrossRate":"0.0004","userAddRate":"0.00012"})",
+                                 taker, maker) && taker == 400 && maker == 120,
+          "hyperliquid user fees");
+  require(valid_hyperliquid_address("0x0000000000000000000000000000000000000000") &&
+              !valid_hyperliquid_address("0x123") && !valid_hyperliquid_address(""),
+          "address validation");
+}
+
 void test_hmac() {
   require(hmac_sha256_hex("key", "The quick brown fox jumps over the lazy dog") ==
               "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8",
@@ -491,13 +525,14 @@ void test_maker_taker_fee_ppm() {
 
 int main(int argc, char** argv) {
   fixtures = argc > 1 ? argv[1] : "tests/fixtures";
-  const std::array<std::pair<const char*, void (*)()>, 20> cases{{
+  const std::array<std::pair<const char*, void (*)()>, 21> cases{{
       {"decimal_and_ppm", test_decimal_and_ppm},
       {"book_and_sweep", test_book_and_sweep},
       {"binance_sync", test_binance_sync},
       {"bybit_sync", test_bybit_sync},
       {"parsers", test_parsers},
       {"instruments", test_instruments},
+      {"hyperliquid_instruments", test_hyperliquid_instruments},
       {"hmac", test_hmac},
       {"latency_model", test_latency_model},
       {"edge_math", test_edge_math},

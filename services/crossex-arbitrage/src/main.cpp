@@ -231,11 +231,11 @@ int shadow(int argc, char** argv) {
   }
   const auto config = load_runtime_config();
   const auto peer = config.shadow.peer;
-  auto basket = parse_basket(config.basket);
+  auto basket = parse_basket(config.basket, config.shadow.peer);
 
   HttpClient http;
   std::string error;
-  if (!load_instruments(http, basket, error)) { std::cerr << "instruments: " << error << '\n'; return 1; }
+  if (!load_instruments(http, basket, error, config.shadow.peer)) { std::cerr << "instruments: " << error << '\n'; return 1; }
 
   std::array<Credentials, kVenues> credentials{load_credentials(Venue::binance), load_credentials(peer)};
   std::array<std::vector<std::int64_t>, kVenues> taker_fees;
@@ -601,7 +601,7 @@ int probe(int argc, char** argv) {
   const auto duration = std::stoull(option(argc, argv, "--duration-seconds", "600"));
   const auto config = load_runtime_config();
   const auto peer = config.shadow.peer;
-  auto basket = parse_basket(config.basket);
+  auto basket = parse_basket(config.basket, config.shadow.peer);
   std::array<Credentials, kVenues> credentials{load_credentials(Venue::binance), load_credentials(peer)};
   struct Samples final {
     std::mutex mutex;
@@ -729,10 +729,10 @@ int probe(int argc, char** argv) {
 int check_keys() {
   const auto config = load_runtime_config();
   const auto peer = config.shadow.peer;
-  auto basket = parse_basket(config.basket);
+  auto basket = parse_basket(config.basket, config.shadow.peer);
   HttpClient http;
   std::string error;
-  if (!load_instruments(http, basket, error)) { std::cerr << "instruments: " << error << '\n'; return 1; }
+  if (!load_instruments(http, basket, error, config.shadow.peer)) { std::cerr << "instruments: " << error << '\n'; return 1; }
   bool ok = true;
   std::cout << "{";
   for (std::size_t v = 0; v < kVenues; ++v) {
