@@ -72,4 +72,17 @@ class BybitFeed final {
   FrameHandler frames_;
 };
 
+// Hyperliquid public WS: `bbo` + `activeAssetCtx` per coin. `l2Book` is not used: the
+// public feed pushes it about every 5.4 s (measured 2026-10-21) against ~100 ms for bbo.
+// Resync re-subscribes bbo, which pushes the current top of book.
+class HyperliquidFeed final {
+ public:
+  HyperliquidFeed(std::vector<std::string> coins, FrameHandler frames);
+  bool run(std::atomic<bool>& stop, ResyncFlags& resync, std::string& error);
+
+ private:
+  std::vector<std::string> coins_;
+  FrameHandler frames_;
+};
+
 }  // namespace cxa

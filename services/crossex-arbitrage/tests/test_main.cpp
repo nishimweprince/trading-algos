@@ -13,6 +13,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace {
 using namespace cxa;
@@ -154,6 +155,52 @@ void test_parsers() {
   require(parse_binance_frame(wide, 7, symbols, frame) && frame.kind == FrameKind::depth,
           "600-level diff parses");
   require(frame.depth.symbol == 0 && frame.depth.bid_count == 600, "wide diff fields");
+}
+
+void test_hyperliquid_parser() {
+  const std::vector<std::string> coins{"BTC", "ETH"};
+  auto parsed = std::make_unique<ParsedFrame>();
+  const std::uint64_t receive = 1'792'542'250'500'000'000ULL;
+  require(parse_hyperliquid_frame(
+              R"({"channel":"bbo","data":{"coin":"ETH","time":1792542250095,"bbo":[{"px":"2455.9","sz":"58.1482","n":11},{"px":"2456.0","sz":"128.9078","n":30}]}})",
+              receive, coins, *parsed) &&
+              parsed->kind == FrameKind::depth,
+          "hyperliquid bbo parsed");
+  const auto& e = parsed->depth;
+  require(e.venue == Venue::hyperliquid && e.symbol == 1 && e.snapshot && e.event_ms == 1792542250095ULL &&
+              e.final_id == e.event_ms,
+          "bbo is a timestamped snapshot");
+  require(e.bid_count == 1 && e.ask_count == 1 && e.bids[0].price == d("2455.9") && e.bids[0].quantity == d("58.1482") &&
+              e.asks[0].price == d("2456.0") && e.asks[0].quantity == d("128.9078"),
+          "bbo levels");
+  require(parse_hyperliquid_frame(R"({"channel":"bbo","data":{"coin":"BTC","time":5,"bbo":[null,{"px":"1.0","sz":"2","n":1}]}})",
+                                  receive, coins, *parsed) &&
+              parsed->depth.bid_count == 0 && parsed->depth.ask_count == 1,
+          "empty bid side");
+  require(parse_hyperliquid_frame(R"({"channel":"bbo","data":{"coin":"BTC","time":5,"bbo":[{"px":"1.0","sz":"2","n":1},null]}})",
+                                  receive, coins, *parsed) &&
+              parsed->depth.bid_count == 1 && parsed->depth.ask_count == 0,
+          "empty ask side");
+  require(parse_hyperliquid_frame(
+              R"({"channel":"activeAssetCtx","data":{"coin":"BTC","ctx":{"funding":"0.0000125","openInterest":"40753.8984","premium":"-0.0003487044","oraclePx":"83165.0","markPx":"83136.0","midPx":"83135.5","impactPxs":["83135.0","83136.0"]}}})",
+              receive, coins, *parsed) &&
+              parsed->kind == FrameKind::funding,
+          "hyperliquid ctx parsed");
+  const auto& f = parsed->funding;
+  require(f.has_rate && f.funding_rate == d("0.0000125") && f.mark == d("83136.0") && f.symbol == 0, "ctx funding");
+  require(f.next_funding_ms % 3'600'000 == 0 && f.next_funding_ms > f.event_ms &&
+              f.next_funding_ms - f.event_ms <= 3'600'000,
+          "next settlement is the next top of the hour");
+  require(parse_hyperliquid_frame(R"({"channel":"subscriptionResponse","data":{"method":"subscribe"}})", receive,
+                                  coins, *parsed) &&
+              parsed->kind == FrameKind::ignored,
+          "subscription ack ignored");
+  require(parse_hyperliquid_frame(R"({"channel":"bbo","data":{"coin":"SOL","time":5,"bbo":[null,null]}})", receive,
+                                  coins, *parsed) &&
+              parsed->kind == FrameKind::ignored,
+          "unsubscribed coin ignored");
+  require(!parse_hyperliquid_frame(R"({"channel":"error","data":"Invalid subscription"})", receive, coins, *parsed),
+          "error channel fails");
 }
 
 void test_instruments() {
@@ -525,12 +572,13 @@ void test_maker_taker_fee_ppm() {
 
 int main(int argc, char** argv) {
   fixtures = argc > 1 ? argv[1] : "tests/fixtures";
-  const std::array<std::pair<const char*, void (*)()>, 21> cases{{
+  const std::array<std::pair<const char*, void (*)()>, 22> cases{{
       {"decimal_and_ppm", test_decimal_and_ppm},
       {"book_and_sweep", test_book_and_sweep},
       {"binance_sync", test_binance_sync},
       {"bybit_sync", test_bybit_sync},
       {"parsers", test_parsers},
+      {"hyperliquid_parser", test_hyperliquid_parser},
       {"instruments", test_instruments},
       {"hyperliquid_instruments", test_hyperliquid_instruments},
       {"hmac", test_hmac},

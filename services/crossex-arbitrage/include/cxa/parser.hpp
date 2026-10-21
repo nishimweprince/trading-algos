@@ -34,6 +34,11 @@ bool parse_binance_frame(std::string_view json, std::uint64_t receive_ns,
                          std::span<const std::string> symbols, ParsedFrame& output) noexcept;
 bool parse_bybit_frame(std::string_view json, std::uint64_t receive_ns,
                        std::span<const std::string> symbols, ParsedFrame& output) noexcept;
+// Hyperliquid `bbo` (top of book, every block) becomes a one-level snapshot DepthEvent;
+// `activeAssetCtx` becomes a FundingEvent with the hourly rate and the next top of the
+// hour (HL omits it), timed by `receive_ns` because ctx frames carry no timestamp.
+bool parse_hyperliquid_frame(std::string_view json, std::uint64_t receive_ns,
+                             std::span<const std::string> symbols, ParsedFrame& output) noexcept;
 bool parse_binance_snapshot(std::string_view json, BookSnapshot& output);
 
 int symbol_index(std::span<const std::string> symbols, std::string_view name) noexcept;

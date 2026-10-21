@@ -79,14 +79,24 @@ std::vector<std::string> venue_symbols(const std::vector<Instrument>& basket, Ve
 
 bool parse_frame(Venue venue, std::string_view frame, std::uint64_t receive_ns,
                  const std::vector<std::string>& symbols, ParsedFrame& parsed) {
-  return venue == Venue::binance ? parse_binance_frame(frame, receive_ns, symbols, parsed)
-                                 : parse_bybit_frame(frame, receive_ns, symbols, parsed);
+  switch (venue) {
+    case Venue::binance: return parse_binance_frame(frame, receive_ns, symbols, parsed);
+    case Venue::bybit: return parse_bybit_frame(frame, receive_ns, symbols, parsed);
+    case Venue::hyperliquid: return parse_hyperliquid_frame(frame, receive_ns, symbols, parsed);
+  }
+  return false;
 }
 
 using FeedRunner = std::function<bool(std::atomic<bool>&, ResyncFlags&, std::string&)>;
 
 // The slot-1 feed for the configured peer.
-FeedRunner make_peer_feed(Venue, std::vector<std::string> symbols, FrameHandler frames) {
+FeedRunner make_peer_feed(Venue peer, std::vector<std::string> symbols, FrameHandler frames) {
+  if (peer == Venue::hyperliquid) {
+    auto feed = std::make_shared<HyperliquidFeed>(std::move(symbols), std::move(frames));
+    return [feed](std::atomic<bool>& stop, ResyncFlags& resync, std::string& error) {
+      return feed->run(stop, resync, error);
+    };
+  }
   auto feed = std::make_shared<BybitFeed>(std::move(symbols), std::move(frames));
   return [feed](std::atomic<bool>& stop, ResyncFlags& resync, std::string& error) {
     return feed->run(stop, resync, error);
@@ -671,7 +681,8 @@ int probe(int argc, char** argv) {
           s.offset.store(recent[recent.size() / 2], std::memory_order_relaxed);
           s.offset_known.store(true, std::memory_order_release);
         }
-        if (credentials[v].present() && tick % 2 == 0) {
+        // Hyperliquid's probe (exchangeStatus) is unsigned and needs no key.
+        if ((credentials[v].present() || venue == Venue::hyperliquid) && tick % 2 == 0) {
           const auto signed_result = signed_probe(clients[v], venue, credentials[v]);
           if (signed_result.ok) {
             std::lock_guard lock(s.mutex);

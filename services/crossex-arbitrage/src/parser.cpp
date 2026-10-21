@@ -140,6 +140,86 @@ bool parse_bybit_frame(std::string_view json, std::uint64_t receive_ns,
   return true;
 }
 
+namespace {
+
+// {"px":"2455.9","sz":"58.1","n":11} or null.
+bool hyperliquid_level(std::string_view side, std::array<Level, kMaxDepthChanges>& levels,
+                       std::uint16_t& count) noexcept {
+  count = 0;
+  if (side.starts_with("null")) return true;
+  Level level;
+  if (!json::decimal(side, "\"px\"", level.price) || !json::decimal(side, "\"sz\"", level.quantity)) return false;
+  levels[0] = level;
+  count = 1;
+  return true;
+}
+
+}  // namespace
+
+bool parse_hyperliquid_frame(std::string_view json, std::uint64_t receive_ns,
+                             std::span<const std::string> symbols, ParsedFrame& output) noexcept {
+  output.kind = FrameKind::ignored;
+  const auto channel = json::scalar(json, "\"channel\"");
+  if (channel == "error") {
+    output.kind = FrameKind::error;
+    return false;
+  }
+  if (channel != "bbo" && channel != "activeAssetCtx") return true;  // subscriptionResponse, pong
+  const auto data = json.find("\"data\"");
+  if (data == std::string_view::npos) {
+    output.kind = FrameKind::error;
+    return false;
+  }
+  const auto body = json.substr(data);
+  const auto symbol = symbol_index(symbols, json::scalar(body, "\"coin\""));
+  if (symbol < 0) return true;
+  if (channel == "bbo") {
+    auto& event = output.depth;
+    event.venue = Venue::hyperliquid;
+    event.symbol = static_cast<std::uint16_t>(symbol);
+    event.receive_ns = receive_ns;
+    event.snapshot = true;
+    event.previous_final_id = 0;
+    auto sides = json::value_after(body, "\"bbo\"");
+    if (!json::u64(body, "\"time\"", event.event_ms) || !sides.starts_with('[')) {
+      output.kind = FrameKind::error;
+      return false;
+    }
+    event.first_id = event.final_id = event.event_ms;
+    sides.remove_prefix(1);
+    const auto split = sides.starts_with("null") ? sides.find(',') : sides.find("},");
+    if (split == std::string_view::npos ||
+        !hyperliquid_level(sides, event.bids, event.bid_count)) {
+      output.kind = FrameKind::error;
+      return false;
+    }
+    auto ask = sides.substr(split + (sides.starts_with("null") ? 1 : 2));
+    while (!ask.empty() && ask.front() == ' ') ask.remove_prefix(1);
+    if (!hyperliquid_level(ask, event.asks, event.ask_count)) {
+      output.kind = FrameKind::error;
+      return false;
+    }
+    output.kind = FrameKind::depth;
+    return true;
+  }
+  auto& event = output.funding;
+  event = {};
+  event.venue = Venue::hyperliquid;
+  event.symbol = static_cast<std::uint16_t>(symbol);
+  event.receive_ns = receive_ns;
+  event.event_ms = receive_ns / 1'000'000;
+  constexpr std::uint64_t kHourMs = 3'600'000;
+  event.next_funding_ms = (event.event_ms / kHourMs + 1) * kHourMs;
+  json::decimal(body, "\"markPx\"", event.mark);
+  event.has_rate = json::decimal(body, "\"funding\"", event.funding_rate);
+  if (!event.has_rate) {
+    output.kind = FrameKind::error;
+    return false;
+  }
+  output.kind = FrameKind::funding;
+  return true;
+}
+
 bool parse_binance_snapshot(std::string_view json, BookSnapshot& output) {
   auto levels = std::make_unique<std::array<Level, kSnapshotLevels>>();
   std::uint16_t count = 0;
