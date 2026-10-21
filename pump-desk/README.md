@@ -33,7 +33,7 @@ A C++ rewrite of `pump-fun/` that trades the **migration racer** strategy live. 
 6. **Guard.** Lighthouse assertions go in front of the swap. If the pool quote vault grew past what we priced (someone landed first), or a ranked rival already holds the mint, the whole tx reverts (~700 CU per assertion) instead of filling up to `slippage_pct` worse.
 7. **Buy.** Size is 15 % of the available balance (compounding). It builds the PumpSwap `buy` exactly as `@pump-fun/pump-swap-sdk` 1.20 does: WSOL wrap → base ATA → buy → unwrap, with CU price and a Sender tip. It signs with libsodium and hands the packet to the exec thread.
 8. **Fills** come from the same gRPC stream (a wallet transaction filter). Unconfirmed orders are resolved by RPC.
-9. **Exits** are a port of `pump-fun/src/exits/engine.ts` `evaluateExit`: TP0/TP1/TP2, hard stop, trailing, time stop, dead money and slippage tiers. Defaults are the live set: TP 50 % full exit, no stop, trailing off, 10-minute time stop. A full exit also closes the base ATA, which returns its rent.
+9. **Exits** are a port of `pump-fun/src/exits/engine.ts` `evaluateExit`, plus liquidity-dump and stall cuts. Defaults are a migration ladder: TP0 +25 % half-out (stop moved to +5 %), trail armed at +15 % with a 12 % gap, hard stop −22 %, dead money at 2 min if MFE < 8 %, quote-vault dump (−15 % from peak SOL), stall (no new high for 45 s after 45 s age), TP1 +55 % remainder, 6-minute time stop as last resort. Protective fills can gap through stops on rugs. A full exit also closes the base ATA, which returns its rent.
 
 ## Routing
 

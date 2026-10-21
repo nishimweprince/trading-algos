@@ -386,6 +386,10 @@ TEST(engine_failed_buy_releases_reservation) {
 
 TEST(engine_time_stop_and_exit_retries) {
   Rig r;
+  // Isolate TIME_STOP from the faster stall / dead-money / dump cuts.
+  r.cfg.exits.stall_enabled = false;
+  r.cfg.exits.dead_money_enabled = false;
+  r.cfg.exits.liquidity_dump_pct = 0;
   r.create();
   r.band(1'000'000'000'000ULL);
   r.migrate(206'900'000'000'000ULL, 67'410'000'000ULL);
@@ -396,7 +400,7 @@ TEST(engine_time_stop_and_exit_retries) {
   CHECK(p.state == PosState::Open);
   r.eng->poll(g_mono);
   CHECK(!r.pop_packet(pk));  // nothing to do yet
-  g_wall += 11 * 60'000;     // past the 10-minute time stop
+  g_wall += 11 * 60'000;     // past the time stop
   r.eng->poll(g_mono);
   CHECK(r.pop_packet(pk));
   CHECK(pk.side == Side::Sell);
@@ -635,27 +639,100 @@ TEST(exit_fsm_matches_engine_ts) {
   Config::Exits x = c.exits;
   ExitState s;
   exit_init(s, 1.0, 0, x);
-  CHECK(evaluate_exit(s, 0.5, 1000, x).trigger == ExitTrigger::None);  // hard stop 100 % = off
-  CHECK(evaluate_exit(s, 1.5, 1000, x).trigger == ExitTrigger::TakeProfit1);
-  CHECK(evaluate_exit(s, 1.2, 10 * 60'000, x).trigger == ExitTrigger::TimeStop);
+  CHECK(evaluate_exit(s, 0.5, 1000, x).trigger == ExitTrigger::StopLoss);  // hard stop 22 %
+  // +50 % is below TP1 (55 %) so TP0 banks half.
+  ExitDecision d0 = evaluate_exit(s, 1.5, 1000, x);
+  CHECK(d0.trigger == ExitTrigger::TakeProfit0);
+  CHECK_EQ(d0.sell_fraction, 0.5);
+  CHECK(evaluate_exit(s, 1.6, 1000, x).trigger == ExitTrigger::TakeProfit1);
+  x.stall_enabled = false;
+  x.dead_money_enabled = false;
+  exit_init(s, 1.0, 0, x);
+  CHECK(evaluate_exit(s, 1.2, int64_t(x.time_stop_minutes * 60'000), x).trigger == ExitTrigger::TimeStop);
+
   x.hard_stop_pct = 20;
   exit_init(s, 1.0, 0, x);
   CHECK(evaluate_exit(s, 0.8, 1000, x).trigger == ExitTrigger::StopLoss);
+
   x.trailing_arm_pct = 20;
   x.tp1_pct = 1000;
+  x.tp0_enabled = false;
   exit_init(s, 1.0, 0, x);
-  exit_observe(s, 1.3, x);
+  exit_observe(s, 1.3, 500, x);
   CHECK(s.trailing_armed);
-  CHECK(evaluate_exit(s, 1.3 * 0.91, 1000, x).trigger == ExitTrigger::TrailingStop);
-  x.tp0_enabled = true;
-  x.tp0_pct = 22;
+  CHECK(evaluate_exit(s, 1.3 * 0.87, 1000, x).trigger == ExitTrigger::TrailingStop);  // 12 % gap
+
+  x = c.exits;
+  x.stall_enabled = false;
+  x.dead_money_enabled = false;
+  x.liquidity_dump_pct = 0;
   exit_init(s, 1.0, 0, x);
   ExitDecision d = evaluate_exit(s, 1.25, 1000, x);
   CHECK(d.trigger == ExitTrigger::TakeProfit0);
   CHECK_EQ(d.sell_fraction, 0.5);
   exit_on_fill(s, ExitTrigger::TakeProfit0, x);
   CHECK(s.tp0_done);
-  CHECK_EQ(s.stop_price, 1.08);
+  CHECK_EQ(s.stop_price, 1.05);  // tp0_move_stop_to_pct = 5
+
+  // Quote vault dump: peak 100, last 84 → −16 % ≤ −15 %.
+  exit_init(s, 1.0, 0, x);
+  x.liquidity_dump_pct = 15;
+  exit_observe_quote(s, 100);
+  exit_observe_quote(s, 84);
+  CHECK(evaluate_exit(s, 1.0, 1000, x).trigger == ExitTrigger::LiquidityDump);
+
+  // Stall: no new high for stall_sec after stall_arm_sec.
+  x.liquidity_dump_pct = 0;
+  x.stall_enabled = true;
+  x.stall_arm_sec = 45;
+  x.stall_sec = 45;
+  exit_init(s, 1.0, 0, x);
+  CHECK(evaluate_exit(s, 1.0, 44'000, x).trigger == ExitTrigger::None);
+  CHECK(evaluate_exit(s, 1.0, 90'000, x).trigger == ExitTrigger::Stall);
+}
+
+TEST(engine_liquidity_dump_sells) {
+  Rig r;
+  r.cfg.exits.stall_enabled = false;
+  r.cfg.exits.dead_money_enabled = false;
+  r.cfg.exits.hard_stop_pct = 100;  // dump must beat a disabled stop
+  r.cfg.exits.tp0_enabled = false;
+  r.cfg.exits.tp1_pct = 1000;
+  r.cfg.exits.trailing_arm_pct = 1000;
+  open_position(r);
+  const Position& p = r.eng->position(0);
+  // Peak at the migrate quote, then dump 20 % of the vault SOL.
+  r.feed(account_frame("watch", r.quote_vault, prog::TOKEN, token_account(67'410'000'000ULL), r.slot));
+  Packet pk;
+  CHECK(!r.pop_packet(pk));
+  r.feed(account_frame("watch", r.quote_vault, prog::TOKEN, token_account(uint64_t(67'410'000'000ULL * 0.80)), r.slot));
+  CHECK(r.pop_packet(pk));
+  CHECK(pk.side == Side::Sell);
+  CHECK(find(r.events(), Ev::Order, "LIQUIDITY_DUMP") != nullptr);
+  CHECK(p.state == PosState::SellSent);
+}
+
+TEST(engine_stall_sells) {
+  Rig r;
+  r.cfg.exits.dead_money_enabled = false;
+  r.cfg.exits.liquidity_dump_pct = 0;
+  r.cfg.exits.tp0_enabled = false;
+  r.cfg.exits.tp1_pct = 1000;
+  r.cfg.exits.trailing_arm_pct = 1000;
+  r.cfg.exits.stall_enabled = true;
+  r.cfg.exits.stall_arm_sec = 45;
+  r.cfg.exits.stall_sec = 45;
+  open_position(r);
+  Packet pk;
+  g_wall += 44'000;
+  r.eng->poll(g_mono);
+  CHECK(!r.pop_packet(pk));
+  g_wall += 46'000;  // past arm + stall with no new high
+  r.eng->poll(g_mono);
+  CHECK(r.pop_packet(pk));
+  CHECK(pk.side == Side::Sell);
+  CHECK(find(r.events(), Ev::Order, "STALL") != nullptr);
+  g_wall -= 90'000;
 }
 
 namespace {

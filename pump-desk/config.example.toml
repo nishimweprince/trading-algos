@@ -49,22 +49,27 @@ cu_limit = 250000
 priority_multiplier = 1       # on the CU price for buys (exits use exit_priority_multiplier)
 
 [exits]
-tp0_enabled = false
-tp0_pct = 22
+# Migration ladder: bank half early, trail the rest, cut dumps / stalls / dead money.
+tp0_enabled = true
+tp0_pct = 25
 tp0_sell_fraction = 0.5
-tp0_move_stop_to_pct = 8
-tp1_pct = 50
+tp0_move_stop_to_pct = 5      # lock stop above entry after TP0
+tp1_pct = 55
 tp1_sell_fraction = 1
 tp2_pct = 100
-trailing_arm_pct = 50         # = tp1: trailing effectively off
-trailing_gap_pct = 8
+trailing_arm_pct = 15         # arm once MFE clears this; trail runners that miss TP1
+trailing_gap_pct = 12
 trailing_gap_high_vol_pct = 6
-hard_stop_pct = 100           # 100 = no stop loss
+hard_stop_pct = 22            # 100 = no stop loss
 tp1_move_stop_to_pct = 20
-time_stop_minutes = 10
-dead_money_enabled = false
-dead_money_minutes = 3
-dead_money_max_mfe_pct = 5
+time_stop_minutes = 6         # last-resort backstop if nothing else fired
+dead_money_enabled = true
+dead_money_minutes = 2
+dead_money_max_mfe_pct = 8    # never moved → free the slot
+liquidity_dump_pct = 15       # quote vault ≤ 85% of peak → LIQUIDITY_DUMP; 0 = off
+stall_enabled = true
+stall_arm_sec = 45            # min age before STALL can fire
+stall_sec = 45                # no new high for this long → STALL
 protective_slippage_tiers = [20, 90]
 take_profit_slippage_tiers = [8, 20, 90]
 exit_retry_ms = 1500

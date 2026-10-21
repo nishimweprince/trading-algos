@@ -236,6 +236,12 @@ TEST(config_example_parses_to_defaults) {
   CHECK_EQ(c.racer.max_completion_cost_sol, d.racer.max_completion_cost_sol);
   CHECK_EQ(c.entry.size_wallet_pct, d.entry.size_wallet_pct);
   CHECK_EQ(c.exits.tp1_pct, d.exits.tp1_pct);
+  CHECK_EQ(c.exits.tp0_enabled, d.exits.tp0_enabled);
+  CHECK_EQ(c.exits.hard_stop_pct, d.exits.hard_stop_pct);
+  CHECK_EQ(c.exits.liquidity_dump_pct, d.exits.liquidity_dump_pct);
+  CHECK_EQ(c.exits.stall_enabled, d.exits.stall_enabled);
+  CHECK_EQ(c.exits.stall_arm_sec, d.exits.stall_arm_sec);
+  CHECK_EQ(c.exits.stall_sec, d.exits.stall_sec);
   CHECK_EQ(c.exits.take_profit_slippage_tiers.size(), size_t(3));
   CHECK_EQ(c.sender.url, d.sender.url);
   CHECK_EQ(c.sender.tip_accounts.size(), size_t(10));

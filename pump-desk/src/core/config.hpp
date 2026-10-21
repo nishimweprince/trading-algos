@@ -65,14 +65,18 @@ struct Config {
   } entry;
 
   struct Exits {
-    bool tp0_enabled = false;
-    double tp0_pct = 22, tp0_sell_fraction = 0.5, tp0_move_stop_to_pct = 8;
-    double tp1_pct = 50, tp1_sell_fraction = 1, tp2_pct = 100;
-    double trailing_arm_pct = 50, trailing_gap_pct = 8, trailing_gap_high_vol_pct = 6;
-    double hard_stop_pct = 100, tp1_move_stop_to_pct = 20;
-    double time_stop_minutes = 10;
-    bool dead_money_enabled = false;
-    double dead_money_minutes = 3, dead_money_max_mfe_pct = 5;
+    bool tp0_enabled = true;
+    double tp0_pct = 25, tp0_sell_fraction = 0.5, tp0_move_stop_to_pct = 5;
+    double tp1_pct = 55, tp1_sell_fraction = 1, tp2_pct = 100;
+    double trailing_arm_pct = 15, trailing_gap_pct = 12, trailing_gap_high_vol_pct = 6;
+    double hard_stop_pct = 22, tp1_move_stop_to_pct = 20;
+    double time_stop_minutes = 6;
+    bool dead_money_enabled = true;
+    double dead_money_minutes = 2, dead_money_max_mfe_pct = 8;
+    double liquidity_dump_pct = 15;  // quote vault ≤ peak*(1-pct/100); 0 = off
+    bool stall_enabled = true;
+    double stall_arm_sec = 45;  // min age before stall can fire
+    double stall_sec = 45;      // no new high for this long → STALL
     std::vector<double> protective_slippage_tiers{20, 90};
     std::vector<double> take_profit_slippage_tiers{8, 20, 90};
     int exit_retry_ms = 1500;

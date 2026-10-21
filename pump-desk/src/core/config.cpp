@@ -147,7 +147,9 @@ Config load_config(const std::string& path) {
   G(exits, tp1_pct); G(exits, tp1_sell_fraction); G(exits, tp2_pct); G(exits, trailing_arm_pct);
   G(exits, trailing_gap_pct); G(exits, trailing_gap_high_vol_pct); G(exits, hard_stop_pct);
   G(exits, tp1_move_stop_to_pct); G(exits, time_stop_minutes); G(exits, dead_money_enabled);
-  G(exits, dead_money_minutes); G(exits, dead_money_max_mfe_pct); G(exits, protective_slippage_tiers);
+  G(exits, dead_money_minutes); G(exits, dead_money_max_mfe_pct); G(exits, liquidity_dump_pct);
+  G(exits, stall_enabled); G(exits, stall_arm_sec); G(exits, stall_sec);
+  G(exits, protective_slippage_tiers);
   G(exits, take_profit_slippage_tiers); G(exits, exit_retry_ms); G(exits, max_exit_attempts);
   G(exits, exit_priority_multiplier); G(exits, cu_limit);
   G(risk, max_concurrent_positions); G(risk, gas_headroom_sol); G(risk, wallet_floor_sol); G(risk, kill_file);
@@ -219,6 +221,10 @@ Config load_config(const std::string& path) {
   if (c.entry.size_wallet_pct <= 0 || c.entry.size_wallet_pct > 100) throw std::runtime_error("config: entry.size_wallet_pct");
   if (c.exits.protective_slippage_tiers.empty() || c.exits.take_profit_slippage_tiers.empty())
     throw std::runtime_error("config: exit slippage tiers must not be empty");
+  if (c.exits.liquidity_dump_pct < 0 || c.exits.liquidity_dump_pct > 100)
+    throw std::runtime_error("config: exits.liquidity_dump_pct must be 0..100");
+  if (c.exits.stall_arm_sec < 0 || c.exits.stall_sec < 0)
+    throw std::runtime_error("config: exits.stall_arm_sec / stall_sec must be >= 0");
   if (c.risk.max_concurrent_positions < 1 || c.risk.max_concurrent_positions > 8)
     throw std::runtime_error("config: risk.max_concurrent_positions must be 1..8");
   if (c.screen.max_migrate_age_slots < 0) throw std::runtime_error("config: screen.max_migrate_age_slots must be >= 0");

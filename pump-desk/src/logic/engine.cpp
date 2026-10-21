@@ -815,13 +815,15 @@ void Engine::mark(Position& p, uint64_t) {
   if (p.base_res == 0) return;
   p.last_price = pool_price_sol(p.base_res, p.quote_res, p.virtual_quote);
   p.marked = p.last_price > 0;
+  if (p.quote_res) exit_observe_quote(p.exit, p.quote_res);
 }
 
 void Engine::maybe_exit(Position& p, int idx, uint64_t) {
   if (p.state != PosState::Open || !p.marked) return;
-  exit_observe(p.exit, p.last_price, cfg_.exits);
+  int64_t now = wall_ms_();
+  exit_observe(p.exit, p.last_price, now, cfg_.exits);
   if (p.sell_attempts >= cfg_.exits.max_exit_attempts) return;  // exits exhausted: kill latched, hands off
-  ExitDecision d = evaluate_exit(p.exit, p.last_price, wall_ms_(), cfg_.exits);
+  ExitDecision d = evaluate_exit(p.exit, p.last_price, now, cfg_.exits);
   if (d.trigger == ExitTrigger::None) return;
   send_sell(p, idx, d.trigger, d.sell_fraction, last_frame_ns_);
 }
@@ -940,6 +942,7 @@ void Engine::on_buy_result(int idx, bool ok, int64_t sol_delta, int64_t base_del
   p.entry_price = (double(swap) / 1e9) / (double(p.base_amount) / 1e6);
   p.opened_ms = wall_ms_();
   exit_init(p.exit, p.entry_price, p.opened_ms, cfg_.exits);
+  if (p.quote_res) exit_observe_quote(p.exit, p.quote_res);
   p.state = PosState::Open;
   f->d[0] = p.entry_price;
   emit();
@@ -1201,6 +1204,7 @@ bool Engine::restore_position(const RestoredPosition& r) {
   p.base_res = r.base_res;
   p.quote_res = r.quote_res;
   p.virtual_quote = r.virtual_quote;
+  if (p.quote_res) exit_observe_quote(p.exit, p.quote_res);
   mark(p, now_ns_());
   watch(p.keys.pool, Pubkey{}, ROLE_POOL);
   watch(p.keys.pool_base_vault, Pubkey{}, ROLE_BASE_VAULT);
