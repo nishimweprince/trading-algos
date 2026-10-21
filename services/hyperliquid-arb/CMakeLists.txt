@@ -40,12 +40,14 @@ endif()
 set(HLA_WARNINGS -Wall -Wextra -Wconversion -Wshadow -Werror)
 
 add_library(hla_core
+  src/bridge_shm.cpp
   src/hl_feed.cpp
   src/hl_gateway.cpp
   src/hl_info.cpp
   src/hl_instruments.cpp
   src/hl_parser.cpp
   src/hl_sign.cpp
+  src/mt5_bridge.cpp
   src/net.cpp
   src/platform.cpp
 )
@@ -60,4 +62,16 @@ if(HLA_ENABLE_SANITIZERS)
   target_compile_options(hla_core PUBLIC -fsanitize=address,undefined -fno-omit-frame-pointer)
   target_link_options(hla_core PUBLIC -fsanitize=address,undefined)
 endif()
+
+# hla_bridge.dll for MQL5/Libraries: self-contained (static runtime) so terminal64.exe loads it
+# without MSYS2 on PATH. Elsewhere it is a static library the tests drive as publisher/executor.
+if(WIN32)
+  add_library(hla_bridge SHARED mt5/bridge/hla_bridge.cpp src/bridge_shm.cpp)
+  target_link_options(hla_bridge PRIVATE -static)
+  set_target_properties(hla_bridge PROPERTIES PREFIX "")
+else()
+  add_library(hla_bridge STATIC mt5/bridge/hla_bridge.cpp src/bridge_shm.cpp)
+endif()
+target_include_directories(hla_bridge PUBLIC include)
+target_compile_options(hla_bridge PRIVATE ${HLA_WARNINGS})
 
