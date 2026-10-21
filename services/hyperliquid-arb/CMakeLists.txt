@@ -50,9 +50,11 @@ add_library(hla_core
   src/hl_instruments.cpp
   src/hl_parser.cpp
   src/hl_sign.cpp
+  src/journal.cpp
   src/mt5_bridge.cpp
   src/net.cpp
   src/platform.cpp
+  src/runtime.cpp
 )
 target_include_directories(hla_core PUBLIC include)
 target_link_libraries(hla_core PUBLIC CURL::libcurl OpenSSL::SSL OpenSSL::Crypto Threads::Threads secp256k1)
@@ -78,3 +80,22 @@ endif()
 target_include_directories(hla_bridge PUBLIC include)
 target_compile_options(hla_bridge PRIVATE ${HLA_WARNINGS})
 
+add_executable(hlarb src/main.cpp)
+target_link_libraries(hlarb PRIVATE hla_core)
+target_compile_options(hlarb PRIVATE ${HLA_WARNINGS})
+
+if(HLA_BUILD_TESTS)
+  enable_testing()
+  add_executable(hla-tests tests/test_main.cpp)
+  target_link_libraries(hla-tests PRIVATE hla_core)
+  if(NOT WIN32)
+    target_link_libraries(hla-tests PRIVATE hla_bridge)
+  endif()
+  target_compile_options(hla-tests PRIVATE ${HLA_WARNINGS})
+  add_test(NAME hla-tests COMMAND hla-tests ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures)
+  add_test(NAME hla-usage COMMAND hlarb)
+  set_tests_properties(hla-usage PROPERTIES WILL_FAIL TRUE)
+  add_test(NAME hla-drill COMMAND hlarb drill)
+endif()
+
+install(TARGETS hlarb RUNTIME DESTINATION bin)
