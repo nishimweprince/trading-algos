@@ -13,14 +13,14 @@
 
 namespace cxa {
 
-// Direction +1 (A): long Binance, short Bybit. Direction -1 (B): long Bybit, short Binance.
-enum class Direction : std::int8_t { long_binance = 1, long_bybit = -1 };
+// Direction +1 (A): long Binance, short the peer. Direction -1 (B): long the peer, short Binance.
+enum class Direction : std::int8_t { long_binance = 1, long_peer = -1 };
 inline constexpr std::int64_t sign(Direction dir) noexcept { return static_cast<std::int64_t>(dir); }
-inline constexpr Venue long_venue(Direction dir) noexcept {
-  return dir == Direction::long_binance ? Venue::binance : Venue::bybit;
+inline constexpr Venue long_venue(Direction dir, Venue peer = Venue::bybit) noexcept {
+  return dir == Direction::long_binance ? Venue::binance : peer;
 }
-inline constexpr Venue short_venue(Direction dir) noexcept {
-  return dir == Direction::long_binance ? Venue::bybit : Venue::binance;
+inline constexpr Venue short_venue(Direction dir, Venue peer = Venue::bybit) noexcept {
+  return dir == Direction::long_binance ? peer : Venue::binance;
 }
 
 enum class LegPurpose : std::uint8_t { open, close, repair };
@@ -230,6 +230,7 @@ class Engine final {
   [[nodiscard]] bool halted() const noexcept { return halted_ || loss_halt_; }
   [[nodiscard]] bool loss_halted() const noexcept { return loss_halt_; }
   [[nodiscard]] std::uint64_t now_ns() const noexcept { return now_ns_; }
+  [[nodiscard]] Venue peer() const noexcept { return shadow_.peer; }
   [[nodiscard]] std::uint64_t state_hash() const noexcept;
   [[nodiscard]] Edge edge(std::size_t symbol, Direction dir, Quantity quantity) const noexcept;
   [[nodiscard]] Edge edge(std::size_t symbol, Direction dir, Quantity quantity, Venue maker_venue) const noexcept;
@@ -269,6 +270,11 @@ class Engine final {
   void submit_leg(std::size_t symbol, Venue venue, Side side, LegPurpose purpose, Quantity quantity,
                   Price limit, LegLiquidity liquidity = LegLiquidity::taker, Venue hedge_venue = Venue::binance,
                   Side hedge_side = Side::buy) noexcept;
+  [[nodiscard]] Venue long_of(Direction dir) const noexcept { return long_venue(dir, shadow_.peer); }
+  [[nodiscard]] Venue short_of(Direction dir) const noexcept { return short_venue(dir, shadow_.peer); }
+  [[nodiscard]] Venue counterpart(Venue venue) const noexcept {
+    return venue == Venue::binance ? shadow_.peer : Venue::binance;
+  }
   void apply_fill(PairState& pair, Venue venue, Side side, Quantity quantity, Price price) noexcept;
   void finish_cycle(std::size_t symbol, ExitReason reason) noexcept;
   void on_gap(Venue venue, std::size_t symbol) noexcept;

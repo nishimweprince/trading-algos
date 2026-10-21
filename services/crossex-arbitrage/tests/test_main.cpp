@@ -345,6 +345,50 @@ void test_replay_interleaved_header() {
   std::filesystem::remove(path);
 }
 
+void test_hyperliquid_peer_latency() {
+  auto config = scenario_config();
+  config.shadow.peer = Venue::hyperliquid;
+  config.shadow.venue_penalty_ns[1] = 200'000'000;
+  Scenario s(config);
+  s.quote(Venue::binance, "100.00", "100.02");
+  s.quote(Venue::hyperliquid, "100.00", "100.02");
+  const auto next = s.now_ns() / 1'000'000 + 3'600'000;
+  s.funding(Venue::binance, "0.0001", next);
+  s.funding(Venue::hyperliquid, "0.0000125", next);
+  s.advance_ms(1);
+  s.quote(Venue::hyperliquid, "100.60", "100.62");
+  const auto* decision = s.last(OutputKind::decision);
+  require(decision != nullptr && decision->decision.dir == Direction::long_binance, "rich peer -> long binance");
+  const auto* leg = s.last(OutputKind::leg_submit);
+  require(leg != nullptr && leg->leg.venue == Venue::hyperliquid, "short leg routed to hyperliquid");
+  s.advance_ms(40);
+  require(s.count(OutputKind::leg_fill) == 1, "only the Binance leg fills inside 40 ms");
+  s.advance_ms(200);
+  require(s.count(OutputKind::leg_fill) == 2 && s.engine().pair(0).phase == PairPhase::open,
+          "hyperliquid leg fills after the inclusion delay");
+}
+
+void test_journal_peer_header() {
+  const auto path = std::filesystem::temp_directory_path() / "cxa-peer-test.jsonl";
+  auto config = scenario_config();
+  config.shadow.peer = Venue::hyperliquid;
+  {
+    Journal journal(path.string());
+    require(journal.header(config, "shadow", 1) && journal.instrument(0, test_instrument()), "peer header written");
+    journal.flush();
+  }
+  std::ifstream in(path);
+  std::string line;
+  std::getline(in, line);
+  require(line.ends_with(" hyperliquid"), "header names the peer");
+  ReplayResult result;
+  std::string error;
+  require(!replay_journal(path.string(), scenario_config(), result, error) &&
+              error.find("CXA_PEER") != std::string::npos,
+          "replay refuses a peer mismatch");
+  std::filesystem::remove(path);
+}
+
 void test_reports() {
   const auto path = std::filesystem::temp_directory_path() / "cxa-report-test.jsonl";
   {
@@ -447,7 +491,7 @@ void test_maker_taker_fee_ppm() {
 
 int main(int argc, char** argv) {
   fixtures = argc > 1 ? argv[1] : "tests/fixtures";
-  const std::array<std::pair<const char*, void (*)()>, 18> cases{{
+  const std::array<std::pair<const char*, void (*)()>, 20> cases{{
       {"decimal_and_ppm", test_decimal_and_ppm},
       {"book_and_sweep", test_book_and_sweep},
       {"binance_sync", test_binance_sync},
@@ -466,6 +510,8 @@ int main(int argc, char** argv) {
       {"maker_taker_fill_and_hedge", test_maker_taker_fill_and_hedge},
       {"maker_timeout_miss", test_maker_timeout_miss},
       {"maker_taker_fee_ppm", test_maker_taker_fee_ppm},
+      {"hyperliquid_peer_latency", test_hyperliquid_peer_latency},
+      {"journal_peer_header", test_journal_peer_header},
   }};
   try {
     for (const auto& [name, test] : cases) {

@@ -67,13 +67,23 @@ inline constexpr Side opposite(Side side) noexcept {
   return side == Side::buy ? Side::sell : Side::buy;
 }
 
-enum class Venue : std::uint8_t { binance = 0, bybit = 1 };
+// A process trades one pair: Binance in slot 0 and a peer (Bybit or Hyperliquid) in
+// slot 1. kVenues counts slots; both peers share slot 1.
+enum class Venue : std::uint8_t { binance = 0, bybit = 1, hyperliquid = 2 };
 constexpr std::size_t kVenues = 2;
 constexpr std::size_t kMaxSymbols = 32;
 
-inline constexpr std::size_t index(Venue venue) noexcept { return static_cast<std::size_t>(venue); }
+inline constexpr std::size_t index(Venue venue) noexcept { return venue == Venue::binance ? 0 : 1; }
+inline constexpr Venue slot_venue(std::size_t slot, Venue peer) noexcept {
+  return slot == 0 ? Venue::binance : peer;
+}
 inline constexpr std::string_view venue_name(Venue venue) noexcept {
-  return venue == Venue::binance ? "binance" : "bybit";
+  switch (venue) {
+    case Venue::binance: return "binance";
+    case Venue::bybit: return "bybit";
+    case Venue::hyperliquid: return "hyperliquid";
+  }
+  return "unknown";
 }
 
 struct Level final {

@@ -37,7 +37,7 @@ Scenario::Scenario(RuntimeConfig config)
                                        config.shadow)),
       event_(std::make_unique<DepthEvent>()) {
   for (std::size_t v = 0; v < kVenues; ++v)
-    engine_->set_fees(static_cast<Venue>(v), 0, config.shadow.fallback_taker_ppm[v],
+    engine_->set_fees(slot_venue(v, config.shadow.peer), 0, config.shadow.fallback_taker_ppm[v],
                       config.shadow.fallback_maker_ppm[v]);
 }
 
@@ -56,9 +56,9 @@ void Scenario::quote(Venue venue, std::string_view bid, std::string_view ask, st
   e.symbol = 0;
   e.receive_ns = now_ns_;
   e.event_ms = now_ns_ / 1'000'000;
-  if (venue == Venue::bybit) {
+  if (venue != Venue::binance) {
     e.snapshot = true;
-    e.first_id = e.final_id = ++bybit_id_;
+    e.first_id = e.final_id = ++peer_id_;
     e.bids[0] = new_bid;
     e.asks[0] = new_ask;
     e.bid_count = e.ask_count = 1;
@@ -115,7 +115,7 @@ void Scenario::advance_ms(std::uint64_t ms) {
     for (std::size_t v = 0; v < kVenues; ++v) {
       if (bid_[v].price.raw == 0) continue;
       FundingEvent heartbeat;
-      heartbeat.venue = static_cast<Venue>(v);
+      heartbeat.venue = slot_venue(v, engine_->peer());
       heartbeat.receive_ns = now_ns_;
       heartbeat.event_ms = now_ns_ / 1'000'000;
       engine_->on_funding(heartbeat);

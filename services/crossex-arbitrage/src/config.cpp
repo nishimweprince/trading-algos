@@ -49,6 +49,12 @@ std::string_view exec_mode_name(ExecMode mode) noexcept {
   return "unknown";
 }
 
+Venue parse_peer(std::string_view name) {
+  if (name == "bybit") return Venue::bybit;
+  if (name == "hyperliquid") return Venue::hyperliquid;
+  throw std::invalid_argument("CXA_PEER must be bybit or hyperliquid");
+}
+
 RuntimeConfig load_runtime_config() {
   RuntimeConfig config;
   if (const auto* basket = std::getenv("CXA_BASKET")) config.basket = basket;
@@ -89,15 +95,25 @@ RuntimeConfig load_runtime_config() {
     else if (text == "pessimistic") h.latency_mode = LatencyMode::pessimistic;
     else throw std::invalid_argument("CXA_LATENCY_MODE must be fixed, sampled, or pessimistic");
   }
+  if (const auto* peer = std::getenv("CXA_PEER")) h.peer = parse_peer(peer);
   h.fixed_one_way_ns[0] = unsigned_integer("CXA_BINANCE_ONE_WAY_NS", h.fixed_one_way_ns[0]);
-  h.fixed_one_way_ns[1] = unsigned_integer("CXA_BYBIT_ONE_WAY_NS", h.fixed_one_way_ns[1]);
   h.engine_penalty_ns = unsigned_integer("CXA_ENGINE_PENALTY_NS", h.engine_penalty_ns);
   h.available_ppm = integer("CXA_AVAILABLE_PPM", h.available_ppm);
   h.seed = unsigned_integer("CXA_SEED", h.seed);
   h.fallback_taker_ppm[0] = integer("CXA_BINANCE_TAKER_PPM", h.fallback_taker_ppm[0]);
-  h.fallback_taker_ppm[1] = integer("CXA_BYBIT_TAKER_PPM", h.fallback_taker_ppm[1]);
   h.fallback_maker_ppm[0] = integer("CXA_BINANCE_MAKER_PPM", h.fallback_maker_ppm[0]);
-  h.fallback_maker_ppm[1] = integer("CXA_BYBIT_MAKER_PPM", h.fallback_maker_ppm[1]);
+  if (h.peer == Venue::hyperliquid) {
+    // Base-tier perp fees (0.045% / 0.015%). An HL order only takes effect when its
+    // block is built, so every leg pays an inclusion delay on top of RTT/2.
+    h.fixed_one_way_ns[1] = unsigned_integer("CXA_HL_ONE_WAY_NS", 5'000'000);
+    h.venue_penalty_ns[1] = unsigned_integer("CXA_HL_INCLUSION_NS", 200'000'000);
+    h.fallback_taker_ppm[1] = integer("CXA_HL_TAKER_PPM", 450);
+    h.fallback_maker_ppm[1] = integer("CXA_HL_MAKER_PPM", 150);
+  } else {
+    h.fixed_one_way_ns[1] = unsigned_integer("CXA_BYBIT_ONE_WAY_NS", h.fixed_one_way_ns[1]);
+    h.fallback_taker_ppm[1] = integer("CXA_BYBIT_TAKER_PPM", h.fallback_taker_ppm[1]);
+    h.fallback_maker_ppm[1] = integer("CXA_BYBIT_MAKER_PPM", h.fallback_maker_ppm[1]);
+  }
   if (s.trade_notional_raw <= 0 || s.trade_notional_raw > r.max_pair_notional_raw)
     throw std::invalid_argument("CXA_TRADE_NOTIONAL must be positive and within CXA_MAX_PAIR_NOTIONAL");
   if (h.available_ppm <= 0 || h.available_ppm > kPpm)

@@ -89,7 +89,16 @@ class LineReader final {
   std::size_t capacity_{};
 };
 
-Venue venue_from(int value) { return value == 0 ? Venue::binance : Venue::bybit; }
+Venue venue_from(int value, Venue peer) { return value == 0 ? Venue::binance : peer; }
+
+// Z header: start mode latency exec notional min_net available basket [peer]. Journals
+// written before the peer field are Binance-Bybit.
+Venue header_peer(const std::string& line) {
+  std::istringstream row(line.substr(2));
+  std::string field;
+  for (int i = 0; i < 8 && row >> field; ++i) {}
+  return row >> field ? parse_peer(field) : Venue::bybit;
+}
 
 struct FileSpan final {
   std::uint64_t start_ns{};
@@ -133,7 +142,7 @@ Journal::Journal(const std::string& path) : buffer_(1 << 20) {
 bool Journal::header(const RuntimeConfig& config, std::string_view mode, std::uint64_t start_ns) {
   stream_ << "Z " << start_ns << ' ' << mode << ' ' << latency_mode_name(config.shadow.latency_mode) << ' '
           << exec_mode_name(config.strategy.exec_mode) << ' ' << config.strategy.trade_notional_raw << ' '
-          << config.strategy.min_net_ppm << ' ' << config.shadow.available_ppm << ' ' << config.basket << '\n';
+          << config.strategy.min_net_ppm << ' ' << config.shadow.available_ppm << ' ' << config.basket << ' ' << venue_name(config.shadow.peer) << '\n';
   return stream_.good();
 }
 
@@ -242,6 +251,7 @@ bool replay_journal(const std::string& path, const RuntimeConfig& config, Replay
   if (!input) { error = "cannot open journal " + path; return false; }
   std::vector<Instrument> instruments;
   std::unique_ptr<Engine> engine;
+  const auto peer = config.shadow.peer;
   struct PendingFee final {
     int venue{};
     std::uint16_t symbol{};
@@ -264,8 +274,8 @@ bool replay_journal(const std::string& path, const RuntimeConfig& config, Replay
     if (instruments.empty()) { error = "journal has no instruments before market data"; return false; }
     engine = std::make_unique<Engine>(instruments, config.strategy, config.risk, config.shadow);
     for (const auto& fee : pending_fees)
-      engine->set_fees(venue_from(fee.venue), fee.symbol, fee.taker_ppm, fee.maker_ppm);
-    for (const auto& sample : pending_latency) engine->add_latency_sample(venue_from(sample.venue), sample.rtt);
+      engine->set_fees(venue_from(fee.venue, peer), fee.symbol, fee.taker_ppm, fee.maker_ppm);
+    for (const auto& sample : pending_latency) engine->add_latency_sample(venue_from(sample.venue, peer), sample.rtt);
     pending_fees.clear();
     pending_latency.clear();
     return true;
@@ -279,6 +289,14 @@ bool replay_journal(const std::string& path, const RuntimeConfig& config, Replay
       return false;
     };
     switch (line[0]) {
+      case 'Z':
+        // Peer-dependent defaults (latency penalty, fallback fees) come from the
+        // environment, so the environment must name the same peer as the journal.
+        if (header_peer(line) != peer) {
+          error = "journal peer is " + std::string(venue_name(header_peer(line))) + "; set CXA_PEER to match";
+          return false;
+        }
+        break;
       case 'Y': {
         Instrument i;
         std::size_t symbol = 0;
@@ -297,7 +315,7 @@ bool replay_journal(const std::string& path, const RuntimeConfig& config, Replay
         std::int64_t maker_ppm = 0;
         if (!(row >> venue >> symbol >> taker_ppm)) return bad();
         if (!(row >> maker_ppm)) maker_ppm = taker_ppm;  // archived 3-field C lines
-        if (engine) engine->set_fees(venue_from(venue), symbol, taker_ppm, maker_ppm);
+        if (engine) engine->set_fees(venue_from(venue, peer), symbol, taker_ppm, maker_ppm);
         else pending_fees.push_back({venue, symbol, taker_ppm, maker_ppm});
         break;
       }
@@ -306,7 +324,7 @@ bool replay_journal(const std::string& path, const RuntimeConfig& config, Replay
         std::uint64_t receive_ns = 0;
         std::uint64_t rtt = 0;
         if (!(row >> venue >> receive_ns >> rtt)) return bad();
-        if (engine) engine->add_latency_sample(venue_from(venue), rtt);
+        if (engine) engine->add_latency_sample(venue_from(venue, peer), rtt);
         else pending_latency.push_back({venue, rtt});
         break;
       }
@@ -316,7 +334,7 @@ bool replay_journal(const std::string& path, const RuntimeConfig& config, Replay
         if (!(row >> venue >> snapshot.symbol >> snapshot.receive_ns >> snapshot.last_update_id) ||
             !read_levels(row, snapshot.bids) || !read_levels(row, snapshot.asks) || !ensure_engine())
           return bad();
-        snapshot.venue = venue_from(venue);
+        snapshot.venue = venue_from(venue, peer);
         engine->on_snapshot(snapshot);
         ++result.events;
         break;
@@ -328,7 +346,7 @@ bool replay_journal(const std::string& path, const RuntimeConfig& config, Replay
               e.previous_final_id) ||
             !read_levels(row, e.bids, e.bid_count) || !read_levels(row, e.asks, e.ask_count) || !ensure_engine())
           return bad();
-        e.venue = venue_from(venue);
+        e.venue = venue_from(venue, peer);
         engine->on_depth(e);
         ++result.events;
         break;
@@ -340,7 +358,7 @@ bool replay_journal(const std::string& path, const RuntimeConfig& config, Replay
               e.funding_rate.raw >> e.has_rate) ||
             !ensure_engine())
           return bad();
-        e.venue = venue_from(venue);
+        e.venue = venue_from(venue, peer);
         engine->on_funding(e);
         ++result.events;
         break;

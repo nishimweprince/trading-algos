@@ -17,6 +17,7 @@
 #include <chrono>
 #include <csignal>
 #include <filesystem>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -76,6 +77,22 @@ std::vector<std::string> venue_symbols(const std::vector<Instrument>& basket, Ve
   return symbols;
 }
 
+bool parse_frame(Venue venue, std::string_view frame, std::uint64_t receive_ns,
+                 const std::vector<std::string>& symbols, ParsedFrame& parsed) {
+  return venue == Venue::binance ? parse_binance_frame(frame, receive_ns, symbols, parsed)
+                                 : parse_bybit_frame(frame, receive_ns, symbols, parsed);
+}
+
+using FeedRunner = std::function<bool(std::atomic<bool>&, ResyncFlags&, std::string&)>;
+
+// The slot-1 feed for the configured peer.
+FeedRunner make_peer_feed(Venue, std::vector<std::string> symbols, FrameHandler frames) {
+  auto feed = std::make_shared<BybitFeed>(std::move(symbols), std::move(frames));
+  return [feed](std::atomic<bool>& stop, ResyncFlags& resync, std::string& error) {
+    return feed->run(stop, resync, error);
+  };
+}
+
 std::uint64_t percentile(std::vector<std::uint64_t> values, double p) {
   if (values.empty()) return 0;
   const auto k = static_cast<std::size_t>(p * static_cast<double>(values.size() - 1));
@@ -108,7 +125,8 @@ std::string summary_json(const Engine& engine, std::string_view latency_mode, st
   const auto& m = engine.metrics();
   std::ostringstream out;
   bool ready = true;
-  out << "{\"service_live\":true,\"mode\":\"shadow\",\"latency_mode\":\"" << latency_mode
+  out << "{\"service_live\":true,\"mode\":\"shadow\",\"peer\":\"" << venue_name(engine.peer())
+      << "\",\"latency_mode\":\"" << latency_mode
       << "\",\"exec_mode\":\"" << exec_mode << "\",\"halted\":" << (engine.halted() ? "true" : "false")
       << ",\"loss_halted\":" << (engine.loss_halted() ? "true" : "false")
       << ",\"kill_file\":" << (kill_file ? "true" : "false") << ",\"net_raw\":" << m.net_raw
@@ -118,7 +136,7 @@ std::string summary_json(const Engine& engine, std::string_view latency_mode, st
       << ",\"depth_events\":[" << m.depth_events[0] << ',' << m.depth_events[1] << "],\"gaps\":[" << m.gaps[0] << ','
       << m.gaps[1] << "],\"funding_settlements\":" << m.funding_settlements << ",\"latency\":[";
   for (std::size_t v = 0; v < kVenues; ++v) {
-    const auto& model = engine.latency(static_cast<Venue>(v));
+    const auto& model = engine.latency(slot_venue(v, engine.peer()));
     out << (v ? "," : "") << "{\"samples\":" << model.samples() << ",\"p50_ns\":" << model.percentile(0.5)
         << ",\"p95_ns\":" << model.percentile(0.95) << '}';
   }
@@ -128,7 +146,7 @@ std::string summary_json(const Engine& engine, std::string_view latency_mode, st
   out << "},\"symbols\":[";
   for (std::size_t s = 0; s < engine.instruments().size(); ++s) {
     const auto& b = engine.book(Venue::binance, s);
-    const auto& y = engine.book(Venue::bybit, s);
+    const auto& y = engine.book(engine.peer(), s);
     ready = ready && b.verified() && y.verified();
     const auto mid_b = b.mid().raw;
     const auto mid_y = y.mid().raw;
@@ -138,10 +156,10 @@ std::string summary_json(const Engine& engine, std::string_view latency_mode, st
         << book_name(b.state()) << '/' << book_name(y.state()) << "\",\"basis_ppm\":" << basis
         << ",\"mean_ppm\":" << engine.basis_mean_ppm(s) << ",\"warm\":" << (engine.basis_warm(s) ? "true" : "false")
         << ",\"disabled\":" << (engine.symbol_disabled(s) ? "true" : "false") << ",\"fee_ppm\":["
-        << engine.taker_ppm(Venue::binance, s) << ',' << engine.taker_ppm(Venue::bybit, s)
-        << "],\"maker_ppm\":[" << engine.maker_ppm(Venue::binance, s) << ',' << engine.maker_ppm(Venue::bybit, s)
+        << engine.taker_ppm(Venue::binance, s) << ',' << engine.taker_ppm(engine.peer(), s)
+        << "],\"maker_ppm\":[" << engine.maker_ppm(Venue::binance, s) << ',' << engine.maker_ppm(engine.peer(), s)
         << "],\"funding_ppm\":["
-        << engine.funding(Venue::binance, s).rate.raw / 100 << ',' << engine.funding(Venue::bybit, s).rate.raw / 100
+        << engine.funding(Venue::binance, s).rate.raw / 100 << ',' << engine.funding(engine.peer(), s).rate.raw / 100
         << "],\"phase\":\"" << phase_name(pair.phase) << "\",\"dir\":" << sign(pair.dir) << ",\"qty_raw\":["
         << pair.qty_raw[0] << ',' << pair.qty_raw[1] << "]}";
   }
@@ -212,13 +230,14 @@ int shadow(int argc, char** argv) {
     return 1;
   }
   const auto config = load_runtime_config();
+  const auto peer = config.shadow.peer;
   auto basket = parse_basket(config.basket);
 
   HttpClient http;
   std::string error;
   if (!load_instruments(http, basket, error)) { std::cerr << "instruments: " << error << '\n'; return 1; }
 
-  std::array<Credentials, kVenues> credentials{load_credentials(Venue::binance), load_credentials(Venue::bybit)};
+  std::array<Credentials, kVenues> credentials{load_credentials(Venue::binance), load_credentials(peer)};
   std::array<std::vector<std::int64_t>, kVenues> taker_fees;
   std::array<std::vector<std::int64_t>, kVenues> maker_fees;
   if (public_only) {
@@ -228,7 +247,7 @@ int shadow(int argc, char** argv) {
     }
   } else {
     for (std::size_t v = 0; v < kVenues; ++v) {
-      const auto venue = static_cast<Venue>(v);
+      const auto venue = slot_venue(v, peer);
       std::string detail;
       if (!verify_read_only(http, venue, credentials[v], detail)) {
         if (environment("CXA_ALLOW_TRADING_KEYS", "0") != "1") {
@@ -258,17 +277,17 @@ int shadow(int argc, char** argv) {
   for (std::size_t s = 0; s < basket.size(); ++s) {
     journal.instrument(s, basket[s]);
     for (std::size_t v = 0; v < kVenues; ++v) {
-      engine->set_fees(static_cast<Venue>(v), static_cast<std::uint16_t>(s), taker_fees[v][s], maker_fees[v][s]);
-      journal.fee(static_cast<Venue>(v), s, taker_fees[v][s], maker_fees[v][s]);
+      engine->set_fees(slot_venue(v, peer), static_cast<std::uint16_t>(s), taker_fees[v][s], maker_fees[v][s]);
+      journal.fee(slot_venue(v, peer), s, taker_fees[v][s], maker_fees[v][s]);
     }
   }
   journal.flush();
 
   const auto binance_symbols = venue_symbols(basket, Venue::binance);
-  const auto bybit_symbols = venue_symbols(basket, Venue::bybit);
+  const auto peer_symbols = venue_symbols(basket, peer);
   std::array<ResyncFlags, kVenues> resync{};
   auto binance_queue = std::make_unique<FeedQueue>();
-  auto bybit_queue = std::make_unique<FeedQueue>();
+  auto peer_queue = std::make_unique<FeedQueue>();
   auto aux_queue = std::make_unique<AuxQueue>();
   auto record_queue = std::make_unique<RecordQueue>();
   std::array<std::unique_ptr<RawQueue>, kVenues> raw_queues{std::make_unique<RawQueue>(), std::make_unique<RawQueue>()};
@@ -306,7 +325,7 @@ int shadow(int argc, char** argv) {
       for (std::size_t v = 0; v < kVenues; ++v) {
         while (raw_queues[v]->try_pop(raw)) {
           worked = true;
-          if (!journal.raw(static_cast<Venue>(v), raw.receive_ns, raw.frame)) fail("raw journal write failed");
+          if (!journal.raw(slot_venue(v, peer), raw.receive_ns, raw.frame)) fail("raw journal write failed");
         }
       }
       while (record_queue->try_pop(record)) {
@@ -354,7 +373,7 @@ int shadow(int argc, char** argv) {
       auto next_fees = std::chrono::steady_clock::now() + std::chrono::hours(1);
       while (!aux_stop.load(std::memory_order_relaxed)) {
         for (std::size_t v = 0; v < kVenues; ++v) {
-          const auto venue = static_cast<Venue>(v);
+          const auto venue = slot_venue(v, peer);
           const auto result = signed_probe(probe_http, venue, credentials[v]);
           if (!result.ok) continue;
           if (!aux_queue->try_push({AuxKind::latency, venue, 0, 0, 0, wall_ns(), result.elapsed_ns}))
@@ -366,13 +385,13 @@ int shadow(int argc, char** argv) {
             std::vector<std::int64_t> updated_taker;
             std::vector<std::int64_t> updated_maker;
             std::string fee_error;
-            if (!fetch_fees(probe_http, static_cast<Venue>(v), credentials[v], basket, updated_taker, updated_maker,
+            if (!fetch_fees(probe_http, slot_venue(v, peer), credentials[v], basket, updated_taker, updated_maker,
                             fee_error)) {
               std::cerr << "fee refresh: " << fee_error << '\n';
               continue;
             }
             for (std::size_t s = 0; s < updated_taker.size(); ++s)
-              aux_queue->try_push({AuxKind::fee, static_cast<Venue>(v), static_cast<std::uint16_t>(s),
+              aux_queue->try_push({AuxKind::fee, slot_venue(v, peer), static_cast<std::uint16_t>(s),
                                    updated_taker[s], updated_maker[s], wall_ns(), 0});
           }
         }
@@ -409,7 +428,7 @@ int shadow(int argc, char** argv) {
       std::lock_guard lock(summary_mutex);
       summary.swap(text);
     };
-    while (!feeds_done.load(std::memory_order_acquire) || !binance_queue->empty() || !bybit_queue->empty() ||
+    while (!feeds_done.load(std::memory_order_acquire) || !binance_queue->empty() || !peer_queue->empty() ||
            !aux_queue->empty()) {
       const auto kill_now = kill_file_active.load(std::memory_order_acquire);
       if (kill_now != kill_applied) {
@@ -425,7 +444,7 @@ int shadow(int argc, char** argv) {
       }
       // Merge the three inputs in receive-time order.
       const auto* b = binance_queue->front();
-      const auto* y = bybit_queue->front();
+      const auto* y = peer_queue->front();
       const auto* a = aux_queue->front();
       const auto bt = b ? b->receive_ns : UINT64_MAX;
       const auto yt = y ? y->receive_ns : UINT64_MAX;
@@ -442,7 +461,7 @@ int shadow(int argc, char** argv) {
         record.aux = aux_message;
         push(std::move(record));
       } else {
-        auto& queue = bt <= yt ? *binance_queue : *bybit_queue;
+        auto& queue = bt <= yt ? *binance_queue : *peer_queue;
         queue.try_pop(message);
         Record record;
         switch (message.kind) {
@@ -489,8 +508,7 @@ int shadow(int argc, char** argv) {
         return false;
       }
       auto parsed = std::make_unique<ParsedFrame>();
-      const auto ok = venue == Venue::binance ? parse_binance_frame(frame, receive_ns, *symbols_ptr, *parsed)
-                                              : parse_bybit_frame(frame, receive_ns, *symbols_ptr, *parsed);
+      const auto ok = parse_frame(venue, frame, receive_ns, *symbols_ptr, *parsed);
       if (!ok) {
         fail(std::string(venue_name(venue)) + ": malformed frame: " + std::string(frame.substr(0, 200)));
         return false;
@@ -534,16 +552,17 @@ int shadow(int argc, char** argv) {
                         }
                         return true;
                       });
-  BybitFeed bybit(bybit_symbols, make_handler(Venue::bybit, *bybit_queue, *raw_queues[1], bybit_symbols));
+  auto peer_feed = make_peer_feed(peer, peer_symbols, make_handler(peer, *peer_queue, *raw_queues[1], peer_symbols));
 
   std::thread binance_thread([&] {
     std::string feed_error;
     if (!binance.run(stop_requested, resync[0], feed_error) && !stop_requested.load()) fail("binance: " + feed_error);
     stop_requested.store(true);
   });
-  std::thread bybit_thread([&] {
+  std::thread peer_thread([&] {
     std::string feed_error;
-    if (!bybit.run(stop_requested, resync[1], feed_error) && !stop_requested.load()) fail("bybit: " + feed_error);
+    if (!peer_feed(stop_requested, resync[1], feed_error) && !stop_requested.load())
+      fail(std::string(venue_name(peer)) + ": " + feed_error);
     stop_requested.store(true);
   });
 
@@ -554,7 +573,7 @@ int shadow(int argc, char** argv) {
   }
   stop_requested.store(true);
   binance_thread.join();
-  bybit_thread.join();
+  peer_thread.join();
   aux_stop.store(true);
   if (aux.joinable()) aux.join();
   feeds_done.store(true, std::memory_order_release);
@@ -581,8 +600,9 @@ int probe(int argc, char** argv) {
   }
   const auto duration = std::stoull(option(argc, argv, "--duration-seconds", "600"));
   const auto config = load_runtime_config();
+  const auto peer = config.shadow.peer;
   auto basket = parse_basket(config.basket);
-  std::array<Credentials, kVenues> credentials{load_credentials(Venue::binance), load_credentials(Venue::bybit)};
+  std::array<Credentials, kVenues> credentials{load_credentials(Venue::binance), load_credentials(peer)};
   struct Samples final {
     std::mutex mutex;
     std::vector<std::uint64_t> feed_age_ns;
@@ -607,7 +627,7 @@ int probe(int argc, char** argv) {
     if (s.feed_age_ns.size() < 2'000'000) s.feed_age_ns.push_back(static_cast<std::uint64_t>(std::max<std::int64_t>(age, 0)));
   };
   const auto binance_symbols = venue_symbols(basket, Venue::binance);
-  const auto bybit_symbols = venue_symbols(basket, Venue::bybit);
+  const auto peer_symbols = venue_symbols(basket, peer);
   auto parsed = std::make_unique<std::array<ParsedFrame, kVenues>>();
   BinanceFeed binance(binance_symbols, [&](std::uint64_t receive_ns, std::string_view frame) {
     auto& p = (*parsed)[0];
@@ -615,18 +635,18 @@ int probe(int argc, char** argv) {
       record_age(Venue::binance, receive_ns, p.depth.event_ms);
     return true;
   }, [](BookSnapshot&&) { return true; });
-  BybitFeed bybit(bybit_symbols, [&](std::uint64_t receive_ns, std::string_view frame) {
+  auto peer_feed = make_peer_feed(peer, peer_symbols, [&](std::uint64_t receive_ns, std::string_view frame) {
     auto& p = (*parsed)[1];
-    if (parse_bybit_frame(frame, receive_ns, bybit_symbols, p) && p.kind == FrameKind::depth)
-      record_age(Venue::bybit, receive_ns, p.depth.event_ms);
+    if (parse_frame(peer, frame, receive_ns, peer_symbols, p) && p.kind == FrameKind::depth)
+      record_age(peer, receive_ns, p.depth.event_ms);
     return true;
   });
   std::array<ResyncFlags, kVenues> resync{};
-  const auto feed = [&](auto& client, std::size_t v) {
+  const auto feed = [&](auto&& run, std::size_t v) {
     std::string error;
-    if (!client.run(stop, resync[v], error) && !stop.load()) {
+    if (!run(stop, resync[v], error) && !stop.load()) {
       std::lock_guard lock(failure_mutex);
-      failure = std::string(venue_name(static_cast<Venue>(v))) + ": " + error;
+      failure = std::string(venue_name(slot_venue(v, peer))) + ": " + error;
       stop.store(true);
     }
   };
@@ -635,7 +655,7 @@ int probe(int argc, char** argv) {
     std::uint64_t tick = 0;
     while (!stop.load()) {
       for (std::size_t v = 0; v < kVenues; ++v) {
-        const auto venue = static_cast<Venue>(v);
+        const auto venue = slot_venue(v, peer);
         auto& s = samples[v];
         std::uint64_t server_ms = 0;
         const auto sent = wall_ns();
@@ -663,14 +683,16 @@ int probe(int argc, char** argv) {
       for (int i = 0; i < 10 && !stop.load(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
   });
-  std::thread binance_thread([&] { feed(binance, 0); });
-  std::thread bybit_thread([&] { feed(bybit, 1); });
+  std::thread binance_thread([&] {
+    feed([&](std::atomic<bool>& s, ResyncFlags& r, std::string& e) { return binance.run(s, r, e); }, 0);
+  });
+  std::thread peer_thread([&] { feed(peer_feed, 1); });
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(duration);
   while (!stop.load() && !stop_requested.load() && std::chrono::steady_clock::now() < deadline)
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   stop.store(true);
   binance_thread.join();
-  bybit_thread.join();
+  peer_thread.join();
   rest.join();
   char host[256] = {};
   gethostname(host, sizeof(host) - 1);
@@ -689,7 +711,7 @@ int probe(int argc, char** argv) {
       return "{\"n\":" + std::to_string(values.size()) + ",\"p50_ms\":" + ms(percentile(values, 0.5)) +
              ",\"p95_ms\":" + ms(percentile(values, 0.95)) + ",\"p99_ms\":" + ms(percentile(values, 0.99)) + "}";
     };
-    std::cout << (v ? "," : "") << '"' << venue_name(static_cast<Venue>(v)) << "\":{\"feed_age\":"
+    std::cout << (v ? "," : "") << '"' << venue_name(slot_venue(v, peer)) << "\":{\"feed_age\":"
               << triple(s.feed_age_ns) << ",\"public_rtt\":" << triple(s.public_rtt_ns)
               << ",\"signed_rtt\":" << triple(s.signed_rtt_ns) << ",\"clock_offset_ms\":"
               << static_cast<double>(s.offset.load()) / 1e6 << '}';
@@ -706,6 +728,7 @@ int probe(int argc, char** argv) {
 
 int check_keys() {
   const auto config = load_runtime_config();
+  const auto peer = config.shadow.peer;
   auto basket = parse_basket(config.basket);
   HttpClient http;
   std::string error;
@@ -713,7 +736,7 @@ int check_keys() {
   bool ok = true;
   std::cout << "{";
   for (std::size_t v = 0; v < kVenues; ++v) {
-    const auto venue = static_cast<Venue>(v);
+    const auto venue = slot_venue(v, peer);
     const auto credentials = load_credentials(venue);
     std::string detail;
     const auto read_only = verify_read_only(http, venue, credentials, detail);

@@ -50,10 +50,13 @@ struct RiskLimits final {
 enum class LatencyMode : std::uint8_t { fixed, sampled, pessimistic };
 
 struct ShadowConfig final {
+  Venue peer{Venue::bybit};  // slot 1 venue (CXA_PEER)
   LatencyMode latency_mode{LatencyMode::sampled};
   // One-way send latency per venue when no RTT samples exist (Tokyo host defaults).
   std::array<std::uint64_t, kVenues> fixed_one_way_ns{2'000'000, 35'000'000};
   std::uint64_t engine_penalty_ns{1'000'000};
+  // Extra one-way delay per slot on top of RTT/2, e.g. Hyperliquid block inclusion.
+  std::array<std::uint64_t, kVenues> venue_penalty_ns{};
   std::int64_t available_ppm{500'000};  // share of displayed size a taker gets
   std::uint64_t seed{42};
   std::array<std::int64_t, kVenues> fallback_taker_ppm{500, 550};
@@ -73,5 +76,7 @@ struct RuntimeConfig final {
 RuntimeConfig load_runtime_config();
 std::string_view latency_mode_name(LatencyMode mode) noexcept;
 std::string_view exec_mode_name(ExecMode mode) noexcept;
+// "bybit" or "hyperliquid"; throws otherwise.
+Venue parse_peer(std::string_view name);
 
 }  // namespace cxa
