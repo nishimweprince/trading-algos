@@ -8,6 +8,10 @@ never completed), and, when the mint migrated, the canonical PumpSwap pool path
 for the first seconds after the migrate. Curves that never completed are kept:
 the replay needs them to price the stall exits.
 
+Schema 2 adds the holder history: every curve trade from the create up to the
+path's start (who bought or sold how many tokens), so the replay can rebuild
+the top holders' balances at its decision point (the overhang).
+
 The Helius URL is read only from HELIUS_HTTP_URL. Raw RPC responses and the URL
 are never written.
 """
@@ -101,6 +105,7 @@ def decode_trade_event(data: bytes) -> dict[str, Any] | None:
     }
     if len(data) >= 225:
         event["fee_bps"] = u64(data, 161)
+        event["creator"] = b58encode(data[177:209])
         event["creator_fee_bps"] = u64(data, 209)
     return event
 
@@ -136,6 +141,7 @@ def trade_events(transaction: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def curve_points(transactions: list[dict[str, Any]], mint_hint: str | None) -> tuple[str | None, list[dict[str, Any]]]:
+    """Curve state after every TradeEvent of the mint, with who traded how many tokens."""
     points: list[dict[str, Any]] = []
     mint = mint_hint
     for transaction in transactions:
@@ -158,8 +164,11 @@ def curve_points(transactions: list[dict[str, Any]], mint_hint: str | None) -> t
                     "event_index": n,
                     "block_time": int(transaction.get("blockTime") or 0),
                     "signer": signer_of(transaction),
+                    "user": event["user"],
                     "is_buy": event["is_buy"],
                     "sol_amount": event["sol_amount"],
+                    "token_amount": event["token_amount"],
+                    "creator": event.get("creator"),
                     "vsol": event["vsol"],
                     "vtok": event["vtok"],
                     "rsol": event["rsol"],
@@ -172,13 +181,9 @@ def curve_points(transactions: list[dict[str, Any]], mint_hint: str | None) -> t
     return mint, points
 
 
-def fetch_curve(rpc: Rpc, admit: dict[str, Any], lookback_seconds: int, stall_horizon_seconds: int,
-                pool_horizon_seconds: int, max_pages: int) -> dict[str, Any]:
-    start = admit["admit_ts"] // 1000 - lookback_seconds
-    if "migration_ts" in admit:
-        end = admit["migration_ts"] // 1000 + 2
-    else:
-        end = admit["admit_ts"] // 1000 + stall_horizon_seconds
+def curve_transactions(rpc: Rpc, curve: str, block_time: dict[str, int],
+                       max_pages: int) -> tuple[list[dict[str, Any]], int, bool]:
+    """Succeeded txs on the curve in the blockTime window, ascending: (txs, pages, truncated)."""
     transactions: list[dict[str, Any]] = []
     token: str | None = None
     pages = 0
@@ -189,24 +194,51 @@ def fetch_curve(rpc: Rpc, admit: dict[str, Any], lookback_seconds: int, stall_ho
             "sortOrder": "asc",
             "limit": 100,
             "maxSupportedTransactionVersion": 1,
-            "filters": {"blockTime": {"gte": start, "lte": end}, "status": "succeeded"},
+            "filters": {"blockTime": block_time, "status": "succeeded"},
         }
         if token:
             options["paginationToken"] = token
-        result = rpc.call("getTransactionsForAddress", [admit["curve"], options]) or {}
+        result = rpc.call("getTransactionsForAddress", [curve, options]) or {}
         transactions.extend(result.get("data") or [])
         token = result.get("paginationToken")
         pages += 1
         if not token:
             break
+    return transactions, pages, bool(token)
+
+
+def holder_trades(points: list[dict[str, Any]]) -> list[list[Any]]:
+    """Compact [slot, order, user, is_buy, token_amount] rows (order = tx index * 16 + event index)."""
+    return [[p["slot"], p["transaction_index"] * 16 + p["event_index"], p["user"], p["is_buy"], p["token_amount"]]
+            for p in points]
+
+
+def fetch_curve(rpc: Rpc, admit: dict[str, Any], lookback_seconds: int, stall_horizon_seconds: int,
+                pool_horizon_seconds: int, max_pages: int, holder_max_pages: int) -> dict[str, Any]:
+    start = admit["admit_ts"] // 1000 - lookback_seconds
+    if "migration_ts" in admit:
+        end = admit["migration_ts"] // 1000 + 2
+    else:
+        end = admit["admit_ts"] // 1000 + stall_horizon_seconds
+    transactions, pages, truncated = curve_transactions(
+        rpc, admit["curve"], {"gte": start, "lte": end}, max_pages)
     mint, points = curve_points(transactions, admit.get("mint"))
+    # Every trade from the create up to the path's start: who holds the supply sold so far.
+    prefix_txs, holder_pages, holder_truncated = curve_transactions(
+        rpc, admit["curve"], {"lte": start - 1}, holder_max_pages)
+    mint, prefix = curve_points(prefix_txs, mint)
+    creator = next((p["creator"] for p in prefix + points if p.get("creator")), None)
     record: dict[str, Any] = {
         **admit,
         "mint": mint,
         "status": "ok" if points else "no_trades",
         "curve_pages": pages,
-        "curve_truncated": bool(token),
+        "curve_truncated": truncated,
         "curve_points": points,
+        "creator": creator,
+        "holder_pages": holder_pages,
+        "holder_truncated": holder_truncated,
+        "holder_trades": holder_trades(prefix),
     }
     if "migration_ts" in admit and mint:
         migration = Migration(mint, admit["migration_ts"], admit["migration_slot"],
@@ -228,7 +260,8 @@ def read_partial(path: Path) -> dict[str, dict[str, Any]]:
                 row = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if row.get("status") in {"ok", "no_trades"}:
+            # Schema 1 rows carry no holder history: fetch them again.
+            if row.get("status") in {"ok", "no_trades"} and "holder_trades" in row:
                 records[str(row["curve"])] = row
     return records
 
@@ -236,7 +269,7 @@ def read_partial(path: Path) -> dict[str, dict[str, Any]]:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", type=Path, default=Path("pump-desk/data/pump-desk.db"))
-    parser.add_argument("--output", type=Path, default=Path("pump-desk/research/data/curve-paths.json.gz"))
+    parser.add_argument("--output", type=Path, default=Path("pump-desk/research/data/curve-paths-v2.json.gz"))
     parser.add_argument("--lookback-seconds", type=int, default=5)
     parser.add_argument("--stall-horizon-seconds", type=int, default=900)
     parser.add_argument("--pool-horizon-seconds", type=int, default=60)
@@ -244,6 +277,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--rps", type=float, default=8.0)
     parser.add_argument("--max-pages", type=int, default=30)
+    parser.add_argument("--holder-max-pages", type=int, default=60,
+                        help="pages of curve history before the path (create -> admission)")
     return parser.parse_args()
 
 
@@ -269,7 +304,7 @@ def main() -> None:
             futures = {
                 executor.submit(fetch_curve, rpc, admit, args.lookback_seconds,
                                 args.stall_horizon_seconds, args.pool_horizon_seconds,
-                                args.max_pages): admit
+                                args.max_pages, args.holder_max_pages): admit
                 for admit in pending
             }
             for future in concurrent.futures.as_completed(futures):
@@ -289,7 +324,7 @@ def main() -> None:
     ordered = [records[a["curve"]] for a in admits if a["curve"] in records]
     temp = args.output.with_suffix(args.output.suffix + ".tmp")
     with gzip.open(temp, "wt", encoding="utf-8", compresslevel=9) as handle:
-        json.dump({"schema": 1, "generated_at": int(time.time()), "records": ordered},
+        json.dump({"schema": 2, "generated_at": int(time.time()), "records": ordered},
                   handle, separators=(",", ":"))
     temp.replace(args.output)
     counts: dict[str, int] = {}
