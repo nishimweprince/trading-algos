@@ -5,7 +5,7 @@
 - **HL is the slow leg.** Its `bbo` pushes about every 100 ms, and an order waits about 200 ms for block inclusion. That is the venue where prices go stale, and HL processes cancels before new orders inside a block, which protects resting makers. So we quote there with ALO orders.
 - **MT5 is the fair price and the hedge.** It is fast, so it is never the side we trade stale prices on.
 
-The research behind this is in [`hyperliquid-arbitrage.md`](hyperliquid-arbitrage.md) and [`research-hyperliquid.md`](research-hyperliquid.md). The exact rules are in [`STRATEGY_SPEC.md`](STRATEGY_SPEC.md), operations in [`RUNBOOK.md`](RUNBOOK.md), and the host and broker choice in [`docs/aws-tokyo-windows.md`](docs/aws-tokyo-windows.md).
+The research behind this is in [`hyperliquid-arbitrage.md`](hyperliquid-arbitrage.md) and [`research-hyperliquid.md`](research-hyperliquid.md). The exact rules are in [`STRATEGY_SPEC.md`](STRATEGY_SPEC.md), operations in [`RUNBOOK.md`](RUNBOOK.md), per-release deploy steps in [`CHANGELOG.md`](CHANGELOG.md), and the host and broker choice in [`docs/aws-tokyo-windows.md`](docs/aws-tokyo-windows.md).
 
 ## Layout
 
