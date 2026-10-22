@@ -282,14 +282,36 @@ std::array<Engine::Desired, 2> Engine::desired_quotes(std::size_t s, std::uint64
   const auto half_spread_ppm = static_cast<double>(pair.hl_maker_ppm + config_.mt5_commission_ppm +
                                                    config_.adverse_ppm + config_.edge_ppm) +
                                mt5_half_spread_ppm;
+  st.half_spread_ppm = half_spread_ppm;
   const auto inventory = inventory_steps(s);
   const auto skewed = f * (1.0 - inventory * static_cast<double>(config_.skew_ppm) / 1e6);
   const auto tick = hl_tick(Price::from_double(f), pair.hl.size_decimals);
   auto bid = round_down(Price::from_double(skewed * (1.0 - half_spread_ppm / 1e6)), tick);
   auto ask = round_up(Price::from_double(skewed * (1.0 + half_spread_ppm / 1e6)), tick);
+  // Improve toward the HL touch (still inside fair±1 tick), always on the tick grid.
+  // Passive-only quotes sat 1–3 ticks behind the book and rarely traded.
+  if (st.hl_bid.price.raw > 0 && st.hl_ask.price.raw > 0 && tick.raw > 0) {
+    auto cap_bid = round_down(Price::from_double(skewed), tick);
+    if (cap_bid.raw > tick.raw) cap_bid = Price{cap_bid.raw - tick.raw};
+    auto cap_ask = round_up(Price::from_double(skewed), tick);
+    cap_ask = Price{cap_ask.raw + tick.raw};
+    auto join_bid = round_down(st.hl_bid.price.raw < cap_bid.raw ? st.hl_bid.price : cap_bid, tick);
+    auto join_ask = round_up(st.hl_ask.price.raw > cap_ask.raw ? st.hl_ask.price : cap_ask, tick);
+    if (join_bid.raw > bid.raw && join_bid.raw < join_ask.raw) bid = join_bid;
+    if ((ask.raw == 0 || join_ask.raw < ask.raw) && join_ask.raw > join_bid.raw) ask = join_ask;
+  }
   // ALO must not cross: rest one tick inside the far side instead.
-  if (bid >= st.hl_ask.price) bid = Price{st.hl_ask.price.raw - tick.raw};
-  if (ask <= st.hl_bid.price) ask = Price{st.hl_bid.price.raw + tick.raw};
+  if (st.hl_ask.price.raw > 0 && bid.raw >= st.hl_ask.price.raw)
+    bid = Price{st.hl_ask.price.raw - tick.raw};
+  if (st.hl_bid.price.raw > 0 && ask.raw <= st.hl_bid.price.raw)
+    ask = Price{st.hl_bid.price.raw + tick.raw};
+  if (bid.raw > 0) bid = round_down(bid, tick);
+  if (ask.raw > 0) ask = round_up(ask, tick);
+  if (bid.raw >= ask.raw) {
+    // Degenerate book: fall back to passive spread only.
+    bid = round_down(Price::from_double(skewed * (1.0 - half_spread_ppm / 1e6)), tick);
+    ask = round_up(Price::from_double(skewed * (1.0 + half_spread_ppm / 1e6)), tick);
+  }
   const auto size = round_down(
       Quantity::from_double(static_cast<double>(config_.quote_lots) * units_per_lot_step(s)), pair.hl.step);
 
@@ -373,9 +395,14 @@ void Engine::requote(std::size_t s, std::uint64_t now_ns) {
 }
 
 void Engine::pull_all(std::uint64_t now_ns, std::string_view reason) {
-  std::snprintf(line_.data(), line_.size(), R"({"k":"pull","reason":"%.*s"})", static_cast<int>(reason.size()),
-                reason.data());
-  journal(line_.data());
+  ++metrics_.pulls;
+  // Cancels still run every time; journal at most once per 10 s for the same soft-halt flap.
+  if (last_soft_halt_journal_ns_ == 0 || now_ns - last_soft_halt_journal_ns_ >= 10ULL * kSecond ||
+      reason != "bridge_stale") {
+    std::snprintf(line_.data(), line_.size(), R"({"k":"pull","reason":"%.*s"})", static_cast<int>(reason.size()),
+                  reason.data());
+    journal(line_.data());
+  }
   for (std::size_t s = 0; s < state_.size(); ++s)
     for (std::size_t side = 0; side < 2; ++side)
       if (state_[s].quotes[side].state == QuoteState::resting) cancel_side(s, side, now_ns);
@@ -423,6 +450,8 @@ void Engine::on_ack(const HlEvent& event, std::uint64_t now_ns) {
           q.price = q.pending_price;
           q.size = q.pending_size;
           q.cloid = q.pending_cloid;
+          q.resting_since_ns = now_ns;
+          ++metrics_.places_ok;
         } else if (timeout) {
           q.cloid = q.pending_cloid;
           orphaned.emplace_back(q.cloid, side);
@@ -431,7 +460,14 @@ void Engine::on_ack(const HlEvent& event, std::uint64_t now_ns) {
           // Back off so a persistent reject (margin, rate limit) never loops at the timer rate.
           q.state = QuoteState::idle;
           q.oid = 0;
-          (event.ok && item.post_only_reject ? post_only_rejected : place_rejected) = true;
+          q.resting_since_ns = 0;
+          if (event.ok && item.post_only_reject) {
+            post_only_rejected = true;
+          } else {
+            place_rejected = true;
+            ++metrics_.places_reject;
+            ++st.places_reject;
+          }
         }
         if (q.state == QuoteState::resting) st.place_backoff_ms = 0;
         break;
@@ -442,9 +478,12 @@ void Engine::on_ack(const HlEvent& event, std::uint64_t now_ns) {
           q.price = q.pending_price;
           q.size = q.pending_size;
           q.cloid = q.pending_cloid;
+          if (q.resting_since_ns == 0) q.resting_since_ns = now_ns;
+          ++metrics_.modifies;
         } else if (event.ok && (contains(text, "canceled or filled") || contains(text, "Cannot modify"))) {
           q.state = QuoteState::idle;  // the order is gone; fills arrive on userFills
           q.oid = 0;
+          q.resting_since_ns = 0;
         } else {
           // Old order may still rest, new one may exist: cancel both by cloid.
           orphaned.emplace_back(q.cloid, side);
@@ -457,6 +496,8 @@ void Engine::on_ack(const HlEvent& event, std::uint64_t now_ns) {
             contains(text, "never placed, already canceled, or filled")) {
           q.state = QuoteState::idle;
           q.oid = 0;
+          q.resting_since_ns = 0;
+          ++metrics_.cancels;
         } else {
           q.state = QuoteState::resting;  // retried by the next requote or pull
         }
@@ -506,17 +547,25 @@ void Engine::on_fill(const HlEvent& event, std::uint64_t now_ns) {
     if (q.size.raw <= 0 && q.state == QuoteState::resting) {
       q.state = QuoteState::idle;
       q.oid = 0;
+      q.resting_since_ns = 0;
     }
   }
+  const auto notional = std::abs(event.price.as_double() * event.size.as_double());
+  ++metrics_.fills;
+  ++st.fills;
+  metrics_.fill_notional_usd += notional;
+  metrics_.fill_fees_usd += event.fee.as_double();
   if (st.first_unhedged_ns == 0) st.first_unhedged_ns = event.receive_ns;
   std::snprintf(line_.data(), line_.size(),
                 R"({"k":"fill","t":%llu,"coin":"%s","side":"%s","px":%.8f,"sz":%.8f,"fee":%.8f,"oid":%llu,)"
-                R"("tid":%llu,"crossed":%s,"dir":"%s","fair":%.8f,"mt5_bid":%.8f,"mt5_ask":%.8f,"hl_pos":%.8f})",
+                R"("tid":%llu,"crossed":%s,"dir":"%s","fair":%.8f,"mt5_bid":%.8f,"mt5_ask":%.8f,"hl_pos":%.8f,)"
+                R"("notional":%.4f,"fills_total":%llu})",
                 static_cast<unsigned long long>(event.receive_ns), pairs_[s].hl.coin.c_str(),
                 event.side == Side::buy ? "B" : "A", event.price.as_double(), event.size.as_double(),
                 event.fee.as_double(), static_cast<unsigned long long>(event.oid),
                 static_cast<unsigned long long>(event.tid), event.crossed ? "true" : "false", event.text.data(),
-                fair(s), st.mt5_bid, st.mt5_ask, st.hl_units.as_double());
+                fair(s), st.mt5_bid, st.mt5_ask, st.hl_units.as_double(), notional,
+                static_cast<unsigned long long>(metrics_.fills));
   journal(line_.data());
   hedge(s, now_ns);
   if (event.forced) set_halt(Halt::forced_fill, "ADL or liquidation fill", now_ns);
@@ -681,10 +730,18 @@ void Engine::set_halt(Halt halt, std::string_view detail, std::uint64_t now_ns) 
 
 void Engine::check_global(std::uint64_t now_ns) {
   const auto stale = config_.mt5_heartbeat_stale_ms * kMs;
+  constexpr std::uint64_t kBridgeStaleConfirmNs = 2 * kSecond;
   Halt soft = Halt::none;
+  const bool bridge_heartbeat_stale =
+      now_ns - publisher_ns_ > stale || (!simulated_mt5_ && now_ns - executor_ns_ > stale);
+  if (bridge_heartbeat_stale) {
+    if (bridge_stale_since_ns_ == 0) bridge_stale_since_ns_ = now_ns;
+  } else {
+    bridge_stale_since_ns_ = 0;
+  }
   if (!gateway_up_) {
     soft = Halt::gateway_down;
-  } else if (now_ns - publisher_ns_ > stale || (!simulated_mt5_ && now_ns - executor_ns_ > stale)) {
+  } else if (bridge_heartbeat_stale && now_ns - bridge_stale_since_ns_ >= kBridgeStaleConfirmNs) {
     soft = Halt::bridge_stale;
   } else if (!account_.valid || !account_.connected || (!simulated_mt5_ && !account_.trade_allowed) ||
              (!config_.mt5_logins.empty() &&
@@ -722,10 +779,16 @@ void Engine::check_global(std::uint64_t now_ns) {
     }
   }
   if (soft != soft_halt_) {
-    std::snprintf(line_.data(), line_.size(), R"({"k":"soft_halt","from":"%.*s","to":"%.*s"})",
-                  static_cast<int>(halt_name(soft_halt_).size()), halt_name(soft_halt_).data(),
-                  static_cast<int>(halt_name(soft).size()), halt_name(soft).data());
-    journal(line_.data());
+    ++metrics_.soft_halt_events;
+    // Always apply the halt (and pull); journal at most once per 10 s while flapping.
+    constexpr std::uint64_t kSoftHaltJournalMinNs = 10ULL * kSecond;
+    if (last_soft_halt_journal_ns_ == 0 || now_ns - last_soft_halt_journal_ns_ >= kSoftHaltJournalMinNs) {
+      std::snprintf(line_.data(), line_.size(), R"({"k":"soft_halt","from":"%.*s","to":"%.*s"})",
+                    static_cast<int>(halt_name(soft_halt_).size()), halt_name(soft_halt_).data(),
+                    static_cast<int>(halt_name(soft).size()), halt_name(soft).data());
+      journal(line_.data());
+      last_soft_halt_journal_ns_ = now_ns;
+    }
     soft_halt_ = soft;
     if (soft != Halt::none) pull_all(now_ns, halt_name(soft));
   }
@@ -754,24 +817,47 @@ void Engine::on_timer(std::uint64_t now_ns) {
 void Engine::journal_snapshot(std::uint64_t now_ns) {
   for (std::size_t s = 0; s < state_.size(); ++s) {
     const auto& st = state_[s];
-    std::snprintf(line_.data(), line_.size(),
-                  R"({"k":"f","t":%llu,"coin":"%s","fair":%.8f,"basis":%.8f,"hl_bid":%.8f,"hl_ask":%.8f,)"
-                  R"("mt5_bid":%.8f,"mt5_ask":%.8f,"bid":%.8f,"ask":%.8f,"hl_pos":%.8f,"mt5_lots":%.4f,"block":"%.*s"})",
-                  static_cast<unsigned long long>(now_ns), pairs_[s].hl.coin.c_str(), fair(s), st.basis,
-                  st.hl_bid.price.as_double(), st.hl_ask.price.as_double(), st.mt5_bid, st.mt5_ask,
-                  st.quotes[0].state == QuoteState::resting ? st.quotes[0].price.as_double() : 0.0,
-                  st.quotes[1].state == QuoteState::resting ? st.quotes[1].price.as_double() : 0.0,
-                  st.hl_units.as_double(), st.mt5_lots, static_cast<int>(block_name(st.block).size()),
-                  block_name(st.block).data());
+    const auto f = fair(s);
+    const auto bid_px = st.quotes[0].state == QuoteState::resting ? st.quotes[0].price.as_double() : 0.0;
+    const auto ask_px = st.quotes[1].state == QuoteState::resting ? st.quotes[1].price.as_double() : 0.0;
+    const auto hl_mid = (st.hl_bid.price.raw > 0 && st.hl_ask.price.raw > 0) ? mid(st.hl_bid, st.hl_ask) : 0.0;
+    const auto bid_touch_ppm =
+        bid_px > 0 && st.hl_bid.price.raw > 0 ? ppm_of(st.hl_bid.price.as_double() - bid_px, hl_mid) : 0.0;
+    const auto ask_touch_ppm =
+        ask_px > 0 && st.hl_ask.price.raw > 0 ? ppm_of(ask_px - st.hl_ask.price.as_double(), hl_mid) : 0.0;
+    const auto bid_age_ms =
+        st.quotes[0].resting_since_ns ? (now_ns - st.quotes[0].resting_since_ns) / kMs : 0ULL;
+    const auto ask_age_ms =
+        st.quotes[1].resting_since_ns ? (now_ns - st.quotes[1].resting_since_ns) / kMs : 0ULL;
+    std::snprintf(
+        line_.data(), line_.size(),
+        R"({"k":"f","t":%llu,"coin":"%s","fair":%.8f,"basis":%.8f,"hl_bid":%.8f,"hl_ask":%.8f,)"
+        R"("mt5_bid":%.8f,"mt5_ask":%.8f,"bid":%.8f,"ask":%.8f,"hl_pos":%.8f,"mt5_lots":%.4f,"block":"%.*s",)"
+        R"("half_spread_ppm":%.1f,"bid_touch_ppm":%.1f,"ask_touch_ppm":%.1f,"bid_age_ms":%llu,"ask_age_ms":%llu,)"
+        R"("fills":%llu,"rejects":%llu})",
+        static_cast<unsigned long long>(now_ns), pairs_[s].hl.coin.c_str(), f, st.basis,
+        st.hl_bid.price.as_double(), st.hl_ask.price.as_double(), st.mt5_bid, st.mt5_ask, bid_px, ask_px,
+        st.hl_units.as_double(), st.mt5_lots, static_cast<int>(block_name(st.block).size()),
+        block_name(st.block).data(), st.half_spread_ppm, bid_touch_ppm, ask_touch_ppm,
+        static_cast<unsigned long long>(bid_age_ms), static_cast<unsigned long long>(ask_age_ms),
+        static_cast<unsigned long long>(st.fills), static_cast<unsigned long long>(st.places_reject));
     journal(line_.data());
   }
-  if (aux_.ok && account_.valid) {
-    std::snprintf(line_.data(), line_.size(),
-                  R"({"k":"equity","t":%llu,"hl":%.4f,"mt5":%.4f,"day_start":%.4f,"requests":%llu})",
-                  static_cast<unsigned long long>(now_ns), aux_.hl_account_value, account_.equity, day_start_equity_,
-                  static_cast<unsigned long long>(requests_sent_));
-    journal(line_.data());
-  }
+  std::snprintf(line_.data(), line_.size(),
+                R"({"k":"m","t":%llu,"hl":%.4f,"mt5":%.4f,"day_start":%.4f,"requests":%llu,"budget":%lld,)"
+                R"("places_ok":%llu,"places_reject":%llu,"modifies":%llu,"cancels":%llu,"fills":%llu,)"
+                R"("fill_notional":%.2f,"fill_fees":%.4f,"soft_halts":%llu,"pulls":%llu,"soft":"%.*s"})",
+                static_cast<unsigned long long>(now_ns), aux_.hl_account_value, account_.equity, day_start_equity_,
+                static_cast<unsigned long long>(requests_sent_), static_cast<long long>(aux_.requests_remaining),
+                static_cast<unsigned long long>(metrics_.places_ok),
+                static_cast<unsigned long long>(metrics_.places_reject),
+                static_cast<unsigned long long>(metrics_.modifies),
+                static_cast<unsigned long long>(metrics_.cancels),
+                static_cast<unsigned long long>(metrics_.fills), metrics_.fill_notional_usd, metrics_.fill_fees_usd,
+                static_cast<unsigned long long>(metrics_.soft_halt_events),
+                static_cast<unsigned long long>(metrics_.pulls), static_cast<int>(halt_name(soft_halt_).size()),
+                halt_name(soft_halt_).data());
+  journal(line_.data());
 }
 
 std::string Engine::status_json(std::uint64_t now_ns) const {
@@ -781,19 +867,40 @@ std::string Engine::status_json(std::uint64_t now_ns) const {
       << halt_name(halt_) << "\",\"soft_halt\":\"" << halt_name(soft_halt_) << "\",\"killed\":"
       << (killed_ ? "true" : "false") << ",\"gateway_up\":" << (gateway_up_ ? "true" : "false")
       << ",\"mt5_login\":" << account_.login << ",\"mt5_equity\":" << account_.equity
-      << ",\"hl_account_value\":" << aux_.hl_account_value << ",\"day_start_equity\":" << day_start_equity_
+      << ",\"mt5_margin_free\":" << account_.margin_free << ",\"hl_account_value\":" << aux_.hl_account_value
+      << ",\"hl_min_withdrawable\":" << aux_.hl_min_withdrawable << ",\"day_start_equity\":" << day_start_equity_
       << ",\"requests_sent\":" << requests_sent_ << ",\"requests_remaining\":" << aux_.requests_remaining
-      << ",\"symbols\":[";
+      << ",\"places_ok\":" << metrics_.places_ok << ",\"places_reject\":" << metrics_.places_reject
+      << ",\"modifies\":" << metrics_.modifies << ",\"cancels\":" << metrics_.cancels
+      << ",\"fills\":" << metrics_.fills << ",\"fill_notional_usd\":" << metrics_.fill_notional_usd
+      << ",\"fill_fees_usd\":" << metrics_.fill_fees_usd << ",\"soft_halt_events\":" << metrics_.soft_halt_events
+      << ",\"pulls\":" << metrics_.pulls << ",\"symbols\":[";
   for (std::size_t s = 0; s < state_.size(); ++s) {
     const auto& st = state_[s];
+    const auto f = fair(s);
+    const auto bid_px = st.quotes[0].state == QuoteState::resting ? st.quotes[0].price.as_double() : 0.0;
+    const auto ask_px = st.quotes[1].state == QuoteState::resting ? st.quotes[1].price.as_double() : 0.0;
+    const auto hl_mid = (st.hl_bid.price.raw > 0 && st.hl_ask.price.raw > 0) ? mid(st.hl_bid, st.hl_ask) : 0.0;
+    const auto bid_touch_ppm =
+        bid_px > 0 && st.hl_bid.price.raw > 0 ? ppm_of(st.hl_bid.price.as_double() - bid_px, hl_mid) : 0.0;
+    const auto ask_touch_ppm =
+        ask_px > 0 && st.hl_ask.price.raw > 0 ? ppm_of(ask_px - st.hl_ask.price.as_double(), hl_mid) : 0.0;
+    const auto bid_age_ms =
+        st.quotes[0].resting_since_ns ? (now_ns - st.quotes[0].resting_since_ns) / kMs : 0ULL;
+    const auto ask_age_ms =
+        st.quotes[1].resting_since_ns ? (now_ns - st.quotes[1].resting_since_ns) / kMs : 0ULL;
     out << (s == 0 ? "" : ",") << "{\"coin\":\"" << pairs_[s].hl.coin << "\",\"mt5\":\"" << pairs_[s].mt5_symbol
-        << "\",\"block\":\"" << block_name(st.block) << "\",\"fair\":" << fair(s) << ",\"hl_bid\":"
-        << st.hl_bid.price.as_double() << ",\"hl_ask\":" << st.hl_ask.price.as_double() << ",\"mt5_bid\":"
-        << st.mt5_bid << ",\"mt5_ask\":" << st.mt5_ask << ",\"bid\":" << st.quotes[0].price.as_double()
-        << ",\"bid_state\":" << static_cast<int>(st.quotes[0].state) << ",\"ask\":" << st.quotes[1].price.as_double()
+        << "\",\"block\":\"" << block_name(st.block) << "\",\"fair\":" << f << ",\"basis\":" << st.basis
+        << ",\"hl_bid\":" << st.hl_bid.price.as_double() << ",\"hl_ask\":" << st.hl_ask.price.as_double()
+        << ",\"mt5_bid\":" << st.mt5_bid << ",\"mt5_ask\":" << st.mt5_ask << ",\"bid\":" << bid_px
+        << ",\"bid_state\":" << static_cast<int>(st.quotes[0].state) << ",\"ask\":" << ask_px
         << ",\"ask_state\":" << static_cast<int>(st.quotes[1].state) << ",\"hl_pos\":" << st.hl_units.as_double()
         << ",\"mt5_lots\":" << st.mt5_lots << ",\"unhedged_lots\":" << unhedged_lots(s)
-        << ",\"hedge_in_flight\":" << (st.hedge.request_id != 0 ? "true" : "false") << "}";
+        << ",\"hedge_in_flight\":" << (st.hedge.request_id != 0 ? "true" : "false")
+        << ",\"half_spread_ppm\":" << st.half_spread_ppm << ",\"bid_touch_ppm\":" << bid_touch_ppm
+        << ",\"ask_touch_ppm\":" << ask_touch_ppm << ",\"bid_age_ms\":" << bid_age_ms
+        << ",\"ask_age_ms\":" << ask_age_ms << ",\"fills\":" << st.fills << ",\"rejects\":" << st.places_reject
+        << "}";
   }
   out << "]}";
   return out.str();

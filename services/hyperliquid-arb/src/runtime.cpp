@@ -13,7 +13,9 @@
 #include "hla/net.hpp"
 #include "hla/platform.hpp"
 #include "hla/spsc.hpp"
+#include "hla/status_http.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -98,6 +100,19 @@ bool hl_state(HttpClient& http, const std::string& account, const std::vector<Hl
     report.hl_account_value += state.account_value.as_double();
     report.hl_min_withdrawable = std::min(report.hl_min_withdrawable, state.withdrawable.as_double());
     for (const auto& position : state.positions) positions[position.coin] = position.size;
+  }
+  // Unified / portfolio margin: collateral lives in spot; per-dex clearinghouse stays ~0.
+  std::string abstraction;
+  if (fetch_user_abstraction(http, account, abstraction, error) && abstraction_uses_spot_margin(abstraction)) {
+    Decimal spot_usdc;
+    if (!fetch_spot_usdc(http, account, spot_usdc, error)) return false;
+    const auto usd = spot_usdc.as_double();
+    report.hl_account_value = usd;
+    report.hl_min_withdrawable = usd;
+  } else if (!error.empty() && abstraction.empty()) {
+    return false;
+  } else {
+    error.clear();
   }
   for (std::size_t i = 0; i < markets.size(); ++i) {
     const auto found = positions.find(markets[i].coin);
@@ -313,7 +328,7 @@ int run_trader(const RunOptions& options, std::atomic<bool>& stop) {
   summary << "],\"hedged\":" << (residual_ok ? "true" : "false") << "}";
   std::cout << summary.str() << std::endl;
   if (has_account && start_state.hl_min_withdrawable < config.hl_min_margin_usd)
-    log("warning: HL withdrawable below HLA_HL_MIN_MARGIN_USD on a basket dex (HIP-3 dexes hold separate margin)");
+    log("warning: HL withdrawable below HLA_HL_MIN_MARGIN_USD (unified: spot USDC; standard: fund each basket dex)");
   if (check) return residual_ok ? 0 : 3;
   if (!residual_ok && !config.adopt_positions) {
     log("positions are not hedged; flatten them or set HLA_ADOPT_POSITIONS=1 to let the hedger square them");
@@ -339,31 +354,42 @@ int run_trader(const RunOptions& options, std::atomic<bool>& stop) {
     if (cancelled > 0) log("cancelled " + std::to_string(cancelled) + " open orders left from a previous run");
     for (const auto& market : markets) {
       std::string reply;
-      if (!gateway.post_rest(update_leverage_action(market.asset_id, !market.only_isolated, config.hl_leverage), reply,
-                             error) ||
+      const auto lev = static_cast<std::uint32_t>(
+          std::clamp(static_cast<int>(config.hl_leverage), 1, std::max(1, market.max_leverage)));
+      if (!gateway.post_rest(update_leverage_action(market.asset_id, !market.only_isolated, lev), reply, error) ||
           reply.find("\"ok\"") == std::string::npos) {
-        log("updateLeverage " + market.coin + ": " + (error.empty() ? reply : error));
+        log("updateLeverage " + market.coin + " x" + std::to_string(lev) + ": " +
+            (error.empty() ? reply : error));
         return 1;
       }
     }
   }
-  Recorder recorder;
-  if (!recorder.open(config.journal, config.status_file, error)) {
+  // Recorder holds an ~6 MiB SPSC ring; keep it on the heap (Windows default stack is 1 MiB).
+  auto recorder = std::make_unique<Recorder>();
+  if (!recorder->open(config.journal, config.status_file, error)) {
     log(error);
     return 1;
   }
-  log("journal " + recorder.path());
-  RuntimeIo io(shared->commands, sim_mt5 ? nullptr : &bridge, recorder, config.kill_file, dry);
+  log("journal " + recorder->path());
+  StatusHttp status_http(config.status_port);
+  if (config.status_port != 0) {
+    if (!status_http.start(error)) {
+      log(error);
+      return 1;
+    }
+    log("status http://127.0.0.1:" + std::to_string(config.status_port) + "/");
+  }
+  RuntimeIo io(shared->commands, sim_mt5 ? nullptr : &bridge, *recorder, config.kill_file, dry);
   Engine engine(config, pairs, io, dry);
   for (std::size_t i = 0; i < markets.size(); ++i)
     engine.seed_positions(i, start_state.hl_positions[i], account.positions[i]);
-  recorder.push("{\"k\":\"start\",\"t\":" + std::to_string(wall_ns()) + ",\"summary\":" + summary.str() + "}");
+  recorder->push("{\"k\":\"start\",\"t\":" + std::to_string(wall_ns()) + ",\"summary\":" + summary.str() + "}");
 
   std::atomic<bool> stop_threads{false};
   std::atomic<bool> stop_recorder{false};
   std::atomic<bool> fatal{false};
   std::string fatal_reason;
-  std::thread recorder_thread([&] { recorder.run(stop_recorder); });
+  std::thread recorder_thread([&] { recorder->run(stop_recorder); });
   std::thread feed_thread([&] {
     if (config.feed_core >= 0) platform::pin_current_thread(static_cast<unsigned>(config.feed_core));
     HlFrame frame;
@@ -527,11 +553,13 @@ int run_trader(const RunOptions& options, std::atomic<bool>& stop) {
     }
     if (now - last_status >= kSecond) {
       last_status = now;
-      recorder.set_status(engine.status_json(now));
+      const auto status = engine.status_json(now);
+      recorder->set_status(status);
+      status_http.publish(status);
     }
-    if (engine.failed() || recorder.failed() || fatal.load()) {
+    if (engine.failed() || recorder->failed() || fatal.load()) {
       if (!stopping) {
-        fatal_reason = engine.failed() ? "engine pipeline" : recorder.failed() ? "journal" : "feed/gateway: " + gateway_error;
+        fatal_reason = engine.failed() ? "engine pipeline" : recorder->failed() ? "journal" : "feed/gateway: " + gateway_error;
         log("fatal: " + fatal_reason);
       }
       if (!stopping) stop.store(true);
@@ -575,8 +603,12 @@ int run_trader(const RunOptions& options, std::atomic<bool>& stop) {
               << engine.hl_position(s).as_double() << ",\"mt5\":" << engine.mt5_position(s)
               << ",\"unhedged_lots\":" << engine.unhedged_lots(s) << "}";
   positions << "]}";
-  recorder.push(positions.str());
-  recorder.set_status(engine.status_json(wall_ns()));
+  recorder->push(positions.str());
+  {
+    const auto status = engine.status_json(wall_ns());
+    recorder->set_status(status);
+    status_http.publish(status);
+  }
   stop_recorder.store(true);
   recorder_thread.join();
   log(positions.str());

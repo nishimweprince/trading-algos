@@ -106,7 +106,7 @@ void test_hip3_markets() {
   HlMarket missing{.coin = "xyz:AUD", .dex = "xyz", .dex_index = 1};
   require(!parse_hl_market(meta, mids, missing, error), "unknown HIP-3 coin rejected");
 
-  HlMarket eth{.coin = "ETH"};
+  HlMarket eth{.coin = "ETH", .dex = {}};
   require(parse_hl_market(fixture("meta_main.json"), fixture("mids_main.json"), eth, error), error);
   require(eth.asset_id == 1 && eth.step == d("0.0001") && eth.tick == d("0.1"), "validator perp asset id and tick");
 }

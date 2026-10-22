@@ -85,6 +85,33 @@ bool parse_agents(std::string_view body, std::vector<std::string>& addresses) {
   return true;
 }
 
+bool parse_user_abstraction(std::string_view body, std::string& mode) {
+  mode.clear();
+  while (!body.empty() && (body.front() == ' ' || body.front() == '\n')) body.remove_prefix(1);
+  if (body.size() < 2 || body.front() != '"') return false;
+  body.remove_prefix(1);
+  const auto end = body.find('"');
+  if (end == std::string_view::npos) return false;
+  mode = std::string(body.substr(0, end));
+  return !mode.empty();
+}
+
+bool parse_spot_usdc(std::string_view body, Decimal& usdc) {
+  usdc = {};
+  const auto balances = json::value_after(body, "\"balances\"");
+  if (balances.empty() || balances.front() != '[') return false;
+  for (const auto item : json::array_items(balances)) {
+    if (json::scalar(item, "\"coin\"") != "USDC") continue;
+    return json::decimal(item, "\"total\"", usdc);
+  }
+  usdc = {};
+  return true;  // no USDC row means zero
+}
+
+bool abstraction_uses_spot_margin(std::string_view mode) noexcept {
+  return mode == "unifiedAccount" || mode == "portfolioMargin";
+}
+
 bool fetch_clearinghouse(HttpClient& http, std::string_view user, std::string_view dex, HlAccountState& out,
                          std::string& error) {
   std::string body;
@@ -133,6 +160,26 @@ bool fetch_agents(HttpClient& http, std::string_view user, std::vector<std::stri
   if (!query(http, user_body("extraAgents", user), body, error)) return false;
   if (!parse_agents(body, addresses)) {
     error = "hyperliquid extraAgents: unexpected response";
+    return false;
+  }
+  return true;
+}
+
+bool fetch_user_abstraction(HttpClient& http, std::string_view user, std::string& mode, std::string& error) {
+  std::string body;
+  if (!query(http, user_body("userAbstraction", user), body, error)) return false;
+  if (!parse_user_abstraction(body, mode)) {
+    error = "hyperliquid userAbstraction: unexpected response";
+    return false;
+  }
+  return true;
+}
+
+bool fetch_spot_usdc(HttpClient& http, std::string_view user, Decimal& usdc, std::string& error) {
+  std::string body;
+  if (!query(http, user_body("spotClearinghouseState", user), body, error)) return false;
+  if (!parse_spot_usdc(body, usdc)) {
+    error = "hyperliquid spotClearinghouseState: unexpected response";
     return false;
   }
   return true;

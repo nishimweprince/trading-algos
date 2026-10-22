@@ -143,6 +143,7 @@ class HlGateway final {
   std::uint64_t sim_oid_{1'000'000'000};
   std::uint64_t internal_id_{1ULL << 62};
   std::uint64_t last_deadman_ns_{};
+  bool deadman_disabled_{};  // set when HL rejects scheduleCancel (e.g. <$1M volume)
 };
 
 }  // namespace hla

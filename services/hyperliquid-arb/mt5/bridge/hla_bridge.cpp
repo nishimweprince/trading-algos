@@ -2,7 +2,6 @@
 // terminal64.exe. Both services share one mapping per process; every call checks the
 // magic so an engine restart (which clears it) never sees a half-written ring.
 #include "hla/bridge_layout.hpp"
-#include "hla/mt5_bridge.hpp"
 
 #include <cmath>
 #include <mutex>

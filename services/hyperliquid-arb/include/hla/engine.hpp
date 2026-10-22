@@ -69,6 +69,20 @@ struct Quote final {
   Quantity pending_size{};
   Cloid pending_cloid{};
   std::uint64_t request_id{};
+  std::uint64_t resting_since_ns{};
+};
+
+// Counters exposed in status JSON / journal for ops monitoring.
+struct EngineMetrics final {
+  std::uint64_t places_ok{};
+  std::uint64_t places_reject{};
+  std::uint64_t modifies{};
+  std::uint64_t cancels{};
+  std::uint64_t fills{};
+  double fill_notional_usd{};
+  double fill_fees_usd{};
+  std::uint64_t soft_halt_events{};
+  std::uint64_t pulls{};
 };
 
 class Engine final {
@@ -112,6 +126,7 @@ class Engine final {
   [[nodiscard]] Halt halt() const noexcept { return halt_; }
   [[nodiscard]] bool failed() const noexcept { return failed_; }
   [[nodiscard]] double fair(std::size_t symbol) const noexcept;
+  [[nodiscard]] const EngineMetrics& metrics() const noexcept { return metrics_; }
   [[nodiscard]] std::string status_json(std::uint64_t now_ns) const;
 
   // Pure quote math, exposed for tests.
@@ -159,6 +174,9 @@ class Engine final {
     std::uint64_t last_hedge_ns{};
     std::uint64_t next_place_ns{};   // backoff after a rejected place
     std::uint64_t place_backoff_ms{};
+    double half_spread_ppm{};
+    std::uint64_t fills{};
+    std::uint64_t places_reject{};
   };
   struct Flight final {
     std::uint64_t request_id{};
@@ -209,7 +227,10 @@ class Engine final {
   std::uint64_t cloid_counter_{};
   std::uint64_t cloid_session_{};
   std::uint64_t last_snapshot_ns_{};
-  std::array<char, 768> line_{};
+  std::uint64_t last_soft_halt_journal_ns_{};  // rate-limit soft_halt / pull spam when flapping
+  std::uint64_t bridge_stale_since_ns_{};      // hysteresis before soft_halt=bridge_stale
+  EngineMetrics metrics_{};
+  std::array<char, 1536> line_{};
 };
 
 }  // namespace hla

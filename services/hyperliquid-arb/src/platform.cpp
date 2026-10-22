@@ -35,6 +35,19 @@ void signal_handler(int) { request_stop(); }
 
 bool wait_readable(const SocketHandle* sockets, std::size_t count, int timeout_ms) noexcept {
   if (count > kMaxWait) count = kMaxWait;
+  // Zero sockets: timed sleep only. WSAPoll rejects nfds=0 without an active Winsock
+  // session; POSIX poll(nfds=0) already sleeps, but keep both paths explicit.
+  if (count == 0) {
+#ifdef _WIN32
+    if (timeout_ms > 0) ::Sleep(static_cast<DWORD>(timeout_ms));
+#else
+    if (timeout_ms > 0) {
+      pollfd unused{};
+      ::poll(&unused, 0, timeout_ms);
+    }
+#endif
+    return true;
+  }
 #ifdef _WIN32
   std::array<WSAPOLLFD, kMaxWait> descriptors{};
   for (std::size_t i = 0; i < count; ++i) descriptors[i] = {static_cast<SOCKET>(sockets[i]), POLLRDNORM, 0};

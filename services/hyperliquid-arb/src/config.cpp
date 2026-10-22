@@ -114,6 +114,7 @@ Config load_config(bool live) {
   c.kill_file = text("HLA_KILL_FILE", c.kill_file);
   c.journal = text("HLA_JOURNAL", c.journal);
   c.status_file = text("HLA_STATUS_FILE", c.status_file);
+  c.status_port = static_cast<std::uint16_t>(integer("HLA_STATUS_PORT", c.status_port));
 
   c.quote_lots = integer("HLA_QUOTE_LOTS", c.quote_lots);
   c.max_inventory_lots = integer("HLA_MAX_INVENTORY_LOTS", c.max_inventory_lots);
@@ -157,7 +158,7 @@ Config load_config(bool live) {
 
   if (c.quote_lots <= 0 || c.max_inventory_lots < c.quote_lots)
     throw std::invalid_argument("need 0 < HLA_QUOTE_LOTS <= HLA_MAX_INVENTORY_LOTS");
-  if (c.hl_leverage == 0 || c.hl_leverage > 10) throw std::invalid_argument("HLA_HL_LEVERAGE must be 1..10");
+  if (c.hl_leverage == 0 || c.hl_leverage > 50) throw std::invalid_argument("HLA_HL_LEVERAGE must be 1..50");
   if (c.deadman_s != 0 && c.deadman_s < 10) throw std::invalid_argument("HLA_DEADMAN_S must be 0 or >= 10");
   if (c.hedge_timeout_ms >= c.mt5_order_max_age_ms)
     throw std::invalid_argument("HLA_HEDGE_TIMEOUT_MS must be below HLA_MT5_ORDER_MAX_AGE_MS");

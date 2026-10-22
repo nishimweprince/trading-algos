@@ -273,7 +273,24 @@ bool HlGateway::handle_frame(std::string_view frame, std::string& error) {
     std::uint64_t id = 0;
     if (!parse_post_frame(frame, id, ack)) return true;
     ack.receive_ns = receive_ns;
+    HlCommandKind kind{};
+    bool known = false;
+    for (const auto& p : pending_)
+      if (p.id == id) {
+        kind = p.kind;
+        known = true;
+        break;
+      }
     std::erase_if(pending_, [&](const Pending& p) { return p.id == id; });
+    // New accounts cannot arm scheduleCancel until $1M volume; stop retrying so we don't burn the budget.
+    if (known && kind == HlCommandKind::schedule_cancel && !ack.ok) {
+      const auto text = ack.text_view();
+      if (text.find("scheduled cancel") != std::string_view::npos ||
+          text.find("enough volume traded") != std::string_view::npos) {
+        deadman_disabled_ = true;
+        config_.deadman_s = 0;
+      }
+    }
     return emit(ack, error);
   }
   if (channel == "userFills" || channel == "orderUpdates") {
@@ -304,7 +321,9 @@ bool HlGateway::handle_frame(std::string_view frame, std::string& error) {
 }
 
 bool HlGateway::deadman(std::uint64_t now_ns, std::string& error) {
-  if (config_.deadman_s == 0 || now_ns - last_deadman_ns_ < config_.deadman_s * 500'000'000ULL) return true;
+  if (deadman_disabled_ || config_.deadman_s == 0 ||
+      now_ns - last_deadman_ns_ < config_.deadman_s * 500'000'000ULL)
+    return true;
   // Refresh only while the decision thread is alive; a hung engine lets the cancel fire.
   if (now_ns - engine_heartbeat_ns_.load(std::memory_order_relaxed) > kEngineAliveNs) return true;
   last_deadman_ns_ = now_ns;

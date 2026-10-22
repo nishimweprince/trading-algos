@@ -47,6 +47,11 @@ bool parse_rate_limit(std::string_view body, HlRateLimit& out);
 bool parse_user_fees(std::string_view body, std::int64_t& taker_ppm, std::int64_t& maker_ppm);
 // extraAgents: approved API wallet addresses, lowercased.
 bool parse_agents(std::string_view body, std::vector<std::string>& addresses);
+// userAbstraction response is a JSON string, e.g. "unifiedAccount" / "disabled".
+bool parse_user_abstraction(std::string_view body, std::string& mode);
+// spotClearinghouseState USDC `total` (unified / portfolio margin lives here).
+bool parse_spot_usdc(std::string_view body, Decimal& usdc);
+[[nodiscard]] bool abstraction_uses_spot_margin(std::string_view mode) noexcept;
 
 bool fetch_clearinghouse(HttpClient& http, std::string_view user, std::string_view dex, HlAccountState& out,
                          std::string& error);
@@ -56,5 +61,7 @@ bool fetch_rate_limit(HttpClient& http, std::string_view user, HlRateLimit& out,
 bool fetch_user_fees(HttpClient& http, std::string_view user, std::int64_t& taker_ppm, std::int64_t& maker_ppm,
                      std::string& error);
 bool fetch_agents(HttpClient& http, std::string_view user, std::vector<std::string>& addresses, std::string& error);
+bool fetch_user_abstraction(HttpClient& http, std::string_view user, std::string& mode, std::string& error);
+bool fetch_spot_usdc(HttpClient& http, std::string_view user, Decimal& usdc, std::string& error);
 
 }  // namespace hla

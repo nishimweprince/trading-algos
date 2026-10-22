@@ -55,6 +55,7 @@ add_library(hla_core
   src/net.cpp
   src/platform.cpp
   src/runtime.cpp
+  src/status_http.cpp
 )
 target_include_directories(hla_core PUBLIC include)
 target_link_libraries(hla_core PUBLIC CURL::libcurl OpenSSL::SSL OpenSSL::Crypto Threads::Threads secp256k1)
@@ -87,15 +88,17 @@ target_compile_options(hlarb PRIVATE ${HLA_WARNINGS})
 if(HLA_BUILD_TESTS)
   enable_testing()
   add_executable(hla-tests tests/test_main.cpp)
-  target_link_libraries(hla-tests PRIVATE hla_core)
-  if(NOT WIN32)
-    target_link_libraries(hla-tests PRIVATE hla_bridge)
-  endif()
+  target_link_libraries(hla-tests PRIVATE hla_core hla_bridge)
   target_compile_options(hla-tests PRIVATE ${HLA_WARNINGS})
   add_test(NAME hla-tests COMMAND hla-tests ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures)
   add_test(NAME hla-usage COMMAND hlarb)
   set_tests_properties(hla-usage PROPERTIES WILL_FAIL TRUE)
   add_test(NAME hla-drill COMMAND hlarb drill)
+  # On Windows the bridge is a DLL; keep it next to the test binary on PATH.
+  if(WIN32)
+    set_tests_properties(hla-tests PROPERTIES
+      ENVIRONMENT "PATH=$<TARGET_FILE_DIR:hla_bridge>;$ENV{PATH}")
+  endif()
 endif()
 
 install(TARGETS hlarb RUNTIME DESTINATION bin)

@@ -32,6 +32,7 @@ struct Config final {
   std::string kill_file{"hlarb.kill"};
   std::string journal{"hlarb-%Y%m%dT%H%M%SZ.jsonl"};
   std::string status_file{"hlarb-status.json"};
+  std::uint16_t status_port{0};  // 0: disabled; e.g. 8071 for Cloudflare tunnel
 
   // Quoting.
   std::int64_t quote_lots{1};          // MT5 lot steps per quote

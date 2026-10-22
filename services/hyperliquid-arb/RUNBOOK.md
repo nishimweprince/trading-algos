@@ -40,7 +40,7 @@ Build `hlarb.exe` and `hla_bridge.dll` from the same commit. The bridge layout i
 ## 4. Hyperliquid
 
 - Approve an API (agent) wallet for the trading account at app.hyperliquid.xyz → API. Save its private key to `C:\hlarb\secrets\agent.key`, and restrict the file's ACL to the trading user. Never put the master key on the box.
-- **HIP-3 margin is per dex.** `xyz:*` markets use the xyz clearinghouse, which starts at $0 even when the main account is funded. Move USDC to the xyz dex, or enable dex abstraction, before trading. `hlarb check` prints `hl_min_withdrawable` across the basket dexes.
+- **Margin depends on account abstraction.** On **Unified** / **Portfolio margin**, spot USDC collateralizes `xyz:*` (and hlarb reads spot). On **Standard / Manual**, HIP-3 margin is per dex: transfer spot → `xyz` via Transfers / `sendAsset` (agents cannot move funds). Prefer Standard for high-frequency quoting (no 50k action/day cap). `hlarb check` prints `hl_min_withdrawable`.
 - Fund HL and MT5 so each has margin for `HLA_MAX_GROSS_NOTIONAL_USD` at `HLA_HL_LEVERAGE`, plus the floors.
 
 ## 5. Configure, check, dry-run, go live
