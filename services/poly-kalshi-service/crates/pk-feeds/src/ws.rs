@@ -19,6 +19,12 @@
 //!   markets settle on), authenticated with CLOB API credentials, recorded
 //!   only. Its connects are written as `b` lines, never `c`, which the engine
 //!   would read as a book reset.
+//! - **Binance** (`n` spot, `f` perp), **Kraken** (`r`, v2 `ticker` with
+//!   `event_trigger: bbo`) and **Bitstamp** (`t`, `order_book_<pair>`, the top
+//!   100 levels about every 100 ms): public best bid/ask references, recorded
+//!   and timed by the observer, never traded. Their connects are written under
+//!   their own venue too. Bitstamp asks for a reconnect before maintenance
+//!   (`bts:request_reconnect`).
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
@@ -47,6 +53,10 @@ pub enum FeedKind {
     PolyBolt { credentials: (String, String, String) },
     /// Binance best bid/ask streams (`<symbol>@bookTicker`), spot or USDⓈ-M perps.
     Binance { futures: bool },
+    /// Kraken v2 `ticker` on best bid/offer changes; ids are symbols (`BTC/USD`).
+    Kraken,
+    /// Bitstamp `order_book_<pair>`; ids are channel names.
+    Bitstamp,
 }
 
 impl FeedKind {
@@ -57,7 +67,14 @@ impl FeedKind {
             FeedKind::PolyBolt { .. } => 'b',
             FeedKind::Binance { futures: false } => 'n',
             FeedKind::Binance { futures: true } => 'f',
+            FeedKind::Kraken => 'r',
+            FeedKind::Bitstamp => 't',
         }
+    }
+
+    /// Public references: recorded, timed and never read by the engine.
+    fn reference(&self) -> bool {
+        matches!(self, FeedKind::Binance { .. } | FeedKind::Kraken | FeedKind::Bitstamp)
     }
 }
 
@@ -136,7 +153,7 @@ impl FeedHandle {
             "poly" => {
                 o.insert("removed_since_connect".into(), self.removed_since_connect().into());
             }
-            "binance_spot" | "binance_perp" => {}
+            "binance_spot" | "binance_perp" | "kraken" | "bitstamp" => {}
             _ => {
                 o.insert("authed".into(), s.authed.load(Ordering::Relaxed).into());
                 o.insert("auth_failures".into(), s.auth_failures.load(Ordering::Relaxed).into());
@@ -155,6 +172,8 @@ pub fn spawn_feed(url: String, kind: FeedKind, emit: Emit) -> FeedHandle {
         FeedKind::PolyBolt { .. } => "polybolt",
         FeedKind::Binance { futures: false } => "binance_spot",
         FeedKind::Binance { futures: true } => "binance_perp",
+        FeedKind::Kraken => "kraken",
+        FeedKind::Bitstamp => "bitstamp",
     };
     let handle = FeedHandle { kind_name, shared: shared.clone() };
     tokio::spawn(run(url, kind, emit, shared));
@@ -240,13 +259,12 @@ async fn session(url: &str, kind: &FeedKind, emit: &Emit, shared: &Shared) -> Re
         ctl["shard"] = (*i).into();
         ctl["tokens"] = shared.wanted.lock().iter().cloned().collect::<Vec<_>>().into();
     }
-    match kind {
-        // Recorded-only venues: the engine must not read their reconnects.
-        FeedKind::PolyBolt { .. } | FeedKind::Binance { .. } => {
-            ctl["type"] = "pk_reconnect".into();
-            emit(venue, ctl.to_string());
-        }
-        _ => emit('c', ctl.to_string()),
+    // Recorded-only venues: the engine must not read their reconnects.
+    if kind.reference() || matches!(kind, FeedKind::PolyBolt { .. }) {
+        ctl["type"] = "pk_reconnect".into();
+        emit(venue, ctl.to_string());
+    } else {
+        emit('c', ctl.to_string());
     }
     tracing::info!(venue = %venue, n, "feed_connected");
 
@@ -314,6 +332,8 @@ async fn session(url: &str, kind: &FeedKind, emit: &Emit, shared: &Shared) -> Re
             _ = ping.tick() => {
                 let m = match kind {
                     FeedKind::Poly { .. } => Message::text("PING"),
+                    FeedKind::Kraken => Message::text(r#"{"method":"ping"}"#),
+                    FeedKind::Bitstamp => Message::text(r#"{"event":"bts:heartbeat"}"#),
                     _ => Message::Ping(Default::default()),
                 };
                 ws.send(m).await.map_err(|e| format!("ping: {e}"))?;
@@ -395,6 +415,16 @@ impl Session<'_> {
                 let body = json!({"method": "SUBSCRIBE", "params": ids, "id": self.cmd_id()});
                 Self::send(ws, body).await?;
             }
+            FeedKind::Kraken => {
+                let body = json!({"method": "subscribe", "req_id": self.cmd_id(),
+                                  "params": {"channel": "ticker", "symbol": ids, "event_trigger": "bbo"}});
+                Self::send(ws, body).await?;
+            }
+            FeedKind::Bitstamp => {
+                for channel in &ids {
+                    Self::send(ws, json!({"event": "bts:subscribe", "data": {"channel": channel}})).await?;
+                }
+            }
         }
         self.shared.subscribed.lock().extend(ids);
         Ok(())
@@ -416,6 +446,16 @@ impl Session<'_> {
             FeedKind::Binance { .. } => {
                 let body = json!({"method": "UNSUBSCRIBE", "params": ids, "id": self.cmd_id()});
                 Self::send(ws, body).await?;
+            }
+            FeedKind::Kraken => {
+                let body = json!({"method": "unsubscribe", "req_id": self.cmd_id(),
+                                  "params": {"channel": "ticker", "symbol": ids, "event_trigger": "bbo"}});
+                Self::send(ws, body).await?;
+            }
+            FeedKind::Bitstamp => {
+                for channel in &ids {
+                    Self::send(ws, json!({"event": "bts:unsubscribe", "data": {"channel": channel}})).await?;
+                }
             }
         }
         let mut sub = self.shared.subscribed.lock();
@@ -469,6 +509,42 @@ impl Session<'_> {
                 }
                 (self.emit)(self.kind.venue(), text);
                 Ok(true)
+            }
+            FeedKind::Kraken => {
+                // Every second a heartbeat; pongs and acks carry `method`.
+                if text == r#"{"channel":"heartbeat"}"# || text.starts_with(r#"{"method":"pong""#) {
+                    return Ok(true);
+                }
+                if text.starts_with(r#"{"method""#) {
+                    if text.contains(r#""success":false"#) {
+                        let head: String = text.chars().take(150).collect();
+                        set_error(self.shared, format!("kraken: {head}"));
+                    } else {
+                        return Ok(true);
+                    }
+                }
+                (self.emit)('r', text);
+                Ok(true)
+            }
+            FeedKind::Bitstamp => {
+                if text.starts_with(r#"{"data""#) {
+                    (self.emit)('t', text);
+                    return Ok(true);
+                }
+                let event =
+                    serde_json::from_str::<Value>(&text).ok().and_then(|v| v["event"].as_str().map(str::to_owned));
+                match event.as_deref() {
+                    Some("bts:heartbeat" | "bts:subscription_succeeded" | "bts:unsubscription_succeeded") => {
+                        Ok(true)
+                    }
+                    Some("bts:request_reconnect") => Ok(false),
+                    _ => {
+                        let head: String = text.chars().take(150).collect();
+                        set_error(self.shared, format!("bitstamp: {head}"));
+                        (self.emit)('t', text);
+                        Ok(true)
+                    }
+                }
             }
         }
     }
@@ -592,6 +668,28 @@ impl PolyShards {
 /// The Binance `bookTicker` stream for an asset; HYPE has no Binance spot market.
 pub fn binance_stream(asset: &str, futures: bool) -> Option<String> {
     (futures || asset != "HYPE").then(|| format!("{}usdt@bookTicker", asset.to_lowercase()))
+}
+
+/// Kraken v2 symbols (v2 names DOGE as DOGE; REST calls it XDG).
+pub const KRAKEN_SYMBOLS: [(&str, &str); 8] = [
+    ("BTC", "BTC/USD"),
+    ("ETH", "ETH/USD"),
+    ("SOL", "SOL/USD"),
+    ("XRP", "XRP/USD"),
+    ("BNB", "BNB/USD"),
+    ("DOGE", "DOGE/USD"),
+    ("HYPE", "HYPE/USD"),
+    ("ZEC", "ZEC/USD"),
+];
+
+pub fn kraken_symbol(asset: &str) -> Option<&'static str> {
+    KRAKEN_SYMBOLS.iter().find(|(a, _)| *a == asset).map(|(_, s)| *s)
+}
+
+/// The Bitstamp order-book channel for an asset (USD pairs).
+pub fn bitstamp_channel(asset: &str) -> Option<String> {
+    const LISTED: [&str; 8] = ["BTC", "ETH", "SOL", "XRP", "BNB", "DOGE", "HYPE", "ZEC"];
+    LISTED.contains(&asset).then(|| format!("order_book_{}usd", asset.to_lowercase()))
 }
 
 pub const POLYBOLT_SYMBOLS: [(&str, &str); 8] = [

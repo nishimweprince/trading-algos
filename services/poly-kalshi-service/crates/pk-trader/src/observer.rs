@@ -11,11 +11,14 @@
 //! order next to the market lines. Research that joins them sorts on
 //! `recv_ns`; the engine ignores venue `b`.
 //!
-//! Binance spot (`n`) and perp (`f`) best bid/ask lines are stamped and
-//! written the same way, but only when the best bid or ask changed (most
-//! updates change only a size). They also drive the lead–lag monitor
-//! (`pk_core::leadlag`), which the Kalshi and Polymarket mids from the engine
-//! follow; its `leadlag_shock` records go to the journal.
+//! Binance spot (`n`) and perp (`f`), Kraken (`r`) and Bitstamp (`t`) best
+//! bid/ask lines are stamped and written the same way, but only when the best
+//! bid or ask changed (most updates change only a size). Binance frames are
+//! kept as they came; Kraken and Bitstamp are written as one compact line per
+//! quote, `{"s","b","a"}` plus the venue's stamp (`ts` RFC 3339, `mt` µs), since
+//! a Bitstamp frame carries 100 levels a side. They also drive the lead–lag
+//! monitor (`pk_core::leadlag`), which the Kalshi and Polymarket mids from the
+//! engine follow; its `leadlag_shock` records go to the journal.
 
 use std::collections::HashMap;
 use std::io::BufRead;
@@ -24,7 +27,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use parking_lot::Mutex;
 use pk_core::journal::{JsonlDaily, Sink};
-use pk_core::leadlag::LeadLag;
+use pk_core::leadlag::{LeadLag, SOURCES};
 use pk_engine::Engine;
 use pk_tape::Recorder;
 use serde::Deserialize;
@@ -56,8 +59,10 @@ pub struct Observer {
     pub polybolt: Mutex<Option<pk_feeds::FeedHandle>>,
     pub leadlag: Option<Mutex<LeadLag>>,
     pub binance: Mutex<Vec<pk_feeds::FeedHandle>>,
+    pub kraken: Mutex<Option<pk_feeds::FeedHandle>>,
+    pub bitstamp: Mutex<Option<pk_feeds::FeedHandle>>,
     /// The last best bid and ask per (venue, symbol): only changes are kept.
-    binance_last: Mutex<HashMap<(char, String), (String, String)>>,
+    ref_last: Mutex<HashMap<(char, String), (f64, f64)>>,
 }
 
 #[derive(Deserialize)]
@@ -76,6 +81,71 @@ struct BookTicker<'a> {
     event_ms: Option<i64>,
 }
 
+/// A Kraken v2 `ticker` frame (`event_trigger: bbo`); prices are numbers.
+#[derive(Deserialize)]
+struct KrakenFrame<'a> {
+    channel: &'a str,
+    #[serde(default, borrow)]
+    data: Vec<KrakenTicker<'a>>,
+}
+
+#[derive(Deserialize)]
+struct KrakenTicker<'a> {
+    symbol: &'a str,
+    bid: f64,
+    ask: f64,
+    timestamp: Option<&'a str>,
+}
+
+/// A Bitstamp `order_book_<pair>` frame: the top 100 levels a side.
+#[derive(Deserialize)]
+struct BitstampFrame<'a> {
+    channel: &'a str,
+    #[serde(borrow)]
+    data: BitstampBook<'a>,
+}
+
+#[derive(Deserialize)]
+struct BitstampBook<'a> {
+    microtimestamp: &'a str,
+    bids: Top,
+    asks: Top,
+}
+
+/// The price of a side's first `[price, size]` level; the other levels are
+/// skipped, not allocated.
+struct Top(Option<f64>);
+
+impl<'de> Deserialize<'de> for Top {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct Levels;
+        impl<'de> serde::de::Visitor<'de> for Levels {
+            type Value = Top;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a list of [price, size] levels")
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Top, A::Error> {
+                let first = seq.next_element::<(&'de str, serde::de::IgnoredAny)>()?;
+                while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+                Ok(Top(first.and_then(|(px, _)| px.parse().ok())))
+            }
+        }
+        d.deserialize_seq(Levels)
+    }
+}
+
+/// The lead–lag source of a reference venue (its index in [`SOURCES`]).
+fn source_of(venue: char) -> Option<usize> {
+    let name = match venue {
+        'n' => "spot",
+        'f' => "perp",
+        'r' => "kraken",
+        't' => "bitstamp",
+        _ => return None,
+    };
+    SOURCES.iter().position(|s| *s == name)
+}
+
 impl Observer {
     pub fn new(engine: Engine, journal: SharedJournal, recorder: Option<Recorder>) -> Self {
         Self {
@@ -92,7 +162,9 @@ impl Observer {
             polybolt: Mutex::new(None),
             leadlag: None,
             binance: Mutex::new(Vec::new()),
-            binance_last: Mutex::new(HashMap::new()),
+            kraken: Mutex::new(None),
+            bitstamp: Mutex::new(None),
+            ref_last: Mutex::new(HashMap::new()),
         }
     }
 
@@ -113,29 +185,88 @@ impl Observer {
         let text = text.trim();
         let Some(q) = serde_json::from_str::<BinanceFrame>(text).ok().and_then(|f| f.data) else {
             // Acknowledgements, reconnect markers, errors: kept as they came.
-            if let Some(r) = &self.recorder {
-                r.lock().write(venue, t, text);
-            }
+            self.record(venue, t, text);
             return;
         };
-        {
-            let mut last = self.binance_last.lock();
-            let key = (venue, q.s.to_owned());
-            if last.get(&key).is_some_and(|(b, a)| b == q.b && a == q.a) {
-                return;
-            }
-            last.insert(key, (q.b.to_owned(), q.a.to_owned()));
+        let (Ok(bid), Ok(ask)) = (q.b.parse::<f64>(), q.a.parse::<f64>()) else {
+            self.record(venue, t, text);
+            return;
+        };
+        self.quote(venue, t, q.s, q.s.strip_suffix("USDT"), (bid, ask), q.event_ms, || text.to_owned());
+    }
+
+    /// One Kraken `ticker` frame (`r`): each quote as a compact line.
+    pub fn kraken(&self, text: &str) {
+        let t = now_ns();
+        let text = text.trim();
+        let frame = serde_json::from_str::<KrakenFrame>(text).ok().filter(|f| f.channel == "ticker");
+        let Some(frame) = frame.filter(|f| !f.data.is_empty()) else {
+            self.record('r', t, text);
+            return;
+        };
+        for q in &frame.data {
+            let venue_ms = q
+                .timestamp
+                .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
+                .map(|d| d.timestamp_millis());
+            let line = || json!({"s": q.symbol, "b": q.bid, "a": q.ask, "ts": q.timestamp}).to_string();
+            self.quote('r', t, q.symbol, q.symbol.strip_suffix("/USD"), (q.bid, q.ask), venue_ms, line);
         }
+    }
+
+    /// One Bitstamp `order_book_<pair>` frame (`t`): its top of book as a compact line.
+    pub fn bitstamp(&self, text: &str) {
+        let t = now_ns();
+        let text = text.trim();
+        // Subscription notices, errors, an empty side: kept as they came.
+        let Some(f) = serde_json::from_str::<BitstampFrame>(text).ok() else {
+            self.record('t', t, text);
+            return;
+        };
+        let (Some(bid), Some(ask)) = (f.data.bids.0, f.data.asks.0) else {
+            self.record('t', t, text);
+            return;
+        };
+        let pair = f.channel.strip_prefix("order_book_").unwrap_or(f.channel);
+        let asset = pair.strip_suffix("usd").map(str::to_ascii_uppercase);
+        let venue_ms = f.data.microtimestamp.parse::<i64>().ok().map(|us| us / 1000);
+        let line = || json!({"s": pair, "b": bid, "a": ask, "mt": f.data.microtimestamp}).to_string();
+        self.quote('t', t, pair, asset.as_deref(), (bid, ask), venue_ms, line);
+    }
+
+    fn record(&self, venue: char, t: i64, text: &str) {
         if let Some(r) = &self.recorder {
             r.lock().write(venue, t, text);
         }
-        let (Some(ll), Ok(bid), Ok(ask)) = (&self.leadlag, q.b.parse::<f64>(), q.a.parse::<f64>()) else {
-            return;
-        };
+    }
+
+    /// A reference best bid and ask for `symbol` (`asset` in our names): to the
+    /// tape as `line()` when either price changed, and to the lead–lag monitor.
+    #[allow(clippy::too_many_arguments)]
+    fn quote(
+        &self,
+        venue: char,
+        t: i64,
+        symbol: &str,
+        asset: Option<&str>,
+        (bid, ask): (f64, f64),
+        venue_ms: Option<i64>,
+        line: impl FnOnce() -> String,
+    ) {
+        {
+            let mut last = self.ref_last.lock();
+            let key = (venue, symbol.to_owned());
+            if last.get(&key) == Some(&(bid, ask)) {
+                return;
+            }
+            last.insert(key, (bid, ask));
+        }
+        self.record(venue, t, &line());
+        let (Some(ll), Some(src), Some(asset)) = (&self.leadlag, source_of(venue), asset) else { return };
         let records = {
             let mut ll = ll.lock();
-            let Some(idx) = q.s.strip_suffix("USDT").and_then(|asset| ll.asset_index(asset)) else { return };
-            ll.on_ref(idx, usize::from(venue == 'f'), t, (bid + ask) / 2.0, q.event_ms)
+            let Some(idx) = ll.asset_index(asset) else { return };
+            ll.on_ref(idx, src, t, (bid + ask) / 2.0, venue_ms)
         };
         self.journal_all(t, &records);
     }
@@ -255,9 +386,11 @@ impl Observer {
             "journal_errors": self.journal.0.lock().errors,
             "polybolt": self.polybolt.lock().as_ref().map(|p| p.stats()).unwrap_or(json!({"enabled": false})),
             "binance": {
-                "enabled": self.leadlag.is_some(),
+                "enabled": !self.binance.lock().is_empty(),
                 "feeds": self.binance.lock().iter().map(|f| f.stats()).collect::<Vec<_>>(),
             },
+            "kraken": self.kraken.lock().as_ref().map(|f| f.stats()).unwrap_or(json!({"enabled": false})),
+            "bitstamp": self.bitstamp.lock().as_ref().map(|f| f.stats()).unwrap_or(json!({"enabled": false})),
             "leadlag": self.leadlag.as_ref().map(|ll| ll.lock().snapshot()),
         })
     }
@@ -321,11 +454,66 @@ mod tests {
         obs.binance('f', &frame("40.11", "40.12", "9"));
         obs.binance('f', r#"{"result":null,"id":1}"#);
         obs.binance('n', r#"{"stream":"dogeusdt@bookTicker","data":{"u":1,"s":"DOGEUSDT","b":"0.1","B":"1","a":"0.2","A":"1"}}"#);
-        assert_eq!(obs.binance_last.lock().len(), 2);
+        assert_eq!(obs.ref_last.lock().len(), 2);
         let snap = obs.status()["leadlag"].clone();
         assert!(snap["assets"]["HYPE"]["perp"]["typical_1s_bps"].is_null()); // one second seen: no move yet
         assert!(snap["assets"]["HYPE"].get("spot").is_none());
         assert!(snap["assets"]["BTC"].as_object().unwrap().is_empty());
         assert!(snap["assets"]["HYPE"]["perp"]["feed_lag_ms_p50"].as_f64().is_some());
+    }
+
+    #[test]
+    fn kraken_and_bitstamp_keep_top_of_book_changes() {
+        let dir = std::env::temp_dir().join(format!("pk-obs-ref-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let journal = SharedJournal(Arc::new(Mutex::new(JsonlDaily::new(dir.join("journal")))));
+        let mut cfg = EngineConfig::new(StrategyParams::default(), vec!["BTC".into(), "DOGE".into()]);
+        cfg.role = Role::Observe;
+        let risk = RiskState::new(RiskLimits {
+            max_open_notional_usd: 1.0,
+            daily_loss_limit_usd: 1.0,
+            kill_file: None,
+        });
+        let engine = Engine::new(cfg, Ledger::new(1.0), risk, Box::new(journal.clone()));
+        let rec = Recorder::start(&dir.join("tape"), "test", 0, 1000).unwrap();
+        let obs = Observer::new(engine, journal, Some(rec)).with_leadlag();
+        let kraken = |bid: f64, qty: f64| {
+            format!(
+                r#"{{"channel":"ticker","type":"update","data":[{{"symbol":"DOGE/USD","bid":{bid},"bid_qty":{qty},"ask":0.0797117,"ask_qty":50.0,"last":0.07972,"timestamp":"2026-10-22T13:55:52.582483Z"}}]}}"#
+            )
+        };
+        obs.kraken(&kraken(0.0797116, 14379.0));
+        obs.kraken(&kraken(0.0797116, 17706.0)); // a size change only
+        obs.kraken(&kraken(0.0797115, 17706.0));
+        obs.kraken(r#"{"channel":"status","type":"update","data":[{"system":"online","api_version":"v2"}]}"#);
+        let levels = |px: f64| {
+            (0..100).map(|i| format!(r#"["{:.2}","0.5"]"#, px - f64::from(i) * 0.01)).collect::<Vec<_>>().join(",")
+        };
+        let book = |bid: f64, us: i64| {
+            format!(
+                r#"{{"data":{{"timestamp":"1792677358","microtimestamp":"{us}","bids":[{}],"asks":[{}]}},"channel":"order_book_btcusd","event":"data"}}"#,
+                levels(bid),
+                levels(bid + 1.0)
+            )
+        };
+        obs.bitstamp(&book(81662.93, 1792677358006727));
+        obs.bitstamp(&book(81662.93, 1792677358115393)); // the same top of book
+        obs.bitstamp(r#"{"event":"bts:subscription_succeeded","channel":"order_book_btcusd","data":{}}"#);
+        assert_eq!(obs.ref_last.lock().get(&('r', "DOGE/USD".into())), Some(&(0.0797115, 0.0797117)));
+        assert_eq!(obs.ref_last.lock().get(&('t', "btcusd".into())), Some(&(81662.93, 81663.93)));
+        let snap = obs.status()["leadlag"].clone();
+        assert!(snap["assets"]["DOGE"]["kraken"]["feed_lag_ms_p50"].as_f64().is_some());
+        assert!(snap["assets"]["BTC"]["bitstamp"]["feed_lag_ms_p50"].as_f64().is_some());
+        drop(obs); // stops the recorder: the hour file is flushed
+        let lines: Vec<(char, String)> = pk_tape::read_lines(pk_tape::iter_files(&dir.join("tape"), None, None))
+            .map(|l| (l.venue, l.text))
+            .collect();
+        let kept: Vec<&str> = lines.iter().filter(|(v, _)| *v == 'r').map(|(_, t)| t.as_str()).collect();
+        assert_eq!(kept.len(), 3); // two quotes and the status frame as it came
+        assert!(kept[0].starts_with(r#"{"a":0.0797117,"b":0.0797116,"s":"DOGE/USD""#), "{}", kept[0]);
+        let bs: Vec<&str> = lines.iter().filter(|(v, _)| *v == 't').map(|(_, t)| t.as_str()).collect();
+        assert_eq!(bs.len(), 2); // one compact quote, then the notice
+        assert_eq!(bs[0], r#"{"a":81663.93,"b":81662.93,"mt":"1792677358006727","s":"btcusd"}"#);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

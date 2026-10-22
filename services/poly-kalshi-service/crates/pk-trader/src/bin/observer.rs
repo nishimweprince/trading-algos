@@ -12,7 +12,7 @@ use parking_lot::Mutex;
 use pk_core::journal::JsonlDaily;
 use pk_core::{Ledger, RiskLimits, RiskState};
 use pk_engine::Role;
-use pk_feeds::ws::{POLYBOLT_SYMBOLS, binance_stream};
+use pk_feeds::ws::{POLYBOLT_SYMBOLS, binance_stream, bitstamp_channel, kraken_symbol};
 use pk_feeds::{FeedKind, spawn_feed};
 use pk_svc::Settings;
 use pk_svc::api::{ApiKey, require_key};
@@ -60,7 +60,8 @@ fn main() -> anyhow::Result<()> {
         })
         .transpose()?;
     let observer = Observer::new(engine, journal, recorder);
-    let observer = Arc::new(if settings.binance_enabled { observer.with_leadlag() } else { observer });
+    let references = settings.binance_enabled || settings.kraken_enabled || settings.bitstamp_enabled;
+    let observer = Arc::new(if references { observer.with_leadlag() } else { observer });
 
     let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build()?;
     {
@@ -101,6 +102,20 @@ fn main() -> anyhow::Result<()> {
                     feed.set_wanted(streams);
                     observer.binance.lock().push(feed);
                 }
+            }
+            if settings.kraken_enabled {
+                let o = observer.clone();
+                let emit: pk_feeds::Emit = Arc::new(move |_, text: String| o.kraken(&text));
+                let feed = spawn_feed(settings.kraken_ws_url.clone(), FeedKind::Kraken, emit);
+                feed.set_wanted(settings.assets.iter().filter_map(|a| kraken_symbol(a)).map(str::to_owned).collect());
+                *observer.kraken.lock() = Some(feed);
+            }
+            if settings.bitstamp_enabled {
+                let o = observer.clone();
+                let emit: pk_feeds::Emit = Arc::new(move |_, text: String| o.bitstamp(&text));
+                let feed = spawn_feed(settings.bitstamp_ws_url.clone(), FeedKind::Bitstamp, emit);
+                feed.set_wanted(settings.assets.iter().filter_map(|a| bitstamp_channel(a)).collect());
+                *observer.bitstamp.lock() = Some(feed);
             }
             let key = ApiKey(Arc::new(settings.api_key.clone()));
             let app = Router::new()
