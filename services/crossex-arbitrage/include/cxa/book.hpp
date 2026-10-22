@@ -38,6 +38,8 @@ class OrderBook final {
   [[nodiscard]] bool verified() const noexcept { return state_ == BookState::verified; }
   [[nodiscard]] std::uint64_t last_update_id() const noexcept { return last_update_id_; }
   [[nodiscard]] std::uint64_t last_receive_ns() const noexcept { return last_receive_ns_; }
+  // Exchange timestamp (ms) of the last applied venue event; 0 after a REST snapshot.
+  [[nodiscard]] std::uint64_t event_ms() const noexcept { return event_ms_; }
   [[nodiscard]] Level best_bid() const noexcept;
   [[nodiscard]] Level best_ask() const noexcept;
   [[nodiscard]] Price mid() const noexcept;
@@ -61,6 +63,7 @@ class OrderBook final {
   std::size_t ask_size_{};
   std::uint64_t last_update_id_{};
   std::uint64_t last_receive_ns_{};
+  std::uint64_t event_ms_{};
   BookState state_{BookState::empty};
 };
 

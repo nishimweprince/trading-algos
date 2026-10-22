@@ -17,7 +17,9 @@
 #include <chrono>
 #include <csignal>
 #include <filesystem>
+#include <fstream>
 #include <functional>
+#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -131,7 +133,8 @@ std::string book_name(BookState state) {
 }
 
 std::string summary_json(const Engine& engine, std::string_view latency_mode, std::string_view exec_mode,
-                         std::string_view close_mode, bool kill_file) {
+                         std::string_view close_mode, bool kill_file,
+                         std::array<std::uint64_t, kVenues> reconnects = {}) {
   const auto& m = engine.metrics();
   std::ostringstream out;
   bool ready = true;
@@ -145,7 +148,10 @@ std::string summary_json(const Engine& engine, std::string_view latency_mode, st
       << ",\"missed\":" << m.missed << ",\"repairs\":" << m.repairs << ",\"legs\":" << m.legs
       << ",\"fills\":" << m.fills << ",\"open_pairs\":" << m.open_pairs << ",\"census_episodes\":" << m.census_episodes
       << ",\"depth_events\":[" << m.depth_events[0] << ',' << m.depth_events[1] << "],\"gaps\":[" << m.gaps[0] << ','
-      << m.gaps[1] << "],\"funding_settlements\":" << m.funding_settlements << ",\"latency\":[";
+      << m.gaps[1] << "],\"funding_settlements\":" << m.funding_settlements
+      << ",\"post_only_rejects\":" << m.post_only_rejects << ",\"keyed_fills\":" << m.keyed_fills
+      << ",\"keyed_fallbacks\":" << m.keyed_fallbacks << ",\"prior_net_raw\":" << engine.prior_net_raw()
+      << ",\"reconnects\":[" << reconnects[0] << ',' << reconnects[1] << "],\"latency\":[";
   for (std::size_t v = 0; v < kVenues; ++v) {
     const auto& model = engine.latency(slot_venue(v, engine.peer()));
     out << (v ? "," : "") << "{\"samples\":" << model.samples() << ",\"p50_ns\":" << model.percentile(0.5)
@@ -223,6 +229,73 @@ using AuxQueue = SpscRing<AuxMessage, 1024>;
 using RecordQueue = SpscRing<Record, 2048>;
 using RawQueue = SpscRing<RawRecord, 8192>;
 
+// ---------------------------------------------------------------- warm state
+
+// CXA_STATE_FILE keeps the basis EWMA per symbol and today's realised net across restarts,
+// so a reconnect-driven restart is not 10 minutes cold and the daily loss cap holds.
+//   day <yyyymmdd> <net_raw>
+//   b <name> <mean_ppm> <first_ms> <last_ms>
+constexpr std::uint64_t kStateMaxAgeMs = 20 * 60 * 1000;
+
+std::uint64_t utc_day(std::uint64_t now_ns) {
+  const auto seconds = static_cast<std::time_t>(now_ns / 1'000'000'000ULL);
+  std::tm tm{};
+  gmtime_r(&seconds, &tm);
+  return static_cast<std::uint64_t>((tm.tm_year + 1900) * 10000 + (tm.tm_mon + 1) * 100 + tm.tm_mday);
+}
+
+void load_state(const std::string& path, Engine& engine, Journal& journal, std::uint64_t now_ns) {
+  std::ifstream input(path);
+  if (!input) return;
+  const auto now_ms = now_ns / 1'000'000;
+  std::string kind;
+  std::size_t seeded = 0;
+  while (input >> kind) {
+    if (kind == "day") {
+      std::uint64_t day = 0;
+      std::int64_t net = 0;
+      if (!(input >> day >> net)) break;
+      if (day == utc_day(now_ns) && net != 0) {
+        engine.seed_prior_net(net);
+        journal.prior_net(net);
+      }
+    } else if (kind == "b") {
+      std::string name;
+      BasisState state;
+      if (!(input >> name >> state.mean_ppm >> state.first_ms >> state.last_ms)) break;
+      state.initialised = true;
+      if (state.last_ms > now_ms || now_ms - state.last_ms > kStateMaxAgeMs) continue;
+      const auto& instruments = engine.instruments();
+      for (std::size_t i = 0; i < instruments.size(); ++i) {
+        if (instruments[i].name != name) continue;
+        engine.seed_basis(i, state);
+        journal.basis(i, state);
+        ++seeded;
+      }
+    }
+  }
+  std::cerr << "state: seeded " << seeded << " basis means, prior net " << engine.prior_net_raw() << '\n';
+}
+
+void save_state(const std::string& path, const Engine& engine, std::uint64_t now_ns) {
+  const auto temporary = path + ".tmp";
+  {
+    std::ofstream output(temporary, std::ios::trunc);
+    if (!output) return;
+    output << "day " << utc_day(now_ns) << ' ' << engine.prior_net_raw() + engine.metrics().net_raw << '\n';
+    output << std::setprecision(17);
+    for (std::size_t i = 0; i < engine.instruments().size(); ++i) {
+      const auto& state = engine.basis_state(i);
+      if (!state.initialised) continue;
+      output << "b " << engine.instruments()[i].name << ' ' << state.mean_ppm << ' ' << state.first_ms << ' '
+             << state.last_ms << '\n';
+    }
+    if (!output.good()) return;
+  }
+  std::error_code ignored;
+  std::filesystem::rename(temporary, path, ignored);
+}
+
 int shadow(int argc, char** argv) {
   // Refuse before touching config, keys, or the network.
   if (option(argc, argv, "--mode", "shadow") != "shadow") {
@@ -234,6 +307,7 @@ int shadow(int argc, char** argv) {
   const auto kill_path = option(argc, argv, "--kill-file", environment("CXA_KILL_FILE", "data/KILL"));
   const auto duration = std::stoull(option(argc, argv, "--duration-seconds", "0"));
   const auto port = static_cast<std::uint16_t>(std::stoul(option(argc, argv, "--port", environment("CXA_STATUS_PORT", "8070"))));
+  const auto state_path = environment("CXA_STATE_FILE", "");
   const auto public_only = flag(argc, argv, "--public-only");
   const auto record_raw = flag(argc, argv, "--record-raw");
   if (!websocket_supported()) {
@@ -292,6 +366,7 @@ int shadow(int argc, char** argv) {
       journal.fee(slot_venue(v, peer), s, taker_fees[v][s], maker_fees[v][s]);
     }
   }
+  if (!state_path.empty()) load_state(state_path, *engine, journal, wall_ns());
   journal.flush();
 
   const auto binance_symbols = venue_symbols(basket, Venue::binance);
@@ -304,6 +379,7 @@ int shadow(int argc, char** argv) {
   std::array<std::unique_ptr<RawQueue>, kVenues> raw_queues{std::make_unique<RawQueue>(), std::make_unique<RawQueue>()};
 
   std::atomic<bool> kill_file_active{std::filesystem::exists(kill_path)};
+  std::array<std::atomic<std::uint64_t>, kVenues> reconnects{};
   std::atomic<bool> feeds_done{false};
   std::atomic<bool> decision_done{false};
   std::atomic<bool> pipeline_failed{false};
@@ -432,11 +508,13 @@ int shadow(int argc, char** argv) {
       }
       engine->clear_outputs();
     };
+    auto last_state = std::chrono::steady_clock::now();
     const auto publish = [&] {
       auto text = summary_json(*engine, latency_mode_name(config.shadow.latency_mode),
                                exec_mode_name(config.strategy.exec_mode),
                                close_mode_name(config.strategy.close_mode),
-                               kill_file_active.load(std::memory_order_acquire));
+                               kill_file_active.load(std::memory_order_acquire),
+                               {reconnects[0].load(), reconnects[1].load()});
       std::lock_guard lock(summary_mutex);
       summary.swap(text);
     };
@@ -506,10 +584,15 @@ int shadow(int argc, char** argv) {
         publish();
         last_summary = now;
       }
+      if (!state_path.empty() && now - last_state >= std::chrono::seconds(60)) {
+        save_state(state_path, *engine, wall_ns());
+        last_state = now;
+      }
     }
     engine->liquidate(wall_ns(), ExitReason::shutdown);
     drain_outputs();
     publish();
+    if (!state_path.empty()) save_state(state_path, *engine, wall_ns());
     decision_done.store(true, std::memory_order_release);
   });
 
@@ -566,17 +649,55 @@ int shadow(int argc, char** argv) {
                       });
   auto peer_feed = make_peer_feed(peer, peer_symbols, make_handler(peer, *peer_queue, *raw_queues[1], peer_symbols));
 
+  // A closed or failed socket reconnects in-process: the venue's books are marked gapped
+  // (entries stop, open pairs wait) and the feed runs again with backoff. Only a storm of
+  // reconnects, or a pipeline failure inside the handler, stops the service.
+  const auto run_forever = [&](Venue venue, FeedQueue& queue, ResyncFlags& flags, const auto& run) {
+    constexpr std::size_t kMaxReconnects = 10;
+    constexpr auto kWindow = std::chrono::minutes(10);
+    std::vector<std::chrono::steady_clock::time_point> recent;
+    auto backoff = std::chrono::seconds(1);
+    const auto name = std::string(venue_name(venue));
+    while (!stop_requested.load()) {
+      const auto started = std::chrono::steady_clock::now();
+      std::string feed_error;
+      if (run(stop_requested, flags, feed_error) || stop_requested.load()) break;
+      const auto now = std::chrono::steady_clock::now();
+      std::erase_if(recent, [&](auto at) { return now - at > kWindow; });
+      recent.push_back(now);
+      if (recent.size() > kMaxReconnects) {
+        fail(name + ": " + feed_error + " (more than 10 reconnects in 10 minutes)");
+        break;
+      }
+      ++reconnects[index(venue)];
+      std::cerr << name << ": " << feed_error << "; reconnecting\n";
+      for (std::size_t s = 0; s < basket.size(); ++s) {
+        FeedMessage gap;
+        gap.kind = FeedKind::gap;
+        gap.receive_ns = wall_ns();
+        gap.depth.venue = venue;
+        gap.depth.symbol = static_cast<std::uint16_t>(s);
+        if (!queue.try_push(std::move(gap))) {
+          fail(name + ": decision queue overflow on reconnect");
+          break;
+        }
+      }
+      if (now - started > std::chrono::minutes(1)) backoff = std::chrono::seconds(1);
+      for (auto waited = std::chrono::milliseconds(0); waited < backoff && !stop_requested.load();
+           waited += std::chrono::milliseconds(100))
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      for (auto& flag : flags) flag.store(false, std::memory_order_release);  // the rerun resnapshots everything
+      backoff = std::min(backoff * 2, std::chrono::seconds(30));
+    }
+    stop_requested.store(true);
+  };
   std::thread binance_thread([&] {
-    std::string feed_error;
-    if (!binance.run(stop_requested, resync[0], feed_error) && !stop_requested.load()) fail("binance: " + feed_error);
-    stop_requested.store(true);
+    run_forever(Venue::binance, *binance_queue, resync[0],
+                [&](std::atomic<bool>& stop, ResyncFlags& flags, std::string& feed_error) {
+                  return binance.run(stop, flags, feed_error);
+                });
   });
-  std::thread peer_thread([&] {
-    std::string feed_error;
-    if (!peer_feed(stop_requested, resync[1], feed_error) && !stop_requested.load())
-      fail(std::string(venue_name(peer)) + ": " + feed_error);
-    stop_requested.store(true);
-  });
+  std::thread peer_thread([&] { run_forever(peer, *peer_queue, resync[1], peer_feed); });
 
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(duration);
   while (!stop_requested.load()) {
@@ -595,7 +716,8 @@ int shadow(int argc, char** argv) {
   status.stop();
   std::cout << summary_json(*engine, latency_mode_name(config.shadow.latency_mode),
                             exec_mode_name(config.strategy.exec_mode),
-                            close_mode_name(config.strategy.close_mode), kill_file_active.load());
+                            close_mode_name(config.strategy.close_mode), kill_file_active.load(),
+                            {reconnects[0].load(), reconnects[1].load()});
   if (pipeline_failed.load()) {
     std::lock_guard lock(error_mutex);
     std::cerr << pipeline_error << '\n';

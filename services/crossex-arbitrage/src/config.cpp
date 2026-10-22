@@ -49,6 +49,15 @@ std::string_view exec_mode_name(ExecMode mode) noexcept {
   return "unknown";
 }
 
+std::string_view maker_venues_name(MakerVenues venues) noexcept {
+  switch (venues) {
+    case MakerVenues::both: return "both";
+    case MakerVenues::binance: return "binance";
+    case MakerVenues::peer: return "peer";
+  }
+  return "unknown";
+}
+
 std::string_view close_mode_name(CloseMode mode) noexcept {
   switch (mode) {
     case CloseMode::taker_taker: return "taker_taker";
@@ -92,6 +101,15 @@ RuntimeConfig load_runtime_config() {
     else if (text == "maker_taker") s.exec_mode = ExecMode::maker_taker;
     else throw std::invalid_argument("CXA_EXEC_MODE must be taker_taker or maker_taker");
   }
+  s.lead_veto_ppm = integer("CXA_LEAD_VETO_PPM", s.lead_veto_ppm);
+  s.lead_window_ms = unsigned_integer("CXA_LEAD_WINDOW_MS", s.lead_window_ms);
+  if (const auto* venues = std::getenv("CXA_MAKER_VENUES")) {
+    const std::string_view text(venues);
+    if (text == "both") s.maker_venues = MakerVenues::both;
+    else if (text == "binance") s.maker_venues = MakerVenues::binance;
+    else if (text == "peer" || text == "hyperliquid" || text == "bybit") s.maker_venues = MakerVenues::peer;
+    else throw std::invalid_argument("CXA_MAKER_VENUES must be both, binance or peer");
+  }
   if (const auto* mode = std::getenv("CXA_CLOSE_MODE")) {
     const std::string_view text(mode);
     if (text == "taker_taker") s.close_mode = CloseMode::taker_taker;
@@ -124,6 +142,9 @@ RuntimeConfig load_runtime_config() {
     // block is built, so every leg pays an inclusion delay on top of RTT/2.
     h.fixed_one_way_ns[1] = unsigned_integer("CXA_HL_ONE_WAY_NS", 5'000'000);
     h.venue_penalty_ns[1] = unsigned_integer("CXA_HL_INCLUSION_NS", 200'000'000);
+    h.hl_time_keyed = unsigned_integer("CXA_HL_TIME_KEYED", 1) != 0;
+    h.hl_clock_offset_ms = integer("CXA_HL_CLOCK_OFFSET_MS", h.hl_clock_offset_ms);
+    h.hl_quiet_ns = unsigned_integer("CXA_HL_QUIET_NS", h.hl_quiet_ns);
     h.fallback_taker_ppm[1] = integer("CXA_HL_TAKER_PPM", 450);
     h.fallback_maker_ppm[1] = integer("CXA_HL_MAKER_PPM", 150);
   } else {

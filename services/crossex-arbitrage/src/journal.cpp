@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
+#include <iomanip>
 #include <map>
 #include <memory>
 #include <sstream>
@@ -193,6 +194,17 @@ bool Journal::raw(Venue venue, std::uint64_t receive_ns, std::string_view frame)
   return stream_.good();
 }
 
+bool Journal::basis(std::size_t symbol, const BasisState& state) {
+  stream_ << "B " << symbol << ' ' << std::setprecision(17) << state.mean_ppm << ' ' << state.first_ms << ' '
+          << state.last_ms << '\n';
+  return stream_.good();
+}
+
+bool Journal::prior_net(std::int64_t net_raw) {
+  stream_ << "N " << net_raw << '\n';
+  return stream_.good();
+}
+
 bool Journal::halt(std::uint64_t now_ns, bool halted) {
   stream_ << "H " << now_ns << ' ' << halted << '\n';
   return stream_.good();
@@ -207,7 +219,7 @@ bool Journal::output(const Output& o) {
               << l.symbol << ' ' << index(l.venue) << ' ' << static_cast<int>(l.side) << ' '
               << static_cast<int>(l.purpose) << ' ' << l.quantity.raw << ' ' << l.limit.raw << ' '
               << l.decision_ns << ' ' << l.arrival_ns << ' ' << l.filled.raw << ' ' << l.vwap.raw << ' '
-              << l.fee_raw << '\n';
+              << l.fee_raw << ' ' << (l.rejected ? 1 : 0) << '\n';
       break;
     }
     case OutputKind::decision: {
@@ -215,7 +227,7 @@ bool Journal::output(const Output& o) {
       stream_ << "X " << d.cycle_id << ' ' << d.symbol << ' ' << sign(d.dir) << ' ' << d.decision_ns << ' '
               << d.quantity.raw << ' ' << d.gap_ppm << ' ' << d.exit_gap_ppm << ' ' << d.basis_ppm << ' '
               << d.mean_ppm << ' ' << d.capture_ppm << ' ' << d.fees_ppm << ' ' << d.funding_ppm << ' '
-              << d.net_ppm << '\n';
+              << d.net_ppm << ' ' << d.lead_ppm << '\n';
       break;
     }
     case OutputKind::cycle: {
@@ -266,6 +278,8 @@ bool replay_journal(const std::string& path, const RuntimeConfig& config, Replay
   // each instrument with its fees); they apply once the engine exists.
   std::vector<PendingFee> pending_fees;
   std::vector<PendingLatency> pending_latency;
+  std::vector<std::pair<std::size_t, BasisState>> pending_basis;
+  std::int64_t pending_prior_net = 0;
   auto depth = std::make_unique<DepthEvent>();
   std::string line;
   std::uint64_t line_number = 0;
@@ -276,8 +290,11 @@ bool replay_journal(const std::string& path, const RuntimeConfig& config, Replay
     for (const auto& fee : pending_fees)
       engine->set_fees(venue_from(fee.venue, peer), fee.symbol, fee.taker_ppm, fee.maker_ppm);
     for (const auto& sample : pending_latency) engine->add_latency_sample(venue_from(sample.venue, peer), sample.rtt);
+    for (const auto& [symbol, state] : pending_basis) engine->seed_basis(symbol, state);
+    if (pending_prior_net != 0) engine->seed_prior_net(pending_prior_net);
     pending_fees.clear();
     pending_latency.clear();
+    pending_basis.clear();
     return true;
   };
   while (input.next(line)) {
@@ -317,6 +334,22 @@ bool replay_journal(const std::string& path, const RuntimeConfig& config, Replay
         if (!(row >> maker_ppm)) maker_ppm = taker_ppm;  // archived 3-field C lines
         if (engine) engine->set_fees(venue_from(venue, peer), symbol, taker_ppm, maker_ppm);
         else pending_fees.push_back({venue, symbol, taker_ppm, maker_ppm});
+        break;
+      }
+      case 'B': {
+        std::size_t symbol = 0;
+        BasisState state;
+        if (!(row >> symbol >> state.mean_ppm >> state.first_ms >> state.last_ms)) return bad();
+        state.initialised = true;
+        if (engine) engine->seed_basis(symbol, state);
+        else pending_basis.push_back({symbol, state});
+        break;
+      }
+      case 'N': {
+        std::int64_t net = 0;
+        if (!(row >> net)) return bad();
+        if (engine) engine->seed_prior_net(net);
+        else pending_prior_net = net;
         break;
       }
       case 'L': {
@@ -433,6 +466,7 @@ bool daily_report(const std::vector<std::string>& paths, std::string& json, std:
     double funding_usd{};
     double hold_s{};
     double expected_net_ppm{};
+    double notional_usd{};
     std::uint32_t repairs{};
   };
   std::vector<Cycle> cycles;
@@ -466,6 +500,7 @@ bool daily_report(const std::vector<std::string>& paths, std::string& json, std:
       c.funding_usd = static_cast<double>(funding) / scale;
       c.net_ppm = notional == 0 ? 0.0 : static_cast<double>(net) * 1e6 / static_cast<double>(notional);
       c.hold_s = static_cast<double>(exit_ns - entry_ns) / 1e9;
+      c.notional_usd = static_cast<double>(notional) / scale;
       c.expected_net_ppm = static_cast<double>(exp_net);
       cycles.push_back(std::move(c));
     }
@@ -475,6 +510,28 @@ bool daily_report(const std::vector<std::string>& paths, std::string& json, std:
   const auto n = cycles.size();
   double net_usd = 0, gross_usd = 0, fees_usd = 0, funding_usd = 0, sum_ppm = 0, worst_usd = 0, hold = 0, expected = 0;
   std::size_t legged = 0;
+  // Notional-weighted net and expected-net buckets, excluding dust cycles (< $10 filled):
+  // an unweighted per-cycle ppm mean lets a $5 partial dominate a day of $250 cycles.
+  constexpr double kDustUsd = 10.0;
+  constexpr std::array<double, 5> kBucketEdges{-1e18, 300, 800, 1500, 1e18};
+  std::array<double, 4> bucket_net{}, bucket_notional{};
+  std::array<std::size_t, 4> bucket_count{};
+  double weighted_net = 0, weighted_notional = 0;
+  std::size_t dust = 0;
+  for (const auto& c : cycles) {
+    if (c.notional_usd < kDustUsd) {
+      ++dust;
+      continue;
+    }
+    weighted_net += c.net_usd;
+    weighted_notional += c.notional_usd;
+    for (std::size_t b = 0; b < bucket_count.size(); ++b) {
+      if (c.expected_net_ppm < kBucketEdges[b] || c.expected_net_ppm >= kBucketEdges[b + 1]) continue;
+      ++bucket_count[b];
+      bucket_net[b] += c.net_usd;
+      bucket_notional[b] += c.notional_usd;
+    }
+  }
   for (const auto& c : cycles) {
     net_usd += c.net_usd;
     gross_usd += c.gross_usd;
@@ -523,6 +580,13 @@ bool daily_report(const std::vector<std::string>& paths, std::string& json, std:
       << fixed(n == 0 ? 0.0 : expected / count) << ",\"bootstrap_ci_low_ppm\":" << fixed(ci_low)
       << ",\"mean_net_usd\":" << fixed(mean_usd, 4) << ",\"worst_cycle_usd\":" << fixed(worst_usd, 4)
       << ",\"legging_rate\":" << fixed(legging_rate, 4) << ",\"mean_hold_s\":" << fixed(n == 0 ? 0.0 : hold / count)
+      << ",\"dust_cycles\":" << dust << ",\"weighted_net_bp\":"
+      << fixed(weighted_notional > 0 ? weighted_net / weighted_notional * 1e4 : 0.0) << ",\"expected_net_buckets\":[";
+  constexpr std::array<const char*, 4> kBucketNames{"<3bp", "3-8bp", "8-15bp", ">=15bp"};
+  for (std::size_t b = 0; b < bucket_count.size(); ++b)
+    out << (b ? "," : "") << "{\"expected\":\"" << kBucketNames[b] << "\",\"cycles\":" << bucket_count[b]
+        << ",\"net_bp\":" << fixed(bucket_notional[b] > 0 ? bucket_net[b] / bucket_notional[b] * 1e4 : 0.0) << '}';
+  out << ']'
       << ",\"reasons\":{";
   bool first = true;
   for (const auto& [reason, total] : reasons) {

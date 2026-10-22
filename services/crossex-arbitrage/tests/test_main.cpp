@@ -445,9 +445,89 @@ void test_hyperliquid_peer_latency() {
   s.advance_ms(40);
   require(s.count(OutputKind::leg_fill) == 1, "only the Binance leg fills inside 40 ms");
   s.advance_ms(200);
+  require(s.count(OutputKind::leg_fill) == 1, "hyperliquid leg waits for a bbo stamped at its exchange time");
+  s.quote(Venue::hyperliquid, "100.60", "100.62");
   require(s.count(OutputKind::leg_fill) == 2 && s.engine().pair(0).phase == PairPhase::open,
-          "hyperliquid leg fills after the inclusion delay");
+          "hyperliquid leg fills on the first bbo at or after its exchange time");
+  require(s.engine().metrics().keyed_fills == 1, "keyed fill counted");
 }
+
+void test_hl_quiet_fallback() {
+  auto config = scenario_config();
+  config.shadow.peer = Venue::hyperliquid;
+  config.shadow.venue_penalty_ns[1] = 100'000'000;
+  config.shadow.hl_quiet_ns = 500'000'000;
+  Scenario s(config);
+  s.quote(Venue::binance, "100.00", "100.02");
+  s.quote(Venue::hyperliquid, "100.00", "100.02");
+  const auto next = s.now_ns() / 1'000'000 + 3'600'000;
+  s.funding(Venue::binance, "0.0001", next);
+  s.funding(Venue::hyperliquid, "0.0000125", next);
+  s.advance_ms(1);
+  s.quote(Venue::hyperliquid, "100.60", "100.62");
+  require(s.last(OutputKind::decision) != nullptr, "entry decided");
+  s.advance_ms(550);
+  require(s.count(OutputKind::leg_fill) == 1, "no HL bbo yet: still inside the quiet window");
+  s.advance_ms(100);
+  require(s.count(OutputKind::leg_fill) == 2 && s.engine().metrics().keyed_fallbacks == 1,
+          "quiet HL book is taken as unchanged after the window");
+}
+
+void test_seed_basis_warm() {
+  Scenario s;
+  require(!s.engine().basis_warm(0), "fresh engine starts cold");
+  const auto now_ms = s.now_ns() / 1'000'000;
+  s.engine().seed_basis(0, BasisState{12.5, now_ms - 700'000, now_ms - 1'000, true});
+  require(s.engine().basis_warm(0) && s.engine().basis_mean_ppm(0) == 13, "seeded EWMA is warm at once");
+  s.engine().seed_prior_net(-250 * kScale);
+  require(s.engine().loss_halted(), "prior net beyond the daily loss halts");
+}
+
+void test_post_only_reject() {
+  auto config = scenario_config();
+  config.strategy.exec_mode = ExecMode::maker_taker;
+  config.strategy.maker_venues = MakerVenues::binance;
+  config.strategy.maker_requotes = 0;
+  Scenario s(config);
+  s.quote(Venue::binance, "100.00", "100.02");
+  s.quote(Venue::bybit, "100.00", "100.02");
+  const auto next = s.now_ns() / 1'000'000 + 3'600'000;
+  s.funding(Venue::binance, "0.0001", next);
+  s.funding(Venue::bybit, "0.0001", next);
+  s.advance_ms(1);
+  s.quote(Venue::bybit, "100.60", "100.62");
+  const auto* leg = s.last(OutputKind::leg_submit);
+  require(leg != nullptr && leg->leg.venue == Venue::binance && leg->leg.liquidity == LegLiquidity::maker,
+          "binance-only maker venue");
+  // Binance gaps down through the bid before the order arrives: PostOnly must reject.
+  s.quote(Venue::binance, "99.90", "99.95");
+  s.advance_ms(10);
+  require(s.engine().metrics().post_only_rejects == 1, "crossing maker rejected at arrival");
+  require(s.engine().metrics().fills == 0 && s.engine().metrics().missed == 1, "rejected entry ends missed");
+}
+
+void test_maker_full_fill_single_hedge() {
+  auto config = scenario_config();
+  config.strategy.exec_mode = ExecMode::maker_taker;
+  config.strategy.maker_venues = MakerVenues::binance;
+  Scenario s(config);
+  s.quote(Venue::binance, "100.00", "100.02");
+  s.quote(Venue::bybit, "100.00", "100.02");
+  const auto next = s.now_ns() / 1'000'000 + 3'600'000;
+  s.funding(Venue::binance, "0.0001", next);
+  s.funding(Venue::bybit, "0.0001", next);
+  s.advance_ms(1);
+  s.quote(Venue::bybit, "100.60", "100.62");
+  s.advance_ms(10);
+  const auto legs_before = s.count(OutputKind::leg_submit);
+  // A thin ask trades down to our bid: the level is consumed, so the whole order fills once.
+  s.quote(Venue::binance, "99.98", "100.00", "0.001");
+  require(s.count(OutputKind::leg_submit) == legs_before + 1, "one hedge for the whole maker fill");
+  const auto& pair = s.engine().pair(0);
+  require(pair.qty_raw[0] > 0 && pair.qty_raw[0] == s.last(OutputKind::leg_submit)->leg.quantity.raw,
+          "maker filled in full regardless of touch size");
+}
+
 
 void test_journal_peer_header() {
   const auto path = std::filesystem::temp_directory_path() / "cxa-peer-test.jsonl";
@@ -657,7 +737,7 @@ void test_maker_requote_then_miss() {
 
 int main(int argc, char** argv) {
   fixtures = argc > 1 ? argv[1] : "tests/fixtures";
-  const std::array<std::pair<const char*, void (*)()>, 25> cases{{
+  const std::array<std::pair<const char*, void (*)()>, 29> cases{{
       {"decimal_and_ppm", test_decimal_and_ppm},
       {"book_and_sweep", test_book_and_sweep},
       {"binance_sync", test_binance_sync},
@@ -682,6 +762,10 @@ int main(int argc, char** argv) {
       {"maker_cancel_cushion", test_maker_cancel_cushion},
       {"maker_requote_then_miss", test_maker_requote_then_miss},
       {"hyperliquid_peer_latency", test_hyperliquid_peer_latency},
+      {"hl_quiet_fallback", test_hl_quiet_fallback},
+      {"post_only_reject", test_post_only_reject},
+      {"seed_basis_warm", test_seed_basis_warm},
+      {"maker_full_fill_single_hedge", test_maker_full_fill_single_hedge},
       {"journal_peer_header", test_journal_peer_header},
   }};
   try {

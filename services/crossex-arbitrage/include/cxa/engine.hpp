@@ -31,7 +31,7 @@ enum class ExitReason : std::uint8_t {
 };
 enum class RiskCode : std::uint8_t {
   ok, halted, symbol_disabled, feed_stale, book_stale, fees_unknown, funding_unknown, basis_cold,
-  max_pairs, notional_limit, cooldown, below_minimum, count
+  max_pairs, notional_limit, cooldown, below_minimum, lead_adverse, count
 };
 
 std::string_view exit_reason_name(ExitReason reason) noexcept;
@@ -56,6 +56,7 @@ struct LegRecord final {
   std::uint64_t fill_ns{};
   Venue hedge_venue{Venue::binance};
   Side hedge_side{Side::buy};
+  bool rejected{};  // PostOnly/ALO order that would have crossed on arrival
 };
 
 struct CycleRecord final {
@@ -92,6 +93,7 @@ struct DecisionRecord final {
   std::int64_t fees_ppm{};
   std::int64_t funding_ppm{};
   std::int64_t net_ppm{};
+  std::int64_t lead_ppm{};  // Binance mid move over the lead window
 };
 
 struct CensusRecord final {
@@ -158,6 +160,14 @@ struct PairState final {
   std::uint32_t requotes_used{};  // open maker timeouts that were re-posted
 };
 
+// Basis EWMA, exposed so a restart can resume warm from a state file.
+struct BasisState final {
+  double mean_ppm{};
+  std::uint64_t first_ms{};
+  std::uint64_t last_ms{};
+  bool initialised{};
+};
+
 struct FundingState final {
   Decimal rate{};
   std::uint64_t next_ms{};
@@ -176,6 +186,9 @@ struct EngineMetrics final {
   std::uint64_t missed{};
   std::uint64_t repairs{};
   std::uint64_t census_episodes{};
+  std::uint64_t post_only_rejects{};
+  std::uint64_t keyed_fills{};      // HL legs matched on an exchange-time book
+  std::uint64_t keyed_fallbacks{};  // ... or on the held book after the quiet window
   std::array<std::uint64_t, static_cast<std::size_t>(RiskCode::count)> risk{};
   std::int64_t net_raw{};
   std::int64_t fees_raw{};
@@ -225,6 +238,13 @@ class Engine final {
   }
   [[nodiscard]] std::int64_t basis_mean_ppm(std::size_t symbol) const noexcept;
   [[nodiscard]] bool basis_warm(std::size_t symbol) const noexcept;
+  [[nodiscard]] const BasisState& basis_state(std::size_t symbol) const noexcept { return basis_[symbol]; }
+  // Resume a saved EWMA (journaled as a B record so replay sees the same seed).
+  void seed_basis(std::size_t symbol, const BasisState& state) noexcept;
+  // Net already realised today by an earlier run; counts toward the daily loss halt.
+  void seed_prior_net(std::int64_t net_raw) noexcept;
+  [[nodiscard]] std::int64_t prior_net_raw() const noexcept { return prior_net_raw_; }
+  [[nodiscard]] std::int64_t lead_ppm(std::size_t symbol) const noexcept;
   [[nodiscard]] bool symbol_disabled(std::size_t symbol) const noexcept { return disabled_[symbol]; }
   [[nodiscard]] const EngineMetrics& metrics() const noexcept { return metrics_; }
   [[nodiscard]] const LatencyModel& latency(Venue venue) const noexcept { return latency_[index(venue)]; }
@@ -244,12 +264,16 @@ class Engine final {
     LegRecord record{};
     Quantity remaining{};
     std::uint64_t expire_ns{};
+    std::uint64_t target_ms{};  // HL exchange time the matching book must reach
+    bool keyed{};
   };
-  struct Basis final {
-    double mean_ppm{};
-    std::uint64_t first_ms{};
+  static constexpr std::size_t kLeadSlots = 32;
+  static constexpr std::uint64_t kLeadSampleMs = 50;
+  struct LeadRing final {
+    std::array<std::int64_t, kLeadSlots> mid{};
     std::uint64_t last_ms{};
-    bool initialised{};
+    std::size_t head{};
+    std::size_t count{};
   };
   struct Episode final {
     bool active{};
@@ -263,6 +287,7 @@ class Engine final {
   void resolve_pair(std::size_t symbol) noexcept;
   void evaluate(std::size_t symbol) noexcept;
   void update_basis(std::size_t symbol) noexcept;
+  void update_lead(std::size_t symbol) noexcept;
   void update_census(std::size_t symbol) noexcept;
   void close_episodes(std::size_t symbol) noexcept;
   void try_open(std::size_t symbol) noexcept;
@@ -289,7 +314,11 @@ class Engine final {
     return strategy_.exec_mode == ExecMode::taker_taker || strategy_.close_mode == CloseMode::taker_taker;
   }
   Output* push_output(OutputKind kind) noexcept;
-  [[nodiscard]] Quantity quantity_for(std::size_t symbol, std::int64_t notional_raw) const noexcept;
+  // `cap_to_peer_l1`: never size above `available_ppm` of the peer's touch (HL is bbo-only,
+  // so anything larger is unhedgeable in one IOC).
+  [[nodiscard]] Quantity quantity_for(std::size_t symbol, std::int64_t notional_raw,
+                                      bool cap_to_peer_l1 = false) const noexcept;
+  void reject_maker(PendingLeg& slot) noexcept;
   [[nodiscard]] std::int64_t funding_cost_ppm(std::size_t symbol, Direction dir,
                                               std::uint64_t horizon_ms) const noexcept;
   [[nodiscard]] std::int64_t mid_basis_ppm(std::size_t symbol) const noexcept;
@@ -309,7 +338,9 @@ class Engine final {
   std::array<LatencyModel, kVenues> latency_{};
   std::array<std::uint64_t, kVenues> last_receive_ns_{};
   std::array<PairState, kMaxSymbols> pairs_{};
-  std::array<Basis, kMaxSymbols> basis_{};
+  std::array<BasisState, kMaxSymbols> basis_{};
+  std::array<LeadRing, kMaxSymbols> lead_{};
+  std::int64_t prior_net_raw_{};
   std::array<bool, kMaxSymbols> disabled_{};
   std::array<bool, kMaxSymbols> mid_checked_{};
   std::array<std::array<std::array<std::array<Episode, kCensusThresholds>, 2>, kCensusSizes>, kMaxSymbols>
