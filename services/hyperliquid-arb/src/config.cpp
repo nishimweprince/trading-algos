@@ -119,6 +119,7 @@ Config load_config(bool live) {
   c.quote_lots = integer("HLA_QUOTE_LOTS", c.quote_lots);
   c.max_inventory_lots = integer("HLA_MAX_INVENTORY_LOTS", c.max_inventory_lots);
   c.edge_ppm = integer("HLA_EDGE_PPM", c.edge_ppm);
+  c.min_edge_ppm = integer("HLA_MIN_EDGE_PPM", c.min_edge_ppm);
   c.adverse_ppm = integer("HLA_ADVERSE_PPM", c.adverse_ppm);
   c.mt5_commission_ppm = integer("HLA_MT5_COMMISSION_PPM", c.mt5_commission_ppm);
   c.skew_ppm = integer("HLA_SKEW_PPM", c.skew_ppm);
@@ -144,6 +145,7 @@ Config load_config(bool live) {
   c.flatten_slippage_ppm = integer("HLA_FLATTEN_SLIPPAGE_PPM", c.flatten_slippage_ppm);
   c.max_daily_loss_usd = number("HLA_MAX_DAILY_LOSS_USD", c.max_daily_loss_usd);
   c.max_gross_notional_usd = number("HLA_MAX_GROSS_NOTIONAL_USD", c.max_gross_notional_usd);
+  c.margin_park_s = integer("HLA_MARGIN_PARK_S", c.margin_park_s);
   c.hl_min_margin_usd = number("HLA_HL_MIN_MARGIN_USD", c.hl_min_margin_usd);
   c.mt5_min_margin_usd = number("HLA_MT5_MIN_MARGIN_USD", c.mt5_min_margin_usd);
   c.hl_leverage = integer("HLA_HL_LEVERAGE", c.hl_leverage);

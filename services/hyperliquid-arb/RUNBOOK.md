@@ -45,6 +45,8 @@ Build `hlarb.exe` and `hla_bridge.dll` from the same commit. The bridge layout i
 
 ## 5. Configure, check, dry-run, go live
 
+Before any deploy or restart after a code change, read the newest entry in [`CHANGELOG.md`](CHANGELOG.md) and apply its Deploy steps.
+
 1. Fill in `C:\hlarb\hlarb.env`: account, key file, logins, and the broker's exact symbol names.
 2. Run `powershell -ExecutionPolicy Bypass -File C:\hlarb\hlarb.ps1 check`. It is read-only and prints one JSON summary per pair: asset id, growth mode, maker ppm, MT5 step, value per point, HL units per lot step, positions. It exits 0 only if everything is hedged. Check by eye:
    - `hl_units_per_lot_step × price` is about the notional you intend per quote;

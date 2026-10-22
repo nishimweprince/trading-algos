@@ -229,10 +229,11 @@ int mt5_roundtrip(int argc, char** argv) {
           return 1;
         }
       }
-      std::cout << "{\"leg\":" << id << ",\"status\":" << txn.status << ",\"retcode\":" << txn.retcode
-                << ",\"lots\":" << txn.volume << ",\"price\":" << txn.price
+      const auto status = txn.status & 0xFFU;  // high bits: where the executor got the price
+      std::cout << "{\"leg\":" << id << ",\"status\":" << status << ",\"retcode\":" << txn.retcode
+                << ",\"lots\":" << txn.volume << ",\"price\":" << txn.price << ",\"px_src\":" << (txn.status >> 8)
                 << ",\"ms\":" << static_cast<double>(txn.publish_ns - now) / 1e6 << "}\n";
-      if (txn.status != bridge::filled) return 1;
+      if (status != bridge::filled) return 1;
       legs.push_back(txn.publish_ns - now);
     }
   }

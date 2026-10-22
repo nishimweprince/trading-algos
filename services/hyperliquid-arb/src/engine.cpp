@@ -44,6 +44,7 @@ std::string_view block_name(Block block) noexcept {
     case Block::fair_gap: return "fair_gap";
     case Block::basis_large: return "basis_large";
     case Block::size: return "size";
+    case Block::margin: return "margin";
     case Block::count: break;
   }
   return "unknown";
@@ -98,6 +99,12 @@ double Engine::units_per_lot_step(std::size_t s) const noexcept {
 double Engine::inventory_steps(std::size_t s) const noexcept {
   const auto per_step = units_per_lot_step(s);
   return per_step > 0 ? state_[s].hl_units.as_double() / per_step : 0;
+}
+
+bool Engine::margin_for(std::size_t s, double units, double fair_px) const noexcept {
+  if (!aux_.ok) return true;  // aux_stale soft-halts separately
+  const auto leverage = std::clamp<double>(config_.hl_leverage, 1, std::max(1, pairs_[s].hl.max_leverage));
+  return units * fair_px / leverage * 1.1 <= aux_.hl_min_withdrawable;
 }
 
 double Engine::unhedged_lots(std::size_t s) const noexcept {
@@ -268,6 +275,8 @@ Block Engine::evaluate(std::size_t s, std::uint64_t now_ns) const {
     return Block::fair_gap;
   const auto units = static_cast<double>(config_.quote_lots) * units_per_lot_step(s);
   if (units < pairs_[s].hl.step.as_double() || units * f < kMinNotionalUsd) return Block::size;
+  // Flat and unable to margin one quote: placing would only collect "Insufficient margin" rejects.
+  if (st.hl_units.raw == 0 && !margin_for(s, units, f)) return Block::margin;
   return Block::none;
 }
 
@@ -279,22 +288,23 @@ std::array<Engine::Desired, 2> Engine::desired_quotes(std::size_t s, std::uint64
   const auto& pair = pairs_[s];
   const auto f = fair(s);
   const auto mt5_half_spread_ppm = ppm_of(st.mt5_ask - st.mt5_bid, mid(st.mt5_bid, st.mt5_ask)) / 2;
-  const auto half_spread_ppm = static_cast<double>(pair.hl_maker_ppm + config_.mt5_commission_ppm +
-                                                   config_.adverse_ppm + config_.edge_ppm) +
-                               mt5_half_spread_ppm;
+  // What one fill costs once hedged; no quote may rest closer to fair than this plus min_edge.
+  const auto cost_ppm =
+      static_cast<double>(pair.hl_maker_ppm + config_.mt5_commission_ppm + config_.adverse_ppm) + mt5_half_spread_ppm;
+  const auto half_spread_ppm = cost_ppm + static_cast<double>(config_.edge_ppm);
+  const auto floor_ppm = cost_ppm + static_cast<double>(config_.min_edge_ppm);
   st.half_spread_ppm = half_spread_ppm;
+  st.floor_ppm = floor_ppm;
   const auto inventory = inventory_steps(s);
   const auto skewed = f * (1.0 - inventory * static_cast<double>(config_.skew_ppm) / 1e6);
   const auto tick = hl_tick(Price::from_double(f), pair.hl.size_decimals);
+  // The floor is measured from the unskewed fair: skew may widen a side, never pull it inside cost.
+  const auto cap_bid = round_down(Price::from_double(f * (1.0 - floor_ppm / 1e6)), tick);
+  const auto cap_ask = round_up(Price::from_double(f * (1.0 + floor_ppm / 1e6)), tick);
   auto bid = round_down(Price::from_double(skewed * (1.0 - half_spread_ppm / 1e6)), tick);
   auto ask = round_up(Price::from_double(skewed * (1.0 + half_spread_ppm / 1e6)), tick);
-  // Improve toward the HL touch (still inside fair±1 tick), always on the tick grid.
-  // Passive-only quotes sat 1–3 ticks behind the book and rarely traded.
+  // Improve toward the HL touch, but only as far as the cost floor.
   if (st.hl_bid.price.raw > 0 && st.hl_ask.price.raw > 0 && tick.raw > 0) {
-    auto cap_bid = round_down(Price::from_double(skewed), tick);
-    if (cap_bid.raw > tick.raw) cap_bid = Price{cap_bid.raw - tick.raw};
-    auto cap_ask = round_up(Price::from_double(skewed), tick);
-    cap_ask = Price{cap_ask.raw + tick.raw};
     auto join_bid = round_down(st.hl_bid.price.raw < cap_bid.raw ? st.hl_bid.price : cap_bid, tick);
     auto join_ask = round_up(st.hl_ask.price.raw > cap_ask.raw ? st.hl_ask.price : cap_ask, tick);
     if (join_bid.raw > bid.raw && join_bid.raw < join_ask.raw) bid = join_bid;
@@ -312,8 +322,18 @@ std::array<Engine::Desired, 2> Engine::desired_quotes(std::size_t s, std::uint64
     bid = round_down(Price::from_double(skewed * (1.0 - half_spread_ppm / 1e6)), tick);
     ask = round_up(Price::from_double(skewed * (1.0 + half_spread_ppm / 1e6)), tick);
   }
-  const auto size = round_down(
-      Quantity::from_double(static_cast<double>(config_.quote_lots) * units_per_lot_step(s)), pair.hl.step);
+  if (bid.raw > cap_bid.raw) bid = cap_bid;
+  if (ask.raw < cap_ask.raw) ask = cap_ask;
+  const auto per_step = units_per_lot_step(s);
+  const auto size = round_down(Quantity::from_double(static_cast<double>(config_.quote_lots) * per_step), pair.hl.step);
+  // The side that reduces inventory quotes only the off-grid remainder of a partial fill, so the
+  // position returns to whole MT5 lot steps and the hedge can match it.
+  auto reduce_size = size;
+  const auto held = std::abs(st.hl_units.as_double());
+  const auto residual = per_step > 0 ? std::fmod(held, per_step) : 0.0;
+  const auto hl_step = pair.hl.step.as_double();
+  if (residual > hl_step && residual < per_step - hl_step && residual * f >= kMinNotionalUsd)
+    reduce_size = round_down(Quantity::from_double(residual), pair.hl.step);
 
   double gross = 0;
   for (std::size_t i = 0; i < state_.size(); ++i) {
@@ -321,13 +341,15 @@ std::array<Engine::Desired, 2> Engine::desired_quotes(std::size_t s, std::uint64
     if (other.hl_bid.price.raw > 0 && other.hl_ask.price.raw > 0)
       gross += std::abs(other.hl_units.as_double()) * mid(other.hl_bid, other.hl_ask);
   }
-  const bool room = gross + size.as_double() * f <= config_.max_gross_notional_usd;
+  const bool room = gross + size.as_double() * f <= config_.max_gross_notional_usd && margin_for(s, size.as_double(), f);
   const auto lots = static_cast<double>(config_.quote_lots);
   const auto max_lots = static_cast<double>(config_.max_inventory_lots);
   const bool long_side = inventory < 0;   // buying reduces a short
   const bool short_side = inventory > 0;  // selling reduces a long
-  out[0] = {inventory + lots <= max_lots + 1e-9 && (room || long_side) && bid.raw > 0, bid, size};
-  out[1] = {inventory - lots >= -max_lots - 1e-9 && (room || short_side), ask, size};
+  out[0] = {inventory + lots <= max_lots + 1e-9 && (room || long_side) && bid.raw > 0, bid,
+            long_side ? reduce_size : size, cap_bid};
+  out[1] = {inventory - lots >= -max_lots - 1e-9 && (room || short_side), ask, short_side ? reduce_size : size,
+            cap_ask};
   return out;
 }
 
@@ -376,7 +398,11 @@ void Engine::requote(std::size_t s, std::uint64_t now_ns) {
     }
     const auto tick = hl_tick(q.price, pair.hl.size_decimals);
     const auto threshold = std::max(tick.raw, apply_ppm(q.price.raw, config_.requote_ppm));
-    if (!may_modify || q.oid == 0 || (abs64(want.price.raw - q.price.raw) < threshold && want.size == q.size)) continue;
+    // A quote that fair has moved inside the cost floor is moved at once, ignoring the requote limits.
+    const bool inside_floor = side == 0 ? q.price.raw > want.cap.raw : q.price.raw < want.cap.raw;
+    if (q.oid == 0 ||
+        (!inside_floor && (!may_modify || (abs64(want.price.raw - q.price.raw) < threshold && want.size == q.size))))
+      continue;
     q.pending_price = want.price;
     q.pending_size = want.size;
     q.pending_cloid = *order.cloid;
@@ -507,15 +533,21 @@ void Engine::on_ack(const HlEvent& event, std::uint64_t now_ns) {
     }
   }
   // Back off once per ack so a persistent reject (margin, rate limit) never loops at the timer rate.
-  if (place_rejected) {
+  if (place_rejected && contains(text, "Insufficient margin")) {
+    // Retrying cannot help until the account changes; each retry spends request budget.
+    st.next_place_ns = now_ns + config_.margin_park_s * kSecond;
+  } else if (place_rejected) {
     st.place_backoff_ms = std::clamp<std::uint64_t>(st.place_backoff_ms * 2, 1'000, 30'000);
     st.next_place_ns = now_ns + st.place_backoff_ms * kMs;
   } else if (post_only_rejected) {
     st.next_place_ns = std::max(st.next_place_ns, now_ns + 200 * kMs);
   }
-  if (!event.ok || (event.count > 0 && event.items[0].status == AckStatus::error && !event.items[0].post_only_reject)) {
+  const bool item_error =
+      event.count > 0 && event.items[0].status == AckStatus::error && !event.items[0].post_only_reject;
+  if (!event.ok || item_error) {
+    // post_ok: HL accepted the request; ok: the order itself went through.
     std::snprintf(line_.data(), line_.size(),
-                  R"({"k":"ack","request":%llu,"coin":"%s","kind":%d,"ok":%s,"error":"%s"})",
+                  R"({"k":"ack","request":%llu,"coin":"%s","kind":%d,"ok":false,"post_ok":%s,"error":"%s"})",
                   static_cast<unsigned long long>(event.request_id), pairs_[s].hl.coin.c_str(),
                   static_cast<int>(flight.kind), event.ok ? "true" : "false", event.text.data());
     journal(line_.data());
@@ -629,7 +661,7 @@ void Engine::hedge(std::size_t s, std::uint64_t now_ns) {
     return;
   }
   const auto attempts = st.hedge.attempts;
-  st.hedge = {order.request_id, lots, now_ns, account_.positions[s], attempts};
+  st.hedge = {order.request_id, lots, now_ns, account_.positions[s], attempts, lots > 0 ? st.mt5_ask : st.mt5_bid};
   st.last_hedge_ns = now_ns;
   std::snprintf(line_.data(), line_.size(),
                 R"({"k":"hedge","t":%llu,"symbol":"%s","request":%llu,"lots":%.4f,"attempt":%d,"mt5_bid":%.8f,"mt5_ask":%.8f})",
@@ -652,17 +684,24 @@ void Engine::on_mt5_txn(const bridge::Txn& txn, std::uint64_t now_ns) {
   auto& st = state_[txn.symbol];
   const bool ours = st.hedge.request_id == txn.request_id;
   const auto sign = txn.side == bridge::buy ? 1.0 : -1.0;
+  // The executor puts where the price came from in the high bits: 0 result, 1 deal history, 2 request.
+  const auto status = txn.status & 0xFFU;
+  const auto px_src = txn.status >> 8;
+  const auto reference = st.hedge.reference_px;
+  // Paid beyond the touch seen when the hedge was sent; positive is a cost.
+  const auto slip_ppm = ours && txn.price > 0 && reference > 0 ? sign * ppm_of(txn.price - reference, reference) : 0.0;
   std::snprintf(line_.data(), line_.size(),
                 R"({"k":"txn","t":%llu,"symbol":"%s","request":%llu,"status":%u,"retcode":%u,"lots":%.4f,)"
-                R"("px":%.8f,"commission":%.4f,"deal":%llu,"hedge_ms":%.3f,"order_ms":%.3f,"ours":%s})",
+                R"("px":%.8f,"px_src":%u,"slip_ppm":%.1f,"commission":%.4f,"deal":%llu,"hedge_ms":%.3f,"order_ms":%.3f,)"
+                R"("ours":%s})",
                 static_cast<unsigned long long>(now_ns), pairs_[txn.symbol].mt5_symbol.c_str(),
-                static_cast<unsigned long long>(txn.request_id), txn.status, txn.retcode, sign * txn.volume,
-                txn.price, txn.commission, static_cast<unsigned long long>(txn.deal),
+                static_cast<unsigned long long>(txn.request_id), status, txn.retcode, sign * txn.volume, txn.price,
+                px_src, slip_ppm, txn.commission, static_cast<unsigned long long>(txn.deal),
                 st.first_unhedged_ns == 0 ? 0.0 : static_cast<double>(txn.publish_ns - st.first_unhedged_ns) / 1e6,
                 ours ? static_cast<double>(txn.publish_ns - st.hedge.sent_ns) / 1e6 : 0.0, ours ? "true" : "false");
   journal(line_.data());
   if (!ours) return;
-  if (txn.status == bridge::filled || txn.status == bridge::partial) {
+  if (status == bridge::filled || status == bridge::partial) {
     st.hedge.attempts = 0;
     hedge_result(txn.symbol, sign * txn.volume, now_ns);
     return;
@@ -833,12 +872,12 @@ void Engine::journal_snapshot(std::uint64_t now_ns) {
         line_.data(), line_.size(),
         R"({"k":"f","t":%llu,"coin":"%s","fair":%.8f,"basis":%.8f,"hl_bid":%.8f,"hl_ask":%.8f,)"
         R"("mt5_bid":%.8f,"mt5_ask":%.8f,"bid":%.8f,"ask":%.8f,"hl_pos":%.8f,"mt5_lots":%.4f,"block":"%.*s",)"
-        R"("half_spread_ppm":%.1f,"bid_touch_ppm":%.1f,"ask_touch_ppm":%.1f,"bid_age_ms":%llu,"ask_age_ms":%llu,)"
-        R"("fills":%llu,"rejects":%llu})",
+        R"("half_spread_ppm":%.1f,"floor_ppm":%.1f,"bid_touch_ppm":%.1f,"ask_touch_ppm":%.1f,"bid_age_ms":%llu,)"
+        R"("ask_age_ms":%llu,"fills":%llu,"rejects":%llu})",
         static_cast<unsigned long long>(now_ns), pairs_[s].hl.coin.c_str(), f, st.basis,
         st.hl_bid.price.as_double(), st.hl_ask.price.as_double(), st.mt5_bid, st.mt5_ask, bid_px, ask_px,
         st.hl_units.as_double(), st.mt5_lots, static_cast<int>(block_name(st.block).size()),
-        block_name(st.block).data(), st.half_spread_ppm, bid_touch_ppm, ask_touch_ppm,
+        block_name(st.block).data(), st.half_spread_ppm, st.floor_ppm, bid_touch_ppm, ask_touch_ppm,
         static_cast<unsigned long long>(bid_age_ms), static_cast<unsigned long long>(ask_age_ms),
         static_cast<unsigned long long>(st.fills), static_cast<unsigned long long>(st.places_reject));
     journal(line_.data());
@@ -897,7 +936,8 @@ std::string Engine::status_json(std::uint64_t now_ns) const {
         << ",\"ask_state\":" << static_cast<int>(st.quotes[1].state) << ",\"hl_pos\":" << st.hl_units.as_double()
         << ",\"mt5_lots\":" << st.mt5_lots << ",\"unhedged_lots\":" << unhedged_lots(s)
         << ",\"hedge_in_flight\":" << (st.hedge.request_id != 0 ? "true" : "false")
-        << ",\"half_spread_ppm\":" << st.half_spread_ppm << ",\"bid_touch_ppm\":" << bid_touch_ppm
+        << ",\"half_spread_ppm\":" << st.half_spread_ppm << ",\"floor_ppm\":" << st.floor_ppm
+        << ",\"bid_touch_ppm\":" << bid_touch_ppm
         << ",\"ask_touch_ppm\":" << ask_touch_ppm << ",\"bid_age_ms\":" << bid_age_ms
         << ",\"ask_age_ms\":" << ask_age_ms << ",\"fills\":" << st.fills << ",\"rejects\":" << st.places_reject
         << "}";

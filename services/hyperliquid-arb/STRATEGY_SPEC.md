@@ -46,14 +46,21 @@ The basis absorbs a static or slowly drifting offset:
 ## Quotes
 
 ```
-half_spread_ppm = hl_maker_ppm + HLA_MT5_COMMISSION_PPM + HLA_ADVERSE_PPM + HLA_EDGE_PPM
-                + ½ × mt5_spread / mt5_mid × 1e6
+cost_ppm        = hl_maker_ppm + HLA_MT5_COMMISSION_PPM + HLA_ADVERSE_PPM + ½ × mt5_spread / mt5_mid × 1e6
+half_spread_ppm = cost_ppm + HLA_EDGE_PPM                         (passive target)
+floor_ppm       = cost_ppm + HLA_MIN_EDGE_PPM                     (no quote is ever closer to fair)
 inventory       = hl_units / hl_units_per_lot_step               (in lot steps, signed)
 skewed          = fair × (1 − inventory × HLA_SKEW_PPM / 1e6)
 tick            = hl_tick(fair, szDecimals)                      (5 significant figures, ≤ 6 − szDecimals decimals)
-bid             = round_down(skewed × (1 − half_spread_ppm/1e6), tick),  capped at hl_best_ask − tick
-ask             = round_up  (skewed × (1 + half_spread_ppm/1e6), tick),  floored at hl_best_bid + tick
+cap_bid         = round_down(fair × (1 − floor_ppm/1e6), tick)    (unskewed fair)
+cap_ask         = round_up  (fair × (1 + floor_ppm/1e6), tick)
+bid             = round_down(skewed × (1 − half_spread_ppm/1e6), tick), raised to min(hl_best_bid, cap_bid)
+                  if that is higher, capped at hl_best_ask − tick, then at cap_bid
+ask             = round_up  (skewed × (1 + half_spread_ppm/1e6), tick), lowered to max(hl_best_ask, cap_ask)
+                  if that is lower, floored at hl_best_bid + tick, then at cap_ask
 ```
+
+Joining the HL touch can tighten a quote from `half_spread_ppm` down to `floor_ppm`, never further. The skew can only widen a side, because the floor uses the unskewed fair.
 
 `hl_maker_ppm` is the account's `userAddRate`, doubled on HIP-3 dexes and divided by 10 in growth mode, unless `HLA_HL_MAKER_PPM` overrides it.
 
@@ -61,10 +68,14 @@ Side limits:
 - The bid is quoted only if `inventory + HLA_QUOTE_LOTS ≤ HLA_MAX_INVENTORY_LOTS`.
 - The ask is quoted only if `inventory − HLA_QUOTE_LOTS ≥ −HLA_MAX_INVENTORY_LOTS`.
 - If total HL gross notional plus this quote would exceed `HLA_MAX_GROSS_NOTIONAL_USD`, only the side that reduces the position is quoted.
+- The same applies when free HL margin can't cover the quote: `notional / min(HLA_HL_LEVERAGE, maxLeverage) × 1.1 > hl_min_withdrawable`. When flat, the pair is blocked (`margin`).
+- An "Insufficient margin" reject parks the pair's places for `HLA_MARGIN_PARK_S`.
+- After a partial fill, the side that reduces the position quotes only the part of it that is not a whole number of lot steps, so the hedge can match it.
 
 Requoting:
 - A resting quote moves, through `batchModify` for both sides in one action, when its target moves by at least `max(tick, price × HLA_REQUOTE_PPM)` or its size changes.
 - Moves are at most one per `HLA_MIN_REQUOTE_MS`.
+- Exception: a resting quote that fair has moved inside its floor (bid > cap_bid, ask < cap_ask) is moved at once, ignoring both limits.
 - At most one command per side is in flight.
 - Places, modifies and cancels carry a client order id (cloid).
 - An ack timeout, or a failed modify, cancels by cloid, because the order's state is unknown.

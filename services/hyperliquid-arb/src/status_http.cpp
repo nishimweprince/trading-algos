@@ -213,7 +213,7 @@ async function refresh(){
   ].join('');
   const rows=s.symbols||[];
   document.getElementById('pairs').innerHTML=
-    '<tr><th>Coin</th><th>Block</th><th>Fair</th><th>Our bid/ask</th><th>State</th><th>Touch ppm</th><th>Half ppm</th><th>Age ms</th><th>HL book</th><th>MT5</th><th>Pos HL/MT5</th><th>Fills</th><th>Rejects</th></tr>'+
+    '<tr><th>Coin</th><th>Block</th><th>Fair</th><th>Our bid/ask</th><th>State</th><th>Touch ppm</th><th>Half/floor ppm</th><th>Age ms</th><th>HL book</th><th>MT5</th><th>Pos HL/MT5</th><th>Fills</th><th>Rejects</th></tr>'+
     rows.map(x=>{
       const resting=x.bid_state===2||x.ask_state===2;
       const touch=`${f(x.bid_touch_ppm,0)}/${f(x.ask_touch_ppm,0)}`;
@@ -225,7 +225,7 @@ async function refresh(){
         <td class="${resting?'good':''}">${f(x.bid,4)} / ${f(x.ask,4)}</td>
         <td>${stateName(x.bid_state)}/${stateName(x.ask_state)}</td>
         <td>${touch}</td>
-        <td>${f(x.half_spread_ppm,0)}</td>
+        <td>${f(x.half_spread_ppm,0)}/${f(x.floor_ppm,0)}</td>
         <td>${age}</td>
         <td>${f(x.hl_bid,4)}/${f(x.hl_ask,4)}</td>
         <td>${f(x.mt5_bid,4)}/${f(x.mt5_ask,4)}</td>

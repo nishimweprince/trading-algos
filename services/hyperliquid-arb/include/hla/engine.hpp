@@ -48,7 +48,7 @@ struct AuxReport final {
 
 enum class Block : std::uint8_t {
   none, no_spec, no_mt5_tick, mt5_stale, mt5_closed, mt5_spread, hl_stale, no_hl_book, basis_cold,
-  rollover, mark_oracle, fair_gap, basis_large, size, count
+  rollover, mark_oracle, fair_gap, basis_large, size, margin, count
 };
 enum class Halt : std::uint8_t {
   none, killed, emergency, bridge_stale, gateway_down, mt5_account, aux_stale, daily_loss, budget, margin,
@@ -134,6 +134,7 @@ class Engine final {
     bool active{};
     Price price{};
     Quantity size{};
+    Price cap{};  // the cost floor: a bid above (ask below) this loses money once hedged
   };
   [[nodiscard]] std::array<Desired, 2> desired_quotes(std::size_t symbol, std::uint64_t now_ns);
 
@@ -144,6 +145,7 @@ class Engine final {
     std::uint64_t sent_ns{};
     double position_before{};
     int attempts{};
+    double reference_px{};  // MT5 touch the hedge would pay when it was sent
   };
   struct Symbol final {
     Level hl_bid{};
@@ -175,6 +177,7 @@ class Engine final {
     std::uint64_t next_place_ns{};   // backoff after a rejected place
     std::uint64_t place_backoff_ms{};
     double half_spread_ppm{};
+    double floor_ppm{};
     std::uint64_t fills{};
     std::uint64_t places_reject{};
   };
@@ -195,6 +198,8 @@ class Engine final {
   void set_halt(Halt halt, std::string_view detail, std::uint64_t now_ns);
   void check_global(std::uint64_t now_ns);
   Block evaluate(std::size_t symbol, std::uint64_t now_ns) const;
+  // Free HL margin covers `units` more at the pair's leverage, with 10% headroom.
+  [[nodiscard]] bool margin_for(std::size_t symbol, double units, double fair_px) const noexcept;
   [[nodiscard]] double units_per_lot_step(std::size_t symbol) const noexcept;
   [[nodiscard]] double inventory_steps(std::size_t symbol) const noexcept;
   bool send(HlCommand& command, std::uint16_t symbol, std::span<const std::uint8_t> sides);
