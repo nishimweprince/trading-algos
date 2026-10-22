@@ -6,6 +6,9 @@
 //! - `fill_price`: average and p90 fill at or below the cap.
 //! - `capacity_usd_per_entry`: median $ filled per entry, per asset (an asset
 //!   under $10 cannot carry live size, whatever its edge).
+//! - `fill_by_path` / `fill_by_phase` (readouts, epoch 16): the entry fill
+//!   rate by the path that sent it (fast trigger or engine) and by when in the
+//!   window it was sent. To be read at n ≥ 300, not before.
 //!
 //! Per entry, net ¢/share = the ledger's P&L over the shares filled (payout or
 //! the active exit's proceeds, less the VWAP and both fees). Day-t is the mean
@@ -25,6 +28,16 @@ pub const GATE_MIN_DAY_T: f64 = 2.0;
 pub const GATE_MARKOUT_5S_CENTS: f64 = -3.0;
 pub const GATE_MARKOUT_MIN_N: usize = 30;
 pub const CAPACITY_MIN_USD: f64 = 10.0;
+pub const PHASES: [(f64, f64); 3] = [(0.0, 300.0), (300.0, 600.0), (600.0, 900.0)];
+
+fn fill_rate_of<'a>(rows: impl Iterator<Item = &'a bool>) -> Value {
+    let (mut n, mut filled) = (0u64, 0u64);
+    for f in rows {
+        n += 1;
+        filled += u64::from(*f);
+    }
+    json!({"n": n, "filled": filled, "rate": (n > 0).then(|| filled as f64 / n as f64)})
+}
 
 pub fn band_of(price: f64) -> String {
     for (lo, hi) in BANDS {
@@ -62,10 +75,16 @@ pub fn evaluate(records: &[Value], max_entry_px: f64) -> Value {
     let mut resolutions: IndexMap<Key, BTreeMap<String, String>> = IndexMap::new();
     let mut windows: BTreeMap<(String, String), u64> = BTreeMap::new();
     let mut markouts_5s: Vec<f64> = Vec::new();
+    // Entries sent (fast?, seconds into the window) and whether each filled.
+    let mut sent: IndexMap<Key, (bool, f64)> = IndexMap::new();
+    let mut outcome: IndexMap<Key, bool> = IndexMap::new();
     for r in records {
         let k = key(r);
         match s(r, "type") {
             Some("decision") => {
+                if s(r, "action") == Some("enter") && !truthy(r, "blocked") {
+                    sent.insert(k.clone(), (truthy(r, "fast"), f(r, "sec_into").unwrap_or(0.0)));
+                }
                 let label = if truthy(r, "blocked") {
                     format!("blocked_{}", s(r, "blocked").unwrap_or_default())
                 } else {
@@ -74,6 +93,7 @@ pub fn evaluate(records: &[Value], max_entry_px: f64) -> Value {
                 *decisions.entry(label).or_default() += 1;
             }
             Some("fill") => {
+                outcome.insert(k.clone(), f(r, "shares").unwrap_or(0.0) > 0.0);
                 if f(r, "shares").unwrap_or(0.0) > 0.0 {
                     fills.insert(k, r);
                 } else {
@@ -156,7 +176,22 @@ pub fn evaluate(records: &[Value], max_entry_px: f64) -> Value {
         band_out.insert(b, json!({"n": v.len(), "net_cents": opt(fmean(&v))}));
     }
     let n_fills = fills.len() as u64;
+    let tried: Vec<(bool, f64, bool)> =
+        sent.iter().filter_map(|(k, (fast, sec))| outcome.get(k).map(|o| (*fast, *sec, *o))).collect();
+    let by_path = json!({
+        "fast": fill_rate_of(tried.iter().filter(|t| t.0).map(|t| &t.2)),
+        "engine": fill_rate_of(tried.iter().filter(|t| !t.0).map(|t| &t.2)),
+    });
+    let by_phase: Map<String, Value> = PHASES
+        .iter()
+        .map(|(lo, hi)| {
+            let rows = tried.iter().filter(|t| *lo <= t.1 && t.1 < *hi).map(|t| &t.2);
+            (format!("{lo:.0}-{hi:.0}s"), fill_rate_of(rows))
+        })
+        .collect();
     json!({
+        "fill_by_path": by_path,
+        "fill_by_phase": by_phase,
         "decisions": decisions,
         "fills": n_fills,
         "no_fills": no_fills,

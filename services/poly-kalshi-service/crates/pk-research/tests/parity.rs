@@ -168,7 +168,12 @@ fn research_matches_python() {
     for side in ["all", "without"] {
         want["assets"][side].as_object_mut().unwrap().remove("shadow_live");
     }
-    same("readout", &pk_research::readout::readout(theirs.clone(), 0.60, None, &ex), &want);
+    let mut ours = pk_research::readout::readout(theirs.clone(), 0.60, None, &ex);
+    // Gate readouts added after the Python engine was retired (epoch 16).
+    for k in ["fill_by_path", "fill_by_phase"] {
+        ours.as_object_mut().unwrap().remove(k);
+    }
+    same("readout", &ours, &want);
 
     // Fills: run, then the grid.
     let fills_out = root.join("fills");

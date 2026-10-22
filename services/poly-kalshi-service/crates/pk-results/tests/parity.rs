@@ -55,6 +55,11 @@ fn summaries_match_python() {
             "results": pk_results::paper_results(&records, 50),
             "open_trades": pk_results::open_trade_etas(&records),
         });
+        // Readouts added after the Python engine was retired (epoch 16).
+        let mut ours = ours;
+        for k in ["fill_by_path", "fill_by_phase"] {
+            ours["gates"].as_object_mut().unwrap().remove(k);
+        }
         let mut problems = Vec::new();
         diff("", &ours, &python, &mut problems);
         assert!(
