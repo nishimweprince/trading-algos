@@ -57,8 +57,12 @@ join the book (buy at best bid, sell at best ask) and hedge the other venue at
 taker VWAP. Pick the (direction, maker venue) with the largest `n`.
 
 - entry buy/sell use the maker join price on the maker venue and VWAP on the hedge
-- exit uses the opposite join on the maker venue and VWAP on the hedge
-- fees `f = 2·(maker_makerVenue + taker_hedgeVenue)` from account rates
+- **`CXA_CLOSE_MODE=maker_taker` (Bybit default):** exit uses the opposite join
+  on the maker venue and VWAP on the hedge; fees
+  `f = 2·(maker_makerVenue + taker_hedgeVenue)`
+- **`CXA_CLOSE_MODE=taker_taker` (HL PREREG default):** exit sweeps both venues
+  as taker; fees
+  `f = maker_makerVenue + taker_hedgeVenue + taker_B + taker_peer`
 
 Then for either mode:
 
@@ -93,8 +97,13 @@ enter if `n ≥ CXA_MIN_NET_PPM` (default 0) and every risk gate passes.
 **Maker/taker:** post a PostOnly join on the maker venue; do nothing on the hedge
 venue until a maker fill. For every maker fill `Δq`, immediately submit an IOC
 taker hedge of `Δq` on the other venue. Cancel residual maker size on timeout
-(`CXA_MAKER_TIMEOUT_MS`, default 2 s) or when live `n` falls below `min_net`.
-Exit uses the same pattern on the entry maker venue. Repairs stay taker IOC.
+(`CXA_MAKER_TIMEOUT_MS`, default 2 s; HL example 8 s) or when live
+`n < min_net − CXA_MAKER_CANCEL_CUSHION_PPM` (default cushion 500 ppm). On an
+open timeout with no fill, if `CXA_MAKER_REQUOTES` (default 1) remains and live
+`n ≥ min_net`, post one more maker join; otherwise the cycle is `missed`.
+**Close:** with `CXA_CLOSE_MODE=maker_taker`, exit uses the same maker pattern on
+the entry maker venue; with `taker_taker`, exit is both-venue IOC (same limits as
+taker/taker exit). Repairs stay taker IOC.
 
 **Repairs.** After entry legs resolve, any residual (from unequal fills) is
 unwound on the venue holding the excess. If nothing filled on one side, the

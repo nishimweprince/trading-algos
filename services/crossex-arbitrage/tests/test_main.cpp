@@ -532,6 +532,7 @@ void test_maker_timeout_miss() {
   config.strategy.exec_mode = ExecMode::maker_taker;
   config.strategy.min_net_ppm = 0;
   config.strategy.maker_timeout_ms = 20;
+  config.strategy.maker_requotes = 0;
   config.shadow.fixed_one_way_ns = {1'000'000, 1'000'000};
   Scenario s(config);
   s.quote(Venue::binance, "100.00", "100.02");
@@ -550,6 +551,7 @@ void test_maker_timeout_miss() {
 void test_maker_taker_fee_ppm() {
   auto config = scenario_config();
   config.strategy.exec_mode = ExecMode::maker_taker;
+  config.strategy.close_mode = CloseMode::taker_taker;
   config.strategy.min_net_ppm = 0;
   Scenario s(config);
   s.quote(Venue::binance, "100.00", "100.02");
@@ -562,17 +564,100 @@ void test_maker_taker_fee_ppm() {
   s.quote(Venue::bybit, "100.60", "100.62");
   const auto* decision = s.last(OutputKind::decision);
   require(decision != nullptr, "decision");
-  // Full cycle: 2 * (maker 200 + opposing taker). Maker on Bybit => 2*(200+500)=1400.
-  // Maker on Binance => 2*(200+550)=1500. Engine picks the larger net (lower fees).
-  require(decision->decision.fees_ppm == 1400 || decision->decision.fees_ppm == 1500, "maker+taker fees");
-  require(decision->decision.fees_ppm < 2 * (500 + 550), "cheaper than taker/taker");
+  // Maker open + taker hedge + both-taker close.
+  // Maker Bybit: 200+500+500+550=1750. Maker Binance: 200+550+500+550=1800.
+  require(decision->decision.fees_ppm == 1750 || decision->decision.fees_ppm == 1800,
+          "maker open + taker close fees");
+  require(decision->decision.fees_ppm < 2 * (500 + 550), "still below pure taker/taker round trip");
+}
+
+void test_maker_open_taker_close() {
+  auto config = scenario_config();
+  config.strategy.exec_mode = ExecMode::maker_taker;
+  config.strategy.close_mode = CloseMode::taker_taker;
+  config.strategy.min_net_ppm = 0;
+  config.strategy.maker_timeout_ms = 5'000;
+  config.shadow.fixed_one_way_ns = {3'000'000, 5'000'000};
+  Scenario s(config);
+  s.quote(Venue::binance, "100.00", "100.02");
+  s.quote(Venue::bybit, "100.00", "100.02");
+  const auto next = s.now_ns() / 1'000'000 + 8 * 3'600'000;
+  s.funding(Venue::binance, "0.0001", next);
+  s.funding(Venue::bybit, "0.0001", next);
+  s.advance_ms(1);
+  s.clear();
+  s.quote(Venue::bybit, "100.60", "100.62");
+  require(s.engine().pair(0).phase == PairPhase::opening, "opening");
+  s.advance_ms(10);
+  s.quote(Venue::bybit, "100.62", "100.64");
+  s.advance_ms(20);
+  require(s.engine().pair(0).phase == PairPhase::open, "hedged open");
+  s.clear();
+  // Kill forces begin_close; with taker close mode that is two IOC legs (maker close would be one).
+  s.engine().kill(s.now_ns());
+  s.advance_ms(1);
+  require(s.count(OutputKind::leg_submit) == 2, "two taker close legs");
+  require(s.engine().pair(0).phase == PairPhase::closing || s.engine().pair(0).phase == PairPhase::flat,
+          "closing or flat after kill");
+}
+
+void test_maker_cancel_cushion() {
+  auto config = scenario_config();
+  config.strategy.exec_mode = ExecMode::maker_taker;
+  config.strategy.min_net_ppm = 0;
+  config.strategy.maker_timeout_ms = 5'000;
+  config.strategy.maker_cancel_cushion_ppm = 500;
+  config.strategy.maker_requotes = 0;
+  config.shadow.fixed_one_way_ns = {1'000'000, 1'000'000};
+  Scenario s(config);
+  s.quote(Venue::binance, "100.00", "100.02");
+  s.quote(Venue::bybit, "100.00", "100.02");
+  const auto next = s.now_ns() / 1'000'000 + 8 * 3'600'000;
+  s.funding(Venue::binance, "0.0001", next);
+  s.funding(Venue::bybit, "0.0001", next);
+  s.advance_ms(1);
+  s.quote(Venue::bybit, "100.60", "100.62");
+  require(s.engine().pair(0).phase == PairPhase::opening, "opening");
+  s.advance_ms(5);  // maker resting
+  // Mild fade: still above min_net - cushion → keep resting.
+  s.quote(Venue::bybit, "100.20", "100.22");
+  require(s.engine().pair(0).phase == PairPhase::opening, "cushion keeps maker");
+  // Hard fade below floor → cancel.
+  s.quote(Venue::bybit, "100.00", "100.02");
+  require(s.engine().pair(0).phase == PairPhase::flat, "cancelled past cushion");
+  require(s.engine().metrics().missed == 1, "missed after cancel");
+}
+
+void test_maker_requote_then_miss() {
+  auto config = scenario_config();
+  config.strategy.exec_mode = ExecMode::maker_taker;
+  config.strategy.min_net_ppm = 0;
+  config.strategy.maker_timeout_ms = 20;
+  config.strategy.maker_requotes = 1;
+  config.strategy.maker_cancel_cushion_ppm = 50'000;  // never cancel on live net
+  config.shadow.fixed_one_way_ns = {1'000'000, 1'000'000};
+  Scenario s(config);
+  s.quote(Venue::binance, "100.00", "100.02");
+  s.quote(Venue::bybit, "100.00", "100.02");
+  const auto next = s.now_ns() / 1'000'000 + 8 * 3'600'000;
+  s.funding(Venue::binance, "0.0001", next);
+  s.funding(Venue::bybit, "0.0001", next);
+  s.advance_ms(1);
+  s.quote(Venue::bybit, "100.60", "100.62");
+  require(s.engine().pair(0).phase == PairPhase::opening, "opening");
+  s.advance_ms(25);  // arrive (~1ms) + timeout (20ms) → requote; second still resting
+  require(s.engine().pair(0).phase == PairPhase::opening, "requoted still opening");
+  require(s.engine().pair(0).requotes_used == 1, "one requote used");
+  s.advance_ms(30);  // second timeout → miss
+  require(s.engine().pair(0).phase == PairPhase::flat, "missed after requote");
+  require(s.engine().metrics().missed == 1, "missed cycle");
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
   fixtures = argc > 1 ? argv[1] : "tests/fixtures";
-  const std::array<std::pair<const char*, void (*)()>, 22> cases{{
+  const std::array<std::pair<const char*, void (*)()>, 25> cases{{
       {"decimal_and_ppm", test_decimal_and_ppm},
       {"book_and_sweep", test_book_and_sweep},
       {"binance_sync", test_binance_sync},
@@ -593,6 +678,9 @@ int main(int argc, char** argv) {
       {"maker_taker_fill_and_hedge", test_maker_taker_fill_and_hedge},
       {"maker_timeout_miss", test_maker_timeout_miss},
       {"maker_taker_fee_ppm", test_maker_taker_fee_ppm},
+      {"maker_open_taker_close", test_maker_open_taker_close},
+      {"maker_cancel_cushion", test_maker_cancel_cushion},
+      {"maker_requote_then_miss", test_maker_requote_then_miss},
       {"hyperliquid_peer_latency", test_hyperliquid_peer_latency},
       {"journal_peer_header", test_journal_peer_header},
   }};

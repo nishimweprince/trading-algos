@@ -154,7 +154,7 @@ async function refresh(){
   const s=await (await fetch('/api/summary')).json();
   const peer=(s.peer||'bybit').replace(/^./,c=>c.toUpperCase());
   document.getElementById('title').textContent=`Binance ↔ ${peer} shadow`;
-  document.getElementById('sub').textContent=`${s.mode} · ${s.exec_mode||'taker_taker'} · latency ${s.latency_mode} · ${s.halted?'HALTED':'running'} · updated ${new Date().toLocaleTimeString()}`;
+  document.getElementById('sub').textContent=`${s.mode} · ${s.exec_mode||'taker_taker'} close ${s.close_mode||'maker_taker'} · latency ${s.latency_mode} · ${s.halted?'HALTED':'running'} · updated ${new Date().toLocaleTimeString()}`;
   document.getElementById('tiles').innerHTML=[
    tile('Net P&L (USD)',usd(s.net_raw),s.net_raw>=0?'good':'bad'),tile('Cycles',s.cycles),tile('Missed',s.missed),
    tile('Repairs',s.repairs),tile('Open pairs',s.open_pairs),tile('Census episodes',s.census_episodes),

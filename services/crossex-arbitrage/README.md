@@ -27,6 +27,9 @@ directory, status port (8071) and gate ([`PREREG-HL.md`](PREREG-HL.md)).
   of book only, and a sweep beyond L1 counts as unfillable.
 - **Latency:** every HL leg adds `CXA_HL_INCLUSION_NS` (default 200 ms) for
   block inclusion, on top of RTT/2.
+- **Exec:** maker open (`CXA_EXEC_MODE=maker_taker`) with **taker close**
+  (`CXA_CLOSE_MODE=taker_taker`), 8 s maker timeout, cancel cushion, and one
+  requote — see [`PREREG-HL.md`](PREREG-HL.md).
 - **Instruments:** these come from `meta` and `allMids`. Bare basket names
   map to coins (`1000PEPEUSDT` → `kPEPE`). HL ticks follow the
   5-significant-figure rule, so they are derived from the startup mid.

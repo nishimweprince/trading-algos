@@ -155,6 +155,7 @@ struct PairState final {
   std::uint64_t cooldown_until_ns{};
   bool opened{};  // at least one entry leg filled this cycle
   Venue maker_venue{Venue::binance};
+  std::uint32_t requotes_used{};  // open maker timeouts that were re-posted
 };
 
 struct FundingState final {
@@ -280,7 +281,13 @@ class Engine final {
   void on_gap(Venue venue, std::size_t symbol) noexcept;
   void mark_out(std::size_t symbol, ExitReason reason) noexcept;
   void cancel_resting_maker(std::size_t symbol) noexcept;
+  // Expire a resting open maker: requote if allowed, otherwise resolve (usually missed).
+  void expire_open_maker(std::size_t symbol, PendingLeg& slot) noexcept;
+  bool submit_open_maker(std::size_t symbol, Quantity quantity) noexcept;
   void on_maker_fill(PendingLeg& slot, Quantity filled, Price price) noexcept;
+  [[nodiscard]] bool use_taker_close() const noexcept {
+    return strategy_.exec_mode == ExecMode::taker_taker || strategy_.close_mode == CloseMode::taker_taker;
+  }
   Output* push_output(OutputKind kind) noexcept;
   [[nodiscard]] Quantity quantity_for(std::size_t symbol, std::int64_t notional_raw) const noexcept;
   [[nodiscard]] std::int64_t funding_cost_ppm(std::size_t symbol, Direction dir,

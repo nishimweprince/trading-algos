@@ -131,13 +131,14 @@ std::string book_name(BookState state) {
 }
 
 std::string summary_json(const Engine& engine, std::string_view latency_mode, std::string_view exec_mode,
-                         bool kill_file) {
+                         std::string_view close_mode, bool kill_file) {
   const auto& m = engine.metrics();
   std::ostringstream out;
   bool ready = true;
   out << "{\"service_live\":true,\"mode\":\"shadow\",\"peer\":\"" << venue_name(engine.peer())
       << "\",\"latency_mode\":\"" << latency_mode
-      << "\",\"exec_mode\":\"" << exec_mode << "\",\"halted\":" << (engine.halted() ? "true" : "false")
+      << "\",\"exec_mode\":\"" << exec_mode << "\",\"close_mode\":\"" << close_mode
+      << "\",\"halted\":" << (engine.halted() ? "true" : "false")
       << ",\"loss_halted\":" << (engine.loss_halted() ? "true" : "false")
       << ",\"kill_file\":" << (kill_file ? "true" : "false") << ",\"net_raw\":" << m.net_raw
       << ",\"fees_raw\":" << m.fees_raw << ",\"funding_raw\":" << m.funding_raw << ",\"cycles\":" << m.cycles
@@ -434,6 +435,7 @@ int shadow(int argc, char** argv) {
     const auto publish = [&] {
       auto text = summary_json(*engine, latency_mode_name(config.shadow.latency_mode),
                                exec_mode_name(config.strategy.exec_mode),
+                               close_mode_name(config.strategy.close_mode),
                                kill_file_active.load(std::memory_order_acquire));
       std::lock_guard lock(summary_mutex);
       summary.swap(text);
@@ -592,7 +594,8 @@ int shadow(int argc, char** argv) {
   recorder.join();
   status.stop();
   std::cout << summary_json(*engine, latency_mode_name(config.shadow.latency_mode),
-                            exec_mode_name(config.strategy.exec_mode), kill_file_active.load());
+                            exec_mode_name(config.strategy.exec_mode),
+                            close_mode_name(config.strategy.close_mode), kill_file_active.load());
   if (pipeline_failed.load()) {
     std::lock_guard lock(error_mutex);
     std::cerr << pipeline_error << '\n';

@@ -12,6 +12,9 @@ constexpr std::size_t kCensusSizes = 4;
 constexpr std::size_t kCensusThresholds = 4;
 
 enum class ExecMode : std::uint8_t { taker_taker, maker_taker };
+// Close path for maker_taker entry. maker_taker joins again on the entry maker venue;
+// taker_taker flattens both venues with IOC (HL PREREG default).
+enum class CloseMode : std::uint8_t { maker_taker, taker_taker };
 
 struct StrategyConfig final {
   // Executable-gap census sizes (USD notional per leg) and thresholds.
@@ -36,7 +39,12 @@ struct StrategyConfig final {
   std::int64_t max_mid_divergence_ppm{10'000};
   std::uint32_t max_repair_attempts{20};
   ExecMode exec_mode{ExecMode::maker_taker};
+  CloseMode close_mode{CloseMode::maker_taker};
   std::uint64_t maker_timeout_ms{2'000};
+  // Cancel resting open maker only when live net < min_net - cushion.
+  std::int64_t maker_cancel_cushion_ppm{500};
+  // Extra open maker posts after a timeout with no fill (0 = miss immediately).
+  std::uint32_t maker_requotes{1};
 };
 
 struct RiskLimits final {
@@ -76,6 +84,7 @@ struct RuntimeConfig final {
 RuntimeConfig load_runtime_config();
 std::string_view latency_mode_name(LatencyMode mode) noexcept;
 std::string_view exec_mode_name(ExecMode mode) noexcept;
+std::string_view close_mode_name(CloseMode mode) noexcept;
 // "bybit" or "hyperliquid"; throws otherwise.
 Venue parse_peer(std::string_view name);
 

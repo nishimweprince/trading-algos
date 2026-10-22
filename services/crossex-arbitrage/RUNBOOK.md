@@ -100,7 +100,8 @@ crossex replay        /data/crossex/<file>             # determinism (same env a
 ## Binance ↔ Hyperliquid instance
 
 The second instance runs on the same host. It shares the binary and has its
-own env, data directory, port and kill file.
+own env, data directory, port and kill file. HL uses maker open + **taker
+close** (`CXA_CLOSE_MODE=taker_taker`); Bybit keeps maker close.
 
 ```sh
 sudo mkdir -p /data/crossex-hl && sudo chown crossex:crossex /data/crossex-hl
@@ -109,7 +110,7 @@ sudo -u crossex env $(sudo cat /etc/crossex-hl.env | xargs) build/release/crosse
 sudo -u crossex env $(sudo cat /etc/crossex-hl.env | xargs) build/release/crossex probe --duration-seconds 3600
 sudo cp ../../infra/systemd/crossex-hl-*.{service,timer} /etc/systemd/system/ && sudo systemctl daemon-reload
 sudo systemctl enable --now crossex-hl-shadow crossex-hl-compress.timer
-curl -s 127.0.0.1:8071/api/summary | jq '{peer,ready,depth_events,gaps,cycles,net_raw}'
+curl -s 127.0.0.1:8071/api/summary | jq '{peer,exec_mode,close_mode,latency_mode,ready,depth_events,gaps,cycles,net_raw}'
 ```
 
 - **Keys.** `check-keys` must show Binance `"read_only":true`, and
@@ -136,3 +137,24 @@ curl -s 127.0.0.1:8071/api/summary | jq '{peer,ready,depth_events,gaps,cycles,ne
 - **Thin coins.** A coin whose HL L1 is usually under 2 × $250 (with
   `CXA_AVAILABLE_PPM=500000`) rarely has a valid edge. The census report
   shows it, but don't drop it during the PREREG window.
+
+### Restarting for a new PREREG-HL window
+
+Any change to frozen strategy knobs (including `CXA_CLOSE_MODE`, maker
+timeout/cushion/requotes) invalidates the prior window. To start clean:
+
+```sh
+sudo systemctl stop crossex-hl-shadow
+sudo mkdir -p /data/crossex-hl/archive-$(date -u +%Y%m%dT%H%M%SZ)
+sudo mv /data/crossex-hl/crossex-hl-*.jsonl* /data/crossex-hl/archive-*/   # keep archive; do not delete
+# Install new binary under /opt/... then merge env keys into an updated example:
+sudo cp /etc/crossex-hl.env /etc/crossex-hl.env.bak
+sudo install -m 0600 config.hyperliquid.example.env /tmp/crossex-hl.env.new
+# copy CXA_BINANCE_* and CXA_HL_ADDRESS from the bak into the new file, then:
+sudo install -m 0600 /tmp/crossex-hl.env.new /etc/crossex-hl.env
+# Fill basket/commit/start in PREREG-HL.md and commit that file before start.
+sudo systemctl start crossex-hl-shadow
+curl -s 127.0.0.1:8071/api/summary | jq '{peer,exec_mode,close_mode,latency_mode}'
+```
+
+Score `daily-report` only on journals created after the recorded start.
