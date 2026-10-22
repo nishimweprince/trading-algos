@@ -65,6 +65,7 @@ bool OrderBook::apply_changes(const DepthEvent& event) noexcept {
   for (std::size_t i = 0; i < event.ask_count; ++i) update(asks_, ask_size_, event.asks[i], false);
   last_update_id_ = event.final_id;
   last_receive_ns_ = event.receive_ns;
+  event_ms_ = event.event_ms;
   state_ = uncrossed() ? BookState::verified : BookState::gap;
   return state_ == BookState::verified;
 }
@@ -89,8 +90,10 @@ bool OrderBook::apply_binance(const DepthEvent& event) noexcept {
 
 bool OrderBook::apply_bybit(const DepthEvent& event) noexcept {
   if (event.snapshot) {
-    return apply_snapshot(event.final_id, {event.bids.data(), event.bid_count},
-                          {event.asks.data(), event.ask_count}, event.receive_ns, true);
+    const auto ok = apply_snapshot(event.final_id, {event.bids.data(), event.bid_count},
+                                   {event.asks.data(), event.ask_count}, event.receive_ns, true);
+    event_ms_ = event.event_ms;
+    return ok;
   }
   if (state_ != BookState::verified) return false;
   if (event.final_id != last_update_id_ + 1) {
@@ -104,6 +107,7 @@ void OrderBook::reset(BookState state) noexcept {
   bid_size_ = 0;
   ask_size_ = 0;
   last_update_id_ = 0;
+  event_ms_ = 0;
   state_ = state;
 }
 

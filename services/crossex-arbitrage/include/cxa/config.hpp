@@ -12,6 +12,12 @@ constexpr std::size_t kCensusSizes = 4;
 constexpr std::size_t kCensusThresholds = 4;
 
 enum class ExecMode : std::uint8_t { taker_taker, maker_taker };
+// Close path for maker_taker entry. maker_taker joins again on the entry maker venue;
+// taker_taker flattens both venues with IOC (HL PREREG default).
+enum class CloseMode : std::uint8_t { maker_taker, taker_taker };
+// Venues allowed to rest the maker leg. Binance leads Hyperliquid by ~0.5 s, so a resting
+// HL quote is the one that gets picked off; HL live runs use `binance`.
+enum class MakerVenues : std::uint8_t { both, binance, peer };
 
 struct StrategyConfig final {
   // Executable-gap census sizes (USD notional per leg) and thresholds.
@@ -36,7 +42,17 @@ struct StrategyConfig final {
   std::int64_t max_mid_divergence_ppm{10'000};
   std::uint32_t max_repair_attempts{20};
   ExecMode exec_mode{ExecMode::maker_taker};
+  CloseMode close_mode{CloseMode::maker_taker};
   std::uint64_t maker_timeout_ms{2'000};
+  // Cancel resting open maker only when live net < min_net - cushion.
+  std::int64_t maker_cancel_cushion_ppm{500};
+  // Extra open maker posts after a timeout with no fill (0 = miss immediately).
+  std::uint32_t maker_requotes{1};
+  MakerVenues maker_venues{MakerVenues::both};
+  // Binance mid move over `lead_window_ms` that vetoes an entry when it runs against the
+  // peer hedge (0 = record only).
+  std::int64_t lead_veto_ppm{0};
+  std::uint64_t lead_window_ms{300};
 };
 
 struct RiskLimits final {
@@ -61,6 +77,13 @@ struct ShadowConfig final {
   std::uint64_t seed{42};
   std::array<std::int64_t, kVenues> fallback_taker_ppm{500, 550};
   std::array<std::int64_t, kVenues> fallback_maker_ppm{200, 200};
+  // Hyperliquid taker legs fill against the first bbo whose exchange time reaches the
+  // leg's arrival (plus the clock offset), not the book held locally at arrival: HL bbo
+  // frames reach Tokyo ~250 ms after their block. If no such frame comes within
+  // `hl_quiet_ns` of arrival the book is taken as unchanged.
+  bool hl_time_keyed{true};
+  std::int64_t hl_clock_offset_ms{0};
+  std::uint64_t hl_quiet_ns{1'000'000'000};
 };
 
 struct RuntimeConfig final {
@@ -76,6 +99,8 @@ struct RuntimeConfig final {
 RuntimeConfig load_runtime_config();
 std::string_view latency_mode_name(LatencyMode mode) noexcept;
 std::string_view exec_mode_name(ExecMode mode) noexcept;
+std::string_view close_mode_name(CloseMode mode) noexcept;
+std::string_view maker_venues_name(MakerVenues venues) noexcept;
 // "bybit" or "hyperliquid"; throws otherwise.
 Venue parse_peer(std::string_view name);
 

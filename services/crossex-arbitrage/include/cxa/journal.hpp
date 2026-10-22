@@ -12,10 +12,11 @@
 
 namespace cxa {
 
-// Append-only, space-separated records; one letter per kind. Inputs (Y C L S D M) are
+// Append-only, space-separated records; one letter per kind. Inputs (Y C L S D M B N) are
 // everything replay needs; the rest are decision/fill/report records.
 //   Z header   Y instrument   C fee (taker [maker])   L latency sample   S Binance snapshot
-//   D depth    M funding      R raw frame   I leg submit       F leg result
+//   D depth    M funding      B basis seed  N prior net (daily loss)
+//   R raw frame   I leg submit       F leg result
 //   X entry decision          P closed cycle                   O census episode
 //   G resync request          H halt change
 class Journal final {
@@ -31,6 +32,8 @@ class Journal final {
   bool raw(Venue venue, std::uint64_t receive_ns, std::string_view frame);
   bool output(const Output& output);
   bool halt(std::uint64_t now_ns, bool halted);
+  bool basis(std::size_t symbol, const BasisState& state);
+  bool prior_net(std::int64_t net_raw);
   void flush() { stream_.flush(); }
   [[nodiscard]] bool good() const { return stream_.good(); }
 
