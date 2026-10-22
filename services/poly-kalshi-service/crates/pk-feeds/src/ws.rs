@@ -41,7 +41,9 @@ pub type Emit = Arc<dyn Fn(char, String) + Send + Sync>;
 #[derive(Clone)]
 pub enum FeedKind {
     Kalshi { signer: Arc<KalshiSigner> },
-    Poly { shard: Option<usize> },
+    /// `silence`: reconnect after this long with no data (a socket that stays
+    /// open while the venue stops sending, 10-22 05:04Z for three minutes).
+    Poly { shard: Option<usize>, silence: Option<Duration> },
     PolyBolt { credentials: (String, String, String) },
     /// Binance best bid/ask streams (`<symbol>@bookTicker`), spot or USDⓈ-M perps.
     Binance { futures: bool },
@@ -234,7 +236,7 @@ async fn session(url: &str, kind: &FeedKind, emit: &Emit, shared: &Shared) -> Re
     *shared.sid.lock() = None;
     // The reconnect control line: the engine drops this venue's (or shard's) books.
     let mut ctl = json!({"type": "reconnect", "venue": venue.to_string(), "n": n});
-    if let FeedKind::Poly { shard: Some(i) } = kind {
+    if let FeedKind::Poly { shard: Some(i), .. } = kind {
         ctl["shard"] = (*i).into();
         ctl["tokens"] = shared.wanted.lock().iter().cloned().collect::<Vec<_>>().into();
     }
@@ -271,6 +273,8 @@ async fn session(url: &str, kind: &FeedKind, emit: &Emit, shared: &Shared) -> Re
         _ => Duration::from_secs(20),
     };
     let mut ping = tokio::time::interval_at(tokio::time::Instant::now() + ping_every, ping_every);
+    let mut watchdog = tokio::time::interval(Duration::from_secs(1));
+    let mut last_data = tokio::time::Instant::now();
     loop {
         tokio::select! {
             biased;
@@ -287,6 +291,9 @@ async fn session(url: &str, kind: &FeedKind, emit: &Emit, shared: &Shared) -> Re
                     _ => continue,
                 };
                 shared.messages.fetch_add(1, Ordering::Relaxed);
+                if text != "PONG" {
+                    last_data = tokio::time::Instant::now();
+                }
                 if !s.on_message(&mut ws, text).await? {
                     return Ok(());
                 }
@@ -295,6 +302,14 @@ async fn session(url: &str, kind: &FeedKind, emit: &Emit, shared: &Shared) -> Re
             _ = shared.recycle.notified() => {
                 let _ = ws.close(None).await;
                 return Ok(());
+            }
+            _ = watchdog.tick() => {
+                if let FeedKind::Poly { silence: Some(limit), .. } = kind
+                    && last_data.elapsed() > *limit
+                    && !shared.wanted.lock().is_empty()
+                {
+                    return Err(format!("silent {:.0}s", last_data.elapsed().as_secs_f64()));
+                }
             }
             _ = ping.tick() => {
                 let m = match kind {
@@ -515,10 +530,10 @@ pub struct PolyShards {
 }
 
 impl PolyShards {
-    pub fn spawn(url: &str, emit: Emit, assets: &[String], n: usize) -> Self {
+    pub fn spawn(url: &str, emit: Emit, assets: &[String], n: usize, silence: Option<Duration>) -> Self {
         let n = if n == 0 { assets.len() } else { n }.clamp(1, assets.len().max(1));
         let shards = (0..n)
-            .map(|i| spawn_feed(url.to_owned(), FeedKind::Poly { shard: Some(i) }, emit.clone()))
+            .map(|i| spawn_feed(url.to_owned(), FeedKind::Poly { shard: Some(i), silence }, emit.clone()))
             .collect();
         let shard_of = assets.iter().enumerate().map(|(i, a)| (a.clone(), i % n)).collect();
         Self { shards, shard_of }

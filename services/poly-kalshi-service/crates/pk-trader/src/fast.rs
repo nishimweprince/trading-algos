@@ -25,13 +25,13 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use parking_lot::{Mutex, RwLock};
 use pk_core::decision::{Action, decide};
 use pk_core::num::px_key;
-use pk_core::{Book, BookSide, NS};
+use pk_core::{Book, BookSide, EntryThrottle, NS};
 use pk_engine::parse::KalshiFrame;
 use pk_engine::{Arm, ArmSide, ArmUpdate, Claim, FastFire, FastGate, OrderIntent};
 use pk_exec::auth::unix_now_s;
@@ -83,7 +83,21 @@ struct InFlight {
     frame_ns: i64,
 }
 
+/// What the trigger checks before it fires, besides the engine's arm: the
+/// Polymarket feed is alive (the engine's gate also disarms a silent asset),
+/// and the entry throttle the engine shares has a slot.
+#[derive(Clone, Default)]
+pub struct FastGuards {
+    /// The last Polymarket frame (ns), stored by the feed's emit.
+    pub last_poly_ns: Arc<AtomicI64>,
+    pub max_poly_silence_ns: Option<i64>,
+    pub throttle: Option<Arc<EntryThrottle>>,
+}
+
 pub struct FastPath {
+    guards: FastGuards,
+    silent_skips: AtomicU64,
+    burst_skips: AtomicU64,
     arms: RwLock<HashMap<String, Armed>>,
     books: Mutex<HashMap<String, (Book, i64)>>,
     claims: Mutex<HashMap<(String, i64), ClaimState>>,
@@ -111,6 +125,7 @@ impl FastPath {
         sender_conns: usize,
         exec_tx: mpsc::UnboundedSender<ExecMsg>,
         rt: tokio::runtime::Handle,
+        guards: FastGuards,
     ) -> anyhow::Result<Arc<Self>> {
         let clob_url = bridge.clob().http.base_url();
         let slot: Arc<std::sync::OnceLock<std::sync::Weak<FastPath>>> = Arc::default();
@@ -124,6 +139,9 @@ impl FastPath {
         };
         let sender = FastSender::start(&clob_url, sender_conns, on_reply)?;
         let fp = Arc::new(Self {
+            guards,
+            silent_skips: AtomicU64::new(0),
+            burst_skips: AtomicU64::new(0),
             arms: RwLock::new(HashMap::new()),
             books: Mutex::new(HashMap::with_capacity(MAX_BOOKS)),
             claims: Mutex::new(HashMap::new()),
@@ -218,6 +236,12 @@ impl FastPath {
         if self.halted.load(Ordering::Acquire) {
             return;
         }
+        if let Some(limit) = self.guards.max_poly_silence_ns
+            && frame_ns - self.guards.last_poly_ns.load(Ordering::Relaxed) > limit
+        {
+            self.silent_skips.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
         let fire = {
             let arms = self.arms.read();
             let Some(a) = arms.get(ticker) else { return };
@@ -255,6 +279,10 @@ impl FastPath {
         {
             let mut claims = self.claims.lock();
             if claims.contains_key(&key) {
+                return;
+            }
+            if self.guards.throttle.as_ref().is_some_and(|t| !t.try_take(frame_ns)) {
+                self.burst_skips.fetch_add(1, Ordering::Relaxed);
                 return;
             }
             claims.insert(key.clone(), ClaimState::Fast { fire: fire.clone(), taken: false });
@@ -453,6 +481,8 @@ impl FastPath {
             "fires": self.fires.load(Ordering::Relaxed),
             "fire_failed": self.fire_failed.load(Ordering::Relaxed),
             "not_ready": self.not_ready.load(Ordering::Relaxed),
+            "silent_skips": self.silent_skips.load(Ordering::Relaxed),
+            "burst_skips": self.burst_skips.load(Ordering::Relaxed),
             "frame_to_wire": ms(&self.frame_to_wire_ns.lock()),
             "check": ms(&self.check_ns.lock()),
             "sender": serde_json::to_value(self.sender.stats()).unwrap_or(Value::Null),

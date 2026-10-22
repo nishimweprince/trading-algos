@@ -17,7 +17,7 @@ pub mod window;
 pub use book::{Book, BookSide, BookState, Quote, quote_json};
 pub use decision::{Action, Decision, StrategyParams, WINDOW_S, decide, net_edge_max_px};
 pub use ledger::{Ledger, Position};
-pub use risk::{RiskLimits, RiskState};
+pub use risk::{EntryThrottle, RiskLimits, RiskState};
 pub use sizing::Sizer;
 pub use window::{Window, window_open};
 

@@ -213,7 +213,7 @@ async fn rig(state: Shared) -> Rig {
     };
     let limits = LiveLimits { poll_every: Duration::from_millis(10), ..LiveLimits::default() };
     let live = LivePart { exec: LiveExec::new(exec.clone(), limits), redeem, gas: None, signature_type: 0 };
-    let cfg = BridgeConfig { latency_seed_ms: 150.0, latency_window: 50, latency_min_samples: 1 };
+    let cfg = BridgeConfig { latency_seed_ms: 150.0, latency_window: 50, latency_min_samples: 1, probe_back_ticks: 20 };
     let bridge = ExecBridge::new(exec, hooks, cfg, Some(live));
     Rig { bridge, seen, view }
 }

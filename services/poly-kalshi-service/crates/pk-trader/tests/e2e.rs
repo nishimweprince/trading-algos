@@ -163,6 +163,8 @@ fn files(dir: &Path, ext: &str) -> Vec<PathBuf> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn trader_and_observer_end_to_end() {
+    // The mock feeds cross right after connecting and then go quiet, which the
+    // Polymarket silence gates (tested in pk-engine) would rightly block: off here.
     // Not in the last 50 s of a window: the test needs the window to stay put
     // while it waits for a fill (entries run to the close: PK_ENTRY_LATE_S=0).
     let into = now_s() % 900;
@@ -182,7 +184,8 @@ async fn trader_and_observer_end_to_end() {
          PK_GAP_THRESHOLD=0.15\nPK_ENTRY_EARLY_S=0\nPK_ENTRY_LATE_S=0\nPK_MAX_OPEN_NOTIONAL_USD=500\nPK_DAILY_LOSS_LIMIT_USD=250\n\
          PK_RESULTS_EPOCH=7\nPK_HOST_TAG=e2e\nPK_MIN_FREE_DISK_GB=0\nKALSHI_API_KEY_ID=kid\n\
          KALSHI_PRIVATE_KEY_PATH={}\nKALSHI_REST_URL=http://{venues}/trade-api/v2\nKALSHI_WS_URL=ws://{venues}/kalshi\n\
-         POLY_GAMMA_URL=http://{venues}\nPOLY_WS_URL=ws://{venues}/poly\nPK_HEARTBEAT_SECONDS=5\nLOG_LEVEL=INFO\n",
+         POLY_GAMMA_URL=http://{venues}\nPOLY_WS_URL=ws://{venues}/poly\nPK_HEARTBEAT_SECONDS=5\nLOG_LEVEL=INFO\n\
+         PK_MAX_POLY_SILENCE_MS=0\nPK_MAX_ASSET_SILENCE_MS=0\nPK_POLY_SILENCE_RECONNECT_S=0\n",
         status_port,
         dir.join("kalshi.pem").display()
     );

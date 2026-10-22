@@ -41,6 +41,8 @@ struct Opts {
     limit_offset: f64,
     order_shares: Option<i64>,
     min_net_edge: Option<f64>,
+    silence: bool,
+    rest_exit: bool,
 }
 
 impl Default for Opts {
@@ -55,6 +57,8 @@ impl Default for Opts {
             limit_offset: 0.0,
             order_shares: None,
             min_net_edge: None,
+            silence: false,
+            rest_exit: false,
         }
     }
 }
@@ -72,6 +76,11 @@ fn engine(o: Opts) -> (Engine, Shared) {
     ec.size_at_limit = o.size_at_limit;
     ec.limit_offset = o.limit_offset;
     ec.order_shares = o.order_shares;
+    if o.silence {
+        ec.max_poly_silence_ms = Some(2000.0);
+        ec.max_asset_silence_ms = Some(5000.0);
+    }
+    ec.rest_exit = o.rest_exit;
     let sink = Shared::default();
     let risk =
         RiskState::new(RiskLimits { max_open_notional_usd: 1e9, daily_loss_limit_usd: 1e9, kill_file: None });
@@ -563,4 +572,97 @@ fn the_engine_does_not_send_a_window_the_trigger_claimed() {
     assert!(e.intents.is_empty());
     assert_eq!(*gate.claims.lock().unwrap(), 1);
     assert_eq!(e.counters.get("fast_raced"), Some(&1));
+}
+
+fn kalshi_nudge(e: &mut Engine, s: f64) {
+    let d = json!({"type":"orderbook_delta","msg":{"market_ticker":"KXBTC15M-X",
+        "price_dollars":"0.7000","delta_fp":"1","side":"yes"}});
+    e.handle_line(at(s), 'k', &d.to_string());
+}
+
+#[test]
+fn a_silent_polymarket_feed_blocks_entries_without_consuming_the_window() {
+    let (mut e, sink) = engine(Opts { silence: true, ..Default::default() });
+    setup(&mut e);
+    // Kalshi crosses 29 s after the last Polymarket frame: a frozen book.
+    cross(&mut e, 30.0);
+    assert!(sink.of("decision").is_empty());
+    let silent = sink.of("feed_silent");
+    assert_eq!(silent.len(), 1, "one record per window");
+    assert_eq!(silent[0]["reason"], "feed_silent");
+    assert!(e.counters["blocked_feed_silent"] >= 1);
+    // The feed resumes: still blocked while its snapshots land.
+    let book = json!({"event_type":"book","asset_id":"Y","bids":[{"price":"0.44","size":"500"}],
+        "asks":[{"price":"0.46","size":"500"}]});
+    e.handle_line(at(31.0), 'p', &book.to_string());
+    assert!(sink.of("decision").is_empty());
+    assert!(e.counters["blocked_feed_resumed"] >= 1);
+    // Flowing again past the grace: the window was not consumed, so it trades.
+    let pc = json!({"event_type":"price_change","market":"0xc","price_changes":[
+        {"asset_id":"N","price":"0.30","size":"5","side":"BUY"}]});
+    e.handle_line(at(32.5), 'p', &pc.to_string());
+    assert!(sink.of("decision").is_empty(), "1.5 s after resuming: still in the grace");
+    kalshi_nudge(&mut e, 33.5);
+    let decisions = sink.of("decision");
+    assert_eq!(decisions.len(), 1);
+    assert_eq!(decisions[0]["action"], "enter");
+}
+
+#[test]
+fn a_wallet_move_with_nothing_in_flight_is_a_transfer() {
+    let (mut e, sink) = engine(Opts { live: true, cash: 0.0, ..Default::default() });
+    ctl(&mut e, 1.0, json!({"type":"balance","balance":100.0}));
+    assert!(sink.of("transfer").is_empty(), "the first read seeds, it is no transfer");
+    ctl(&mut e, 31.0, json!({"type":"balance","balance":63.0}));
+    ctl(&mut e, 61.0, json!({"type":"balance","balance":63.0}));
+    let t = sink.of("transfer");
+    assert_eq!(t.len(), 1);
+    assert_eq!(t[0]["amount"], -37.0);
+    assert!((e.ledger.transfers_total() + 37.0).abs() < 1e-9);
+    // A withdrawal is not a loss: the daily limit's baseline moved with it.
+    assert!(e.ledger.day_drawdown(at(61.0)).unwrap().abs() < 1e-9);
+}
+
+#[test]
+fn a_held_live_position_rests_a_sell_at_kalshi_fair() {
+    let opts = Opts { live: true, cash: 0.0, active_exit: true, rest_exit: true, ..Default::default() };
+    let (mut e, _sink) = engine(opts);
+    setup(&mut e);
+    ctl(&mut e, 1.0, json!({"type":"balance","balance":100.0}));
+    cross(&mut e, 30.0);
+    e.intents.clear();
+    ctl(
+        &mut e,
+        30.6,
+        json!({"type":"live_fill","asset":"BTC","open_unix":OPEN,"side":"yes","token":"Y",
+               "order_id":"0xo","ordered":10.0,"shares":10.0,"cost":4.6,"entry_px":0.46,
+               "limit_px":0.46,"status":"matched","decision_ns":at(30.02)}),
+    );
+    kalshi_nudge(&mut e, 31.0);
+    let rests = std::mem::take(&mut e.rests);
+    assert_eq!(rests.len(), 1);
+    let r = &rests[0];
+    // Kalshi 0.70/0.72: the sell rests at 0.71, above the 0.44 bid and the floor.
+    assert_eq!((r.token.as_str(), r.shares, r.px), ("Y", 10.0, Some(0.71)));
+    assert!(r.min_px > 0.47 && r.min_px < 0.71);
+    // The bid a cent under the rest is the rest's to take, not a FAK's.
+    poly_catches_up(&mut e, 35.0);
+    assert!(e.exits.is_empty());
+    assert!(e.rests.is_empty(), "same price: not re-posted");
+    // A partial maker fill closes part of the position, at no fee.
+    ctl(
+        &mut e,
+        35.5,
+        json!({"type":"live_exit","asset":"BTC","open_unix":OPEN,"reason":"rest","shares":4.0,
+               "proceeds":2.84,"fee":0.0,"order_id":"0xr"}),
+    );
+    let p = e.ledger.open_positions().next().unwrap();
+    assert!((p.shares - 6.0).abs() < 1e-9);
+    // Five seconds before the close it comes off the book, once.
+    kalshi_nudge(&mut e, 896.0);
+    let off = std::mem::take(&mut e.rests);
+    assert_eq!(off.len(), 1);
+    assert_eq!(off[0].px, None);
+    kalshi_nudge(&mut e, 897.0);
+    assert!(e.rests.is_empty());
 }

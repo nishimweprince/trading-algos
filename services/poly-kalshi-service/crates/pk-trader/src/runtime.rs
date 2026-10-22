@@ -153,7 +153,7 @@ impl Runtime {
         while let Ok(Line { recv_ns, venue, text }) = rx.recv() {
             let picked = Instant::now();
             self.lines.fetch_add(1, Ordering::Relaxed);
-            let (intents, hints, exits, arms, halted) = {
+            let (intents, hints, exits, rests, arms, halted) = {
                 let mut e = self.engine.lock();
                 let queue_us = (now_ns() - recv_ns) as f64 / 1e3;
                 let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -171,6 +171,7 @@ impl Runtime {
                     std::mem::take(&mut e.intents),
                     std::mem::take(&mut e.hints),
                     std::mem::take(&mut e.exits),
+                    std::mem::take(&mut e.rests),
                     std::mem::take(&mut e.arms),
                     e.risk.halted,
                 )
@@ -181,7 +182,7 @@ impl Runtime {
                     fast.update(arms);
                 }
             }
-            if !(intents.is_empty() && hints.is_empty() && exits.is_empty())
+            if !(intents.is_empty() && hints.is_empty() && exits.is_empty() && rests.is_empty())
                 && let Some(tx) = self.exec_tx.lock().as_ref()
             {
                 for h in hints {
@@ -192,6 +193,9 @@ impl Runtime {
                 }
                 for x in exits {
                     let _ = tx.send(ExecMsg::Exit(x, picked));
+                }
+                for r in rests {
+                    let _ = tx.send(ExecMsg::Rest(r));
                 }
             }
             if let Some(link) = &self.link {

@@ -33,6 +33,8 @@ pub enum Trigger {
     Cadence,
     /// Clean-up: cancel after a post, or the kill switch.
     Cleanup,
+    /// The resting exit: a post-only sell at Kalshi's price, or its cancel.
+    Rest,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]

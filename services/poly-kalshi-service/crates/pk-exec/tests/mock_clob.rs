@@ -213,7 +213,7 @@ async fn probe_posts_signed_and_cancels_on_a_warm_h2_connection() {
     assert_eq!(post.sign_us, 0);
     assert_eq!(post.http, "HTTP/2.0");
     assert!(post.decision_to_ack_us >= post.write_to_headers_us);
-    assert_eq!(post.price, Some("0.40".parse().unwrap()));
+    assert_eq!(post.price, Some("0.25".parse().unwrap()));
     assert!(cancel.ok, "{cancel:?}");
     assert_eq!(probe.open_orders(), 0);
 
@@ -230,8 +230,8 @@ async fn probe_posts_signed_and_cancels_on_a_warm_h2_connection() {
         assert_eq!(body["postOnly"], json!(true));
         assert_eq!(body["orderType"], json!("GTC"));
         assert_eq!(body["order"]["side"], json!("BUY"));
-        // 5 shares at 0.40: pays 2 pUSD for 5 tokens (6 decimals).
-        assert_eq!(body["order"]["makerAmount"], json!("2000000"));
+        // 5 shares at 0.25 (20 ticks under the bid): pays 1.25 pUSD for 5 tokens (6 decimals).
+        assert_eq!(body["order"]["makerAmount"], json!("1250000"));
         assert_eq!(body["order"]["takerAmount"], json!("5000000"));
         assert_eq!(m.cancelled.len(), 2);
     }

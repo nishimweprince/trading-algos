@@ -81,6 +81,13 @@ pub const EXIT_RETRY_NS: i64 = 5 * NS;
 /// this many misses a position waits [`EXIT_RETRY_NS`] between tries.
 pub const EXIT_MAX_ATTEMPTS: u32 = 8;
 pub const EXIT_BALANCE_RETRY_NS: i64 = NS;
+/// A reconciled wallet move at least this large with no trade behind it is
+/// recorded as a deposit or withdrawal (`transfer`), not as trading P&L.
+pub const TRANSFER_MIN_USD: f64 = 1.0;
+/// The resting exit is re-priced at most this often, and taken off the book
+/// this long before the window closes.
+pub const REST_REQUOTE_NS: i64 = NS;
+pub const REST_CANCEL_BEFORE_S: i64 = 5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
@@ -114,6 +121,8 @@ pub struct AssetState {
     pub max_abs_gap_full: f64,
     pub first_cross: [Option<(f64, &'static str)>; 5],
     pub last_hint_ns: i64,
+    /// A `feed_silent` record was written for this window.
+    pub silent_logged: bool,
 }
 
 impl AssetState {
@@ -186,6 +195,23 @@ pub struct ExitIntent {
     pub fee_exponent: f64,
 }
 
+/// The resting exit (`PK_REST_EXIT`): a post-only sell of the held leg at
+/// Kalshi's price, so the exit fills as Polymarket catches up without the
+/// venue's ~200 ms taker hold. `px: None` takes it off the book. The FAK exit
+/// stays the fallback; the order path cancels the rest before it sells.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RestIntent {
+    pub asset: String,
+    pub open_unix: i64,
+    pub token: String,
+    pub shares: f64,
+    pub px: Option<f64>,
+    /// The leg's bid now: a post-only sell at or under it would cross.
+    pub bid: f64,
+    pub min_px: f64,
+    pub decision_ns: i64,
+}
+
 /// An asset's gap is nearing the threshold: sign an order for this leg ahead.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PresignHint {
@@ -237,6 +263,13 @@ pub struct EngineConfig {
     pub order_shares: Option<i64>,
     /// How far under the bid the active exit sells (cents).
     pub active_exit_ticks: u32,
+    /// No entry while no Polymarket frame (any asset) arrived for this long,
+    /// nor for as long after the feed resumes or reconnects (ms).
+    pub max_poly_silence_ms: Option<f64>,
+    /// No entry for an asset whose own Polymarket frames stopped this long (ms).
+    pub max_asset_silence_ms: Option<f64>,
+    /// Rest a post-only sell at Kalshi's price while a live position is held.
+    pub rest_exit: bool,
 }
 
 /// `Forward` is the trade: Kalshi signals, Polymarket executes. `Reverse`
@@ -268,6 +301,9 @@ impl EngineConfig {
             size_at_limit: false,
             order_shares: None,
             active_exit_ticks: 0,
+            max_poly_silence_ms: None,
+            max_asset_silence_ms: None,
+            rest_exit: false,
         }
     }
 }
@@ -333,6 +369,17 @@ pub struct Engine {
     armed: Vec<Option<Arm>>,
     prev_p_ns: Option<i64>,
     last_reconnect_p_ns: Option<i64>,
+    max_poly_silence_ns: Option<i64>,
+    max_asset_silence_ns: Option<i64>,
+    /// The first Polymarket frame after a feed-wide silence.
+    poly_resumed_ns: Option<i64>,
+    /// Per asset: its last Polymarket frame, and the first after its own silence.
+    last_p_asset: Vec<Option<i64>>,
+    asset_resumed_ns: Vec<Option<i64>>,
+    rest_exit: bool,
+    pub rests: Vec<RestIntent>,
+    /// The last resting price asked for per window key (None = off the book), and when.
+    rest_sent: HashMap<String, (Option<f64>, i64)>,
 }
 
 fn side_str(buy_yes: Option<bool>) -> &'static str {
@@ -401,6 +448,14 @@ impl Engine {
             armed: vec![None; n],
             prev_p_ns: None,
             last_reconnect_p_ns: None,
+            max_poly_silence_ns: cfg.max_poly_silence_ms.map(|m| (m * 1e6) as i64),
+            max_asset_silence_ns: cfg.max_asset_silence_ms.map(|m| (m * 1e6) as i64),
+            poly_resumed_ns: None,
+            last_p_asset: vec![None; n],
+            asset_resumed_ns: vec![None; n],
+            rest_exit: cfg.rest_exit,
+            rests: Vec::new(),
+            rest_sent: HashMap::new(),
             assets: cfg.assets,
         }
     }
@@ -440,6 +495,12 @@ impl Engine {
         // The last Polymarket frame before this line, for `age_outlier`.
         self.prev_p_ns = self.last_by_venue.get(&'p').copied();
         self.last_by_venue.insert(venue, recv_ns);
+        if venue == 'p'
+            && let Some(limit) = self.max_poly_silence_ns
+            && self.prev_p_ns.is_some_and(|t| recv_ns - t > limit)
+        {
+            self.poly_resumed_ns = Some(recv_ns);
+        }
         if self.observe {
             let sec = recv_ns.div_euclid(NS);
             if self.sample_sec != Some(sec) {
@@ -474,6 +535,16 @@ impl Engine {
             self.count("bad_json");
             return;
         };
+        if venue == 'p' {
+            for &idx in &touched {
+                if let Some(limit) = self.max_asset_silence_ns
+                    && self.last_p_asset[idx].is_some_and(|t| recv_ns - t > limit)
+                {
+                    self.asset_resumed_ns[idx] = Some(recv_ns);
+                }
+                self.last_p_asset[idx] = Some(recv_ns);
+            }
+        }
         for idx in touched {
             self.evaluate(idx, recv_ns);
         }
@@ -568,6 +639,8 @@ impl Engine {
                 self.ids.remove(&id);
                 self.books.remove(&id);
             }
+            let ledger = &self.ledger;
+            self.rest_sent.retain(|k, _| ledger.positions.get(k).is_some_and(Position::is_open));
             let cutoff = now_open - KEEP_WINDOWS_S;
             let old: Vec<i64> = self.windows[idx].range(..cutoff).map(|(o, _)| *o).collect();
             for open in old {
@@ -937,6 +1010,30 @@ impl Engine {
             st.last_gap = Some(gap);
             st.max_abs_gap = st.max_abs_gap.max(gap.abs());
         }
+        if self.trade
+            && fast_fire.is_none()
+            && decision.consumes_window()
+            && let Some(why) = self.poly_silent(idx, recv_ns)
+        {
+            // A crossing on a Polymarket book that may be frozen (10-22 05:04Z:
+            // six entries on books 69–98 s old). Not consumed: a fresh one may trade.
+            self.count(&format!("blocked_{why}"));
+            self.disarm(idx);
+            if !self.state[idx].silent_logged {
+                self.state[idx].silent_logged = true;
+                let ms = |t: Option<i64>| t.map(|t| round_dp((recv_ns - t) as f64 / 1e6, 1));
+                let record = json!({
+                    "type": "feed_silent", "t_ns": recv_ns, "asset": window.asset,
+                    "open_unix": window.open_unix, "reason": why,
+                    "gap": decision.gap.map(|g| round_dp(g, 4)), "side": side_str(decision.buy_yes),
+                    "poly_silence_ms": ms(if self.frame_venue == 'p' { Some(recv_ns) } else { self.prev_p_ns }),
+                    "asset_silence_ms": ms(self.last_p_asset[idx]),
+                    "since_reconnect_p_ms": ms(self.last_reconnect_p_ns),
+                });
+                self.write(recv_ns, record, true);
+            }
+            return;
+        }
         if !decision.consumes_window() {
             if self.emit_intents && self.trade {
                 self.maybe_hint(idx, &window, y.mid(), &decision, recv_ns);
@@ -1028,6 +1125,33 @@ impl Engine {
         }
         self.state[idx].decision = Some(record.clone());
         self.write(recv_ns, Value::Object(record), true);
+    }
+
+    /// Why an entry now could be priced off a frozen Polymarket book, if it could:
+    /// the whole feed or this asset's socket silent past its limit, or resumed
+    /// (or reconnected) less than the feed limit ago, before its snapshots land.
+    fn poly_silent(&self, idx: usize, recv_ns: i64) -> Option<&'static str> {
+        let grace = self.max_poly_silence_ns;
+        if let Some(limit) = self.max_poly_silence_ns {
+            let last = if self.frame_venue == 'p' { Some(recv_ns) } else { self.prev_p_ns };
+            if last.is_none_or(|t| recv_ns - t > limit) {
+                return Some("feed_silent");
+            }
+            if [self.poly_resumed_ns, self.last_reconnect_p_ns].into_iter().flatten().any(|t| recv_ns - t < limit) {
+                return Some("feed_resumed");
+            }
+        }
+        if let Some(limit) = self.max_asset_silence_ns {
+            if self.last_p_asset[idx].is_none_or(|t| recv_ns - t > limit) {
+                return Some("asset_silent");
+            }
+            if let (Some(g), Some(t)) = (grace, self.asset_resumed_ns[idx])
+                && recv_ns - t < g
+            {
+                return Some("asset_resumed");
+            }
+        }
+        None
     }
 
     /// Why the cheap leg's book was old at a decision: venue silence (no
@@ -1156,6 +1280,11 @@ impl Engine {
             self.count(&format!("blocked_{b}"));
             return Some(b.to_owned());
         }
+        // The fast path took its own slot when it fired.
+        if !fast && self.risk.throttle.as_ref().is_some_and(|t| !t.try_take(recv_ns)) {
+            self.count("blocked_entry_burst");
+            return Some("entry_burst".to_owned());
+        }
         let side = side_str(d.buy_yes);
         let token = if d.buy_yes == Some(true) { w.yes_token.clone() } else { w.no_token.clone() };
         if self.live {
@@ -1220,7 +1349,14 @@ impl Engine {
         let yes = p.side == "yes";
         let (Some(bid), Some(fair)) = (if yes { y.bid } else { n.bid }, kalshi_fair(k, yes)) else { return };
         let (shares, vwap, side) = (p.shares, p.vwap(), p.side.clone());
-        if !should_exit(bid, fair, vwap) || self.exit_until.get(&key).is_some_and(|u| recv_ns < *u) {
+        if self.live && self.rest_exit && !self.risk.halted {
+            self.maybe_rest(w, &key, yes, (shares, vwap), (fair, bid), recv_ns);
+        }
+        // With a sell resting at Kalshi's price, the taker exit waits for the bid
+        // to reach that price: a cent under it is the rest's job, not a FAK's.
+        let resting = self.rest_exit && self.rest_sent.get(&key).is_some_and(|(px, _)| px.is_some());
+        let trigger = if resting { fair + pk_core::exit::EXIT_MARGIN } else { fair };
+        if !should_exit(bid, trigger, vwap) || self.exit_until.get(&key).is_some_and(|u| recv_ns < *u) {
             return;
         }
         self.exit_until.insert(key.clone(), recv_ns + EXIT_RETRY_NS);
@@ -1251,6 +1387,38 @@ impl Engine {
             let fee = taker_fee(bid, shares, w.fee_rate, w.fee_exponent);
             self.close_position(&w.asset, w.open_unix, (shares, shares * bid, fee), "fair", None, recv_ns);
         }
+    }
+
+    /// Keep the held leg's resting sell at Kalshi's price (never under the exit
+    /// floor), re-priced when that moves a cent, off the book near the close.
+    fn maybe_rest(&mut self, w: &Window, key: &str, yes: bool, (shares, vwap): (f64, f64), (fair, bid): (f64, f64), recv_ns: i64) {
+        let sec_into = secs_f64(recv_ns) - w.open_unix as f64;
+        let min_px = exit_floor(vwap, w.fee_rate, w.fee_exponent);
+        let px = ((fair * 100.0 - 1e-6).ceil() / 100.0).max(min_px);
+        let px = (sec_into < (WINDOW_S - REST_CANCEL_BEFORE_S) as f64 && px <= 0.99).then_some(round_dp(px, 2));
+        let changed = match (self.rest_sent.get(key), px) {
+            (None, px) => px.is_some(),
+            (Some((last, _)), None) => last.is_some(),
+            (Some((last, t)), Some(px)) => {
+                last.is_none_or(|l| (l - px).abs() >= 0.005) && recv_ns - t >= REST_REQUOTE_NS
+            }
+        };
+        // Off the book is final for the window.
+        if !changed || self.rest_sent.get(key).is_some_and(|(l, _)| l.is_none()) {
+            return;
+        }
+        self.rest_sent.insert(key.to_owned(), (px, recv_ns));
+        self.count(if px.is_some() { "rest_quotes" } else { "rest_cancels" });
+        self.rests.push(RestIntent {
+            asset: w.asset.clone(),
+            open_unix: w.open_unix,
+            token: if yes { w.yes_token.clone() } else { w.no_token.clone() },
+            shares,
+            px,
+            bid,
+            min_px,
+            decision_ns: recv_ns,
+        });
     }
 
     /// Sell `shares` of a position for `proceeds` less `fee`: an `exit` record,
@@ -1303,7 +1471,7 @@ impl Engine {
         }
         let near = d.reason == "below_threshold"
             && d.gap.is_some_and(|g| g.abs() >= self.params.gap_threshold * PRESIGN_FRACTION);
-        if !near || self.risk.halted {
+        if !near || self.risk.halted || self.poly_silent(idx, recv_ns).is_some() {
             self.disarm(idx);
             return;
         }
@@ -1713,9 +1881,12 @@ impl Engine {
                 // closed window awaits its resolution, and until two reads agree.
                 if (balance - before).abs() >= 0.005 && self.balance_seen {
                     let now_s = recv_ns.div_euclid(NS);
+                    // A resting exit can fill between two polls: its proceeds may
+                    // be in the wallet before the ledger, so drift waits while held.
                     let busy = self.ledger.in_flight() > 0
                         || !self.exits_in_flight.is_empty()
-                        || self.ledger.open_positions().any(|p| p.open_unix + WINDOW_S <= now_s);
+                        || self.ledger.open_positions().any(|p| p.open_unix + WINDOW_S <= now_s)
+                        || (self.rest_exit && self.ledger.open_positions().next().is_some());
                     let agreed = self.unconfirmed_balance.is_some_and(|b| (b - balance).abs() < 0.005);
                     if busy || !agreed {
                         self.unconfirmed_balance = (!busy).then_some(balance);
@@ -1732,7 +1903,7 @@ impl Engine {
                     }
                 }
                 self.unconfirmed_balance = None;
-                self.balance_seen = true;
+                let seen = std::mem::replace(&mut self.balance_seen, true);
                 let drift = self.ledger.set_cash(balance, recv_ns);
                 if drift.abs() >= 0.005 {
                     let record = json!({
@@ -1743,6 +1914,25 @@ impl Engine {
                     });
                     self.count("reconcile_drift");
                     self.write(recv_ns, record, false);
+                }
+                // Two agreeing reads with nothing in flight and no closed window
+                // pending: a deposit or withdrawal (every one in epoch 15 was).
+                if seen && drift.abs() >= TRANSFER_MIN_USD {
+                    self.ledger.note_transfer(drift, recv_ns);
+                    self.count("transfers");
+                    let record = json!({
+                        "type": "transfer", "t_ns": recv_ns, "amount": round_dp(drift, 4),
+                        "balance": round_dp(balance, 4), "ledger_cash": round_dp(before, 4),
+                        "transfers_total": round_dp(self.ledger.transfers_total(), 4),
+                    });
+                    self.write(recv_ns, record, true);
+                    let lines = vec![
+                        format!("wallet {before:.2} -> {balance:.2} ({drift:+.2}) with no order in flight"),
+                        "recorded as a transfer; the daily loss limit's baseline moved with it".to_owned(),
+                    ];
+                    if let Some(alert) = self.alert.as_mut() {
+                        alert("transfer", &format!("poly-kalshi: wallet moved {drift:+.2} with no trade, confirm"), &lines);
+                    }
                 }
                 if self.sizer.basis_balance.is_none() {
                     let open_cost: f64 = self.ledger.open_positions().map(|p| p.cost + p.fee).sum();
@@ -1761,6 +1951,8 @@ impl Engine {
                 *misses += 1;
                 let misses = *misses;
                 self.exits_in_flight.remove(&key);
+                // The order path took the rest off the book for the FAK: re-post it.
+                self.rest_sent.remove(&key);
                 let until = match reason.as_str() {
                     _ if misses >= EXIT_MAX_ATTEMPTS => recv_ns + EXIT_RETRY_NS,
                     "balance" => recv_ns + EXIT_BALANCE_RETRY_NS,
@@ -1782,6 +1974,10 @@ impl Engine {
                 let reason = v.get("reason").and_then(Value::as_str).unwrap_or("flatten").to_owned();
                 let order_id = v.get("order_id").cloned();
                 self.exits_in_flight.remove(&format!("{asset}:{open}"));
+                if reason != "rest" {
+                    // A FAK sold part: the rest was cancelled for it, re-post what is left.
+                    self.rest_sent.remove(&format!("{asset}:{open}"));
+                }
                 self.close_position(&asset, open, (shares, proceeds, fee), &reason, order_id, recv_ns);
             }
             _ => {}

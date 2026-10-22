@@ -83,6 +83,8 @@ struct Stored {
     mode: Option<String>,
     #[serde(default)]
     day_start: Option<(String, f64)>,
+    #[serde(default)]
+    transfers: Vec<(i64, f64)>,
 }
 
 #[derive(Debug)]
@@ -101,6 +103,8 @@ pub struct Ledger {
     pub reserved: IndexMap<String, f64>,
     /// The UTC day and the equity (cash + open cost) at its first reconciliation.
     pub day_start: Option<(String, f64)>,
+    /// Wallet moves no trade explains (deposits +, withdrawals −): (t_ns, usd).
+    pub transfers: Vec<(i64, f64)>,
 }
 
 impl Ledger {
@@ -117,6 +121,7 @@ impl Ledger {
             mode: "paper".into(),
             reserved: IndexMap::new(),
             day_start: None,
+            transfers: Vec::new(),
         }
     }
 
@@ -164,6 +169,7 @@ impl Ledger {
             mode: mode.to_owned(),
             reserved: IndexMap::new(),
             day_start: stored.day_start,
+            transfers: stored.transfers,
         };
         tracing::info!(cash = ledger.cash, open_positions = ledger.open_positions().count(), "ledger_loaded");
         Ok(ledger)
@@ -180,6 +186,7 @@ impl Ledger {
             epoch: self.epoch.clone(),
             mode: Some(self.mode.clone()),
             day_start: self.day_start.clone(),
+            transfers: self.transfers.clone(),
         };
         let write = || -> anyhow::Result<()> {
             if let Some(dir) = path.parent() {
@@ -230,6 +237,22 @@ impl Ledger {
         }
         self.save();
         drift
+    }
+
+    /// A deposit (+) or withdrawal (−) the wallet showed with no trade behind it:
+    /// moves the day's starting equity with it, so a withdrawal is not a loss.
+    pub fn note_transfer(&mut self, amount: f64, t_ns: i64) {
+        self.transfers.push((t_ns, round_dp(amount, 4)));
+        if let Some((day, start)) = self.day_start.as_mut()
+            && *day == utc_day(t_ns)
+        {
+            *start += amount;
+        }
+        self.save();
+    }
+
+    pub fn transfers_total(&self) -> f64 {
+        self.transfers.iter().map(|(_, a)| a).sum()
     }
 
     /// Equity lost since the day's first reconciliation (positive = a loss),
@@ -352,6 +375,7 @@ impl Ledger {
                 "in_flight": self.in_flight(),
                 "reserved": round_dp(self.reserved.values().sum::<f64>(), 2),
                 "day_start_equity": self.day_start.as_ref().map(|(_, e)| round_dp(*e, 2)),
+                "transfers_total": round_dp(self.transfers_total(), 2),
             });
             if let (Some(o), Some(l)) = (snap.as_object_mut(), live.as_object()) {
                 o.extend(l.clone());
@@ -416,6 +440,18 @@ mod tests {
         assert!((l.realised_today(t) - (44.0 - 47.7)).abs() < 1e-9);
         assert!((l.day_drawdown(t).unwrap() - (99.7 - 96.0)).abs() < 1e-9);
         assert!(l.close("BTC", 900, 1.0, 1.0, 0.0, t).is_none());
+    }
+
+    #[test]
+    fn a_transfer_is_not_drawdown() {
+        let mut l = Ledger::new(100.0);
+        let t = 2_000_000_000;
+        l.set_cash(100.0, t);
+        l.set_cash(63.0, t);
+        assert!((l.day_drawdown(t).unwrap() - 37.0).abs() < 1e-9);
+        l.note_transfer(-37.0, t);
+        assert!(l.day_drawdown(t).unwrap().abs() < 1e-9);
+        assert!((l.transfers_total() + 37.0).abs() < 1e-9);
     }
 
     #[test]

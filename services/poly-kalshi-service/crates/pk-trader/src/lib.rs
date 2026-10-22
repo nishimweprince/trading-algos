@@ -56,6 +56,10 @@ pub fn build_engine(
     cfg.active_exit_ticks = settings.active_exit_ticks;
     cfg.age_outlier_ms = (trades && settings.age_outlier_ms > 0.0).then_some(settings.age_outlier_ms);
     cfg.emit_intents = trades && settings.order_path();
+    let ms = |m: f64| (trades && m > 0.0).then_some(m);
+    cfg.max_poly_silence_ms = ms(settings.max_poly_silence_ms);
+    cfg.max_asset_silence_ms = ms(settings.max_asset_silence_ms);
+    cfg.rest_exit = trades && live && settings.active_exit && settings.rest_exit;
     let mut stamp = serde_json::Map::new();
     stamp.insert("epoch".into(), settings.results_epoch.clone().into());
     stamp.insert("build".into(), pk_svc::build::build_id().into());
@@ -71,6 +75,7 @@ pub fn build_engine(
                 ("active_exit", settings.active_exit.then_some(true.into())),
                 ("size_at_limit", settings.size_at_limit.then_some(true.into())),
                 ("order_shares", settings.order_shares.map(Into::into)),
+                ("rest_exit", (settings.active_exit && settings.rest_exit).then_some(true.into())),
                 (
                     "active_exit_ticks",
                     (settings.active_exit && settings.active_exit_ticks != 1)

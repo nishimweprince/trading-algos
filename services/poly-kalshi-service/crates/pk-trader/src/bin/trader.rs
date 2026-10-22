@@ -7,19 +7,20 @@
 //! (`pk_trader::hot`) and each of its frames goes through the armed trigger
 //! (`pk_trader::fast`) before it is queued for the engine.
 
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use clap::Parser;
 use pk_core::journal::JsonlDaily;
-use pk_core::{Ledger, RiskLimits, RiskState};
+use pk_core::{EntryThrottle, Ledger, RiskLimits, RiskState};
 use pk_engine::Role;
 use pk_exec::{LiveLimits, RelayerConfig, WalletConfig};
 use pk_feeds::{Discovery, Emit, FeedKind, KalshiSigner, PolyShards, spawn_feed};
 use pk_svc::{Alerts, Notifier, Settings};
 use pk_tape::Recorder;
 use pk_trader::exec_bridge::{BridgeConfig, ExecBridge, Hooks, RedeemConfig};
-use pk_trader::fast::FastPath;
+use pk_trader::fast::{FastGuards, FastPath};
 use pk_trader::hot::HotThread;
 use pk_trader::ingest::Ingest;
 use pk_trader::link::{LinkSink, ObserverLink};
@@ -66,11 +67,16 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
         Some(&settings.results_epoch),
         if live { "live" } else { "paper" },
     )?;
+    // One entry throttle for the engine and the fast path.
+    let throttle = (settings.entry_burst_max > 0).then(|| {
+        Arc::new(EntryThrottle::new(settings.entry_burst_max, (settings.entry_burst_window_s * 1e9) as i64))
+    });
     let risk = RiskState::new(RiskLimits {
         max_open_notional_usd: settings.max_open_notional_usd,
         daily_loss_limit_usd: settings.daily_loss_limit_usd,
         kill_file: Some(settings.kill_file_path.clone()),
-    });
+    })
+    .with_entry_caps((settings.max_open_positions > 0).then_some(settings.max_open_positions), throttle.clone());
     let journal_dir = settings.state_dir.join("journal");
     let (link, recorder, journal_direct, engine) = if settings.observer_enabled {
         let exe = std::env::current_exe()?;
@@ -106,9 +112,17 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
 
     let (ingest, rx) = Ingest::new();
     let ingest = Arc::new(ingest);
-    let emit: Emit = {
-        let ingest = ingest.clone();
-        Arc::new(move |venue, text| ingest.push(venue, text))
+    // The last Polymarket frame, for the fast path's silence check (it never
+    // sees Polymarket frames itself).
+    let last_poly_ns = Arc::new(AtomicI64::new(0));
+    let poly_emit: Emit = {
+        let (ingest, last) = (ingest.clone(), last_poly_ns.clone());
+        Arc::new(move |venue, text| {
+            if venue == 'p' {
+                last.store(pk_trader::now_ns(), Ordering::Relaxed);
+            }
+            ingest.push(venue, text)
+        })
     };
     // The fast path: the Kalshi feed on its own pinned thread, each frame
     // checked by the armed trigger before it is queued.
@@ -137,7 +151,10 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
         let _on_hot = hot.as_ref().map(|h| h.handle.enter());
         spawn_feed(settings.kalshi_ws_url.clone(), FeedKind::Kalshi { signer }, kalshi_emit)
     };
-    let poly = PolyShards::spawn(&settings.poly_ws_url, emit, &settings.assets, settings.poly_sockets);
+    let silence = (settings.poly_silence_reconnect_s > 0.0)
+        .then(|| Duration::from_secs_f64(settings.poly_silence_reconnect_s));
+    let poly =
+        PolyShards::spawn(&settings.poly_ws_url, poly_emit, &settings.assets, settings.poly_sockets, silence);
     let discovery = Discovery::new(&settings.poly_gamma_url, &settings.kalshi_rest_url);
 
     let rt = Arc::new(Runtime::new(
@@ -205,6 +222,7 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
             latency_seed_ms: settings.paper_latency_ms as f64,
             latency_window: settings.latency_window,
             latency_min_samples: settings.latency_min_samples,
+            probe_back_ticks: settings.probe_back_ticks,
         };
         let live_cfg = live.then(|| {
             let d = |x: f64| rust_decimal::Decimal::from_f64_retain(x).unwrap_or_default().round_dp(4);
@@ -235,7 +253,13 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
                 *rt.exec_tx.lock() = Some(tx.clone());
                 if let Some(h) = &hot {
                     let rt_handle = tokio::runtime::Handle::current();
-                    match FastPath::new(bridge.clone(), settings.fast_conns, tx, rt_handle) {
+                    let guards = FastGuards {
+                        last_poly_ns: last_poly_ns.clone(),
+                        max_poly_silence_ns: (settings.max_poly_silence_ms > 0.0)
+                            .then(|| (settings.max_poly_silence_ms * 1e6) as i64),
+                        throttle: throttle.clone(),
+                    };
+                    match FastPath::new(bridge.clone(), settings.fast_conns, tx, rt_handle, guards) {
                         Ok(fast) => {
                             rt.engine.lock().set_fast_gate(fast.clone());
                             *rt.fast.lock() = Some(fast.clone());

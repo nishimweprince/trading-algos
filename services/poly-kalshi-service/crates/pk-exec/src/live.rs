@@ -67,6 +67,8 @@ pub enum Refused {
     BelowFloor(Decimal, Decimal),
     #[error("notional {0} is over the cap {1}")]
     Notional(Decimal, Decimal),
+    #[error("a post-only sell at {0} would cross the bid {1}")]
+    WouldCross(Decimal, Decimal),
 }
 
 fn floor_to(x: Decimal, step: Decimal) -> Decimal {
@@ -134,6 +136,35 @@ pub fn exit_spec_ticks(
         return Err(Refused::BelowMin(size, Decimal::new(1, 2)));
     }
     Ok(OrderSpec { token: token.to_owned(), side: Side::Sell, price, size, tif: Tif::Fak, post_only: false })
+}
+
+/// The resting exit: a post-only GTC sell of `shares` at `px` rounded up to
+/// the tick, never under `floor`, and never at or under the bid (it would
+/// cross, and post-only is refused). Pure.
+pub fn rest_spec(
+    token: &str,
+    shares: Decimal,
+    px: Decimal,
+    floor: Option<Decimal>,
+    top: &Top,
+) -> Result<OrderSpec, Refused> {
+    let mut price = ceil_to(px, top.tick);
+    if let Some(floor) = floor {
+        price = price.max(ceil_to(floor, top.tick));
+    }
+    if price < top.tick || price >= Decimal::ONE {
+        return Err(Refused::BadPrice(price));
+    }
+    if let Some(bid) = top.best_bid
+        && price <= bid
+    {
+        return Err(Refused::WouldCross(price, bid));
+    }
+    let size = floor_to(shares, Decimal::new(1, 2));
+    if size < top.min_size.max(Decimal::new(1, 2)) {
+        return Err(Refused::BelowMin(size, top.min_size));
+    }
+    Ok(OrderSpec { token: token.to_owned(), side: Side::Sell, price, size, tif: Tif::Gtc, post_only: true })
 }
 
 /// The venue refused for lack of funds or approvals.
@@ -229,6 +260,27 @@ impl<S: OrderSigner> LiveExec<S> {
             Ok(spec) => self.execute(&spec, t_decision).await,
             Err(r) => Executed { refused: Some(r.to_string()), cost_basis: "none", ..Default::default() },
         }
+    }
+
+    /// Post the resting exit; it rests, so nothing is polled here.
+    pub async fn rest(&self, spec: &OrderSpec) -> Executed {
+        let (ack, timing) = self.exec.post(spec, Instant::now(), Trigger::Rest).await;
+        let mut out = Executed {
+            order_id: timing.order_id.clone(),
+            status: timing.venue_status.clone(),
+            error: timing.error.clone(),
+            cost_basis: "none",
+            ..Default::default()
+        };
+        if timing.ok {
+            if let Some((shares, usd)) = ack.as_ref().and_then(|a| from_ack(a, spec.side)) {
+                (out.shares, out.usd, out.cost_basis) = (f(shares), f(usd), "ack");
+            }
+        } else {
+            out.balance_reject = out.error.as_deref().is_some_and(is_balance_reject);
+        }
+        out.records.push(timing);
+        out
     }
 
     async fn execute(&self, spec: &OrderSpec, t_decision: Instant) -> Executed {
@@ -335,6 +387,21 @@ mod tests {
         // Capped at the strategy's maximum.
         let s = entry_spec("t", d("0.75"), d("10"), &top(None, Some("0.55")), &l).unwrap();
         assert_eq!(s.price, d("0.60"));
+    }
+
+    #[test]
+    fn rests_post_only_above_the_bid_and_floor() {
+        let t = top(Some("0.52"), Some("0.55"));
+        let s = rest_spec("t", d("18.199"), d("0.531"), Some(d("0.48")), &t).unwrap();
+        assert_eq!(
+            (s.price, s.size, s.side, s.tif, s.post_only),
+            (d("0.54"), d("18.19"), Side::Sell, Tif::Gtc, true)
+        );
+        // The floor wins over a lower fair.
+        assert_eq!(rest_spec("t", d("18"), d("0.40"), Some(d("0.561")), &t).unwrap().price, d("0.57"));
+        assert_eq!(rest_spec("t", d("18"), d("0.52"), None, &t), Err(Refused::WouldCross(d("0.52"), d("0.52"))));
+        assert_eq!(rest_spec("t", d("4"), d("0.60"), None, &t), Err(Refused::BelowMin(d("4"), d("5"))));
+        assert_eq!(rest_spec("t", d("18"), d("1.2"), None, &t), Err(Refused::BadPrice(d("1.2"))));
     }
 
     #[test]

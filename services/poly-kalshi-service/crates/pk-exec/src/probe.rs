@@ -34,7 +34,8 @@ pub struct ProbeLimits {
 
 impl Default for ProbeLimits {
     fn default() -> Self {
-        Self { back_ticks: 5, max_notional: Decimal::from(3), max_open: 1 }
+        // 20, not 5: on 2026-10-20 a probe 5 ticks under a moving bid filled.
+        Self { back_ticks: 20, max_notional: Decimal::from(3), max_open: 1 }
     }
 }
 
@@ -246,7 +247,7 @@ mod tests {
     #[test]
     fn prices_under_the_bid() {
         let s = probe_spec("t", &top(Some("0.45"), Some("0.47")), &ProbeLimits::default(), 0).unwrap();
-        assert_eq!(s.price, d("0.40"));
+        assert_eq!(s.price, d("0.25"));
         assert_eq!(s.size, d("5"));
         assert!(s.post_only);
         assert_eq!(s.side, Side::Buy);

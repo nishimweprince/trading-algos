@@ -106,6 +106,22 @@ pub struct Settings {
     pub discover_lead_seconds: i64,
     /// Write `age_outlier` records for cheap legs older than this (ms); 0 = off.
     pub age_outlier_ms: f64,
+    /// No entry while the Polymarket feed (all sockets) is silent this long,
+    /// nor this long after it resumes or reconnects (ms; 0 = off).
+    pub max_poly_silence_ms: f64,
+    /// No entry for an asset whose own Polymarket socket is silent this long (ms; 0 = off).
+    pub max_asset_silence_ms: f64,
+    /// Reconnect a Polymarket socket that delivered no data for this long (s; 0 = off).
+    pub poly_silence_reconnect_s: f64,
+    /// Open positions plus orders in flight (0 = no cap).
+    pub max_open_positions: usize,
+    /// At most this many entries in any `entry_burst_window_s` (0 = no cap).
+    pub entry_burst_max: usize,
+    pub entry_burst_window_s: f64,
+    /// How far under the best bid order probes post, in ticks.
+    pub probe_back_ticks: u32,
+    /// Rest a post-only sell at Kalshi's price while a live position is held.
+    pub rest_exit: bool,
 
     pub kalshi_api_key_id: String,
     pub kalshi_private_key_path: PathBuf,
@@ -463,6 +479,14 @@ impl Settings {
             stale_feed_seconds: e.num("PK_STALE_FEED_SECONDS", 30.0)?,
             discover_lead_seconds: e.num("PK_DISCOVER_LEAD_SECONDS", 120)?,
             age_outlier_ms: e.num("PK_AGE_OUTLIER_MS", 500.0)?,
+            max_poly_silence_ms: e.num("PK_MAX_POLY_SILENCE_MS", 2000.0)?,
+            max_asset_silence_ms: e.num("PK_MAX_ASSET_SILENCE_MS", 5000.0)?,
+            poly_silence_reconnect_s: e.num("PK_POLY_SILENCE_RECONNECT_S", 20.0)?,
+            max_open_positions: e.num("PK_MAX_OPEN_POSITIONS", 3)?,
+            entry_burst_max: e.num("PK_ENTRY_BURST_MAX", 2)?,
+            entry_burst_window_s: e.num("PK_ENTRY_BURST_WINDOW_S", 30.0)?,
+            probe_back_ticks: e.num::<u32>("PK_PROBE_BACK_TICKS", 20)?.max(1),
+            rest_exit: e.flag("PK_REST_EXIT", false)?,
             kalshi_api_key_id: e.required("KALSHI_API_KEY_ID")?,
             kalshi_private_key_path: expand(&e.required("KALSHI_PRIVATE_KEY_PATH")?),
             kalshi_rest_url: e.or("KALSHI_REST_URL", "https://api.elections.kalshi.com/trade-api/v2"),

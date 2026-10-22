@@ -13,7 +13,10 @@
 //! - **Live** (`PK_EXECUTION_MODE=live`): an entry is a real FAK buy
 //!   (`pk_exec::live`). Its result goes back as a `live_fill` line. An
 //!   [`ExitIntent`] (the active exit) is a FAK sell under the bid; what it sold
-//!   goes back as a `live_exit` line with `reason: "fair"`. A
+//!   goes back as a `live_exit` line with `reason: "fair"`. A [`RestIntent`]
+//!   (`PK_REST_EXIT`) keeps a post-only sell resting at Kalshi's price; a
+//!   poller hands its matches back as `live_exit` lines with `reason: "rest"`,
+//!   and the FAK exit cancels it before selling what is left. A
 //!   reconciler reads the wallet every [`RECONCILE_EVERY`] and after every
 //!   fill or redemption (`balance` lines, which also drive percentage sizing
 //!   when flat), checks for stray orders and for positions that don't match
@@ -40,7 +43,9 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use pk_core::fees::taker_fee;
-use pk_engine::{ExitIntent, OrderIntent, PresignHint};
+use pk_core::WINDOW_S;
+use pk_engine::{ExitIntent, OrderIntent, PresignHint, RestIntent};
+use pk_exec::live::rest_spec;
 use pk_exec::presign::PresignCache;
 use pk_exec::{
     ClobExec, LatencyEstimator, LiveExec, LiveLimits, OrderSigner, OrderTiming, Probe, ProbeLimits,
@@ -61,11 +66,17 @@ pub const REDEEM_ALERT_AFTER: u32 = 20;
 pub const GAS_LOW_POL: f64 = 0.05;
 const GAS_CHECK_EVERY: Duration = Duration::from_secs(600);
 const SHARE_DRIFT: f64 = 0.01;
+/// Resting exits are polled this often; a post refused for balance (the
+/// entry's shares not credited yet) is retried after a second, a few times.
+pub const REST_POLL_EVERY: Duration = Duration::from_millis(500);
+pub const REST_RETRY_AFTER: Duration = Duration::from_secs(1);
+pub const REST_MAX_TRIES: u32 = 5;
 
 pub enum ExecMsg {
     Intent(OrderIntent, Instant),
     Hint(PresignHint),
     Exit(ExitIntent, Instant),
+    Rest(RestIntent),
     /// The armed trigger's entry got its reply on the fast path's connection.
     FastResult(Box<FastResult>),
 }
@@ -153,6 +164,25 @@ pub struct LiveStatus {
     pub balance_rejects: u64,
     pub last_error: Option<String>,
     pub exits: u64,
+    pub rests_posted: u64,
+    pub rest_fills: u64,
+    pub rests_refused: u64,
+}
+
+/// One resting exit sell.
+#[derive(Clone, Debug)]
+struct Rest {
+    intent: RestIntent,
+    order_id: Option<String>,
+    price: Decimal,
+    /// Matched shares already handed to the engine.
+    reported: Decimal,
+    tries: u32,
+    retry_at: Option<Instant>,
+}
+
+fn rest_key(asset: &str, open_unix: i64) -> String {
+    format!("{asset}:{open_unix}")
 }
 
 pub struct ExecBridge<S: OrderSigner = SdkSigner> {
@@ -171,6 +201,10 @@ pub struct ExecBridge<S: OrderSigner = SdkSigner> {
     pub status: Mutex<LiveStatus>,
     gas_checked: Mutex<Option<Instant>>,
     pub refused: AtomicU64,
+    /// Resting exits by window key. Never held across an await.
+    rests: Mutex<HashMap<String, Rest>>,
+    /// Windows whose FAK exit is running: no rest is posted for them meanwhile.
+    exiting: Mutex<HashSet<String>>,
 }
 
 fn dec(x: Option<f64>) -> Option<Decimal> {
@@ -185,6 +219,8 @@ pub struct BridgeConfig {
     pub latency_seed_ms: f64,
     pub latency_window: usize,
     pub latency_min_samples: usize,
+    /// How far under the best bid probes post (`PK_PROBE_BACK_TICKS`).
+    pub probe_back_ticks: u32,
 }
 
 /// Where live redemptions are sent from.
@@ -270,7 +306,10 @@ impl<S: OrderSigner> ExecBridge<S> {
         cfg: BridgeConfig,
         live: Option<LivePart<S>>,
     ) -> Arc<Self> {
-        let probe = Arc::new(Probe::new(exec, ProbeLimits { max_open: 2, ..ProbeLimits::default() }));
+        let probe = Arc::new(Probe::new(
+            exec,
+            ProbeLimits { max_open: 2, back_ticks: cfg.probe_back_ticks.max(1), ..ProbeLimits::default() },
+        ));
         Arc::new(Self {
             probe,
             live,
@@ -289,6 +328,8 @@ impl<S: OrderSigner> ExecBridge<S> {
             status: Mutex::new(LiveStatus::default()),
             gas_checked: Mutex::new(None),
             refused: AtomicU64::new(0),
+            rests: Mutex::new(HashMap::new()),
+            exiting: Mutex::new(HashSet::new()),
         })
     }
 
@@ -354,8 +395,13 @@ impl<S: OrderSigner> ExecBridge<S> {
     /// replaces the asset's pending one, a probe joins the probe queue.
     pub async fn run(self: Arc<Self>, mut rx: mpsc::UnboundedReceiver<ExecMsg>) {
         let (probe_tx, probe_rx) = mpsc::unbounded_channel();
+        let (rest_tx, rest_rx) = mpsc::unbounded_channel();
         tokio::spawn(self.clone().hint_worker());
         tokio::spawn(self.clone().probe_worker(probe_rx));
+        if self.live.is_some() {
+            tokio::spawn(self.clone().rest_worker(rest_rx));
+            tokio::spawn(self.clone().rest_poller());
+        }
         while let Some(msg) = rx.recv().await {
             match msg {
                 ExecMsg::Hint(h) => {
@@ -375,6 +421,9 @@ impl<S: OrderSigner> ExecBridge<S> {
                 ExecMsg::Exit(x, t_decision) => {
                     let this = self.clone();
                     tokio::spawn(async move { this.exit_position(&x, t_decision).await });
+                }
+                ExecMsg::Rest(r) => {
+                    let _ = rest_tx.send(r);
                 }
                 ExecMsg::FastResult(r) => {
                     let this = self.clone();
@@ -539,8 +588,27 @@ impl<S: OrderSigner> ExecBridge<S> {
     /// what it sold to the engine (`live_exit`, `reason: "fair"`).
     async fn exit_position(&self, x: &ExitIntent, t_decision: Instant) {
         let Some(live) = &self.live else { return };
+        let key = rest_key(&x.asset, x.open_unix);
+        self.exiting.lock().insert(key.clone());
+        // The rest holds the shares: take it off the book (crediting what it
+        // sold) before the FAK sells the remainder.
+        let resting = self.rests.lock().remove(&key);
+        let credited = match resting {
+            Some(r) => self.retire(r).await,
+            None => 0.0,
+        };
+        let remaining = x.shares - credited;
+        if remaining < 0.01 {
+            self.exiting.lock().remove(&key);
+            return;
+        }
+        self.sell_fak(live, x, remaining, t_decision).await;
+        self.exiting.lock().remove(&key);
+    }
+
+    async fn sell_fak(&self, live: &LivePart<S>, x: &ExitIntent, remaining: f64, t_decision: Instant) {
         let Some(top) = self.top(&x.token, Some(x.bid), None).await else { return };
-        let shares = Decimal::from_f64(x.shares).unwrap_or_default();
+        let shares = Decimal::from_f64(remaining).unwrap_or_default();
         let ticks = live.exec.limits.active_exit_ticks;
         let floor = Decimal::from_f64(x.min_px).filter(|f| *f > Decimal::ZERO);
         let ex = live.exec.exit_ticks(&x.token, shares, &top, ticks, floor, t_decision).await;
@@ -574,6 +642,201 @@ impl<S: OrderSigner> ExecBridge<S> {
             "shares": ex.shares, "proceeds": ex.usd, "fee": fee, "order_id": ex.order_id,
         }));
         self.status.lock().exits += 1;
+    }
+
+    // --- live: the resting exit -----------------------------------------------------
+
+    /// Applies resting-exit intents in order; a backlog keeps the latest per window.
+    async fn rest_worker(self: Arc<Self>, mut rx: mpsc::UnboundedReceiver<RestIntent>) {
+        while let Some(r) = rx.recv().await {
+            let mut latest: HashMap<String, RestIntent> = HashMap::new();
+            latest.insert(rest_key(&r.asset, r.open_unix), r);
+            while let Ok(r) = rx.try_recv() {
+                latest.insert(rest_key(&r.asset, r.open_unix), r);
+            }
+            for (_, r) in latest {
+                self.apply_rest(r).await;
+            }
+        }
+    }
+
+    /// Re-price (cancel and post) or take off the book one window's rest.
+    async fn apply_rest(&self, r: RestIntent) {
+        let Some(live) = &self.live else { return };
+        let key = rest_key(&r.asset, r.open_unix);
+        if self.exiting.lock().contains(&key) {
+            return;
+        }
+        let old = self.rests.lock().remove(&key);
+        let credited = match old {
+            Some(old) => self.retire(old).await,
+            None => 0.0,
+        };
+        if r.px.is_none() {
+            return;
+        }
+        let shares = r.shares - credited;
+        let mut rest = Rest {
+            intent: RestIntent { shares, ..r },
+            order_id: None,
+            price: Decimal::ZERO,
+            reported: Decimal::ZERO,
+            tries: 0,
+            retry_at: None,
+        };
+        self.post_rest(live, &mut rest).await;
+        self.keep_rest(key, rest).await;
+    }
+
+    /// Store a posted (or retrying) rest, unless a FAK exit started meanwhile.
+    async fn keep_rest(&self, key: String, rest: Rest) {
+        if rest.order_id.is_none() && rest.retry_at.is_none() {
+            return;
+        }
+        if self.exiting.lock().contains(&key) {
+            self.retire(rest).await;
+            return;
+        }
+        let stale = self.rests.lock().insert(key, rest);
+        if let Some(stale) = stale {
+            // Two posts raced: keep the newer, cancel the other.
+            self.retire(stale).await;
+        }
+    }
+
+    async fn post_rest(&self, live: &LivePart<S>, rest: &mut Rest) {
+        rest.tries += 1;
+        rest.retry_at = None;
+        let i = rest.intent.clone();
+        let Some(top) = self.top(&i.token, Some(i.bid), None).await else { return };
+        let shares = Decimal::from_f64(i.shares).unwrap_or_default();
+        let spec = match rest_spec(&i.token, shares, dec(i.px).unwrap_or_default(), dec(Some(i.min_px)), &top) {
+            Ok(spec) => spec,
+            Err(e) => {
+                // At or under the bid, the FAK exit takes it; too small, it settles.
+                self.status.lock().rests_refused += 1;
+                tracing::debug!(asset = %i.asset, error = %e, "rest refused");
+                return;
+            }
+        };
+        let ex = live.exec.rest(&spec).await;
+        for t in &ex.records {
+            self.record(t, &i.asset, i.open_unix);
+        }
+        match (&ex.order_id, &ex.error) {
+            (Some(id), None) => {
+                rest.order_id = Some(id.clone());
+                rest.price = spec.price;
+                self.status.lock().rests_posted += 1;
+            }
+            _ if ex.balance_reject && rest.tries < REST_MAX_TRIES => {
+                rest.retry_at = Some(Instant::now() + REST_RETRY_AFTER);
+            }
+            _ => {
+                let mut s = self.status.lock();
+                s.rests_refused += 1;
+                s.last_error = ex.error.map(|e| format!("rest: {e}"));
+            }
+        }
+    }
+
+    /// Hand the rest's new matches to the engine; returns the shares credited.
+    fn credit_rest(&self, rest: &mut Rest, matched: Decimal) -> f64 {
+        let delta = matched - rest.reported;
+        if delta <= Decimal::ZERO {
+            return 0.0;
+        }
+        rest.reported = matched;
+        let shares = delta.to_f64().unwrap_or(0.0);
+        let proceeds = (delta * rest.price).to_f64().unwrap_or(0.0);
+        // A maker pays no fee on Polymarket.
+        (self.hooks.control)(json!({
+            "type": "live_exit", "asset": rest.intent.asset, "open_unix": rest.intent.open_unix,
+            "reason": "rest", "shares": shares, "proceeds": proceeds, "fee": 0.0,
+            "order_id": rest.order_id,
+        }));
+        let mut s = self.status.lock();
+        s.rest_fills += 1;
+        s.exits += 1;
+        shares
+    }
+
+    /// Cancel a rest and credit what it matched before the cancel landed.
+    async fn retire(&self, mut rest: Rest) -> f64 {
+        let Some(id) = rest.order_id.clone() else { return 0.0 };
+        let (_, cancel) = self.exec().cancel(&id, Trigger::Rest).await;
+        self.record(&cancel, &rest.intent.asset, rest.intent.open_unix);
+        match self.exec().order_state(&id).await {
+            Ok(state) => self.credit_rest(&mut rest, state.size_matched),
+            Err(e) => {
+                // The reconciler's share check will flag what this misses.
+                self.status.lock().last_error = Some(format!("rest state: {e:#}"));
+                0.0
+            }
+        }
+    }
+
+    /// Poll every rest: credit matches, drop the finished, retry balance rejects,
+    /// and take rests off the book once their window has closed.
+    async fn rest_poller(self: Arc<Self>) {
+        let Some(live) = &self.live else { return };
+        let mut tick = tokio::time::interval(REST_POLL_EVERY);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tick.tick().await;
+            let snapshot: Vec<(String, Option<String>, Option<Instant>, i64)> = self
+                .rests
+                .lock()
+                .iter()
+                .map(|(k, r)| (k.clone(), r.order_id.clone(), r.retry_at, r.intent.open_unix))
+                .collect();
+            let now_s = now_ns().div_euclid(1_000_000_000);
+            for (key, id, retry_at, open_unix) in snapshot {
+                if now_s >= open_unix + WINDOW_S {
+                    let r = self.rests.lock().remove(&key);
+                    if let Some(r) = r {
+                        self.retire(r).await;
+                    }
+                    continue;
+                }
+                match id {
+                    Some(id) => {
+                        let Ok(state) = self.exec().order_state(&id).await else { continue };
+                        let open = matches!(state.status.to_lowercase().as_str(), "live" | "delayed");
+                        let mut book = self.rests.lock();
+                        // Gone meanwhile: whoever removed it credited it.
+                        let Some(r) = book.get_mut(&key).filter(|r| r.order_id.as_deref() == Some(id.as_str()))
+                        else {
+                            continue;
+                        };
+                        self.credit_rest(r, state.size_matched);
+                        if !open {
+                            book.remove(&key);
+                        }
+                    }
+                    None if retry_at.is_some_and(|at| Instant::now() >= at) => {
+                        let r = self.rests.lock().remove(&key);
+                        if let Some(mut r) = r {
+                            self.post_rest(live, &mut r).await;
+                            self.keep_rest(key, r).await;
+                        }
+                    }
+                    None => {}
+                }
+            }
+        }
+    }
+
+    /// Take every rest off the book, crediting what they sold.
+    async fn retire_all_rests(&self) {
+        let all: Vec<Rest> = self.rests.lock().drain().map(|(_, r)| r).collect();
+        for r in all {
+            self.retire(r).await;
+        }
+    }
+
+    fn rest_order_ids(&self) -> HashSet<String> {
+        self.rests.lock().values().filter_map(|r| r.order_id.clone()).collect()
     }
 
     // --- live: reconciliation ----------------------------------------------------------
@@ -611,15 +874,38 @@ impl<S: OrderSigner> ExecBridge<S> {
         self.publish_balance(live).await;
         match self.exec().open_orders().await {
             Ok(orders) if !orders.is_empty() => {
-                // Entries are FAK: nothing should ever rest.
-                self.status.lock().stray_orders += orders.len() as u64;
-                let cancelled = self.exec().cancel_all().await.map(|a| a.canceled.len());
-                (self.hooks.alert)(
-                    "stray_orders",
-                    "poly-kalshi: resting orders found on the live account",
-                    vec![format!("{} open; cancel-all: {cancelled:?}", orders.len())],
-                    true,
-                );
+                // Entries are FAK: only the resting exits may rest. With none
+                // up, cancel everything; else cancel what is not one of them.
+                let ours = self.rest_order_ids();
+                let stray: Vec<String> = orders
+                    .iter()
+                    .filter_map(|o| o.get("id").and_then(Value::as_str).map(str::to_owned))
+                    .filter(|id| !ours.contains(id))
+                    .collect();
+                if ours.is_empty() {
+                    self.status.lock().stray_orders += orders.len() as u64;
+                    let cancelled = self.exec().cancel_all().await.map(|a| a.canceled.len());
+                    (self.hooks.alert)(
+                        "stray_orders",
+                        "poly-kalshi: resting orders found on the live account",
+                        vec![format!("{} open; cancel-all: {cancelled:?}", orders.len())],
+                        true,
+                    );
+                } else if !stray.is_empty() {
+                    self.status.lock().stray_orders += stray.len() as u64;
+                    let mut cancelled = 0;
+                    for id in &stray {
+                        let (_, t) = self.exec().cancel(id, Trigger::Cleanup).await;
+                        cancelled += usize::from(t.ok);
+                        self.record(&t, "", 0);
+                    }
+                    (self.hooks.alert)(
+                        "stray_orders",
+                        "poly-kalshi: resting orders found on the live account",
+                        vec![format!("{} stray of {} open; cancelled {cancelled}", stray.len(), orders.len())],
+                        true,
+                    );
+                }
             }
             Ok(_) => {}
             Err(e) => {
@@ -793,6 +1079,7 @@ impl<S: OrderSigner> ExecBridge<S> {
 
     /// The kill switch's order side: cancel everything on the account.
     pub async fn cancel_all(&self) {
+        self.retire_all_rests().await;
         for t in self.probe.cancel_everything().await {
             self.record(&t, "", 0);
         }
