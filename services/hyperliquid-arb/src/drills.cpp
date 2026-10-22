@@ -93,6 +93,7 @@ struct Rig final {
   std::unique_ptr<Engine> engine;
   std::uint64_t now = kNoon;
   Mt5Account account;
+  double withdrawable = 5'000;
 
   explicit Rig(std::function<void(Config&)> tweak = {}) {
     if (tweak) tweak(config);
@@ -121,7 +122,7 @@ struct Rig final {
     aux.receive_ns = now;
     aux.ok = true;
     aux.hl_account_value = hl_value;
-    aux.hl_min_withdrawable = 5'000;
+    aux.hl_min_withdrawable = withdrawable;
     aux.hl_positions[0] = engine->hl_position(0);
     engine->on_aux(aux, now);
   }
@@ -219,8 +220,10 @@ void drill_quotes_and_hedge() {
   Rig r;
   const auto& place = r.io.commands.at(0);
   require(place.orders[0].tif == Tif::alo && place.orders[0].asset == 110'024, "ALO on xyz:JPY");
-  require(place.orders[0].is_buy && place.orders[0].price == d("157.75"), "bid at fair minus half spread");
-  require(!place.orders[1].is_buy && place.orders[1].price == d("157.85"), "ask at fair plus half spread");
+  // Fair 157.80; floor = 3 maker + 35 commission + 100 adverse + 31.7 MT5 half-spread + 10 min edge = 180 ppm.
+  // The HL touch (157.78/157.82) is inside it, so both sides join only as far as the floor.
+  require(place.orders[0].is_buy && place.orders[0].price == d("157.77"), "bid joins toward the touch, stops at the floor");
+  require(!place.orders[1].is_buy && place.orders[1].price == d("157.83"), "ask joins toward the touch, stops at the floor");
   require(place.orders[0].size == d("6.33"), "one 0.01-lot step is 6.33 HL units");
   r.rest();
   r.fill(Side::buy, "6.33");
@@ -328,7 +331,7 @@ void drill_reject_backoff() {
   ack.kind = HlEventKind::ack;
   ack.request_id = place.request_id;
   ack.ok = false;
-  ack.set_text("Insufficient margin to place order.");
+  ack.set_text("Order price cannot be more than 80% away from the reference price");
   r.engine->on_hl_event(ack, r.now);
   r.acked = r.io.commands.size();
   const auto after_reject = r.io.commands.size();
@@ -336,6 +339,82 @@ void drill_reject_backoff() {
   require(r.io.commands.size() == after_reject, "no re-place within the 1 s backoff");
   r.advance(600 * kMs);
   require(r.count(HlCommandKind::place) == 2, "re-placed once after the backoff");
+}
+
+void drill_margin_reject_park() {
+  Rig r;
+  const auto& place = r.io.commands.at(0);
+  HlEvent ack;
+  ack.kind = HlEventKind::ack;
+  ack.request_id = place.request_id;
+  ack.ok = true;
+  ack.count = 2;
+  ack.items[0] = {AckStatus::error, 0, {}, {}, false};
+  ack.items[1] = {AckStatus::error, 0, {}, {}, false};
+  ack.set_text("Insufficient margin to place order. asset=110024");
+  r.engine->on_hl_event(ack, r.now);
+  require(r.io.journaled(R"("ok":false,"post_ok":true)"), "an item-level reject is journaled as not ok");
+  r.acked = r.io.commands.size();
+  for (int i = 0; i < 60; ++i) r.advance(5 * kSecond);
+  require(r.count(HlCommandKind::place) == 1, "no re-place for 5 minutes after a margin reject");
+  r.advance(301 * kSecond);
+  require(r.count(HlCommandKind::place) == 2, "re-placed once the 600 s park ends");
+}
+
+void drill_quote_floor() {
+  Rig r([](Config& c) { c.edge_ppm = 0; });  // passive target alone would sit inside the floor
+  r.hl("157.79", "157.81");
+  const auto want = r.engine->desired_quotes(0, r.now);
+  require(want[0].active && want[1].active, "both sides quoted");
+  require(want[0].price == d("157.77") && want[0].cap == d("157.77"), "bid held at the cost floor");
+  require(want[1].price == d("157.83") && want[1].cap == d("157.83"), "ask held at the cost floor");
+}
+
+void drill_skew_floor() {
+  Rig r([](Config& c) { c.skew_ppm = 2'000; });
+  r.engine->seed_positions(0, d("-6.33"), 0.01);  // short one step, hedged
+  const auto want = r.engine->desired_quotes(0, r.now);
+  require(want[0].active && want[0].price <= d("157.77"), "a big skew never lifts the unwind bid inside the floor");
+  require(want[1].price >= d("157.83"), "the ask is only pushed further away");
+}
+
+void drill_margin_block() {
+  Rig r([](Config& c) {
+    c.hl_leverage = 20;
+    c.hl_min_margin_usd = 5;
+  });
+  r.rest();
+  r.withdrawable = 20;  // one $1k step at 20x needs $55 with headroom
+  r.advance(kMs);
+  require(r.engine->block(0) == Block::margin, "flat and unable to margin a quote blocks the pair");
+  require(r.count(HlCommandKind::cancel_cloid) == 2, "resting quotes pulled");
+  r.ack_pending();
+  r.advance(10 * kSecond);
+  require(r.count(HlCommandKind::place) == 1, "no places while blocked");
+  r.engine->seed_positions(0, d("6.33"), -0.01);
+  const auto want = r.engine->desired_quotes(0, r.now);
+  require(r.engine->block(0) == Block::none && !want[0].active && want[1].active,
+          "holding a position: the reducing ask is still quoted, the adding bid is not");
+}
+
+void drill_stale_quote_inside_floor() {
+  Rig r([](Config& c) { c.min_requote_ms = 60'000; });
+  r.rest();
+  r.mt5(157.815, 157.825);  // fair +127 ppm: the resting 157.83 ask is now inside the floor
+  require(r.count(HlCommandKind::modify) == 1, "moved at once despite min_requote_ms");
+  const auto& modify = r.io.commands.back();
+  require(modify.count == 1 && !modify.orders[0].is_buy && modify.orders[0].price >= d("157.85"),
+          "only the ask moves, back out to the floor");
+}
+
+void drill_partial_fill_resize() {
+  Rig r;
+  r.rest();
+  r.fill(Side::buy, "1.90");  // 0.3 of a 6.33-unit step: too small to hedge
+  require(r.io.orders.empty(), "a sub-half-step fill is not hedged");
+  const auto want = r.engine->desired_quotes(0, r.now);
+  require(want[1].active && want[1].size == d("1.90"), "the ask works off just the off-grid 1.90");
+  require(want[0].size == d("6.33"), "the bid keeps the full step");
 }
 
 void drill_requote_on_move() {
@@ -428,6 +507,12 @@ int run_drills(std::ostream& out) {
       {"forced_fill", drill_forced_fill},
       {"post_only_reject", drill_post_only_reject},
       {"reject_backoff", drill_reject_backoff},
+      {"margin_reject_park", drill_margin_reject_park},
+      {"quote_floor", drill_quote_floor},
+      {"skew_floor", drill_skew_floor},
+      {"margin_block", drill_margin_block},
+      {"stale_quote_inside_floor", drill_stale_quote_inside_floor},
+      {"partial_fill_resize", drill_partial_fill_resize},
       {"requote_on_move", drill_requote_on_move},
       {"rollover", drill_rollover},
       {"gateway_down", drill_gateway_down},

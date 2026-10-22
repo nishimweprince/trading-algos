@@ -38,11 +38,12 @@ struct Config final {
   std::int64_t quote_lots{1};          // MT5 lot steps per quote
   std::int64_t max_inventory_lots{2};  // MT5 lot steps of unhedged-equivalent HL inventory
   std::int64_t edge_ppm{100};
+  std::int64_t min_edge_ppm{10};  // joining the HL touch never quotes inside cost + this
   std::int64_t adverse_ppm{100};
   std::int64_t mt5_commission_ppm{35};  // per hedge side
   std::int64_t skew_ppm{50};            // fair shift per lot step of inventory
   std::int64_t hl_maker_ppm{-1};        // -1: from userFees, x2 for HIP-3, x0.1 in growth mode
-  std::int64_t requote_ppm{30};
+  std::int64_t requote_ppm{10};
   std::uint64_t min_requote_ms{250};
   double basis_tau_s{1800};
   std::uint64_t basis_warmup_s{300};
@@ -65,6 +66,7 @@ struct Config final {
   std::int64_t flatten_slippage_ppm{5'000};
   double max_daily_loss_usd{50};
   double max_gross_notional_usd{5'000};
+  std::uint64_t margin_park_s{600};  // an "Insufficient margin" reject parks the pair this long
   double hl_min_margin_usd{100};
   double mt5_min_margin_usd{100};
   std::uint32_t hl_leverage{3};

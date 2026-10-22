@@ -392,7 +392,7 @@ void test_report() {
     out << R"({"k":"f","t":1000000000,"coin":"xyz:JPY","fair":157.80})" << '\n'
         << R"({"k":"fill","t":1000000000,"coin":"xyz:JPY","side":"B","px":157.75,"sz":6.33,"fee":0.003,"crossed":false})" << '\n'
         << R"({"k":"hedge","t":1000000000})" << '\n'
-        << R"({"k":"txn","t":1,"status":1,"hedge_ms":4.5,"order_ms":3.0,"ours":true})" << '\n'
+        << R"({"k":"txn","t":1,"status":1,"px":157.81,"slip_ppm":12.5,"commission":-0.07,"hedge_ms":4.5,"order_ms":3.0,"ours":true})" << '\n'
         << R"({"k":"f","t":2000000000,"coin":"xyz:JPY","fair":157.80})" << '\n'
         << R"({"k":"f","t":11000000000,"coin":"xyz:JPY","fair":157.70})" << '\n';
   }
@@ -401,6 +401,9 @@ void test_report() {
   const auto text = report.str();
   require(text.find("\"fills\":1") != std::string::npos && text.find("\"hedge_ms\":{\"p50\":4.5") != std::string::npos,
           "report counts fills and hedge latency");
+  require(text.find("\"hedges_priced\":1,\"mt5_slip_ppm_mean\":12.5,\"mt5_commission_per_hedge_usd\":-0.07") !=
+              std::string::npos,
+          "report averages MT5 slippage and commission per hedge");
   // Bought at 157.75: +317 ppm at 1 s (fair 157.80), -317 ppm at 10 s (fair 157.70).
   require(text.find("\"markout_1s_ppm\":316.9") != std::string::npos &&
               text.find("\"markout_10s_ppm\":-316.9") != std::string::npos,

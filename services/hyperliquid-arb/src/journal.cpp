@@ -141,6 +141,9 @@ int journal_report(const std::vector<std::string>& paths, std::ostream& out) {
   std::vector<Fill> fills;
   std::vector<double> hedge_ms;
   std::vector<double> order_ms;
+  std::vector<double> slip_ppm;  // MT5 fill vs the touch when the hedge was sent; positive is a cost
+  double commission = 0;
+  std::size_t priced = 0;
   std::vector<std::string> halts;
   std::size_t hedges = 0;
   std::size_t rejects = 0;
@@ -173,6 +176,11 @@ int journal_report(const std::vector<std::string>& paths, std::ostream& out) {
         if (status == 1 || status == 2) {
           hedge_ms.push_back(number(line, "\"hedge_ms\""));
           order_ms.push_back(number(line, "\"order_ms\""));
+          commission += number(line, "\"commission\"");
+          if (number(line, "\"px\"") > 0) {
+            ++priced;
+            slip_ppm.push_back(number(line, "\"slip_ppm\""));
+          }
         } else {
           ++rejects;
         }
@@ -207,7 +215,9 @@ int journal_report(const std::vector<std::string>& paths, std::ostream& out) {
   out << "{\"fills\":" << fills.size() << ",\"hedges\":" << hedges << ",\"hedge_rejects\":" << rejects
       << ",\"hedge_ms\":{\"p50\":" << percentile(hedge_ms, 0.5) << ",\"p99\":" << percentile(hedge_ms, 0.99)
       << "},\"mt5_order_ms\":{\"p50\":" << percentile(order_ms, 0.5) << ",\"p99\":" << percentile(order_ms, 0.99)
-      << "},\"equity_change_usd\":" << (last_equity - first_equity) << ",\"coins\":[";
+      << "},\"hedges_priced\":" << priced << ",\"mt5_slip_ppm_mean\":" << mean(slip_ppm)
+      << ",\"mt5_commission_per_hedge_usd\":" << (hedge_ms.empty() ? 0.0 : commission / static_cast<double>(hedge_ms.size()))
+      << ",\"equity_change_usd\":" << (last_equity - first_equity) << ",\"coins\":[";
   bool first = true;
   for (const auto& [name, coin] : coins) {
     if (coin.fills == 0) continue;
