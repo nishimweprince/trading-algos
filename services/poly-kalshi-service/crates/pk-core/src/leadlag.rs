@@ -1,6 +1,7 @@
-//! Lead–lag: does Binance move before Kalshi and Polymarket?
+//! Lead–lag: does a spot reference move before Kalshi and Polymarket?
 //!
-//! A **shock** is a Binance mid move over the last second of at least
+//! The references ([`SOURCES`]) are Binance spot and perp, Kraken and Bitstamp,
+//! each timed on its own. A **shock** is a reference mid move over the last second of at least
 //! [`SHOCK_K`] × the asset's typical one-second move (an EWMA of |1 s log
 //! return| per asset and source, sampled on the clock: a second without a new
 //! best bid or ask is a zero move), and never less than [`MIN_SHOCK_BPS`].
@@ -8,11 +9,11 @@
 //! A shock is only confirmed once the move is large, so timing from the
 //! confirmation would credit any venue that reacted to the start of the move
 //! with "moving first". Times are measured from the move's **onset** instead:
-//! the first Binance update in that second that was already a third of the
+//! the first reference update in that second that was already a third of the
 //! way there. Each follower (Kalshi's YES mid, Polymarket's YES mid; price up
 //! = YES up) gets a **signed** lag: the time from the onset to its first 1¢
 //! move that way, against its mid one second before the onset. Negative means
-//! it moved before Binance did (as this host sees both). No move within
+//! it moved before the reference did (as this host sees both). No move within
 //! [`TIMEOUT_NS`] of the confirmation is no response.
 //!
 //! - Only shocks while Kalshi's mid is inside [0.10, 0.90] count: near 0 or 1
@@ -30,7 +31,9 @@ use serde_json::{Map, Value, json};
 
 use crate::num::{round_dp, round_opt};
 
-pub const SOURCES: [&str; 2] = ["spot", "perp"];
+/// Binance spot and perp keep their first names, so older journals read the same.
+pub const SOURCES: [&str; 4] = ["spot", "perp", "kraken", "bitstamp"];
+const N_SOURCES: usize = SOURCES.len();
 pub const FOLLOWERS: [&str; 2] = ["kalshi", "poly"];
 pub const SHOCK_K: f64 = 3.0;
 pub const MIN_SHOCK_BPS: f64 = 3.0;
@@ -106,6 +109,7 @@ impl Stat {
         json!({
             "n": self.n,
             "responded": self.responded,
+            // Answers before the reference's onset (the key predates Kraken and Bitstamp).
             "before_binance": self.before,
             "lag_ms_p10": round_opt(self.lags.quantile(0.1), 0),
             "lag_ms_p50": round_opt(self.lags.quantile(0.5), 0),
@@ -192,14 +196,14 @@ struct Follower {
 
 #[derive(Debug, Default)]
 struct Asset {
-    sources: [Source; 2],
+    sources: [Source; N_SOURCES],
     followers: [Follower; 2],
 }
 
 pub struct LeadLag {
     pub assets: Vec<String>,
     state: Vec<Asset>,
-    totals: [[Stat; 2]; 2],
+    totals: [[Stat; 2]; N_SOURCES],
     /// Merged into each record (epoch, build, config).
     stamp: Map<String, Value>,
 }
@@ -214,8 +218,8 @@ impl LeadLag {
         self.assets.iter().position(|a| a == asset)
     }
 
-    /// A Binance mid for asset `a`, source `src` (0 spot, 1 perp), received at
-    /// `t`. `venue_ms` is Binance's own stamp when the stream has one.
+    /// A reference mid for asset `a`, source `src` (an index into [`SOURCES`]),
+    /// received at `t`. `venue_ms` is the venue's own stamp when the stream has one.
     pub fn on_ref(&mut self, a: usize, src: usize, t: i64, mid: f64, venue_ms: Option<i64>) -> Vec<Value> {
         let mut out = self.expire(a, t);
         let Some(asset) = self.state.get_mut(a) else { return out };
@@ -497,6 +501,28 @@ mod tests {
         let quiet = &snap["assets"]["BTC"]["spot"];
         assert_eq!(quiet["warm"], true);
         assert!(quiet["typical_1s_bps"].as_f64().unwrap() < busy);
+    }
+
+    #[test]
+    fn each_reference_is_timed_on_its_own() {
+        let mut ll = warmed();
+        // Kraken (source 2) warms on its own clock; Binance perp stays quiet.
+        for i in 0..120 {
+            let px = if i % 2 == 0 { 100.0 } else { 100.01 };
+            ll.on_ref(0, 2, i * S + 50 * MS, px, Some((i * S + 50 * MS) / MS - 5));
+        }
+        let t0 = 120 * S + 500 * MS;
+        assert!(ll.on_ref(0, 2, t0, 100.2, None).is_empty());
+        let out = ll.on_follow(0, 1, t0 + 80 * MS, 900, Some(0.51));
+        assert!(out.is_empty()); // Kalshi has not answered yet
+        let out = ll.on_follow(0, 0, t0 + 200 * MS, 900, Some(0.52));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0]["source"], "kraken");
+        let snap = ll.snapshot();
+        assert_eq!(snap["assets"]["BTC"]["kraken"]["feed_lag_ms_p50"].as_f64(), Some(5.0));
+        assert_eq!(snap["totals"]["kraken"]["poly"]["responded"], 1);
+        assert_eq!(snap["totals"]["perp"]["poly"]["n"], 0);
+        assert_eq!(snap["totals"]["bitstamp"]["kalshi"]["n"], 0);
     }
 
     #[test]

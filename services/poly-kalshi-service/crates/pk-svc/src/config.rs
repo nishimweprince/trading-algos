@@ -142,6 +142,12 @@ pub struct Settings {
     pub binance_enabled: bool,
     pub binance_spot_ws_url: String,
     pub binance_perp_ws_url: String,
+    /// Kraken (London) and Bitstamp best bid/ask, the same way: public data,
+    /// recorded and timed by the observer, never traded.
+    pub kraken_enabled: bool,
+    pub kraken_ws_url: String,
+    pub bitstamp_enabled: bool,
+    pub bitstamp_ws_url: String,
 
     /// The order probe (`pk_exec::probe`): real, unfillable orders.
     pub order_probe: bool,
@@ -501,6 +507,10 @@ impl Settings {
             binance_enabled: e.flag("PK_BINANCE", true)?,
             binance_spot_ws_url: e.or("BINANCE_SPOT_WS_URL", "wss://stream.binance.com:9443/stream"),
             binance_perp_ws_url: e.or("BINANCE_PERP_WS_URL", "wss://fstream.binance.com/public/stream"),
+            kraken_enabled: e.flag("PK_KRAKEN", true)?,
+            kraken_ws_url: e.or("KRAKEN_WS_URL", "wss://ws.kraken.com/v2"),
+            bitstamp_enabled: e.flag("PK_BITSTAMP", true)?,
+            bitstamp_ws_url: e.or("BITSTAMP_WS_URL", "wss://ws.bitstamp.net"),
             order_probe,
             poly_private_key,
             poly_funder,
@@ -647,8 +657,8 @@ mod tests {
     #[test]
     fn every_supported_asset_loads_and_every_feed_covers_it() {
         // Onboarding a coin means every table at once: PK_ASSETS validation
-        // here, the observer's PolyBolt symbols and the Binance lead-lag
-        // streams. A gap in any table silently drops the coin from that feed.
+        // here, the observer's PolyBolt symbols and the Binance, Kraken and
+        // Bitstamp lead-lag streams. A gap in any table silently drops the coin from that feed.
         let mut m = base();
         m.insert("PK_ASSETS".into(), SUPPORTED_ASSETS.join(","));
         let s = Settings::from_env(m, None).unwrap();
@@ -665,6 +675,8 @@ mod tests {
                 a == "HYPE" || pk_feeds::ws::binance_stream(a, false).is_some(),
                 "{a} has no Binance spot stream"
             );
+            assert!(pk_feeds::ws::kraken_symbol(a).is_some(), "{a} has no Kraken symbol");
+            assert!(pk_feeds::ws::bitstamp_channel(a).is_some(), "{a} has no Bitstamp pair");
         }
         for (x, _) in pk_feeds::ws::POLYBOLT_SYMBOLS {
             assert!(SUPPORTED_ASSETS.contains(&x), "{x} is not a supported asset");
