@@ -20,8 +20,9 @@
 //!   only. Its connects are written as `b` lines, never `c`, which the engine
 //!   would read as a book reset.
 //! - **Binance** (`n` spot, `f` perp), **Kraken** (`r`, v2 `ticker` with
-//!   `event_trigger: bbo`) and **Bitstamp** (`t`, `order_book_<pair>`, the top
-//!   100 levels about every 100 ms): public best bid/ask references, recorded
+//!   `event_trigger: bbo`), **Bitstamp** (`t`, `order_book_<pair>`, the top
+//!   100 levels about every 100 ms) and **Coinbase** (`o`, the Exchange
+//!   `ticker`: best bid and ask on each trade): public best bid/ask references, recorded
 //!   and timed by the observer, never traded. Their connects are written under
 //!   their own venue too. Bitstamp asks for a reconnect before maintenance
 //!   (`bts:request_reconnect`).
@@ -57,6 +58,8 @@ pub enum FeedKind {
     Kraken,
     /// Bitstamp `order_book_<pair>`; ids are channel names.
     Bitstamp,
+    /// Coinbase Exchange `ticker`; ids are products (`BTC-USD`).
+    Coinbase,
 }
 
 impl FeedKind {
@@ -69,12 +72,13 @@ impl FeedKind {
             FeedKind::Binance { futures: true } => 'f',
             FeedKind::Kraken => 'r',
             FeedKind::Bitstamp => 't',
+            FeedKind::Coinbase => 'o',
         }
     }
 
     /// Public references: recorded, timed and never read by the engine.
     fn reference(&self) -> bool {
-        matches!(self, FeedKind::Binance { .. } | FeedKind::Kraken | FeedKind::Bitstamp)
+        matches!(self, FeedKind::Binance { .. } | FeedKind::Kraken | FeedKind::Bitstamp | FeedKind::Coinbase)
     }
 }
 
@@ -153,7 +157,7 @@ impl FeedHandle {
             "poly" => {
                 o.insert("removed_since_connect".into(), self.removed_since_connect().into());
             }
-            "binance_spot" | "binance_perp" | "kraken" | "bitstamp" => {}
+            "binance_spot" | "binance_perp" | "kraken" | "bitstamp" | "coinbase" => {}
             _ => {
                 o.insert("authed".into(), s.authed.load(Ordering::Relaxed).into());
                 o.insert("auth_failures".into(), s.auth_failures.load(Ordering::Relaxed).into());
@@ -174,6 +178,7 @@ pub fn spawn_feed(url: String, kind: FeedKind, emit: Emit) -> FeedHandle {
         FeedKind::Binance { futures: true } => "binance_perp",
         FeedKind::Kraken => "kraken",
         FeedKind::Bitstamp => "bitstamp",
+        FeedKind::Coinbase => "coinbase",
     };
     let handle = FeedHandle { kind_name, shared: shared.clone() };
     tokio::spawn(run(url, kind, emit, shared));
@@ -425,6 +430,10 @@ impl Session<'_> {
                     Self::send(ws, json!({"event": "bts:subscribe", "data": {"channel": channel}})).await?;
                 }
             }
+            FeedKind::Coinbase => {
+                let body = json!({"type": "subscribe", "product_ids": ids, "channels": ["ticker"]});
+                Self::send(ws, body).await?;
+            }
         }
         self.shared.subscribed.lock().extend(ids);
         Ok(())
@@ -456,6 +465,10 @@ impl Session<'_> {
                 for channel in &ids {
                     Self::send(ws, json!({"event": "bts:unsubscribe", "data": {"channel": channel}})).await?;
                 }
+            }
+            FeedKind::Coinbase => {
+                let body = json!({"type": "unsubscribe", "product_ids": ids, "channels": ["ticker"]});
+                Self::send(ws, body).await?;
             }
         }
         let mut sub = self.shared.subscribed.lock();
@@ -545,6 +558,17 @@ impl Session<'_> {
                         Ok(true)
                     }
                 }
+            }
+            FeedKind::Coinbase => {
+                if text.starts_with(r#"{"type":"subscriptions""#) {
+                    return Ok(true);
+                }
+                if text.starts_with(r#"{"type":"error""#) {
+                    let head: String = text.chars().take(150).collect();
+                    set_error(self.shared, format!("coinbase: {head}"));
+                }
+                (self.emit)('o', text);
+                Ok(true)
             }
         }
     }
@@ -690,6 +714,12 @@ pub fn kraken_symbol(asset: &str) -> Option<&'static str> {
 pub fn bitstamp_channel(asset: &str) -> Option<String> {
     const LISTED: [&str; 8] = ["BTC", "ETH", "SOL", "XRP", "BNB", "DOGE", "HYPE", "ZEC"];
     LISTED.contains(&asset).then(|| format!("order_book_{}usd", asset.to_lowercase()))
+}
+
+/// The Coinbase Exchange product for an asset (USD pairs).
+pub fn coinbase_product(asset: &str) -> Option<String> {
+    const LISTED: [&str; 8] = ["BTC", "ETH", "SOL", "XRP", "BNB", "DOGE", "HYPE", "ZEC"];
+    LISTED.contains(&asset).then(|| format!("{asset}-USD"))
 }
 
 pub const POLYBOLT_SYMBOLS: [(&str, &str); 8] = [

@@ -1,6 +1,6 @@
 //! Lead–lag: does a spot reference move before Kalshi and Polymarket?
 //!
-//! The references ([`SOURCES`]) are Binance spot and perp, Kraken and Bitstamp,
+//! The references ([`SOURCES`]) are Binance spot and perp, Kraken, Bitstamp and Coinbase,
 //! each timed on its own. A **shock** is a reference mid move over the last second of at least
 //! [`SHOCK_K`] × the asset's typical one-second move (an EWMA of |1 s log
 //! return| per asset and source, sampled on the clock: a second without a new
@@ -32,7 +32,7 @@ use serde_json::{Map, Value, json};
 use crate::num::{round_dp, round_opt};
 
 /// Binance spot and perp keep their first names, so older journals read the same.
-pub const SOURCES: [&str; 4] = ["spot", "perp", "kraken", "bitstamp"];
+pub const SOURCES: [&str; 5] = ["spot", "perp", "kraken", "bitstamp", "coinbase"];
 const N_SOURCES: usize = SOURCES.len();
 pub const FOLLOWERS: [&str; 2] = ["kalshi", "poly"];
 pub const SHOCK_K: f64 = 3.0;
@@ -109,7 +109,7 @@ impl Stat {
         json!({
             "n": self.n,
             "responded": self.responded,
-            // Answers before the reference's onset (the key predates Kraken and Bitstamp).
+            // Answers before the reference's onset (the key predates the other references).
             "before_binance": self.before,
             "lag_ms_p10": round_opt(self.lags.quantile(0.1), 0),
             "lag_ms_p50": round_opt(self.lags.quantile(0.5), 0),

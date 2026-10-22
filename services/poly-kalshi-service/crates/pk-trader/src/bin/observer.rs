@@ -12,7 +12,7 @@ use parking_lot::Mutex;
 use pk_core::journal::JsonlDaily;
 use pk_core::{Ledger, RiskLimits, RiskState};
 use pk_engine::Role;
-use pk_feeds::ws::{POLYBOLT_SYMBOLS, binance_stream, bitstamp_channel, kraken_symbol};
+use pk_feeds::ws::{POLYBOLT_SYMBOLS, binance_stream, bitstamp_channel, coinbase_product, kraken_symbol};
 use pk_feeds::{FeedKind, spawn_feed};
 use pk_svc::Settings;
 use pk_svc::api::{ApiKey, require_key};
@@ -60,7 +60,10 @@ fn main() -> anyhow::Result<()> {
         })
         .transpose()?;
     let observer = Observer::new(engine, journal, recorder);
-    let references = settings.binance_enabled || settings.kraken_enabled || settings.bitstamp_enabled;
+    let references = settings.binance_enabled
+        || settings.kraken_enabled
+        || settings.bitstamp_enabled
+        || settings.coinbase_enabled;
     let observer = Arc::new(if references { observer.with_leadlag() } else { observer });
 
     let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build()?;
@@ -116,6 +119,13 @@ fn main() -> anyhow::Result<()> {
                 let feed = spawn_feed(settings.bitstamp_ws_url.clone(), FeedKind::Bitstamp, emit);
                 feed.set_wanted(settings.assets.iter().filter_map(|a| bitstamp_channel(a)).collect());
                 *observer.bitstamp.lock() = Some(feed);
+            }
+            if settings.coinbase_enabled {
+                let o = observer.clone();
+                let emit: pk_feeds::Emit = Arc::new(move |_, text: String| o.coinbase(&text));
+                let feed = spawn_feed(settings.coinbase_ws_url.clone(), FeedKind::Coinbase, emit);
+                feed.set_wanted(settings.assets.iter().filter_map(|a| coinbase_product(a)).collect());
+                *observer.coinbase.lock() = Some(feed);
             }
             let key = ApiKey(Arc::new(settings.api_key.clone()));
             let app = Router::new()

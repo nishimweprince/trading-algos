@@ -11,12 +11,13 @@
 //! order next to the market lines. Research that joins them sorts on
 //! `recv_ns`; the engine ignores venue `b`.
 //!
-//! Binance spot (`n`) and perp (`f`), Kraken (`r`) and Bitstamp (`t`) best
-//! bid/ask lines are stamped and written the same way, but only when the best
-//! bid or ask changed (most updates change only a size). Binance frames are
-//! kept as they came; Kraken and Bitstamp are written as one compact line per
-//! quote, `{"s","b","a"}` plus the venue's stamp (`ts` RFC 3339, `mt` µs), since
-//! a Bitstamp frame carries 100 levels a side. They also drive the lead–lag
+//! Binance spot (`n`) and perp (`f`), Kraken (`r`), Bitstamp (`t`) and
+//! Coinbase (`o`) best bid/ask lines are stamped and written the same way, but
+//! only when the best bid or ask changed (most updates change only a size).
+//! Binance frames are kept as they came; the others are written as one compact
+//! line per quote, `{"s","b","a"}` plus the venue's stamp (`ts` RFC 3339, `mt`
+//! µs), since a Bitstamp frame carries 100 levels a side and a Coinbase ticker
+//! a day of statistics. They also drive the lead–lag
 //! monitor (`pk_core::leadlag`), which the Kalshi and Polymarket mids from the
 //! engine follow; its `leadlag_shock` records go to the journal.
 
@@ -61,6 +62,7 @@ pub struct Observer {
     pub binance: Mutex<Vec<pk_feeds::FeedHandle>>,
     pub kraken: Mutex<Option<pk_feeds::FeedHandle>>,
     pub bitstamp: Mutex<Option<pk_feeds::FeedHandle>>,
+    pub coinbase: Mutex<Option<pk_feeds::FeedHandle>>,
     /// The last best bid and ask per (venue, symbol): only changes are kept.
     ref_last: Mutex<HashMap<(char, String), (f64, f64)>>,
 }
@@ -134,6 +136,17 @@ impl<'de> Deserialize<'de> for Top {
     }
 }
 
+/// A Coinbase Exchange `ticker` frame: the best bid and ask after a trade.
+#[derive(Deserialize)]
+struct CoinbaseTicker<'a> {
+    #[serde(rename = "type")]
+    kind: &'a str,
+    product_id: &'a str,
+    best_bid: &'a str,
+    best_ask: &'a str,
+    time: Option<&'a str>,
+}
+
 /// The lead–lag source of a reference venue (its index in [`SOURCES`]).
 fn source_of(venue: char) -> Option<usize> {
     let name = match venue {
@@ -141,6 +154,7 @@ fn source_of(venue: char) -> Option<usize> {
         'f' => "perp",
         'r' => "kraken",
         't' => "bitstamp",
+        'o' => "coinbase",
         _ => return None,
     };
     SOURCES.iter().position(|s| *s == name)
@@ -164,6 +178,7 @@ impl Observer {
             binance: Mutex::new(Vec::new()),
             kraken: Mutex::new(None),
             bitstamp: Mutex::new(None),
+            coinbase: Mutex::new(None),
             ref_last: Mutex::new(HashMap::new()),
         }
     }
@@ -232,6 +247,24 @@ impl Observer {
         let venue_ms = f.data.microtimestamp.parse::<i64>().ok().map(|us| us / 1000);
         let line = || json!({"s": pair, "b": bid, "a": ask, "mt": f.data.microtimestamp}).to_string();
         self.quote('t', t, pair, asset.as_deref(), (bid, ask), venue_ms, line);
+    }
+
+    /// One Coinbase frame (`o`): a ticker's best bid and ask as a compact line.
+    pub fn coinbase(&self, text: &str) {
+        let t = now_ns();
+        let text = text.trim();
+        // Reconnect markers, errors: kept as they came.
+        let Some(q) = serde_json::from_str::<CoinbaseTicker>(text).ok().filter(|q| q.kind == "ticker") else {
+            self.record('o', t, text);
+            return;
+        };
+        let (Ok(bid), Ok(ask)) = (q.best_bid.parse::<f64>(), q.best_ask.parse::<f64>()) else {
+            self.record('o', t, text);
+            return;
+        };
+        let venue_ms = q.time.and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok()).map(|d| d.timestamp_millis());
+        let line = || json!({"s": q.product_id, "b": bid, "a": ask, "ts": q.time}).to_string();
+        self.quote('o', t, q.product_id, q.product_id.strip_suffix("-USD"), (bid, ask), venue_ms, line);
     }
 
     fn record(&self, venue: char, t: i64, text: &str) {
@@ -391,6 +424,7 @@ impl Observer {
             },
             "kraken": self.kraken.lock().as_ref().map(|f| f.stats()).unwrap_or(json!({"enabled": false})),
             "bitstamp": self.bitstamp.lock().as_ref().map(|f| f.stats()).unwrap_or(json!({"enabled": false})),
+            "coinbase": self.coinbase.lock().as_ref().map(|f| f.stats()).unwrap_or(json!({"enabled": false})),
             "leadlag": self.leadlag.as_ref().map(|ll| ll.lock().snapshot()),
         })
     }
@@ -499,11 +533,21 @@ mod tests {
         obs.bitstamp(&book(81662.93, 1792677358006727));
         obs.bitstamp(&book(81662.93, 1792677358115393)); // the same top of book
         obs.bitstamp(r#"{"event":"bts:subscription_succeeded","channel":"order_book_btcusd","data":{}}"#);
+        let coinbase = |bid: &str, size: &str| {
+            format!(
+                r#"{{"type":"ticker","sequence":1,"product_id":"BTC-USD","price":"81567.31","open_24h":"84495.31","best_bid":"{bid}","best_bid_size":"{size}","best_ask":"81567.31","best_ask_size":"0.009","side":"buy","time":"2026-10-22T14:37:23.117725Z","trade_id":1,"last_size":"0.1"}}"#
+            )
+        };
+        obs.coinbase(&coinbase("81567.30", "0.002"));
+        obs.coinbase(&coinbase("81567.30", "0.5")); // a size change only
+        obs.coinbase(r#"{"type":"error","message":"Failed to subscribe"}"#);
+        assert_eq!(obs.ref_last.lock().get(&('o', "BTC-USD".into())), Some(&(81567.30, 81567.31)));
         assert_eq!(obs.ref_last.lock().get(&('r', "DOGE/USD".into())), Some(&(0.0797115, 0.0797117)));
         assert_eq!(obs.ref_last.lock().get(&('t', "btcusd".into())), Some(&(81662.93, 81663.93)));
         let snap = obs.status()["leadlag"].clone();
         assert!(snap["assets"]["DOGE"]["kraken"]["feed_lag_ms_p50"].as_f64().is_some());
         assert!(snap["assets"]["BTC"]["bitstamp"]["feed_lag_ms_p50"].as_f64().is_some());
+        assert!(snap["assets"]["BTC"]["coinbase"]["feed_lag_ms_p50"].as_f64().is_some());
         drop(obs); // stops the recorder: the hour file is flushed
         let lines: Vec<(char, String)> = pk_tape::read_lines(pk_tape::iter_files(&dir.join("tape"), None, None))
             .map(|l| (l.venue, l.text))
@@ -514,6 +558,9 @@ mod tests {
         let bs: Vec<&str> = lines.iter().filter(|(v, _)| *v == 't').map(|(_, t)| t.as_str()).collect();
         assert_eq!(bs.len(), 2); // one compact quote, then the notice
         assert_eq!(bs[0], r#"{"a":81663.93,"b":81662.93,"mt":"1792677358006727","s":"btcusd"}"#);
+        let cb: Vec<&str> = lines.iter().filter(|(v, _)| *v == 'o').map(|(_, t)| t.as_str()).collect();
+        assert_eq!(cb.len(), 2); // one compact quote, then the error as it came
+        assert_eq!(cb[0], r#"{"a":81567.31,"b":81567.3,"s":"BTC-USD","ts":"2026-10-22T14:37:23.117725Z"}"#);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

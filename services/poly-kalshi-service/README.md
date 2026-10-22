@@ -4,9 +4,9 @@ The kpc convergence trade, rebuilt to measure its one untested repair. On 15-min
 crypto up/down binaries, when Kalshi's YES mid and Polymarket's differ by at least
 0.20, buy the cheap Polymarket leg as a taker, at or below 0.60, and sell it once
 Polymarket's bid catches up with Kalshi's price (the active exit), else hold to
-settlement. Kalshi is the signal only; Binance, Kraken and Bitstamp are recorded and
-compared (lead–lag panel) but never decide: from Dublin Binance arrives after both
-venues move, and Kraken (London) is being measured.
+settlement. Kalshi is the signal only; Binance, Kraken, Bitstamp and Coinbase are recorded
+and compared (lead–lag panel) but never decide: from Dublin Binance arrives after
+both venues move, and the others are being measured.
 
 **Epoch 14 (2026-10-14).** Execution economics, and live code only:
 - **Exits net a cent after both fees.** The floor was entry + entry fee + 1¢,
@@ -95,7 +95,7 @@ Telegram `/kill` and `/status` run on a bot of its own (`PK_TELEGRAM_BOT_TOKEN`)
 |---|---|
 | `pk-core` | books, fees, `decide()`, windows, ledger, risk, journal records |
 | `pk-engine` | the line-driven engine (roles `full`, `trade`, `observe`; forward and reverse) |
-| `pk-feeds` | Kalshi (RSA-PSS) and Polymarket (sharded) websockets, PolyBolt, the Binance/Kraken/Bitstamp references, window discovery |
+| `pk-feeds` | Kalshi (RSA-PSS) and Polymarket (sharded) websockets, PolyBolt, the Binance/Kraken/Bitstamp/Coinbase references, window discovery |
 | `pk-exec` | the Polymarket CLOB V2 order path: warm HTTP/2, L2 auth, EIP-712 signing, pre-signing, the probe |
 | `pk-tape` | the zstd tape writer and the reader (it also reads the old `.gz` hours) |
 | `pk-trader` | `poly-kalshi-service` and `pk-observer` |
@@ -110,7 +110,7 @@ Telegram `/kill` and `/status` run on a bot of its own (`PK_TELEGRAM_BOT_TOKEN`)
    - *Trade quality:* average win and loss, profit factor, expectancy, largest win and loss, longest losing streak, gross P&L and fees.
    - *Gates.*
 3. **Live market:** the market state table (per asset bid/ask/mid, Δ against the threshold, what the rule would do now, book ages, this window's decision) and per-second Kalshi vs Polymarket charts.
-4. **Edge:** the signal check (win rate vs Kalshi-implied vs price paid), the opportunity funnel (windows → crossings → skips → blocked → orders → fills → settled, total and today), and breakdowns by asset, by second and by entry band; the lead–lag table times each reference feed (Binance spot and perp, Kraken, Bitstamp) against Kalshi and Polymarket.
+4. **Edge:** the signal check (win rate vs Kalshi-implied vs price paid), the opportunity funnel (windows → crossings → skips → blocked → orders → fills → settled, total and today), and breakdowns by asset, by second and by entry band; the lead–lag table times each reference feed (Binance spot and perp, Kraken, Bitstamp, Coinbase) against Kalshi and Polymarket.
 5. **History:** equity curve, daily results, the last 50 trades, recent engine events.
 6. **System:** feeds, latency (engine queue delay next to the loop lag), the order path (decision → acknowledgement, pre-sign hit rate, assumed against measured paper latency), execution, and data quality.
 
