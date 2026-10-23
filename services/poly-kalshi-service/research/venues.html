@@ -1,0 +1,434 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Prediction-market venue research for poly-kalshi-service, researched 2026-10-23.">
+  <link rel="icon" href="data:,">
+  <title>Prediction-market venue research · poly-kalshi-service</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f5f3ee;
+      --surface: #fcfbf8;
+      --surface-2: #ece9e1;
+      --ink: #17201d;
+      --muted: #61706a;
+      --line: #d6d4cc;
+      --accent: #0b6b55;
+      --accent-soft: #dcece5;
+      --warn: #865e13;
+      --warn-soft: #f3e8cc;
+      --info: #315e83;
+      --info-soft: #dfeaf2;
+      --good: #176b45;
+      --radius: 10px;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #101512;
+        --surface: #171e1a;
+        --surface-2: #202a25;
+        --ink: #eef3ef;
+        --muted: #a0aea7;
+        --line: #334039;
+        --accent: #66c8a5;
+        --accent-soft: #173d31;
+        --warn: #e0b45d;
+        --warn-soft: #3b3019;
+        --info: #82b6dc;
+        --info-soft: #1a3447;
+        --good: #75d3a6;
+      }
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--sans);
+      line-height: 1.55;
+    }
+    a { color: var(--accent); text-underline-offset: 3px; }
+    a:hover { text-decoration-thickness: 2px; }
+    code { font-family: var(--mono); font-size: .9em; }
+
+    .skip-link {
+      position: absolute;
+      left: -9999px;
+      top: 8px;
+      padding: 8px 12px;
+      background: var(--surface);
+      color: var(--ink);
+      border: 1px solid var(--line);
+      z-index: 10;
+    }
+    .skip-link:focus { left: 8px; }
+
+    .shell { width: min(1500px, calc(100% - 40px)); margin: 0 auto; }
+    header { padding: 52px 0 26px; }
+    .hero {
+      border-left: 4px solid var(--accent);
+      padding-left: 24px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 28px;
+      align-items: start;
+    }
+    .eyebrow {
+      margin: 0 0 8px;
+      color: var(--accent);
+      font-size: .72rem;
+      font-weight: 760;
+      letter-spacing: .13em;
+      text-transform: uppercase;
+    }
+    h1 { margin: 0; max-width: 900px; font-size: clamp(2rem, 5vw, 4.5rem); line-height: .98; letter-spacing: -.045em; }
+    .lede { max-width: 850px; margin: 20px 0 0; color: var(--muted); font-size: 1.08rem; }
+    .status {
+      white-space: nowrap;
+      border: 1px solid var(--accent);
+      color: var(--accent);
+      border-radius: 999px;
+      padding: 7px 11px;
+      font-size: .78rem;
+      font-weight: 700;
+    }
+
+    .tabs {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      display: flex;
+      gap: 8px;
+      padding: 13px 0;
+      background: color-mix(in srgb, var(--bg) 94%, transparent);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--line);
+      overflow-x: auto;
+    }
+    .tab {
+      appearance: none;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--surface);
+      color: var(--muted);
+      cursor: pointer;
+      font: inherit;
+      font-size: .84rem;
+      font-weight: 700;
+      padding: 8px 13px;
+      white-space: nowrap;
+    }
+    .tab:hover, .tab:focus-visible { border-color: var(--accent); color: var(--ink); }
+    .tab[aria-selected="true"] { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+
+    main { padding: 26px 0 72px; }
+    [role="tabpanel"][hidden] { display: none; }
+    .stack > * + * { margin-top: 28px; }
+    section > h2 { margin: 0 0 7px; font-size: 1.55rem; letter-spacing: -.025em; }
+    section > .section-note { margin: 0 0 14px; color: var(--muted); }
+
+    .callout {
+      display: grid;
+      grid-template-columns: 4px minmax(0, 1fr);
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .callout::before { content: ""; background: var(--accent); }
+    .callout.warning::before { background: var(--warn); }
+    .callout.info::before { background: var(--info); }
+    .callout-body { padding: 17px 19px; }
+    .callout h2, .callout h3 { margin: 0 0 5px; font-size: 1rem; }
+    .callout p { margin: 0; color: var(--muted); }
+
+    .split { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(260px, .55fr); gap: 16px; }
+    .feature, .metrics, .mini-card {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+    }
+    .feature { padding: 22px; }
+    .feature-head { display: flex; justify-content: space-between; gap: 18px; align-items: start; }
+    .feature h2 { margin: 0; font-size: 1.45rem; }
+    .feature p { margin: 12px 0 0; color: var(--muted); }
+    .badge { border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: .72rem; font-weight: 760; padding: 5px 9px; white-space: nowrap; }
+    .link-row { display: flex; flex-wrap: wrap; gap: 7px 14px; margin-top: 17px; font-size: .86rem; }
+    .metrics { display: grid; grid-template-columns: repeat(2, 1fr); }
+    .metric { padding: 19px; min-height: 108px; }
+    .metric:nth-child(odd) { border-right: 1px solid var(--line); }
+    .metric:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+    .metric strong { display: block; font-size: 2rem; line-height: 1; letter-spacing: -.04em; }
+    .metric span { display: block; margin-top: 8px; color: var(--muted); font-size: .78rem; }
+
+    .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+    table { width: 100%; border-collapse: collapse; min-width: 1020px; font-size: .82rem; }
+    th { background: var(--surface-2); color: var(--muted); font-size: .7rem; letter-spacing: .07em; text-align: left; text-transform: uppercase; }
+    th, td { padding: 12px 13px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    tr:last-child td { border-bottom: 0; }
+    tbody tr:hover { background: color-mix(in srgb, var(--surface-2) 55%, transparent); }
+    .rank { font-family: var(--mono); color: var(--muted); }
+    .venue { font-weight: 760; white-space: nowrap; }
+    .tier-a { color: var(--good); }
+    .tier-b { color: var(--warn); }
+
+    .grade-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+    .mini-card { padding: 17px; }
+    .mini-card h3 { margin: 0; font-size: .92rem; }
+    .mini-card p { margin: 8px 0 0; color: var(--muted); font-size: .82rem; }
+
+    .roadmap { display: grid; grid-template-columns: repeat(5, 1fr); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--surface); }
+    .step { padding: 17px; border-right: 1px solid var(--line); }
+    .step:last-child { border-right: 0; }
+    .step b { display: block; color: var(--accent); font-family: var(--mono); font-size: .75rem; }
+    .step strong { display: block; margin-top: 7px; font-size: .88rem; }
+    .step p { margin: 6px 0 0; color: var(--muted); font-size: .78rem; }
+
+    .source-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    .source { padding: 14px 15px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+    .source strong { display: block; margin-bottom: 5px; font-size: .82rem; }
+    .source a { font-size: .76rem; overflow-wrap: anywhere; }
+    .fine-print { padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: .76rem; }
+
+    @media (max-width: 950px) {
+      .hero { grid-template-columns: 1fr; }
+      .status { justify-self: start; }
+      .split { grid-template-columns: 1fr; }
+      .grade-grid { grid-template-columns: repeat(2, 1fr); }
+      .roadmap { grid-template-columns: 1fr; }
+      .step { border-right: 0; border-bottom: 1px solid var(--line); }
+      .step:last-child { border-bottom: 0; }
+      .source-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 620px) {
+      .shell { width: min(100% - 24px, 1500px); }
+      header { padding-top: 30px; }
+      .hero { padding-left: 15px; }
+      .grade-grid, .source-grid { grid-template-columns: 1fr; }
+      .metrics { grid-template-columns: 1fr; }
+      .metric:nth-child(odd) { border-right: 0; }
+      .metric:not(:last-child) { border-bottom: 1px solid var(--line); }
+    }
+    @media print {
+      :root { color-scheme: light; --bg: #fff; --surface: #fff; --surface-2: #f3f3f0; --ink: #111; --muted: #555; --line: #bbb; --accent: #075945; }
+      .tabs { display: none; }
+      [role="tabpanel"][hidden] { display: block; }
+      [role="tabpanel"] { break-before: page; }
+      [role="tabpanel"]:first-of-type { break-before: auto; }
+      .table-wrap { overflow: visible; }
+      table { min-width: 0; font-size: 7.5pt; }
+      a { color: inherit; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#content">Skip to report</a>
+  <header class="shell">
+    <div class="hero">
+      <div>
+        <p class="eyebrow">poly-kalshi-service · venue research · 2026-10-23</p>
+        <h1>Where the strategy should look next</h1>
+        <p class="lede">A ranked map of short-duration crypto prediction markets, settlement compatibility, execution constraints, duplicated frontends, and the adjacent FX path.</p>
+      </div>
+      <span class="status">Research complete</span>
+    </div>
+  </header>
+
+  <nav class="shell tabs" role="tablist" aria-label="Research sections">
+    <button class="tab" id="tab-direct" role="tab" aria-controls="panel-direct" aria-selected="true" tabindex="0">Ranked direct matches</button>
+    <button class="tab" id="tab-inventory" role="tab" aria-controls="panel-inventory" aria-selected="false" tabindex="-1">Broader venue inventory</button>
+    <button class="tab" id="tab-sources" role="tab" aria-controls="panel-sources" aria-selected="false" tabindex="-1">Primary sources</button>
+  </nav>
+
+  <main id="content" class="shell">
+    <section id="panel-direct" role="tabpanel" aria-labelledby="tab-direct" class="stack">
+      <div class="callout">
+        <div class="callout-body">
+          <h2>Decision</h2>
+          <p>Build record-only adapters in this order: <strong>Gemini → OKX → Nadex/CDNA → Predict.fun → Polymarket US → Jupiter/BisonFi</strong>. Keep broker, parimutuel, and fixed-quote markets outside the current active-exit engine.</p>
+        </div>
+      </div>
+
+      <div class="split">
+        <article class="feature">
+          <div class="feature-head"><h2>Gemini Predictions</h2><span class="badge">Build first</span></div>
+          <p>Native recurring 15-minute BTC, ETH, SOL and XRP binaries; public event discovery; public book, depth, trade and index streams; plus REST/WebSocket trading. This is the strongest combination of asset overlap, real order-book microstructure and integration quality found.</p>
+          <div class="callout warning" style="margin-top:16px">
+            <div class="callout-body"><h3>Correlated is not equivalent</h3><p>Gemini’s reference index and equality rule differ from the Kalshi and Polymarket contracts. Capture the exact source and sample rules before using it as anything stronger than an E1 signal leg.</p></div>
+          </div>
+          <div class="link-row">
+            <a href="https://developer.gemini.com/prediction-markets/tickers-crypto">Ticker specification</a>
+            <a href="https://developer.gemini.com/prediction-markets-spec/markets">Market API</a>
+            <a href="https://developer.gemini.com/trading/websocket/streams">WebSocket streams</a>
+          </div>
+        </article>
+        <aside class="metrics" aria-label="Research summary">
+          <div class="metric"><strong>6</strong><span>direct-match venues</span></div>
+          <div class="metric"><strong>10</strong><span>short-duration candidates</span></div>
+          <div class="metric"><strong>4</strong><span>Gemini overlap assets</span></div>
+          <div class="metric"><strong>3+</strong><span>frontends to deduplicate</span></div>
+        </aside>
+      </div>
+
+      <section>
+        <h2>Ranked short-duration venues</h2>
+        <p class="section-note">Overlap means overlap with assets configured in the service—not contract equivalence.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Rank</th><th>Venue</th><th>Overlap</th><th>Structure</th><th>Data & execution</th><th>Settlement</th><th>Action</th></tr></thead>
+            <tbody>
+              <tr><td class="rank">01</td><td class="venue tier-a">Gemini Predictions</td><td>BTC · ETH · SOL · XRP</td><td>Native 5m / 15m CLOB</td><td>Public REST discovery and public book/depth/trade WS; REST/WS trading</td><td>Gemini reference index; equality resolves YES</td><td><strong>Build first.</strong> Data/paper first; jurisdiction-dependent execution.</td></tr>
+              <tr><td class="rank">02</td><td class="venue tier-a">OKX Event Contracts</td><td>BTC · ETH · SOL</td><td>Native 5m / 15m USDT CLOB</td><td>Public REST/WS; private trading API; taker speed bump</td><td>OKX spot index; 60-second average for 15m</td><td><strong>Build second.</strong> Validate account region and real depth.</td></tr>
+              <tr><td class="rank">03</td><td class="venue tier-a">Nadex / CDNA</td><td>BTC · ETH plus wider catalog</td><td>$1 short-duration event contracts</td><td>FIX now; prediction REST/WS trading listed as coming soon</td><td>Nadex asset index and defined sampling</td><td><strong>High-value observer.</strong> US-only FCM access is the main blocker.</td></tr>
+              <tr><td class="rank">04</td><td class="venue tier-a">Predict.fun</td><td>BTC · ETH verified</td><td>BNB Chain conditional tokens + off-chain CLOB</td><td>Beta REST/CLOB SDK; API key</td><td>Chainlink DataLink from Binance; equality 50/50</td><td><strong>Build direct.</strong> Binance Wallet is the same upstream book.</td></tr>
+              <tr><td class="rank">05</td><td class="venue">Polymarket US</td><td>BTC · ETH · SOL · XRP</td><td>Independent US-regulated book</td><td>Live pages; programmatic onboarding less clear than global Polymarket</td><td>Capture per contract</td><td><strong>Onboard for data.</strong> Keep separate from the Polygon CLOB.</td></tr>
+              <tr><td class="rank">06</td><td class="venue">Jupiter / BisonFi</td><td>BTC</td><td>Solana outcome tokens / atomic swaps</td><td>Jupiter Prediction REST API; API key</td><td>Chainlink BTC/USD</td><td><strong>Data + paper.</strong> Only <code>provider=bisonfi</code> is independent.</td></tr>
+              <tr><td class="rank">07</td><td class="venue tier-b">Forsee</td><td>BTC · ETH · SOL · BNB · XRP · HYPE</td><td>Fixed quote from venue market maker</td><td>REST polling; limited rollout</td><td>60-second TWAP; fee; positions lock</td><td><strong>Hold-to-settlement only.</strong> No book or active exit.</td></tr>
+              <tr><td class="rank">08</td><td class="venue tier-b">PancakeSwap</td><td>BTC · ETH · BNB; SOL in Dumb Mode</td><td>Parimutuel 5m / house-style 15m</td><td>On-chain; no conventional live exit</td><td>Chainlink; locked positions</td><td><strong>Reference only.</strong> Incompatible microstructure.</td></tr>
+              <tr><td class="rank">09</td><td class="venue">Hyperliquid HIP-4</td><td>BTC · ETH · SOL</td><td>Daily and short threshold outcomes</td><td>Public <code>outcomeMeta</code> and book API</td><td>Pyth or Hyperliquid mark</td><td><strong>Catalog watcher.</strong> No recurring start-vs-end 15m family verified.</td></tr>
+              <tr><td class="rank">10</td><td class="venue">Deriv Rise/Fall</td><td>FX + selected instruments</td><td>Broker binary quotes</td><td>Quote / buy / monitor / optional sell APIs</td><td>Tick and entry-relative rules</td><td><strong>Low priority.</strong> Requires a separate broker-contract model.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2>Contract equivalence</h2>
+        <p class="section-note">Store the grade with every matched contract. The new candidates initially belong in E1, not E0.</p>
+        <div class="grade-grid">
+          <article class="mini-card"><h3>E0 · Equivalent</h3><p>Same outcome, source, time window, tie rule and correction policy. Eligible for true cross-venue pricing logic.</p></article>
+          <article class="mini-card"><h3>E1 · Correlated</h3><p>Same clock and direction but a different oracle, strike, sample, tie rule or correction policy.</p></article>
+          <article class="mini-card"><h3>E2 · Related</h3><p>Same underlying with a different timeframe, threshold or contract shape. Signal use only.</p></article>
+          <article class="mini-card"><h3>E3 · Reference</h3><p>Spot, perp, options, broker quotes or play-money forecasts. Never an executable twin.</p></article>
+        </div>
+      </section>
+
+      <div class="callout warning">
+        <div class="callout-body"><h2>Frontends are not extra liquidity</h2><p>Coinbase predictions route to Kalshi; Binance Wallet predictions route to Predict.fun; Crypto.com Predict Pro, CDNA, OG Predictions and Nadex belong to one exchange family; Jupiter’s Kalshi/Polymarket listings are aggregations.</p></div>
+      </div>
+
+      <section>
+        <h2>Implementation shape</h2>
+        <p class="section-note">Follow the isolated <code>pk-limitless</code> pattern and normalize contract semantics before quotes.</p>
+        <div class="roadmap">
+          <div class="step"><b>01</b><strong>Discover</strong><p>Poll catalogs and persist full contract rules and venue IDs.</p></div>
+          <div class="step"><b>02</b><strong>Record</strong><p>Store raw frames, normalized BBO and settlement-source observations.</p></div>
+          <div class="step"><b>03</b><strong>Measure</strong><p>Run at least 72 hours; compare coverage, depth, lead/lag and disagreements.</p></div>
+          <div class="step"><b>04</b><strong>Paper</strong><p>Model fees, latency, partial fills, speed bumps and locked positions.</p></div>
+          <div class="step"><b>05</b><strong>Promote</strong><p>Enable live only after venue limits, stale-feed checks and kill switches pass.</p></div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Adjacent FX path</h2>
+        <p class="section-note">Kalshi’s 15-minute EUR/USD, GBP/USD and USD/JPY contracts form a second strategy family. Use OANDA, Saxo, LMAX or IBKR as price references—not as equivalent prediction venues—and test whether spot FX leads Kalshi.</p>
+      </section>
+    </section>
+
+    <section id="panel-inventory" role="tabpanel" aria-labelledby="tab-inventory" class="stack" hidden>
+      <div class="callout info"><div class="callout-body"><h2>Broader market map</h2><p>These venues are worth cataloging, but no recurring contract equivalent to the service’s current 15-minute crypto window was verified. Put them behind a general-event discovery layer.</p></div></div>
+      <section>
+        <h2>General-event and adjacent venues</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Venue</th><th>Model</th><th>API surface</th><th>Fit</th></tr></thead>
+            <tbody>
+              <tr><td class="venue">Opinion</td><td>General event CLOB</td><td>REST market/book data; SDK/WS trading</td><td>Strong infrastructure; no verified recurring 15m crypto family.</td></tr>
+              <tr><td class="venue">Pascal</td><td>Solana non-custodial CLOB</td><td>Public REST/WS; REST/WS trading</td><td>Excellent general-event adapter target; no direct match found.</td></tr>
+              <tr><td class="venue">Myriad</td><td>On-chain event markets</td><td>Public API</td><td>Broad-market expansion; short automated markets need validation.</td></tr>
+              <tr><td class="venue">Futuur</td><td>Real-money prediction market</td><td>API + Pusher stream</td><td>General-event candidate; contract matching required.</td></tr>
+              <tr><td class="venue">Rain</td><td>Arbitrum prediction markets</td><td>Unauthenticated read API; SDK path</td><td>Useful catalog/reference feed; no verified short match.</td></tr>
+              <tr><td class="venue">XO Market</td><td>User-created CLOB</td><td>API; off-chain match / on-chain settle</td><td>Oracle and market-creator risk require explicit gates.</td></tr>
+              <tr><td class="venue">Bayse Markets</td><td>Africa-focused CLOB + AMM</td><td>REST/WS, order and settlement APIs</td><td>Regionally relevant; no verified recurring 15m crypto series.</td></tr>
+              <tr><td class="venue">SX Bet</td><td>Sports CLOB</td><td>CLOB API</td><td>Separate sports strategy only.</td></tr>
+              <tr><td class="venue">ProphetX · Novig · Sporttrade</td><td>US sports exchanges</td><td>Gated or partner APIs</td><td>Separate sports strategy only.</td></tr>
+              <tr><td class="venue">PredictIt</td><td>US political contracts</td><td>Public data API</td><td>Politics only and structurally constrained.</td></tr>
+              <tr><td class="venue">ForecastEx / IBKR</td><td>CFTC event contracts</td><td>IBKR account/data workflows</td><td>Macro/economic expansion, not native crypto windows.</td></tr>
+              <tr><td class="venue">Manifold · Metaculus</td><td>Play-money / forecasts</td><td>Public data APIs</td><td>Research signal only; no executable real-money leg.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section>
+        <h2>Discovery and normalization services</h2>
+        <p class="section-note">Prediction.com, Synpath, Predictefy, pdata, Prediction Market Radar and Resolved Markets can accelerate symbol mapping and backfill. They are not execution venues; use direct connections on the hot path.</p>
+      </section>
+    </section>
+
+    <section id="panel-sources" role="tabpanel" aria-labelledby="tab-sources" class="stack" hidden>
+      <div class="callout"><div class="callout-body"><h2>Source quality</h2><p>Primary venue and developer documentation was used wherever available. Live catalogs were checked on 2026-10-23 to verify current listings. Recheck availability, jurisdiction, fees and rules before rollout.</p></div></div>
+      <section>
+        <h2>Primary references</h2>
+        <div class="source-grid">
+          <div class="source"><strong>Gemini tickers</strong><a href="https://developer.gemini.com/prediction-markets/tickers-crypto">developer.gemini.com/prediction-markets/tickers-crypto</a></div>
+          <div class="source"><strong>Gemini markets API</strong><a href="https://developer.gemini.com/prediction-markets-spec/markets">developer.gemini.com/prediction-markets-spec/markets</a></div>
+          <div class="source"><strong>Gemini WebSockets</strong><a href="https://developer.gemini.com/trading/websocket/streams">developer.gemini.com/trading/websocket/streams</a></div>
+          <div class="source"><strong>OKX Event Contracts FAQ</strong><a href="https://www.okx.com/en-gb/help/event-contracts-faq">okx.com/en-gb/help/event-contracts-faq</a></div>
+          <div class="source"><strong>OKX settlement logic</strong><a href="https://www.okx.com/en-gb/help/how-to-trade-event-contracts-and-settlement-logic">okx.com/en-gb/help/how-to-trade-event-contracts-and-settlement-logic</a></div>
+          <div class="source"><strong>OKX API v5</strong><a href="https://www.okx.com/docs-v5/">okx.com/docs-v5</a></div>
+          <div class="source"><strong>Nadex crypto specifications</strong><a href="https://www.nadex.com/crypto/">nadex.com/crypto</a></div>
+          <div class="source"><strong>Nadex fees</strong><a href="https://website-prod.nadex.com/pricing/">nadex.com/pricing</a></div>
+          <div class="source"><strong>Crypto.com / CDNA relationship</strong><a href="https://help.crypto.com/en/articles/17213297-overview">help.crypto.com/predict-pro/overview</a></div>
+          <div class="source"><strong>Predict.fun developer API</strong><a href="https://dev.predict.fun/">dev.predict.fun</a></div>
+          <div class="source"><strong>Predict.fun BTC 15m rules</strong><a href="https://predict.fun/market/btc-updown-15m-1792671300">predict.fun/market/btc-updown-15m</a></div>
+          <div class="source"><strong>Binance Wallet upstream disclosure</strong><a href="https://developers.binance.com/en/docs/products/w3w-prediction/websocket-streams/orderbook">developers.binance.com/w3w-prediction/orderbook</a></div>
+          <div class="source"><strong>Polymarket US</strong><a href="https://polymarket.us/">polymarket.us</a></div>
+          <div class="source"><strong>Jupiter Forecast API</strong><a href="https://developers.jup.ag/docs/prediction/forecast">developers.jup.ag/docs/prediction/forecast</a></div>
+          <div class="source"><strong>Forsee API</strong><a href="https://api.forsee.market/">api.forsee.market</a></div>
+          <div class="source"><strong>PancakeSwap Prediction</strong><a href="https://docs.pancakeswap.finance/play/prediction">docs.pancakeswap.finance/play/prediction</a></div>
+          <div class="source"><strong>Hyperliquid outcome assets</strong><a href="https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/asset-ids">hyperliquid.gitbook.io/.../asset-ids</a></div>
+          <div class="source"><strong>Opinion API</strong><a href="https://docs.opinion.trade/developer-guide/opinion-open-api/overview">docs.opinion.trade/.../overview</a></div>
+          <div class="source"><strong>Pascal API</strong><a href="https://docs.pascal.trade/">docs.pascal.trade</a></div>
+          <div class="source"><strong>Kalshi 15-minute financials</strong><a href="https://kalshi.com/category/financials/frequency/fifteen_min">kalshi.com/category/financials/frequency/fifteen_min</a></div>
+          <div class="source"><strong>OANDA pricing stream</strong><a href="https://developer.oanda.com/rest-live-v20/pricing-ep/">developer.oanda.com/rest-live-v20/pricing-ep</a></div>
+          <div class="source"><strong>Saxo pricing</strong><a href="https://www.developer.saxo/openapi/learn/pricing">developer.saxo/openapi/learn/pricing</a></div>
+          <div class="source"><strong>IBKR market data</strong><a href="https://interactivebrokers.github.io/tws-api/market_data.html">interactivebrokers.github.io/tws-api/market_data.html</a></div>
+        </div>
+      </section>
+      <p class="fine-print">This report evaluates technical and market-structure fit. It is not a statement that any venue accepts accounts from Rwanda or that a particular service is permitted to trade there. Account eligibility, KYC, sanctions, tax and local rules require separate verification.</p>
+    </section>
+  </main>
+
+  <script>
+    (() => {
+      const tabs = [...document.querySelectorAll('[role="tab"]')];
+      const panels = [...document.querySelectorAll('[role="tabpanel"]')];
+
+      function activate(tab, updateHash = true) {
+        tabs.forEach((item) => {
+          const selected = item === tab;
+          item.setAttribute('aria-selected', String(selected));
+          item.tabIndex = selected ? 0 : -1;
+        });
+        panels.forEach((panel) => { panel.hidden = panel.id !== tab.getAttribute('aria-controls'); });
+        if (updateHash) history.replaceState(null, '', `#${tab.id.replace('tab-', '')}`);
+      }
+
+      tabs.forEach((tab, index) => {
+        tab.addEventListener('click', () => activate(tab));
+        tab.addEventListener('keydown', (event) => {
+          if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+          event.preventDefault();
+          let next = index;
+          if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+          if (event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length;
+          if (event.key === 'Home') next = 0;
+          if (event.key === 'End') next = tabs.length - 1;
+          activate(tabs[next]);
+          tabs[next].focus();
+        });
+      });
+
+      const initial = document.getElementById(`tab-${location.hash.slice(1)}`);
+      if (initial) activate(initial, false);
+    })();
+  </script>
+</body>
+</html>
