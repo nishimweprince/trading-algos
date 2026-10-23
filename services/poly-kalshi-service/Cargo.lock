@@ -3832,6 +3832,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "pk-okx"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum 0.8.9",
+ "chrono",
+ "clap",
+ "dotenvy",
+ "parking_lot",
+ "pk-core",
+ "pk-engine",
+ "pk-exec",
+ "pk-feeds",
+ "pk-stats",
+ "pk-svc",
+ "pk-tape",
+ "reqwest 0.13.5",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "pk-research"
 version = "0.1.0"
 dependencies = [
