@@ -51,6 +51,12 @@ pub struct LimSettings {
     pub api_secret: Option<String>,
     pub private_key: Option<String>,
     pub base_rpc_url: Option<String>,
+    /// SOL hourly, priced from Helius on-chain SOL (paper only); off without a Helius key.
+    pub hourly: Option<crate::hourly::HourlyCfg>,
+    pub hourly_epoch: String,
+    pub helius_url: String,
+    pub helius_key: Option<String>,
+    pub binance_spot_ws_url: String,
 }
 
 struct Env(HashMap<String, String>);
@@ -160,7 +166,32 @@ impl LimSettings {
             api_secret: e.get("LIMITLESS_API_SECRET"),
             private_key: e.get("LIMITLESS_PRIVATE_KEY").or_else(|| settings.poly_private_key.clone()),
             base_rpc_url: e.get("BASE_RPC_URL"),
+            hourly: None,
+            hourly_epoch: e.or("PK_LIMH_EPOCH", "1"),
+            helius_url: settings.laserstream_url.clone(),
+            helius_key: settings.helius_api_key.clone(),
+            binance_spot_ws_url: settings.binance_spot_ws_url.clone(),
         };
+        let mut lim = lim;
+        if e.flag("PK_LIMH_ENABLED", true)? && lim.helius_key.is_some() {
+            lim.hourly = Some(crate::hourly::HourlyCfg {
+                min_edge: e.num("PK_LIMH_MIN_EDGE", 0.10)?,
+                min_net_edge: e.num("PK_LIMH_MIN_NET_EDGE", 0.03)?,
+                min_px: e.num("PK_LIMH_MIN_PX", 0.20)?,
+                max_px: e.num("PK_LIMH_MAX_PX", 0.60)?,
+                max_spread: e.num("PK_LIMH_MAX_SPREAD", 0.10)?,
+                early_s: e.num("PK_LIMH_EARLY_S", 120)?,
+                late_s: e.num("PK_LIMH_LATE_S", 120)?,
+                shares: e.num("PK_LIMH_ORDER_SHARES", lim.shares as f64)?,
+                limit_offset: lim.limit_offset,
+                exit_slip: lim.exit_slip,
+                fee_rate: lim.fee_rate,
+                vol_halflife_s: e.num("PK_LIMH_VOL_HALFLIFE_S", 600.0)?,
+                basis_halflife_s: e.num("PK_LIMH_BASIS_HALFLIFE_S", 300.0)?,
+                paper_extra_ms: lim.paper_extra_ms,
+                max_open_usd: lim.max_open_usd,
+            });
+        }
         anyhow::ensure!(lim.shares >= 1, "PK_LIM_ORDER_SHARES must be at least 1");
         anyhow::ensure!(
             lim.port != settings.port && lim.port != settings.observer_port && lim.port != settings.status_port,

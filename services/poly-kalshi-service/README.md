@@ -177,6 +177,19 @@ but another binary can.
   - `pk-limitless --profile dev probe-orders`: post-only buys far below the bid,
     cancelled at once.
 
+- **SOL hourly (paper only, `PK_LIMH_*`, on whenever `HELIUS_API_KEY` is set).**
+  Limitless has no SOL 15-minute market since 2026-07-08; its "Solana Up or Down
+  Hourly" (a Polymarket mirror) resolves on Binance SOL/USDT's 1 h candle (close
+  ≥ open). It is priced from Helius on-chain SOL:
+  `P(Up) = Φ(ln(S/open)/(σ√τ))`, where S is the freshest of Pyth, Orca and Raydium
+  times its Binance basis (5-minute EWMA). Pyth's push account updates only about every 10 s; the pools about once a second.
+  σ is the EWMA of 1 s on-chain returns. Entries need the ask ≥ 10¢ under fair and
+  pass the same net-edge, price and 10¢-spread gates, once an hour, with delayed paper
+  fills. The Binance-only fair value is journaled beside it (`fair_up_binance`), as is
+  a Brier score of the fair value at entry. State is in `limitless/sol-hourly`.
+  This opens a second Helius LaserStream subscription (the observer has the other),
+  which counts against the same Helius credits.
+
 | Journal record (`limitless/journal`) | |
 |---|---|
 | `lim_window` | a window identified on both venues |

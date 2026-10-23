@@ -73,6 +73,14 @@ svg.mkt .k { stroke:var(--kalshi); } svg.mkt .l { stroke:var(--lim); } svg.mkt .
 </div>
 <div class="card"><h2>Feed lag per asset (ms)</h2><table id="feedlag"></table><div class="note">Lag: receive time minus the venue's stamp (host clock chrony-synced). Interval: time between Limitless book frames (they are coalesced).</div></div>
 
+<h3 class="section">SOL hourly · Helius on-chain (paper)</h3>
+<div class="grid">
+  <div class="card"><h2>Model</h2><div id="h-model"></div><div class="note">Fair P(Up) = Φ(ln(S/open) / σ√τ), S = the freshest Helius source (Pyth, Orca, Raydium) × its Binance basis; settles on Binance SOL/USDT's 1 h candle.</div></div>
+  <div class="card"><h2>Market &amp; decision</h2><div id="h-market"></div></div>
+  <div class="card"><h2>Results</h2><div id="h-results"></div></div>
+</div>
+<div class="card"><h2>SOL sources</h2><table id="h-src"></table><div class="note">Lag: receive time minus the Helius node's created_at (on-chain) — Binance has no stamp on bookTicker.</div></div>
+
 <h3 class="section">History</h3>
 <div class="card"><table id="recent"></table></div>
 </main>
@@ -149,6 +157,18 @@ async function tick() {
   const du = s.decide_ns || {};
   put("engine", kv([["decide() p50 / p99", `${du.p50 ?? "–"} / ${du.p99 ?? "–"} ns`], ["decisions timed", du.n ?? 0], ["Kalshi resets / Limitless resets", `${c.kalshi_resets ?? 0} / ${c.lim_resets ?? 0}`], ["stale frames dropped", c.lim_stale_frames ?? 0], ["recorder lines / dropped", `${(s.recorder || {}).lines_written ?? "–"} / ${(s.recorder || {}).dropped ?? "–"}`], ["discovery errors", (s.discovery || {}).errors ?? 0]]));
   put("feedlag", `<tr><th>asset</th><th>Limitless lag p50</th><th>p90</th><th>p99</th><th>frame interval p50</th><th>p90</th><th>Kalshi lag p50</th><th>p90</th></tr>${Object.entries(assets).map(([a, x]) => { const fl = x.feed || {}; return `<tr><td>${esc(a)}</td><td>${f(fl.lim_lag_ms_p50, 0)}</td><td>${f(fl.lim_lag_ms_p90, 0)}</td><td>${f(fl.lim_lag_ms_p99, 0)}</td><td>${f(fl.lim_interval_ms_p50, 0)}</td><td>${f(fl.lim_interval_ms_p90, 0)}</td><td>${f(fl.kalshi_lag_ms_p50, 0)}</td><td>${f(fl.kalshi_lag_ms_p90, 0)}</td></tr>`; }).join("")}`);
+
+  // SOL hourly.
+  const H = s.sol_hourly;
+  if (!H) { put("h-model", '<span class="muted">off (no HELIUS_API_KEY or PK_LIMH_ENABLED=false)</span>'); }
+  else {
+    const e = H.eval || {}, w = H.window || {}, hg = H.gates || {}, hc = H.counters || {}, hl = H.ledger || {}, hf = (s.feeds || {}).helius || {};
+    put("h-model", kv([["hour open (Binance)", w.open_price != null ? f(w.open_price, 2) : "–"], ["into the hour", H.sec_into == null ? "–" : f(H.sec_into / 60, 1) + " min"], ["fair Up (Helius)", f(e.fair_up, 3)], ["fair Up (Binance only)", f(e.fair_up_binance, 3)], ["σ", e.sigma_bps_per_min == null ? `warming (${H.vol_samples}/120 s)` : f(e.sigma_bps_per_min, 1) + " bp/√min"], ["signal (on-chain × basis)", e.signal_src ? `${esc(e.signal_src)} ${f(e.signal_px, 3)}` : "–"], ["basis to Binance", f(e.basis_bps, 1) + " bp"], ["Helius stream", hf.connected ? `up · ${hf.messages ?? 0} writes` : "down", hf.connected ? "good" : "bad"]]));
+    const L2 = H.lim || {};
+    put("h-market", kv([["market", w.slug || "not found yet"], ["Limitless bid / ask", `${px(L2.bid)} / ${px(L2.ask)}`], ["book age", f((L2.age_ms || 0) / 1000, 1) + " s"], ["taker delay", f(w.taker_delay_ms, 0) + " ms"], ["this hour", H.pending ? `${H.pending.exit ? "exit" : "entry"} held` : H.position && H.position.status === "open" ? `${H.position.side} ${f(H.position.shares, 0)} @ ${px(H.position.cost / H.position.shares)}` : H.consumed ? "used" : "watching"], ["entries decided / filled / missed", `${hc.entries_decided ?? 0} / ${hc.entries_filled ?? 0} / ${hc.entry_missed ?? 0}`], ["blocked: spread / floor / cap / net edge", `${hc.blocked_spread ?? 0} / ${hc.blocked_below_floor ?? 0} / ${hc.blocked_above_cap ?? 0} / ${hc.blocked_net_edge ?? 0}`]]));
+    put("h-results", kv([["paper cash", money(hl.cash)], ["settled / P&L", `${hl.settled ?? 0} / ${money(hl.pnl)}`], ["net ¢/share", smp(hg.net_cents_per_share)], ["30 s markout", smp(hg.markout30_cents)], ["delay cost", smp(hg.delay_cost_cents)], ["Brier (fair at entry)", smp(hg.brier, "")]]));
+    put("h-src", `<tr><th>source</th><th>price</th><th>age (s)</th><th>updates</th><th>lag p50 (ms)</th><th>p90</th></tr>${Object.entries(H.sources || {}).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${f(v.px, 3)}</td><td>${f((v.age_ms || 0) / 1000, 1)}</td><td>${v.updates ?? 0}</td><td>${f(v.lag_ms_p50, 0)}</td><td>${f(v.lag_ms_p90, 0)}</td></tr>`).join("")}`);
+  }
 
   // History.
   const rec = (s.recent || []).slice(0, 30).map((r) => {

@@ -17,6 +17,7 @@
 mod config;
 mod discovery;
 mod engine;
+mod hourly;
 mod live;
 mod probes;
 
@@ -37,7 +38,7 @@ use pk_core::ledger::Ledger;
 use pk_core::{NS, window_open};
 use pk_exec::limitless::{Hmac, LimChain, LimClient, LimSigner};
 use pk_exec::{WarmConfig, WarmHttp};
-use pk_feeds::{FeedHandle, FeedKind, KalshiSigner, LimitlessFeed, spawn_feed, spawn_limitless};
+use pk_feeds::{FeedHandle, FeedKind, KalshiSigner, LaserHandle, LimitlessFeed, spawn_feed, spawn_laserstream, spawn_limitless};
 use pk_svc::Settings;
 use pk_svc::api::{ApiKey, require_key};
 use pk_tape::Recorder;
@@ -47,6 +48,7 @@ use serde_json::{Map, Value, json};
 use crate::config::{LimSettings, Mode};
 use crate::discovery::{LimDiscovery, LimWindow};
 use crate::engine::{Engine, EngineCfg};
+use crate::hourly::Hourly;
 use crate::live::now_ns;
 use crate::probes::{NetProbe, OrderProbeStats, TakerStats};
 
@@ -97,6 +99,10 @@ struct App {
     chain: Mutex<Option<Arc<LimChain>>>,
     redeemed: Mutex<Vec<Value>>,
     started_ns: i64,
+    hourly: Option<Arc<Mutex<Hourly>>>,
+    helius: Mutex<Option<LaserHandle>>,
+    binance: Mutex<Option<FeedHandle>>,
+    hour_slugs: Mutex<HashMap<i64, String>>,
 }
 
 impl App {
@@ -106,13 +112,29 @@ impl App {
         }
     }
 
+    /// The Limitless subscription: every 15-minute slug and the SOL hour's.
+    fn resubscribe(&self) {
+        let mut slugs = self.engine.lock().slugs();
+        if let Some(h) = &self.hourly
+            && let Some(s) = h.lock().slug()
+        {
+            slugs.push(s);
+        }
+        if let Some(l) = self.feed.lock().as_ref() {
+            l.set_wanted(slugs);
+        }
+    }
+
     fn status(&self) -> Value {
         let t = now_ns();
         let mut st = self.engine.lock().status(t);
         let feeds = json!({
             "kalshi": self.kalshi.lock().as_ref().map(FeedHandle::stats),
             "limitless": self.feed.lock().as_ref().map(LimitlessFeed::stats),
+            "helius": self.helius.lock().as_ref().map(LaserHandle::stats),
+            "binance_sol": self.binance.lock().as_ref().map(FeedHandle::stats),
         });
+        st["sol_hourly"] = self.hourly.as_ref().map(|h| h.lock().status(t)).unwrap_or(Value::Null);
         st["feeds"] = feeds;
         st["netprobe"] = self.probe.lock().as_ref().map(|p| p.stats()).unwrap_or(Value::Null);
         st["order_path"] = json!({
@@ -260,6 +282,17 @@ async fn run(settings: Settings, lim: LimSettings) -> anyhow::Result<()> {
         daily_loss_usd: lim.daily_loss_usd,
     };
     let engine = Arc::new(Mutex::new(Engine::new(cfg, &lim.assets, ledger, journal, stamp(&lim))));
+    let hourly = match &lim.hourly {
+        Some(cfg) => {
+            let dir = lim.state_dir.join("sol-hourly");
+            let ledger = Ledger::open_mode(Some(&dir.join("ledger.json")), lim.paper_cash, Some(&lim.hourly_epoch), "paper")?;
+            let mut st = stamp(&lim);
+            st.insert("epoch".into(), lim.hourly_epoch.clone().into());
+            st.insert("mode".into(), "paper".into());
+            Some(Arc::new(Mutex::new(Hourly::new(cfg.clone(), ledger, JsonlDaily::new(dir.join("journal")), st))))
+        }
+        None => None,
+    };
     let recorder = if lim.record {
         Some(Mutex::new(Recorder::start(
             &lim.record_dir,
@@ -288,6 +321,10 @@ async fn run(settings: Settings, lim: LimSettings) -> anyhow::Result<()> {
         chain: Mutex::new(None),
         redeemed: Mutex::new(Vec::new()),
         started_ns: now_ns(),
+        hourly,
+        helius: Mutex::new(None),
+        binance: Mutex::new(None),
+        hour_slugs: Mutex::new(HashMap::new()),
     });
 
     // Live: the order path must come up, or nothing trades.
@@ -341,11 +378,74 @@ async fn run(settings: Settings, lim: LimSettings) -> anyhow::Result<()> {
         let emit: pk_feeds::Emit = Arc::new(move |_, text: String| {
             let t = now_ns();
             a.tape('l', t, &text);
-            let mut e = a.engine.lock();
-            e.on_limitless(&text, t);
-            si(&mut e);
+            {
+                let mut e = a.engine.lock();
+                e.on_limitless(&text, t);
+                si(&mut e);
+            }
+            if let Some(h) = &a.hourly {
+                h.lock().on_limitless(&text, t);
+            }
         });
         *app.feed.lock() = Some(spawn_limitless(lim.ws_url.clone(), emit));
+    }
+
+    // SOL hourly: Helius on-chain SOL (the signal) and Binance SOL/USDT (the settlement source).
+    if app.hourly.is_some() {
+        let a = app.clone();
+        let emit: pk_feeds::Emit = Arc::new(move |_, text: String| {
+            let t = now_ns();
+            a.tape('h', t, &text);
+            if let Some(h) = &a.hourly {
+                h.lock().on_helius(&text, t);
+            }
+        });
+        let key = lim.helius_key.clone().unwrap_or_default();
+        *app.helius.lock() = Some(spawn_laserstream(lim.helius_url.clone(), key, emit));
+        let a = app.clone();
+        let emit: pk_feeds::Emit = Arc::new(move |venue, text: String| {
+            let t = now_ns();
+            a.tape(venue, t, &text);
+            if let Some(h) = &a.hourly {
+                h.lock().on_binance(&text, t);
+            }
+        });
+        let feed = spawn_feed(lim.binance_spot_ws_url.clone(), FeedKind::Binance { futures: false }, emit);
+        feed.set_wanted(BTreeSet::from(["solusdt@bookTicker".to_owned()]));
+        *app.binance.lock() = Some(feed);
+        // This hour's market, every 5 s until found (it is listed a few seconds after the hour).
+        let a = app.clone();
+        tokio::spawn(async move {
+            let d = LimDiscovery::new(&a.lim.api_url, &a.settings.poly_gamma_url, &a.settings.kalshi_rest_url);
+            let mut tick = tokio::time::interval(Duration::from_secs(5));
+            loop {
+                tick.tick().await;
+                let hour = now_ns() / NS / hourly::HOUR_S * hourly::HOUR_S;
+                let Some(h) = a.hourly.clone() else { return };
+                if h.lock().window().is_some_and(|w| w.open_unix == hour) {
+                    continue;
+                }
+                match d.market("sol-hourly-price").await {
+                    Ok(Some(m)) => match hourly::parse_hour(&m, hour) {
+                        Ok(w) => {
+                            let t = now_ns();
+                            let mut ctl = serde_json::to_value(&w).unwrap_or(Value::Null);
+                            ctl["type"] = "limh_window".into();
+                            a.tape('c', t, &ctl.to_string());
+                            a.hour_slugs.lock().insert(w.open_unix, w.slug.clone());
+                            h.lock().set_window(w, t);
+                            a.resubscribe();
+                        }
+                        Err(why) => *a.last_discovery_error.lock() = Some(format!("sol hourly: {why}")),
+                    },
+                    Ok(None) => {}
+                    Err(e) => {
+                        a.discovery_errors.fetch_add(1, Ordering::Relaxed);
+                        *a.last_discovery_error.lock() = Some(e.to_string());
+                    }
+                }
+            }
+        });
     }
 
     // Discovery: this window, on both venues, every 2 s until found.
@@ -380,16 +480,11 @@ async fn run(settings: Settings, lim: LimSettings) -> anyhow::Result<()> {
                     }
                 }
                 if changed {
-                    let (tickers, slugs) = {
-                        let e = a.engine.lock();
-                        (e.tickers(), e.slugs())
-                    };
+                    let tickers = a.engine.lock().tickers();
                     if let Some(k) = a.kalshi.lock().as_ref() {
                         k.set_wanted(tickers.into_iter().collect::<BTreeSet<_>>());
                     }
-                    if let Some(l) = a.feed.lock().as_ref() {
-                        l.set_wanted(slugs);
-                    }
+                    a.resubscribe();
                     let cutoff = open - 6 * 3600;
                     a.windows.lock().retain(|k, _| k.1 >= cutoff);
                 }
@@ -405,9 +500,15 @@ async fn run(settings: Settings, lim: LimSettings) -> anyhow::Result<()> {
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 tick.tick().await;
-                let mut e = a.engine.lock();
-                e.tick(now_ns());
-                si(&mut e);
+                let t = now_ns();
+                {
+                    let mut e = a.engine.lock();
+                    e.tick(t);
+                    si(&mut e);
+                }
+                if let Some(h) = &a.hourly {
+                    h.lock().tick(t);
+                }
             }
         });
     }
@@ -420,6 +521,15 @@ async fn run(settings: Settings, lim: LimSettings) -> anyhow::Result<()> {
             let mut tick = tokio::time::interval(Duration::from_secs(15));
             loop {
                 tick.tick().await;
+                if let Some(h) = a.hourly.clone() {
+                    let slugs = a.hour_slugs.lock().clone();
+                    let due = h.lock().unsettled(now_ns(), &slugs);
+                    for (open, slug) in due {
+                        if let Ok(Some(outcome)) = d.outcome(&slug).await {
+                            h.lock().settle(open, outcome, now_ns());
+                        }
+                    }
+                }
                 let due = a.engine.lock().unsettled(now_ns());
                 for (asset, open) in due {
                     let slug = discovery::lim_slug(&asset, open);
@@ -482,6 +592,9 @@ async fn run(settings: Settings, lim: LimSettings) -> anyhow::Result<()> {
                 n += 1;
                 if let Some(p50) = probe.warm_p50() {
                     a.engine.lock().set_rtt(p50);
+                    if let Some(h) = &a.hourly {
+                        h.lock().set_rtt(p50);
+                    }
                 }
                 if now_ns() - last_summary >= 60 * NS {
                     last_summary = now_ns();
@@ -490,6 +603,9 @@ async fn run(settings: Settings, lim: LimSettings) -> anyhow::Result<()> {
                         s["ws"] = f.stats();
                     }
                     a.engine.lock().note(last_summary, "lim_probe", s);
+                    if let Some(h) = &a.hourly {
+                        h.lock().note_eval(last_summary);
+                    }
                 }
             }
         });

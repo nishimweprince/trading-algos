@@ -259,6 +259,7 @@ pub fn pick_lim(status: Option<&Value>) -> Option<Value> {
         "order_path": strip(st.get("order_path"), &[]),
         "recorder": keep(st.get("recorder"), &["enabled", "lines_written", "dropped", "errors", "disk_free_gb", "disk_paused"]),
         "discovery": keep(st.get("discovery"), &["errors"]),
+        "sol_hourly": st.get("sol_hourly"),
     }))
 }
 
