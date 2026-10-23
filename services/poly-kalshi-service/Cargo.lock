@@ -3759,6 +3759,7 @@ dependencies = [
  "anyhow",
  "axum 0.8.9",
  "base64 0.22.1",
+ "chrono",
  "hmac",
  "httparse",
  "parking_lot",
@@ -3800,6 +3801,32 @@ dependencies = [
  "sha2",
  "tokio",
  "tokio-tungstenite",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "pk-limitless"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "axum 0.8.9",
+ "chrono",
+ "clap",
+ "dotenvy",
+ "parking_lot",
+ "pk-core",
+ "pk-engine",
+ "pk-exec",
+ "pk-feeds",
+ "pk-stats",
+ "pk-svc",
+ "pk-tape",
+ "reqwest 0.13.5",
+ "serde",
+ "serde_json",
+ "tokio",
  "tracing",
  "url",
 ]
