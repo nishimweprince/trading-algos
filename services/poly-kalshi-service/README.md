@@ -131,6 +131,62 @@ Telegram `/kill` and `/status` run on a bot of its own (`PK_TELEGRAM_BOT_TOKEN`)
 - **Export all data (.zip)** downloads the journal, events log, ledger, metrics summary, recording manifests and chart data, with no secrets.
 - It runs at lower CPU priority and is published through a Cloudflare Tunnel with Access in front. See the poly-kalshi section of `infra/cloudflare/README.md`.
 
+## pk-limitless: Kalshi → Limitless (a process of its own)
+
+The same rule, with Limitless's 15-minute BTC and ETH Up/Down markets as the leg.
+These mirror Polymarket's (`isPolyArbitrage`) and settle on the same Chainlink 60 s TWAP.
+The research behind it: Kalshi's move is worth ≤ 1 bp on spot, so spot can't carry it,
+but another binary can.
+
+- **Isolation.** `pk-limitless` (`infra/systemd/pk-limitless.service`) shares nothing
+  with the trader:
+  - it opens its own Kalshi socket and the Limitless Socket.IO socket;
+  - state lives in `data/state/<profile>/limitless`, the tape in `<PK_RECORD_DIR>-limitless`
+    (venues `k`, `l`, `c`);
+  - its API is on `127.0.0.1:8053`;
+  - the unit is `CPUAffinity=0-2`, `Nice=5`, so it never runs on the trader's hot core.
+
+  Starting, stopping or crashing it never touches the Polymarket trader.
+- **The 500 ms taker hold.** Limitless holds every taker order (FAK/FOK, a crossing GTC)
+  for the market's `takerDelayMs` (500 ms), and makers can cancel meanwhile. Paper
+  entries and exits therefore fill against the book at decision + measured round trip +
+  taker delay. The fill at the decision's book is journaled beside it, so `delay_cost`
+  measures what the hold costs.
+- **Fee.** 5% × (1 − p) of the USDC value, i.e. `0.05 · p(1 − p)` per share: the
+  Polymarket formula at rate 0.05. Makers pay nothing.
+- **Live** needs `PK_LIM_EXECUTION_MODE=live` and `PK_LIM_LIVE_CONFIRM=yes`, plus:
+  - a scoped API token for the signing EOA (`LIMITLESS_API_KEY/SECRET`; the key defaults
+    to `POLY_PRIVATE_KEY`), with the profile in `eoa` trading mode;
+  - USDC and a little ETH on Base;
+  - `BASE_RPC_URL`;
+  - the one-time `pk-limitless --profile dev approve`.
+
+  Orders are FAK at the limit, with a dead-man heartbeat. Results come from
+  `/orders/status/batch`. Positions are redeemed on-chain after resolution, because
+  Limitless never redeems for an EOA.
+- **Gate before live:** ≥ 150 delayed-fill entries over ≥ 3 days including US hours,
+  net ¢/share > 0 at t ≥ 2, median 5 s markout ≥ −3¢.
+- **Latency probes** (the status page's Limitless tab, `/limitless`):
+  - warm HTTP/2 round trip on the uncached order-book route (cached answers are rejected),
+    plus the cold request, TCP connect and Cloudflare colo;
+  - the Socket.IO subscribe → ack time and server ping interval;
+  - per-asset feed lag (venue stamp → receive) and frame interval;
+  - Kalshi → Limitless response lag;
+  - `decide()` µs;
+  - live taker ack and ack → final;
+  - `pk-limitless --profile dev probe-orders`: post-only buys far below the bid,
+    cancelled at once.
+
+| Journal record (`limitless/journal`) | |
+|---|---|
+| `lim_window` | a window identified on both venues |
+| `lim_decision` | each consumed crossing, with the instant fill it would have had |
+| `lim_fill`, `lim_no_fill`, `lim_exit` | what the held order got (`held_ms`, `instant_*`) |
+| `lim_settle`, `lim_redeem` | resolution and on-chain redemption |
+| `lim_resp` | one Kalshi ≥ 2¢ move and Limitless's answer |
+| `lim_probe` | the minute's network-probe summary |
+| `lim_live_order` | a live order's timing and result |
+
 ## Order path (the latency review's step 2)
 
 `pk probe-orders` times the real order path without trading. With

@@ -53,10 +53,14 @@ h3.section { font-size:12px; text-transform:uppercase; letter-spacing:.08em; col
 .alerts ul { margin:0; padding-left:18px; } .alerts li { color:var(--bad); }
 .alerts.paused { border-color:var(--warn); color:var(--warn); } .alerts.paused ul { margin-top:6px; }
 .good { color:var(--good); } .bad { color:var(--bad); } .warn { color:var(--warn); } .muted { color:var(--muted); }
+.tabs { display:flex; gap:4px; border-bottom:1px solid var(--line); margin:0 0 12px; }
+.tab { padding:6px 12px; color:var(--muted); text-decoration:none; border:1px solid transparent; border-bottom:none; border-radius:6px 6px 0 0; margin-bottom:-1px; }
+.tab:hover { color:var(--ink); } .tab.on { color:var(--ink); font-weight:600; background:var(--panel); border-color:var(--line); }
 </style>
 </head>
 <body>
 <main>
+<nav class="tabs" aria-label="Venues"><a class="tab on" href="./" aria-current="page">Polymarket</a><a class="tab" href="limitless" target="_blank" rel="noopener" title="opens in a new tab">Limitless ↗</a></nav>
 <div class="head"><div><h1>poly-kalshi</h1><div class="sub"><span id="sub">connecting…</span> · <span id="age" class="muted"></span> <span id="conn"></span></div></div>
   <a class="btn" href="api/export" download title="journal, events log, ledger, metrics, recording manifests and chart data in one zip">Export all data (.zip)</a></div>
 <div class="alerts" id="alerts" role="status">checking…</div>

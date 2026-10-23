@@ -175,6 +175,9 @@ pub struct Settings {
 
     pub status_host: String,
     pub status_port: u16,
+    /// `pk-limitless`, a separate process: the status page reads its API on this port.
+    pub lim_enabled: bool,
+    pub lim_port: u16,
 
     pub telegram_bot_token: Option<String>,
     pub telegram_admin_user_ids: Vec<i64>,
@@ -538,6 +541,8 @@ impl Settings {
             poly_redeem_collateral: e.get("POLY_REDEEM_COLLATERAL"),
             status_host: e.or("PK_STATUS_HOST", "127.0.0.1"),
             status_port,
+            lim_enabled: e.flag("PK_LIM_ENABLED", false)?,
+            lim_port: e.num("PK_LIM_PORT", 8053)?,
             telegram_bot_token,
             telegram_admin_user_ids,
             notify: NotifyConfig {

@@ -1,0 +1,36 @@
+# pk-limitless: Kalshi-signal / Limitless-leg 15-minute trader, paper unless
+# PK_LIM_EXECUTION_MODE=live and PK_LIM_LIVE_CONFIRM=yes. A process of its own:
+# its own Kalshi socket, state (data/state/<profile>/limitless), tape
+# (<PK_RECORD_DIR>-limitless) and loopback API (PK_LIM_PORT, 8053). It shares
+# nothing with poly-kalshi-service, so starting or stopping it never touches
+# the Polymarket trader. Secrets stay in .env.<profile>.
+[Unit]
+Description=pk-limitless (Kalshi → Limitless, profile dev)
+OnFailure=pk-unit-alert@%n.service
+Wants=network-online.target
+After=network-online.target time-sync.target
+RequiresMountsFor=/data
+
+[Service]
+Type=simple
+User=pk
+Group=pk
+WorkingDirectory=/home/pk/trading-algos/services/poly-kalshi-service
+ExecStart=/home/pk/trading-algos/services/poly-kalshi-service/target/release/pk-limitless --profile dev
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+# Never on the trader's hot core: the trader pins pk-hot to the highest core
+# (PK_HOT_CORE=-1). On a 4-vCPU host that is core 3, so this stays on 0-2, at
+# lower priority and weight than the trader.
+CPUAffinity=0-2
+Nice=5
+CPUWeight=50
+MemoryMax=1G
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

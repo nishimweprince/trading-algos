@@ -19,6 +19,7 @@ pub mod clob;
 pub mod fast;
 pub mod gamma;
 pub mod latency;
+pub mod limitless;
 pub mod live;
 pub mod presign;
 pub mod probe;

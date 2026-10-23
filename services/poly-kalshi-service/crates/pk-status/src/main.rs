@@ -8,6 +8,12 @@
 //! | `GET /api/series?since=` | per-second market data per asset, and decisions |
 //! | `GET /api/export` | one zip with everything for offline analysis |
 //! | `GET /health/live` | process up |
+//! | `GET /limitless` | the Limitless page (opened from the main page's tab, in a new tab) |
+//! | `GET /api/lim/status` | allowlisted `pk-limitless` status |
+//! | `GET /api/lim/series?since=` | its per-second Kalshi and Limitless points |
+//!
+//! `pk-limitless` is polled the same way, only when `PK_LIM_ENABLED`, on its
+//! own schedule: a Limitless outage never delays the Polymarket data.
 //!
 //! **Load on the trader is fixed, not per viewer.** One poller reads the
 //! trader's `/v1/status` (and the observer's `/v1/obs/status`) every 5 s and
@@ -36,6 +42,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 const PAGE: &str = include_str!("page.html");
+const LIM_PAGE: &str = include_str!("limitless.html");
 const LIVE_POLL: Duration = Duration::from_secs(5);
 const JOURNAL_EVERY: Duration = Duration::from_secs(30);
 const SERIES_POINTS: usize = 1800;
@@ -211,6 +218,50 @@ pub fn pick(status: Option<&Value>) -> Option<Value> {
     }))
 }
 
+/// The allowlisted subset of `pk-limitless`'s status. Errors, paths and
+/// connection details stay in the process; only counts and timings leave.
+pub fn pick_lim(status: Option<&Value>) -> Option<Value> {
+    let st = status?;
+    let strip = |v: Option<&Value>, drop: &[&str]| -> Value {
+        match v {
+            Some(Value::Object(o)) => {
+                Value::Object(o.iter().filter(|(k, _)| !drop.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect())
+            }
+            other => other.cloned().unwrap_or(Value::Null),
+        }
+    };
+    let feeds = st.get("feeds").and_then(Value::as_object).map(|f| {
+        f.iter().map(|(k, v)| (k.clone(), strip(Some(v), &["last_error"]))).collect::<Map<String, Value>>()
+    });
+    let netprobe = st.get("netprobe").map(|n| {
+        let mut v = strip(Some(n), &["last_error", "connection"]);
+        v["connection"] = keep(n.get("connection"), &["client_age_s", "warm_rtt_ms", "warm_errors", "dns_changes", "non_h2", "requests"]);
+        v
+    });
+    Some(json!({
+        "mode": st.get("mode"),
+        "stamp": st.get("stamp"),
+        "host": st.get("host"),
+        "uptime_s": st.get("uptime_s"),
+        "params": st.get("params"),
+        "shares": st.get("shares"),
+        "limit_offset": st.get("limit_offset"),
+        "assets": st.get("assets"),
+        "ledger": st.get("ledger"),
+        "gates": st.get("gates"),
+        "counters": st.get("counters"),
+        "response": st.get("response"),
+        "decide_ns": st.get("decide_ns"),
+        "rtt_ms": st.get("rtt_ms"),
+        "recent": st.get("recent"),
+        "feeds": feeds,
+        "netprobe": netprobe,
+        "order_path": strip(st.get("order_path"), &[]),
+        "recorder": keep(st.get("recorder"), &["enabled", "lines_written", "dropped", "errors", "disk_free_gb", "disk_paused"]),
+        "discovery": keep(st.get("discovery"), &["errors"]),
+    }))
+}
+
 /// The trader's status with the observer's statistics folded in: the observer
 /// owns the recorder, feed latencies, result delays and data-quality counters;
 /// the trader owns engine time, queue delay, book ages and trade counters.
@@ -266,6 +317,10 @@ struct Cache {
     last_messages: HashMap<String, (f64, f64)>,
     series: HashMap<String, VecDeque<Value>>,
     series_last: i64,
+    lim: Option<Value>,
+    lim_at: Option<f64>,
+    lim_series: HashMap<String, VecDeque<Value>>,
+    lim_series_last: i64,
 }
 
 struct App {
@@ -311,6 +366,28 @@ impl App {
         }
         c.live = live;
         c.live_at = Some(now);
+    }
+
+    async fn refresh_lim(&self) {
+        let base = format!("http://127.0.0.1:{}", self.settings.lim_port);
+        let status = pick_lim(self.get(&format!("{base}/v1/lim/status"), &[]).await.as_ref());
+        let since = self.cache.lock().lim_series_last;
+        let series = self.get(&format!("{base}/v1/lim/series"), &[("since", since.to_string())]).await;
+        let now = chrono::Utc::now().timestamp_millis() as f64 / 1e3;
+        let mut c = self.cache.lock();
+        c.lim = status;
+        c.lim_at = Some(now);
+        for (asset, points) in series.and_then(|b| b.get("points").cloned()).and_then(|p| p.as_object().cloned()).unwrap_or_default() {
+            for p in points.as_array().cloned().unwrap_or_default() {
+                let sec = p.get(0).and_then(Value::as_i64).unwrap_or(0);
+                let s = c.lim_series.entry(asset.clone()).or_default();
+                if s.len() == SERIES_POINTS {
+                    s.pop_front();
+                }
+                s.push_back(p);
+                c.lim_series_last = c.lim_series_last.max(sec);
+            }
+        }
     }
 
     async fn refresh_series(&self) {
@@ -391,6 +468,13 @@ impl App {
             "results": j.get("results"),
             "open_trades": j.get("open_trades"),
         })
+    }
+}
+
+async fn lim_poller(app: Arc<App>) {
+    loop {
+        app.refresh_lim().await;
+        tokio::time::sleep(LIVE_POLL).await;
     }
 }
 
@@ -623,6 +707,40 @@ fn router(app: Arc<App>) -> Router {
                 }
             }),
         )
+        .route("/limitless", get(|| async { Html(LIM_PAGE) }))
+        .route(
+            "/api/lim/status",
+            get(|State(app): State<Arc<App>>| async move {
+                let c = app.cache.lock();
+                json_response(json!({
+                    "enabled": app.settings.lim_enabled,
+                    "fetched_at": c.lim_at,
+                    "service_up": c.lim.is_some(),
+                    "status": c.lim,
+                }))
+            }),
+        )
+        .route(
+            "/api/lim/series",
+            get(|State(app): State<Arc<App>>, Query(q): Query<Since>| async move {
+                let since = q.since.unwrap_or(0);
+                let c = app.cache.lock();
+                let points: Map<String, Value> = c
+                    .lim_series
+                    .iter()
+                    .map(|(a, s)| {
+                        let pts: Vec<Value> = s
+                            .iter()
+                            .filter(|p| p.get(0).and_then(Value::as_i64).is_some_and(|t| t > since))
+                            .cloned()
+                            .collect();
+                        (a.clone(), Value::Array(pts))
+                    })
+                    .collect();
+                let params = c.lim.as_ref().and_then(|l| l.get("params")).cloned().unwrap_or(json!({}));
+                json_response(json!({"threshold": params.get("gap_threshold"), "points": points}))
+            }),
+        )
         .route("/health/live", get(|| async { axum::Json(json!({"status": "ok"})) }))
         .layer(tower_http::compression::CompressionLayer::new())
         .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
@@ -668,6 +786,9 @@ fn main() -> anyhow::Result<()> {
             settings: settings.clone(),
         });
         tokio::spawn(poller(app.clone()));
+        if settings.lim_enabled {
+            tokio::spawn(lim_poller(app.clone()));
+        }
         let listener =
             tokio::net::TcpListener::bind((settings.status_host.as_str(), settings.status_port)).await?;
         tracing::info!(addr = %listener.local_addr()?, "pk-status listening");
@@ -702,6 +823,28 @@ mod tests {
         assert_eq!(p["order_path"]["live"]["balance"], 12.5);
         assert!(p["order_path"]["live"].get("last_error").is_none());
         assert!(p["recent"][0].get("kalshi").is_none());
+    }
+
+    #[test]
+    fn pick_lim_drops_errors_and_paths() {
+        let st = json!({
+            "mode": "paper", "assets": {"BTC": {"gap": 0.1}},
+            "feeds": {"kalshi": {"connected": true, "last_error": "secret"}},
+            "netprobe": {"n": 3, "last_error": "x", "connection": {"host": "h", "addrs": ["1.2.3.4:443"], "requests": 9}},
+            "recorder": {"enabled": true, "root": "/data/pk", "lines_written": 4},
+            "discovery": {"errors": 1, "last_error": "e"},
+            "anything_else": 1,
+        });
+        let p = pick_lim(Some(&st)).unwrap();
+        assert!(p["feeds"]["kalshi"].get("last_error").is_none());
+        assert_eq!(p["feeds"]["kalshi"]["connected"], true);
+        assert!(p["netprobe"].get("last_error").is_none());
+        assert!(p["netprobe"]["connection"].get("addrs").is_none());
+        assert_eq!(p["netprobe"]["connection"]["requests"], 9);
+        assert!(p["recorder"].get("root").is_none());
+        assert!(p["discovery"].get("last_error").is_none());
+        assert!(p.get("anything_else").is_none());
+        assert_eq!(p["assets"]["BTC"]["gap"], 0.1);
     }
 
     #[test]
