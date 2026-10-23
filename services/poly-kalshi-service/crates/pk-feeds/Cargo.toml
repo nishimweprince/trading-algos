@@ -1,6 +1,6 @@
 [package]
 name = "pk-feeds"
-description = "The venue feeds (Kalshi, sharded Polymarket, PolyBolt) and window discovery"
+description = "The venue feeds (Kalshi, sharded Polymarket, PolyBolt, the references) and window discovery"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -20,6 +20,8 @@ rsa.workspace = true
 ed25519-dalek.workspace = true
 sha2.workspace = true
 base64.workspace = true
+bs58.workspace = true
+helius-laserstream.workspace = true
 rand.workspace = true
 parking_lot.workspace = true
 chrono.workspace = true

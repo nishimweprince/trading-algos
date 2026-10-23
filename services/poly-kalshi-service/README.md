@@ -8,6 +8,18 @@ settlement. Kalshi is the signal only; Binance, Kraken, Bitstamp and Coinbase ar
 and compared (lead–lag panel) but never decide: from Dublin Binance arrives after
 both venues move, and the others are being measured.
 
+**On-chain SOL (Helius LaserStream, `PK_LASERSTREAM`, off by default).** The
+observer can also record the Orca and Raydium SOL/USDC pools (0.04%) and Pyth's
+SOL/USD push feed over LaserStream gRPC from Helius London, at processed
+commitment (venue `h`, one compact line per account write; feed lag from the
+Helius node's `created_at`). Each account is its own lead–lag source. It is a
+measurement, never traded. On 2026-10-23, after 9 h, Kalshi moved before every CEX feed
+(the Bitstamp shocks 84% of the time), so the bar is high. **Decision rule** after 2–3 days
+including US hours: an on-chain source is a candidate signal only if Kalshi and
+Polymarket both answer it with a p50 lag ≥ +50 ms and ≤ 30% of answers before it;
+otherwise record a no and turn it off. Polymarket settles on Chainlink, not on
+any of these (see below).
+
 **Epoch 14 (2026-10-14).** Execution economics, and live code only:
 - **Exits net a cent after both fees.** The floor was entry + entry fee + 1¢,
   so a sale there lost the exit's own fee (≈ −0.7¢/share near 0.50). It is now
@@ -95,7 +107,7 @@ Telegram `/kill` and `/status` run on a bot of its own (`PK_TELEGRAM_BOT_TOKEN`)
 |---|---|
 | `pk-core` | books, fees, `decide()`, windows, ledger, risk, journal records |
 | `pk-engine` | the line-driven engine (roles `full`, `trade`, `observe`; forward and reverse) |
-| `pk-feeds` | Kalshi (RSA-PSS) and Polymarket (sharded) websockets, PolyBolt, the Binance/Kraken/Bitstamp/Coinbase references, window discovery |
+| `pk-feeds` | Kalshi (RSA-PSS) and Polymarket (sharded) websockets, PolyBolt, the Binance/Kraken/Bitstamp/Coinbase references, Helius LaserStream (gRPC, on-chain SOL), window discovery |
 | `pk-exec` | the Polymarket CLOB V2 order path: warm HTTP/2, L2 auth, EIP-712 signing, pre-signing, the probe |
 | `pk-tape` | the zstd tape writer and the reader (it also reads the old `.gz` hours) |
 | `pk-trader` | `poly-kalshi-service` and `pk-observer` |
@@ -110,7 +122,7 @@ Telegram `/kill` and `/status` run on a bot of its own (`PK_TELEGRAM_BOT_TOKEN`)
    - *Trade quality:* average win and loss, profit factor, expectancy, largest win and loss, longest losing streak, gross P&L and fees.
    - *Gates.*
 3. **Live market:** the market state table (per asset bid/ask/mid, Δ against the threshold, what the rule would do now, book ages, this window's decision) and per-second Kalshi vs Polymarket charts.
-4. **Edge:** the signal check (win rate vs Kalshi-implied vs price paid), the opportunity funnel (windows → crossings → skips → blocked → orders → fills → settled, total and today), and breakdowns by asset, by second and by entry band; the lead–lag table times each reference feed (Binance spot and perp, Kraken, Bitstamp, Coinbase) against Kalshi and Polymarket.
+4. **Edge:** the signal check (win rate vs Kalshi-implied vs price paid), the opportunity funnel (windows → crossings → skips → blocked → orders → fills → settled, total and today), and breakdowns by asset, by second and by entry band; the lead–lag table times each reference feed (Binance spot and perp, Kraken, Bitstamp, Coinbase, and on-chain SOL when LaserStream is on) against Kalshi and Polymarket.
 5. **History:** equity curve, daily results, the last 50 trades, recent engine events.
 6. **System:** feeds, latency (engine queue delay next to the loop lag), the order path (decision → acknowledgement, pre-sign hit rate, assumed against measured paper latency), execution, and data quality.
 

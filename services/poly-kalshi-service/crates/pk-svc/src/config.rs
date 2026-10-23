@@ -151,6 +151,11 @@ pub struct Settings {
     /// Coinbase Exchange (AWS us-east-1), the same way; its ticker moves on trades.
     pub coinbase_enabled: bool,
     pub coinbase_ws_url: String,
+    /// Helius LaserStream gRPC: on-chain SOL prices (Orca, Raydium, Pyth),
+    /// recorded and timed by the observer, never traded. Needs `HELIUS_API_KEY`.
+    pub laserstream_enabled: bool,
+    pub laserstream_url: String,
+    pub helius_api_key: Option<String>,
 
     /// The order probe (`pk_exec::probe`): real, unfillable orders.
     pub order_probe: bool,
@@ -376,6 +381,9 @@ impl Settings {
                 "POLY_CLOB_API_KEY, POLY_CLOB_API_SECRET and POLY_CLOB_API_PASSPHRASE go together"
             ),
         };
+        let laserstream_enabled = e.flag("PK_LASERSTREAM", false)?;
+        let helius_api_key = e.get("HELIUS_API_KEY");
+        anyhow::ensure!(!laserstream_enabled || helius_api_key.is_some(), "PK_LASERSTREAM needs HELIUS_API_KEY");
         let telegram_bot_token = e.get("PK_TELEGRAM_BOT_TOKEN");
         if let Some(t) = &telegram_bot_token {
             anyhow::ensure!(!t.starts_with(PLACEHOLDER), "PK_TELEGRAM_BOT_TOKEN still holds its placeholder");
@@ -516,6 +524,9 @@ impl Settings {
             bitstamp_ws_url: e.or("BITSTAMP_WS_URL", "wss://ws.bitstamp.net"),
             coinbase_enabled: e.flag("PK_COINBASE", true)?,
             coinbase_ws_url: e.or("COINBASE_WS_URL", "wss://ws-feed.exchange.coinbase.com"),
+            laserstream_enabled,
+            laserstream_url: e.or("LASERSTREAM_URL", "https://laserstream-mainnet-lon.helius-rpc.com"),
+            helius_api_key,
             order_probe,
             poly_private_key,
             poly_funder,
@@ -641,6 +652,13 @@ mod tests {
         assert!(with("PK_PROBE_CADENCE_S", "1").is_err());
         assert!(with("PK_ORDER_PROBE", "on").is_err());
         assert!(with("POLY_CLOB_API_KEY", "k").is_err());
+        // LaserStream is off by default and needs a Helius key when on.
+        assert!(!with("PK_ASSETS", "BTC").unwrap().laserstream_enabled);
+        assert!(with("PK_LASERSTREAM", "true").unwrap_err().to_string().contains("HELIUS_API_KEY"));
+        let mut m = base();
+        m.extend([("PK_LASERSTREAM".into(), "true".into()), ("HELIUS_API_KEY".into(), "hk".into())]);
+        let s = Settings::from_env(m, None).unwrap();
+        assert!(s.laserstream_enabled && s.laserstream_url.contains("-lon."));
         assert!(with("API_KEY", "replace-with-a-long-random-key").is_err());
         assert_eq!(with("PK_MAX_POLY_LAG_MS", "250").unwrap().params.max_poly_lag_ms, Some(250.0));
         // The epoch-13 gates and sizes.

@@ -17,7 +17,9 @@
 //! Binance frames are kept as they came; the others are written as one compact
 //! line per quote, `{"s","b","a"}` plus the venue's stamp (`ts` RFC 3339, `mt`
 //! µs), since a Bitstamp frame carries 100 levels a side and a Coinbase ticker
-//! a day of statistics. They also drive the lead–lag
+//! a day of statistics. Helius LaserStream (`h`) lines come decoded from
+//! `pk_feeds::laserstream`, one price per account write (`{"s","p","slot","mt"}`),
+//! each account its own source. They also drive the lead–lag
 //! monitor (`pk_core::leadlag`), which the Kalshi and Polymarket mids from the
 //! engine follow; its `leadlag_shock` records go to the journal.
 
@@ -63,6 +65,7 @@ pub struct Observer {
     pub kraken: Mutex<Option<pk_feeds::FeedHandle>>,
     pub bitstamp: Mutex<Option<pk_feeds::FeedHandle>>,
     pub coinbase: Mutex<Option<pk_feeds::FeedHandle>>,
+    pub laserstream: Mutex<Option<pk_feeds::LaserHandle>>,
     /// The last best bid and ask per (venue, symbol): only changes are kept.
     ref_last: Mutex<HashMap<(char, String), (f64, f64)>>,
 }
@@ -147,9 +150,19 @@ struct CoinbaseTicker<'a> {
     time: Option<&'a str>,
 }
 
-/// The lead–lag source of a reference venue (its index in [`SOURCES`]).
-fn source_of(venue: char) -> Option<usize> {
+/// A LaserStream line: one on-chain price (Pyth adds `conf` and `pt`).
+#[derive(Deserialize)]
+struct OnChain<'a> {
+    s: &'a str,
+    p: f64,
+    mt: Option<i64>,
+}
+
+/// The lead–lag source of a reference venue (its index in [`SOURCES`]);
+/// LaserStream's accounts are each a source of their own.
+fn source_of(venue: char, symbol: &str) -> Option<usize> {
     let name = match venue {
+        'h' => symbol,
         'n' => "spot",
         'f' => "perp",
         'r' => "kraken",
@@ -179,6 +192,7 @@ impl Observer {
             kraken: Mutex::new(None),
             bitstamp: Mutex::new(None),
             coinbase: Mutex::new(None),
+            laserstream: Mutex::new(None),
             ref_last: Mutex::new(HashMap::new()),
         }
     }
@@ -267,6 +281,17 @@ impl Observer {
         self.quote('o', t, q.product_id, q.product_id.strip_suffix("-USD"), (bid, ask), venue_ms, line);
     }
 
+    /// One LaserStream line (`h`): an on-chain SOL price, already compact.
+    pub fn laserstream(&self, text: &str) {
+        let t = now_ns();
+        // Reconnect markers: kept as they came.
+        let Some(q) = serde_json::from_str::<OnChain>(text).ok() else {
+            self.record('h', t, text);
+            return;
+        };
+        self.quote('h', t, q.s, Some("SOL"), (q.p, q.p), q.mt.map(|us| us / 1000), || text.to_owned());
+    }
+
     fn record(&self, venue: char, t: i64, text: &str) {
         if let Some(r) = &self.recorder {
             r.lock().write(venue, t, text);
@@ -295,7 +320,7 @@ impl Observer {
             last.insert(key, (bid, ask));
         }
         self.record(venue, t, &line());
-        let (Some(ll), Some(src), Some(asset)) = (&self.leadlag, source_of(venue), asset) else { return };
+        let (Some(ll), Some(src), Some(asset)) = (&self.leadlag, source_of(venue, symbol), asset) else { return };
         let records = {
             let mut ll = ll.lock();
             let Some(idx) = ll.asset_index(asset) else { return };
@@ -425,6 +450,7 @@ impl Observer {
             "kraken": self.kraken.lock().as_ref().map(|f| f.stats()).unwrap_or(json!({"enabled": false})),
             "bitstamp": self.bitstamp.lock().as_ref().map(|f| f.stats()).unwrap_or(json!({"enabled": false})),
             "coinbase": self.coinbase.lock().as_ref().map(|f| f.stats()).unwrap_or(json!({"enabled": false})),
+            "laserstream": self.laserstream.lock().as_ref().map(|f| f.stats()).unwrap_or(json!({"enabled": false})),
             "leadlag": self.leadlag.as_ref().map(|ll| ll.lock().snapshot()),
         })
     }
@@ -501,7 +527,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("pk-obs-ref-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let journal = SharedJournal(Arc::new(Mutex::new(JsonlDaily::new(dir.join("journal")))));
-        let mut cfg = EngineConfig::new(StrategyParams::default(), vec!["BTC".into(), "DOGE".into()]);
+        let mut cfg = EngineConfig::new(StrategyParams::default(), vec!["BTC".into(), "DOGE".into(), "SOL".into()]);
         cfg.role = Role::Observe;
         let risk = RiskState::new(RiskLimits {
             max_open_notional_usd: 1.0,
@@ -541,6 +567,12 @@ mod tests {
         obs.coinbase(&coinbase("81567.30", "0.002"));
         obs.coinbase(&coinbase("81567.30", "0.5")); // a size change only
         obs.coinbase(r#"{"type":"error","message":"Failed to subscribe"}"#);
+        let orca = r#"{"mt":1792715492123456,"p":103.7055,"s":"orca","slot":380000001}"#;
+        obs.laserstream(r#"{"n":1,"type":"pk_reconnect","venue":"h"}"#);
+        obs.laserstream(orca);
+        obs.laserstream(r#"{"mt":1792715492173456,"p":103.7055,"s":"orca","slot":380000001}"#); // the same price
+        obs.laserstream(r#"{"conf":0.05,"mt":1792715492200000,"p":103.716,"pt":1792715492,"s":"pyth","slot":380000001}"#);
+        assert_eq!(obs.ref_last.lock().get(&('h', "orca".into())), Some(&(103.7055, 103.7055)));
         assert_eq!(obs.ref_last.lock().get(&('o', "BTC-USD".into())), Some(&(81567.30, 81567.31)));
         assert_eq!(obs.ref_last.lock().get(&('r', "DOGE/USD".into())), Some(&(0.0797115, 0.0797117)));
         assert_eq!(obs.ref_last.lock().get(&('t', "btcusd".into())), Some(&(81662.93, 81663.93)));
@@ -548,6 +580,8 @@ mod tests {
         assert!(snap["assets"]["DOGE"]["kraken"]["feed_lag_ms_p50"].as_f64().is_some());
         assert!(snap["assets"]["BTC"]["bitstamp"]["feed_lag_ms_p50"].as_f64().is_some());
         assert!(snap["assets"]["BTC"]["coinbase"]["feed_lag_ms_p50"].as_f64().is_some());
+        assert!(snap["assets"]["SOL"]["orca"]["feed_lag_ms_p50"].as_f64().is_some());
+        assert!(snap["assets"]["SOL"]["pyth"].is_object() && snap["assets"]["SOL"].get("raydium").is_none());
         drop(obs); // stops the recorder: the hour file is flushed
         let lines: Vec<(char, String)> = pk_tape::read_lines(pk_tape::iter_files(&dir.join("tape"), None, None))
             .map(|l| (l.venue, l.text))
@@ -561,6 +595,9 @@ mod tests {
         let cb: Vec<&str> = lines.iter().filter(|(v, _)| *v == 'o').map(|(_, t)| t.as_str()).collect();
         assert_eq!(cb.len(), 2); // one compact quote, then the error as it came
         assert_eq!(cb[0], r#"{"a":81567.31,"b":81567.3,"s":"BTC-USD","ts":"2026-10-22T14:37:23.117725Z"}"#);
+        let hl: Vec<&str> = lines.iter().filter(|(v, _)| *v == 'h').map(|(_, t)| t.as_str()).collect();
+        assert_eq!(hl.len(), 3); // the marker, the Orca quote, the Pyth quote
+        assert_eq!(hl[1], orca);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -20,6 +20,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 clap = { version = "4", features = ["derive", "env"] }
 base64 = "0.22"
+bs58 = "0.5"
+helius-laserstream = { version = "=0.10.0", default-features = false }
 hmac = "0.12"
 sha2 = "0.10"
 rust_decimal = { version = "1", features = ["serde"] }

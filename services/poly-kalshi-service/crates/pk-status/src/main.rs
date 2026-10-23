@@ -197,7 +197,7 @@ pub fn pick(status: Option<&Value>) -> Option<Value> {
         "feed_age_s": engine.get("feed_age_s"),
         "recorder": keep(st.get("recorder"), &["enabled", "lines_written", "dropped", "errors", "disk_free_gb", "disk_paused"]),
         "latency": engine.get("latency"),
-        "observer": keep(st.get("observer"), &["enabled", "alive", "spawns", "dropped", "buffer_bytes", "fallback_writes", "behind_ms", "gaps", "engine_errors", "polybolt", "binance", "kraken", "bitstamp", "coinbase"]),
+        "observer": keep(st.get("observer"), &["enabled", "alive", "spawns", "dropped", "buffer_bytes", "fallback_writes", "behind_ms", "gaps", "engine_errors", "polybolt", "binance", "kraken", "bitstamp", "coinbase", "laserstream"]),
         "leadlag": st.get("leadlag"),
         "fast_path": st.get("fast_path"),
         "host_load": st.get("host_load"),
@@ -248,7 +248,7 @@ pub fn merge_observer(status: Option<Value>, obs: Option<Value>) -> Option<Value
     } else {
         keep(Some(&polybolt), &["enabled", "connected", "authed", "messages", "errors"])
     };
-    for venue in ["binance", "kraken", "bitstamp", "coinbase"] {
+    for venue in ["binance", "kraken", "bitstamp", "coinbase", "laserstream"] {
         link[venue] = obs.get(venue).cloned().unwrap_or(json!({"enabled": false}));
     }
     status["leadlag"] = obs.get("leadlag").cloned().unwrap_or(Value::Null);

@@ -26,6 +26,8 @@
 //!   and timed by the observer, never traded. Their connects are written under
 //!   their own venue too. Bitstamp asks for a reconnect before maintenance
 //!   (`bts:request_reconnect`).
+//! - **Helius LaserStream** (`h`) is gRPC, not a socket here: see
+//!   [`crate::laserstream`].
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
