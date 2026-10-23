@@ -10,8 +10,9 @@
 //! Pyth. A pool's price is its sqrt price squared, so one write is one quote.
 //!
 //! The SDK reconnects on its own and silently, so liveness is ours: a session
-//! with no account write for [`SILENCE`] (Orca alone writes ~14 times a
-//! second) is dropped and a new one subscribed. Each session starts with a
+//! with no account write for [`SILENCE`] is dropped and a new one subscribed.
+//! The pools change price in only ~0.4 slots a second (most transactions that
+//! touch them fail), and quiet spells of 20 s are normal, so the bar is a minute. Each session starts with a
 //! `pk_reconnect` line, as the other references' connects do.
 
 use std::collections::HashMap;
@@ -35,7 +36,7 @@ pub const SOL_ACCOUNTS: [(&str, &str); 3] = [
     ("pyth", "7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE"),
 ];
 
-pub const SILENCE: Duration = Duration::from_secs(10);
+pub const SILENCE: Duration = Duration::from_secs(60);
 
 /// SOL is 9 decimals and USDC 6 in both pools (token A / token 0 is SOL).
 const SOL_USDC_SCALE: f64 = 1e3;
