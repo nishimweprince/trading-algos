@@ -21,6 +21,7 @@ pub mod gamma;
 pub mod latency;
 pub mod limitless;
 pub mod live;
+pub mod okx;
 pub mod presign;
 pub mod probe;
 pub mod redeem;

@@ -1,0 +1,34 @@
+# pk-okx: Kalshi-signal / OKX event-contract 15-minute trader, paper only. A
+# process of its own: its own Kalshi socket, state (data/state/<profile>/okx),
+# tape (<PK_RECORD_DIR>-okx) and loopback API (PK_OKX_PORT, 8054). It shares
+# nothing with poly-kalshi-service or pk-limitless. Secrets stay in
+# .env.<profile>. The status page is pk-status with PK_OKX_ENABLED=true
+# (PK_STATUS_HOME=okx on a host that runs only this).
+[Unit]
+Description=pk-okx (Kalshi → OKX event contracts, paper, profile dev)
+OnFailure=pk-unit-alert@%n.service
+Wants=network-online.target
+After=network-online.target time-sync.target
+RequiresMountsFor=/data
+
+[Service]
+Type=simple
+User=pk
+Group=pk
+WorkingDirectory=/home/pk/trading-algos/services/poly-kalshi-service
+ExecStart=/home/pk/trading-algos/services/poly-kalshi-service/target/release/pk-okx --profile dev
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+# A shared, burstable host (the Tokyo VM also serves web apps): lower priority
+# than anything interactive, and capped.
+Nice=5
+CPUWeight=50
+MemoryMax=1G
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

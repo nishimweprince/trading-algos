@@ -200,6 +200,76 @@ but another binary can.
 | `lim_probe` | the minute's network-probe summary |
 | `lim_live_order` | a live order's timing and result |
 
+## pk-okx: Kalshi → OKX event contracts (a process of its own, paper)
+
+The same rule, with OKX's 15-minute BTC, ETH and SOL Up/Down event contracts
+(`<ASSET>-UPDOWN-15MIN`) as the leg. Their windows open and close at Kalshi's
+instants. They settle on OKX's own `<ASSET>-USDT` index: the last-60 s average
+against the index at the open (`stk`). Kalshi settles on BRTI. The venue survey
+behind it is in `research/VENUES.md`.
+
+- **Host.** The Tokyo VM, in crossex's place. OKX moved its matching from Hong
+  Kong to Tokyo in July 2026. From Tokyo, OKX is ~18 ms (Cloudflare NRT) and
+  Kalshi's origin is ~153 ms; from Dublin they are ~250 ms and ~88 ms.
+  Deploying there stopped crossex. Its data, `/etc/crossex-hl.env` and its
+  binary are kept. To go back:
+  `sudo systemctl disable --now pk-okx pk-status && sudo systemctl enable --now crossex-hl-shadow crossex-hl-compress.timer`.
+  Both serve 127.0.0.1:8070, so only one can run at a time.
+- **Isolation.** `pk-okx` (`infra/systemd/pk-okx.service`) shares nothing:
+  - its own Kalshi socket and OKX public socket (`books`, `trades`, `index-tickers`);
+  - state `data/state/<profile>/okx`, tape `<PK_RECORD_DIR>-okx` (venues `k`, `o`, `c`);
+  - its API on `127.0.0.1:8054`.
+- **Books.** OKX publishes UP only; DOWN is its mirror. A snapshot comes
+  first, then absolute-size updates chained by `seqId`/`prevSeqId`. On a break,
+  the book is dropped and the feed resubscribes for a fresh snapshot
+  (`okx_seq_breaks`, `seq_gaps`).
+- **Paper fills** land at decision + the measured REST round trip (the warm
+  probe's p50; OKX holds no taker order), against the book as it is then. An
+  entry the touch cannot fill in full is partial (`entries_partial`), and the
+  fill rate is a gate figure.
+- **Fees are assumptions** until `check` reads the account's:
+  `PK_OKX_FEE_RATE · (p(1 − p))^PK_OKX_FEE_EXPONENT` per share for a taker, and
+  `PK_OKX_SETTLE_FEE` per winning share at settlement. Every fill journals its
+  gross and fee apart, so a corrected fee re-scores the journal without a re-run.
+- **Outcomes.** OKX has no public settlement route for event contracts. Once a
+  window expires, its candles end with a row at `expTime`, without volume,
+  priced 1 (Up won) or 0 (Down won). Each window's `okx_outcome` holds:
+  - OKX's result;
+  - Kalshi's `result`;
+  - the outcome OKX's recorded index implies.
+
+  How often they disagree is on the page.
+- **`pk-okx --profile dev check`** is the go/no-go for the account on this host.
+  It reads `account/config`, the `EVENTS` trade fee and the USDT balance, then:
+  1. posts one post-only buy at the lowest tick on this BTC window (guards:
+     below the bid, never crossing, ≤ $1);
+  2. cancels it at once;
+  3. confirms nothing filled.
+
+  `--no-order` reads only. A refusal prints OKX's code.
+- **No live mode.** `PK_OKX_EXECUTION_MODE=live` is refused: there is no order
+  path yet.
+- **Gate before any live work:** ≥ 150 delayed-fill entries over ≥ 3 days
+  including US hours, net ¢/share > 0 at t ≥ 2, median 5 s markout ≥ −3¢. Report
+  with it:
+  - the fill rate;
+  - Kalshi → OKX response lag;
+  - the settlement disagreement.
+- **Page:** `pk-status` with `PK_OKX_ENABLED=true` serves `/okx`. On a host that
+  runs only `pk-okx`, `PK_STATUS_HOME=okx` serves it at `/` and skips the trader.
+  On Tokyo it listens on 8070, which the tunnel routes as
+  `crossex.nishimweprince.dev`.
+
+| Journal record (`okx/journal`) | |
+|---|---|
+| `okx_window` | a window identified on both venues, with OKX's strike |
+| `okx_decision` | each consumed crossing, with the instant fill it would have had |
+| `okx_fill`, `okx_no_fill`, `okx_exit` | what the delayed order got (`held_ms`, `instant_*`, `gross`, `fee`) |
+| `okx_outcome` | OKX's and Kalshi's results, and the one OKX's index implies |
+| `okx_settle` | a paper position settled, with the settlement fee |
+| `okx_resp` | one Kalshi ≥ 2¢ move and OKX's answer |
+| `okx_probe` | the minute's network-probe summary |
+
 ## Order path (the latency review's step 2)
 
 `pk probe-orders` times the real order path without trading. With

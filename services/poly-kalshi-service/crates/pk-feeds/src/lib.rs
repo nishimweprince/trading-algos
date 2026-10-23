@@ -7,10 +7,12 @@ pub mod discovery;
 pub mod kalshi_sign;
 pub mod laserstream;
 pub mod limitless;
+pub mod okx;
 pub mod ws;
 
 pub use discovery::Discovery;
 pub use kalshi_sign::KalshiSigner;
 pub use laserstream::{LaserHandle, spawn_laserstream};
 pub use limitless::{LimitlessFeed, spawn_limitless};
+pub use okx::{OkxFeed, spawn_okx};
 pub use ws::{Emit, FeedHandle, FeedKind, PolyShards, spawn_feed};

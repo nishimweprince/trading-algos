@@ -12,8 +12,14 @@
 //! | `GET /api/lim/status` | allowlisted `pk-limitless` status |
 //! | `GET /api/lim/series?since=` | its per-second Kalshi and Limitless points |
 //!
-//! `pk-limitless` is polled the same way, only when `PK_LIM_ENABLED`, on its
-//! own schedule: a Limitless outage never delays the Polymarket data.
+//! | `GET /okx` | the OKX page |
+//! | `GET /api/okx/status` | allowlisted `pk-okx` status |
+//! | `GET /api/okx/series?since=` | its per-second Kalshi and OKX points |
+//!
+//! `pk-limitless` and `pk-okx` are polled the same way, only when
+//! `PK_LIM_ENABLED` / `PK_OKX_ENABLED`, each on its own schedule: an outage of
+//! one never delays the others. With `PK_STATUS_HOME=okx` (a host that runs
+//! only `pk-okx`), `/` serves the OKX page and the trader is not polled.
 //!
 //! **Load on the trader is fixed, not per viewer.** One poller reads the
 //! trader's `/v1/status` (and the observer's `/v1/obs/status`) every 5 s and
@@ -43,6 +49,7 @@ use serde_json::{Map, Value, json};
 
 const PAGE: &str = include_str!("page.html");
 const LIM_PAGE: &str = include_str!("limitless.html");
+const OKX_PAGE: &str = include_str!("okx.html");
 const LIVE_POLL: Duration = Duration::from_secs(5);
 const JOURNAL_EVERY: Duration = Duration::from_secs(30);
 const SERIES_POINTS: usize = 1800;
@@ -263,6 +270,48 @@ pub fn pick_lim(status: Option<&Value>) -> Option<Value> {
     }))
 }
 
+/// The allowlisted subset of `pk-okx`'s status: `pick_lim`'s rules, with the
+/// fee in force and the venues' settlement agreement.
+pub fn pick_okx(status: Option<&Value>) -> Option<Value> {
+    let st = status?;
+    let mut p = pick_lim(Some(st))?;
+    let o = p.as_object_mut()?;
+    o.remove("sol_hourly");
+    o.remove("order_path");
+    o.insert("fee".into(), st.get("fee").cloned().unwrap_or(Value::Null));
+    o.insert("settlement".into(), st.get("settlement").cloned().unwrap_or(Value::Null));
+    o.insert("discovery".into(), keep(st.get("discovery"), &["errors", "awaiting_outcome"]));
+    Some(p)
+}
+
+/// Append a series answer's new points, capped per asset; returns the newest second.
+fn merge_series(series: &mut HashMap<String, VecDeque<Value>>, mut last: i64, body: Option<Value>) -> i64 {
+    for (asset, points) in body.and_then(|b| b.get("points").cloned()).and_then(|p| p.as_object().cloned()).unwrap_or_default() {
+        for p in points.as_array().cloned().unwrap_or_default() {
+            let sec = p.get(0).and_then(Value::as_i64).unwrap_or(0);
+            let s = series.entry(asset.clone()).or_default();
+            if s.len() == SERIES_POINTS {
+                s.pop_front();
+            }
+            s.push_back(p);
+            last = last.max(sec);
+        }
+    }
+    last
+}
+
+/// The points after `since`, per asset.
+fn series_after(series: &HashMap<String, VecDeque<Value>>, since: i64) -> Map<String, Value> {
+    series
+        .iter()
+        .map(|(a, s)| {
+            let pts: Vec<Value> =
+                s.iter().filter(|p| p.get(0).and_then(Value::as_i64).is_some_and(|t| t > since)).cloned().collect();
+            (a.clone(), Value::Array(pts))
+        })
+        .collect()
+}
+
 /// The trader's status with the observer's statistics folded in: the observer
 /// owns the recorder, feed latencies, result delays and data-quality counters;
 /// the trader owns engine time, queue delay, book ages and trade counters.
@@ -322,6 +371,10 @@ struct Cache {
     lim_at: Option<f64>,
     lim_series: HashMap<String, VecDeque<Value>>,
     lim_series_last: i64,
+    okx: Option<Value>,
+    okx_at: Option<f64>,
+    okx_series: HashMap<String, VecDeque<Value>>,
+    okx_series_last: i64,
 }
 
 struct App {
@@ -378,17 +431,21 @@ impl App {
         let mut c = self.cache.lock();
         c.lim = status;
         c.lim_at = Some(now);
-        for (asset, points) in series.and_then(|b| b.get("points").cloned()).and_then(|p| p.as_object().cloned()).unwrap_or_default() {
-            for p in points.as_array().cloned().unwrap_or_default() {
-                let sec = p.get(0).and_then(Value::as_i64).unwrap_or(0);
-                let s = c.lim_series.entry(asset.clone()).or_default();
-                if s.len() == SERIES_POINTS {
-                    s.pop_front();
-                }
-                s.push_back(p);
-                c.lim_series_last = c.lim_series_last.max(sec);
-            }
-        }
+        let last = c.lim_series_last;
+        c.lim_series_last = merge_series(&mut c.lim_series, last, series);
+    }
+
+    async fn refresh_okx(&self) {
+        let base = format!("http://127.0.0.1:{}", self.settings.okx_port);
+        let status = pick_okx(self.get(&format!("{base}/v1/okx/status"), &[]).await.as_ref());
+        let since = self.cache.lock().okx_series_last;
+        let series = self.get(&format!("{base}/v1/okx/series"), &[("since", since.to_string())]).await;
+        let now = chrono::Utc::now().timestamp_millis() as f64 / 1e3;
+        let mut c = self.cache.lock();
+        c.okx = status;
+        c.okx_at = Some(now);
+        let last = c.okx_series_last;
+        c.okx_series_last = merge_series(&mut c.okx_series, last, series);
     }
 
     async fn refresh_series(&self) {
@@ -475,6 +532,13 @@ impl App {
 async fn lim_poller(app: Arc<App>) {
     loop {
         app.refresh_lim().await;
+        tokio::time::sleep(LIVE_POLL).await;
+    }
+}
+
+async fn okx_poller(app: Arc<App>) {
+    loop {
+        app.refresh_okx().await;
         tokio::time::sleep(LIVE_POLL).await;
     }
 }
@@ -603,8 +667,9 @@ fn build_export(
 }
 
 fn router(app: Arc<App>) -> Router {
+    let home = if app.settings.status_home == "okx" { OKX_PAGE } else { PAGE };
     Router::new()
-        .route("/", get(|| async { Html(PAGE) }))
+        .route("/", get(move || async move { Html(home) }))
         .route(
             "/api/summary",
             get(|State(app): State<Arc<App>>| async move {
@@ -724,21 +789,31 @@ fn router(app: Arc<App>) -> Router {
         .route(
             "/api/lim/series",
             get(|State(app): State<Arc<App>>, Query(q): Query<Since>| async move {
-                let since = q.since.unwrap_or(0);
                 let c = app.cache.lock();
-                let points: Map<String, Value> = c
-                    .lim_series
-                    .iter()
-                    .map(|(a, s)| {
-                        let pts: Vec<Value> = s
-                            .iter()
-                            .filter(|p| p.get(0).and_then(Value::as_i64).is_some_and(|t| t > since))
-                            .cloned()
-                            .collect();
-                        (a.clone(), Value::Array(pts))
-                    })
-                    .collect();
+                let points = series_after(&c.lim_series, q.since.unwrap_or(0));
                 let params = c.lim.as_ref().and_then(|l| l.get("params")).cloned().unwrap_or(json!({}));
+                json_response(json!({"threshold": params.get("gap_threshold"), "points": points}))
+            }),
+        )
+        .route("/okx", get(|| async { Html(OKX_PAGE) }))
+        .route(
+            "/api/okx/status",
+            get(|State(app): State<Arc<App>>| async move {
+                let c = app.cache.lock();
+                json_response(json!({
+                    "enabled": app.settings.okx_enabled,
+                    "fetched_at": c.okx_at,
+                    "service_up": c.okx.is_some(),
+                    "status": c.okx,
+                }))
+            }),
+        )
+        .route(
+            "/api/okx/series",
+            get(|State(app): State<Arc<App>>, Query(q): Query<Since>| async move {
+                let c = app.cache.lock();
+                let points = series_after(&c.okx_series, q.since.unwrap_or(0));
+                let params = c.okx.as_ref().and_then(|l| l.get("params")).cloned().unwrap_or(json!({}));
                 json_response(json!({"threshold": params.get("gap_threshold"), "points": points}))
             }),
         )
@@ -786,9 +861,14 @@ fn main() -> anyhow::Result<()> {
             export_lock: tokio::sync::Mutex::new(()),
             settings: settings.clone(),
         });
-        tokio::spawn(poller(app.clone()));
+        if settings.status_home != "okx" {
+            tokio::spawn(poller(app.clone()));
+        }
         if settings.lim_enabled {
             tokio::spawn(lim_poller(app.clone()));
+        }
+        if settings.okx_enabled {
+            tokio::spawn(okx_poller(app.clone()));
         }
         let listener =
             tokio::net::TcpListener::bind((settings.status_host.as_str(), settings.status_port)).await?;
@@ -846,6 +926,23 @@ mod tests {
         assert!(p["discovery"].get("last_error").is_none());
         assert!(p.get("anything_else").is_none());
         assert_eq!(p["assets"]["BTC"]["gap"], 0.1);
+    }
+
+    #[test]
+    fn pick_okx_keeps_fee_and_settlement_only() {
+        let st = json!({
+            "mode": "paper", "assets": {"BTC": {"gap": 0.1}},
+            "fee": {"rate": 0.07}, "settlement": {"windows": 3, "okx_vs_kalshi": 1},
+            "feeds": {"okx": {"connected": true, "last_error": "secret"}},
+            "discovery": {"errors": 1, "last_error": "e", "awaiting_outcome": 2},
+            "order_path": {"x": 1}, "sol_hourly": {"y": 1}, "anything_else": 1,
+        });
+        let p = pick_okx(Some(&st)).unwrap();
+        assert_eq!(p["fee"]["rate"], 0.07);
+        assert_eq!(p["settlement"]["okx_vs_kalshi"], 1);
+        assert!(p["feeds"]["okx"].get("last_error").is_none());
+        assert_eq!(p["discovery"], json!({"errors": 1, "awaiting_outcome": 2}));
+        assert!(p.get("order_path").is_none() && p.get("sol_hourly").is_none() && p.get("anything_else").is_none());
     }
 
     #[test]
