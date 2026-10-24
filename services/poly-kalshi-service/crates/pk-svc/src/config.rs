@@ -178,7 +178,7 @@ pub struct Settings {
     /// `pk-limitless`, a separate process: the status page reads its API on this port.
     pub lim_enabled: bool,
     pub lim_port: u16,
-    /// `pk-okx`, likewise; `status_home` picks the page `/` serves (`polymarket` or `okx`).
+    /// `pk-okx`, likewise; `status_home` picks the page `/` serves (`polymarket`, `limitless` or `okx`).
     pub okx_enabled: bool,
     pub okx_port: u16,
     pub status_home: String,
@@ -551,7 +551,10 @@ impl Settings {
             okx_port: e.num("PK_OKX_PORT", 8054)?,
             status_home: {
                 let h = e.or("PK_STATUS_HOME", "polymarket").to_lowercase();
-                anyhow::ensure!(["polymarket", "okx"].contains(&h.as_str()), "PK_STATUS_HOME must be polymarket or okx");
+                anyhow::ensure!(
+                    ["polymarket", "limitless", "okx"].contains(&h.as_str()),
+                    "PK_STATUS_HOME must be polymarket, limitless or okx"
+                );
                 h
             },
             telegram_bot_token,

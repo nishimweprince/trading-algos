@@ -18,8 +18,9 @@
 //!
 //! `pk-limitless` and `pk-okx` are polled the same way, only when
 //! `PK_LIM_ENABLED` / `PK_OKX_ENABLED`, each on its own schedule: an outage of
-//! one never delays the others. With `PK_STATUS_HOME=okx` (a host that runs
-//! only `pk-okx`), `/` serves the OKX page and the trader is not polled.
+//! one never delays the others. With `PK_STATUS_HOME=okx` or `limitless` (a
+//! host that runs only that process), `/` serves its page and the trader is
+//! not polled.
 //!
 //! **Load on the trader is fixed, not per viewer.** One poller reads the
 //! trader's `/v1/status` (and the observer's `/v1/obs/status`) every 5 s and
@@ -667,7 +668,11 @@ fn build_export(
 }
 
 fn router(app: Arc<App>) -> Router {
-    let home = if app.settings.status_home == "okx" { OKX_PAGE } else { PAGE };
+    let home = match app.settings.status_home.as_str() {
+        "okx" => OKX_PAGE,
+        "limitless" => LIM_PAGE,
+        _ => PAGE,
+    };
     Router::new()
         .route("/", get(move || async move { Html(home) }))
         .route(
@@ -861,7 +866,7 @@ fn main() -> anyhow::Result<()> {
             export_lock: tokio::sync::Mutex::new(()),
             settings: settings.clone(),
         });
-        if settings.status_home != "okx" {
+        if settings.status_home == "polymarket" {
             tokio::spawn(poller(app.clone()));
         }
         if settings.lim_enabled {
