@@ -57,6 +57,11 @@ pub struct LimSettings {
     pub helius_url: String,
     pub helius_key: Option<String>,
     pub binance_spot_ws_url: String,
+    /// The maker arm (paper): quotes on every Limitless crypto mirror (`PK_LIMM_*`).
+    pub maker: Option<crate::maker::MakerCfg>,
+    pub maker_epoch: String,
+    pub poly_ws_url: String,
+    pub poly_gamma_url: String,
 }
 
 struct Env(HashMap<String, String>);
@@ -171,6 +176,10 @@ impl LimSettings {
             helius_url: settings.laserstream_url.clone(),
             helius_key: settings.helius_api_key.clone(),
             binance_spot_ws_url: settings.binance_spot_ws_url.clone(),
+            maker: None,
+            maker_epoch: e.or("PK_LIMM_EPOCH", "1"),
+            poly_ws_url: settings.poly_ws_url.clone(),
+            poly_gamma_url: settings.poly_gamma_url.clone(),
         };
         let mut lim = lim;
         if e.flag("PK_LIMH_ENABLED", true)? && lim.helius_key.is_some() {
@@ -191,6 +200,37 @@ impl LimSettings {
                 paper_extra_ms: lim.paper_extra_ms,
                 max_open_usd: lim.max_open_usd,
             });
+        }
+        if e.flag("PK_LIMM_ENABLED", false)? {
+            let series: Vec<String> = match e.get("PK_LIMM_SERIES") {
+                Some(v) => v.split(',').map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect(),
+                None => crate::maker::markets::DEFAULT_SERIES.iter().map(|s| (*s).to_owned()).collect(),
+            };
+            anyhow::ensure!(!series.is_empty(), "PK_LIMM_SERIES is empty");
+            let m = crate::maker::MakerCfg {
+                series,
+                shares: e.num("PK_LIMM_SHARES", 10.0)?,
+                half_spread: e.num("PK_LIMM_HALF_SPREAD", 0.02)?,
+                skew_k: e.num("PK_LIMM_SKEW", 0.01)?,
+                max_pos: e.num("PK_LIMM_MAX_POS", 30.0)?,
+                max_poly_spread: e.num("PK_LIMM_MAX_POLY_SPREAD", 0.04)?,
+                pause_jump: e.num("PK_LIMM_PAUSE_JUMP", 0.02)?,
+                pause_ms: e.num("PK_LIMM_PAUSE_MS", 1500)?,
+                requote_ticks: e.num("PK_LIMM_REQUOTE_TICKS", 5.0)?,
+                min_requote_ms: e.num("PK_LIMM_MIN_REQUOTE_MS", 250)?,
+                stop_s_15m: e.num("PK_LIMM_STOP_S_15M", 60)?,
+                stop_s_1h: e.num("PK_LIMM_STOP_S_1H", 300)?,
+                stop_s_1d: e.num("PK_LIMM_STOP_S_1D", 1800)?,
+                max_open_usd: e.num("PK_LIMM_MAX_OPEN_USD", 150.0)?,
+                daily_loss_usd: e.num("PK_LIMM_DAILY_LOSS_USD", 25.0)?,
+                paper_cash: e.num("PK_LIMM_PAPER_CASH", 300.0)?,
+                trades_poll_15m_ms: e.num("PK_LIMM_TRADES_POLL_15M_MS", 2000)?,
+                trades_poll_other_ms: e.num("PK_LIMM_TRADES_POLL_OTHER_MS", 10000)?,
+            };
+            anyhow::ensure!(m.shares > 0.0 && m.max_pos >= m.shares, "PK_LIMM_MAX_POS must be at least PK_LIMM_SHARES");
+            anyhow::ensure!((0.001..=0.2).contains(&m.half_spread), "PK_LIMM_HALF_SPREAD must be within 0.001..=0.2");
+            anyhow::ensure!(m.trades_poll_15m_ms >= 500 && m.trades_poll_other_ms >= 500, "trade polls under 500 ms would hammer the API");
+            lim.maker = Some(m);
         }
         anyhow::ensure!(lim.shares >= 1, "PK_LIM_ORDER_SHARES must be at least 1");
         anyhow::ensure!(

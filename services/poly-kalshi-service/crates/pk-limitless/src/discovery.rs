@@ -125,6 +125,18 @@ impl LimDiscovery {
         parse_market(asset, open_unix, &ticker, &m).map(Some).map_err(|why| anyhow::anyhow!("{asset} {open_unix}: {why}"))
     }
 
+    /// One page (25) of `/markets/active`: the maker arm's market list.
+    pub async fn active_page(&self, page: u32) -> anyhow::Result<Vec<Value>> {
+        let body: Value =
+            self.http.get(format!("{}/markets/active?limit=25&page={page}", self.api)).send().await?.error_for_status()?.json().await?;
+        Ok(body.get("data").and_then(Value::as_array).cloned().unwrap_or_default())
+    }
+
+    /// The latest taker fills on a market (`/markets/<slug>/events`, newest first).
+    pub async fn events(&self, slug: &str) -> anyhow::Result<Value> {
+        Ok(self.http.get(format!("{}/markets/{slug}/events?page=1&limit=25", self.api)).send().await?.error_for_status()?.json().await?)
+    }
+
     pub async fn outcome(&self, slug: &str) -> anyhow::Result<Option<&'static str>> {
         Ok(self.market(slug).await?.as_ref().and_then(parse_outcome))
     }

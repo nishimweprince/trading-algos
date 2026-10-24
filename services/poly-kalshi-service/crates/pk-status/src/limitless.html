@@ -73,6 +73,15 @@ svg.mkt .k { stroke:var(--kalshi); } svg.mkt .l { stroke:var(--lim); } svg.mkt .
 </div>
 <div class="card"><h2>Feed lag per asset (ms)</h2><table id="feedlag"></table><div class="note">Lag: receive time minus the venue's stamp (host clock chrony-synced). Interval: time between Limitless book frames (they are coalesced).</div></div>
 
+<h3 class="section">Maker (paper) · quotes around Polymarket's mid</h3>
+<div class="grid">
+  <div class="card"><h2>Maker results</h2><div id="m-results"></div></div>
+  <div class="card"><h2>Maker gates</h2><div id="m-gates"></div><div class="note">Capture: bought below / sold above Polymarket's fair at the fill. Markout: fair 5 s / 30 s later minus our price (negative = adverse selection). Live needs ≥ 300 fills over ≥ 3 days, net &gt; 0 at t ≥ 2, 30 s markout better than −half-spread, uptime ≥ 80%.</div></div>
+  <div class="card"><h2>Maker feeds</h2><div id="m-feeds"></div></div>
+</div>
+<div class="card"><table id="m-markets"></table><div class="note">Bid = buy YES; ask = buy NO at 1 − ask. Fills come from Limitless's own trade prints against the quote live at the print's time; takers there wait for the market's taker delay, our cancels do not.</div></div>
+<div class="card" style="margin-top:12px"><h2>By series</h2><table id="m-series"></table></div>
+
 <h3 class="section">SOL hourly · Helius on-chain (paper)</h3>
 <div class="grid">
   <div class="card"><h2>Model</h2><div id="h-model"></div><div class="note">Fair P(Up) = Φ(ln(S/open) / σ√τ), S = the freshest Helius source (Pyth, Orca, Raydium) × its Binance basis; settles on Binance SOL/USDT's 1 h candle.</div></div>
@@ -168,6 +177,22 @@ async function tick() {
     put("h-market", kv([["market", w.slug || "not found yet"], ["Limitless bid / ask", `${px(L2.bid)} / ${px(L2.ask)}`], ["book age", f((L2.age_ms || 0) / 1000, 1) + " s"], ["taker delay", f(w.taker_delay_ms, 0) + " ms"], ["this hour", H.pending ? `${H.pending.exit ? "exit" : "entry"} held` : H.position && H.position.status === "open" ? `${H.position.side} ${f(H.position.shares, 0)} @ ${px(H.position.cost / H.position.shares)}` : H.consumed ? "used" : "watching"], ["entries decided / filled / missed", `${hc.entries_decided ?? 0} / ${hc.entries_filled ?? 0} / ${hc.entry_missed ?? 0}`], ["blocked: spread / floor / cap / net edge", `${hc.blocked_spread ?? 0} / ${hc.blocked_below_floor ?? 0} / ${hc.blocked_above_cap ?? 0} / ${hc.blocked_net_edge ?? 0}`]]));
     put("h-results", kv([["paper cash", money(hl.cash)], ["settled / P&L", `${hl.settled ?? 0} / ${money(hl.pnl)}`], ["net ¢/share", smp(hg.net_cents_per_share)], ["30 s markout", smp(hg.markout30_cents)], ["delay cost", smp(hg.delay_cost_cents)], ["Brier (fair at entry)", smp(hg.brier, "")]]));
     put("h-src", `<tr><th>source</th><th>price</th><th>age (s)</th><th>updates</th><th>lag p50 (ms)</th><th>p90</th></tr>${Object.entries(H.sources || {}).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${f(v.px, 3)}</td><td>${f((v.age_ms || 0) / 1000, 1)}</td><td>${v.updates ?? 0}</td><td>${f(v.lag_ms_p50, 0)}</td><td>${f(v.lag_ms_p90, 0)}</td></tr>`).join("")}`);
+  }
+
+  // Maker.
+  const M = s.maker || {};
+  if (!M.enabled) { put("m-results", '<span class="muted">off (PK_LIMM_ENABLED)</span>'); }
+  else {
+    const ml = M.ledger || {}, mg = M.gates || {}, mc = M.counters || {}, pf = feeds.polymarket || {};
+    put("m-results", kv([["paper cash", money(ml.cash)], ["open cost", money(ml.open_cost)], ["settled markets / P&L", `${ml.settled ?? 0} / ${money(ml.pnl)}`, ml.pnl < 0 ? "bad" : ml.pnl > 0 ? "good" : ""], ["realised today", money(ml.realised_today)], ["rebate (estimated, not in P&L)", money(ml.rebate_est)], ["fills / shares", `${mg.fills ?? 0} / ${f(mg.shares, 1)}`]]));
+    put("m-gates", kv([["capture vs fair", smp(mg.capture_cents)], ["5 s markout", smp(mg.markout5_cents)], ["30 s markout", smp(mg.markout30_cents)], ["net ¢/share (settled)", smp(mg.net_cents_per_share)]]));
+    put("m-feeds", kv([["Polymarket connected", pf.connected ? "yes" : "no", pf.connected ? "good" : "bad"], ["markets tracked", (M.markets || []).length], ["pauses (Kalshi / Polymarket)", `${mc.pauses_kalshi ?? 0} / ${mc.pauses_poly ?? 0}`], ["Polymarket resets", mc.poly_resets ?? 0], ["paper round trip", `${f(M.rtt_ms, 0)} ms`], ["errors", M.errors ?? 0, M.errors ? "warn" : ""]]));
+    const mrows = (M.markets || []).slice().sort((x, y) => x.to_close_s - y.to_close_s).map((x) => {
+      const close = x.to_close_s > 3600 ? f(x.to_close_s / 3600, 1) + " h" : f(x.to_close_s / 60, 1) + " min";
+      return `<tr><td>${esc(x.asset)} ${esc(x.kind)}</td><td>${x.open ? close : "opens later"}</td><td>${px(x.fair)}</td><td>${px(x.bid)} / ${px(x.ask)}${x.paused ? ' <span class="warn">paused</span>' : ""}</td><td>${px(x.lim_bid)} / ${px(x.lim_ask)}</td><td>${x.prints ?? 0} (${f(x.print_shares, 0)})</td><td>${x.fills ?? 0}</td><td>${f(x.net, 1)}</td><td>${money(x.cost)}</td><td>${money(x.locked)}</td><td>${x.uptime == null ? "–" : f(100 * x.uptime, 0) + "%"}</td></tr>`;
+    });
+    put("m-markets", `<tr><th>market</th><th>closes in</th><th>fair</th><th>our bid / ask</th><th>Limitless bid / ask</th><th>prints (shares)</th><th>fills</th><th>net YES</th><th>cost</th><th>locked</th><th>uptime</th></tr>${mrows.join("") || '<tr><td colspan="11" class="muted">no markets yet</td></tr>'}`);
+    put("m-series", `<tr><th>series</th><th>fills</th><th>shares</th><th>P&amp;L (settled)</th></tr>${Object.entries(M.by_series || {}).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v.fills}</td><td>${f(v.shares, 1)}</td><td>${money(v.pnl)}</td></tr>`).join("") || '<tr><td colspan="4" class="muted">no fills yet</td></tr>'}`);
   }
 
   // History.

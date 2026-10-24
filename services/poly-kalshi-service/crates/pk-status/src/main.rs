@@ -268,6 +268,7 @@ pub fn pick_lim(status: Option<&Value>) -> Option<Value> {
         "recorder": keep(st.get("recorder"), &["enabled", "lines_written", "dropped", "errors", "disk_free_gb", "disk_paused"]),
         "discovery": keep(st.get("discovery"), &["errors"]),
         "sol_hourly": st.get("sol_hourly"),
+        "maker": strip(st.get("maker"), &["last_error"]),
     }))
 }
 
@@ -919,9 +920,12 @@ mod tests {
             "netprobe": {"n": 3, "last_error": "x", "connection": {"host": "h", "addrs": ["1.2.3.4:443"], "requests": 9}},
             "recorder": {"enabled": true, "root": "/data/pk", "lines_written": 4},
             "discovery": {"errors": 1, "last_error": "e"},
+            "maker": {"enabled": true, "fills": 3, "last_error": "events x: 429"},
             "anything_else": 1,
         });
         let p = pick_lim(Some(&st)).unwrap();
+        assert_eq!(p["maker"]["fills"], 3);
+        assert!(p["maker"].get("last_error").is_none());
         assert!(p["feeds"]["kalshi"].get("last_error").is_none());
         assert_eq!(p["feeds"]["kalshi"]["connected"], true);
         assert!(p["netprobe"].get("last_error").is_none());

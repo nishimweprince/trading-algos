@@ -301,6 +301,11 @@ impl Engine {
         self.assets.iter().find(|a| a.name == asset)?.window.as_ref()
     }
 
+    /// Kalshi's YES mid for an asset's current window (the maker arm's pause signal).
+    pub fn kalshi_mid(&self, asset: &str) -> Option<f64> {
+        self.assets.iter().find(|a| a.name == asset)?.kbook.quote(None).mid()
+    }
+
     pub fn tickers(&self) -> Vec<String> {
         self.assets.iter().filter_map(|a| a.window.as_ref().map(|w| w.kalshi_ticker.clone())).collect()
     }

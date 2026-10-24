@@ -19,6 +19,7 @@ mod discovery;
 mod engine;
 mod hourly;
 mod live;
+mod maker;
 mod probes;
 
 use std::collections::{BTreeSet, HashMap};
@@ -103,6 +104,10 @@ struct App {
     helius: Mutex<Option<LaserHandle>>,
     binance: Mutex<Option<FeedHandle>>,
     hour_slugs: Mutex<HashMap<i64, String>>,
+    maker: Option<Arc<Mutex<maker::Maker>>>,
+    poly: Mutex<Option<FeedHandle>>,
+    maker_errors: AtomicU64,
+    last_maker_error: Mutex<Option<String>>,
 }
 
 impl App {
@@ -120,6 +125,9 @@ impl App {
         {
             slugs.push(s);
         }
+        if let Some(m) = &self.maker {
+            slugs.extend(m.lock().slugs());
+        }
         if let Some(l) = self.feed.lock().as_ref() {
             l.set_wanted(slugs);
         }
@@ -133,8 +141,18 @@ impl App {
             "limitless": self.feed.lock().as_ref().map(LimitlessFeed::stats),
             "helius": self.helius.lock().as_ref().map(LaserHandle::stats),
             "binance_sol": self.binance.lock().as_ref().map(FeedHandle::stats),
+            "polymarket": self.poly.lock().as_ref().map(FeedHandle::stats),
         });
         st["sol_hourly"] = self.hourly.as_ref().map(|h| h.lock().status(t)).unwrap_or(Value::Null);
+        st["maker"] = match &self.maker {
+            Some(m) => {
+                let mut v = m.lock().status(t);
+                v["errors"] = self.maker_errors.load(Ordering::Relaxed).into();
+                v["last_error"] = self.last_maker_error.lock().clone().into();
+                v
+            }
+            None => json!({"enabled": false}),
+        };
         st["feeds"] = feeds;
         st["netprobe"] = self.probe.lock().as_ref().map(|p| p.stats()).unwrap_or(Value::Null);
         st["order_path"] = json!({
@@ -325,6 +343,16 @@ async fn run(settings: Settings, lim: LimSettings) -> anyhow::Result<()> {
         helius: Mutex::new(None),
         binance: Mutex::new(None),
         hour_slugs: Mutex::new(HashMap::new()),
+        maker: lim.maker.clone().map(|cfg| {
+            let mut st = stamp(&lim);
+            st.insert("epoch".into(), lim.maker_epoch.clone().into());
+            st.insert("mode".into(), "paper".into());
+            st.insert("arm".into(), "maker".into());
+            Arc::new(Mutex::new(maker::Maker::new(cfg, &lim.state_dir.join("maker"), st)))
+        }),
+        poly: Mutex::new(None),
+        maker_errors: AtomicU64::new(0),
+        last_maker_error: Mutex::new(None),
     });
 
     // Live: the order path must come up, or nothing trades.
@@ -370,6 +398,17 @@ async fn run(settings: Settings, lim: LimSettings) -> anyhow::Result<()> {
                 _ => {}
             }
             si(&mut e);
+            if venue == 'k'
+                && let Some(m) = &a.maker
+            {
+                let mids: Vec<(String, f64)> =
+                    a.lim.assets.iter().filter_map(|x| e.kalshi_mid(x).map(|v| (x.clone(), v))).collect();
+                drop(e);
+                let mut m = m.lock();
+                for (asset, mid) in mids {
+                    m.on_kalshi_mid(&asset, mid, t);
+                }
+            }
         });
         *app.kalshi.lock() = Some(spawn_feed(settings.kalshi_ws_url.clone(), FeedKind::Kalshi { signer }, emit));
     }
@@ -385,6 +424,9 @@ async fn run(settings: Settings, lim: LimSettings) -> anyhow::Result<()> {
             }
             if let Some(h) = &a.hourly {
                 h.lock().on_limitless(&text, t);
+            }
+            if let Some(m) = &a.maker {
+                m.lock().on_limitless(&text, t);
             }
         });
         *app.feed.lock() = Some(spawn_limitless(lim.ws_url.clone(), emit));
@@ -444,6 +486,126 @@ async fn run(settings: Settings, lim: LimSettings) -> anyhow::Result<()> {
                         *a.last_discovery_error.lock() = Some(e.to_string());
                     }
                 }
+            }
+        });
+    }
+
+    // The maker arm: Polymarket books (fair value), its market list, and Limitless's trade prints.
+    if app.maker.is_some() {
+        let a = app.clone();
+        let emit: pk_feeds::Emit = Arc::new(move |venue, text: String| {
+            let t = now_ns();
+            a.tape(venue, t, &text);
+            let Some(m) = &a.maker else { return };
+            match venue {
+                'p' => m.lock().on_poly(&text, t),
+                'c' if text.contains(r#""venue":"p""#) => m.lock().invalidate_poly(),
+                _ => {}
+            }
+        });
+        *app.poly.lock() =
+            Some(spawn_feed(lim.poly_ws_url.clone(), FeedKind::Poly { shard: None, silence: None }, emit));
+
+        // Markets every 60 s: Limitless's active list, each mirror's Polymarket tokens.
+        let a = app.clone();
+        tokio::spawn(async move {
+            let d = LimDiscovery::new(&a.lim.api_url, &a.lim.poly_gamma_url, &a.settings.kalshi_rest_url);
+            let mut tokens: HashMap<String, (String, String)> = HashMap::new();
+            let mut tick = tokio::time::interval(Duration::from_secs(60));
+            loop {
+                tick.tick().await;
+                let Some(mk) = a.maker.clone() else { return };
+                let series = mk.lock().cfg.series.clone();
+                let now_ms = now_ns() / 1_000_000;
+                let mut found = Vec::new();
+                for page in 1..=40 {
+                    match d.active_page(page).await {
+                        Ok(rows) => {
+                            let n = rows.len();
+                            found.extend(rows.iter().filter_map(|m| maker::parse_active(m, &series)));
+                            if n < 25 {
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            a.maker_errors.fetch_add(1, Ordering::Relaxed);
+                            *a.last_maker_error.lock() = Some(format!("active page {page}: {e}"));
+                            break;
+                        }
+                    }
+                }
+                let mut added = false;
+                for mut m in found {
+                    if now_ms >= m.close_ms || mk.lock().has(&m.slug) {
+                        continue;
+                    }
+                    if !tokens.contains_key(&m.external_slug) {
+                        match d.kalshi.poly_event_market(&m.external_slug).await {
+                            Ok(Some(pm)) => {
+                                if let Some(t) = maker::parse_poly(&pm) {
+                                    tokens.insert(m.external_slug.clone(), t);
+                                }
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                a.maker_errors.fetch_add(1, Ordering::Relaxed);
+                                *a.last_maker_error.lock() = Some(format!("gamma {}: {e}", m.external_slug));
+                            }
+                        }
+                    }
+                    let Some((up, down)) = tokens.get(&m.external_slug).cloned() else { continue };
+                    m.poly_up = up;
+                    m.poly_down = down;
+                    let t = now_ns();
+                    let mut ctl = serde_json::to_value(&m).unwrap_or(Value::Null);
+                    ctl["type"] = "limm_market".into();
+                    a.tape('c', t, &ctl.to_string());
+                    mk.lock().add(m, t);
+                    added = true;
+                }
+                mk.lock().prune(now_ns() / 1_000_000);
+                if tokens.len() > 500 {
+                    tokens.clear();
+                }
+                if added {
+                    let want = mk.lock().poly_tokens();
+                    if let Some(p) = a.poly.lock().as_ref() {
+                        p.set_wanted(want);
+                    }
+                    a.resubscribe();
+                }
+            }
+        });
+
+        // Trade prints: every 2 s per 15-minute market, every 10 s for the others.
+        let a = app.clone();
+        tokio::spawn(async move {
+            let d = LimDiscovery::new(&a.lim.api_url, &a.lim.poly_gamma_url, &a.settings.kalshi_rest_url);
+            let mut last: HashMap<String, i64> = HashMap::new();
+            let mut tick = tokio::time::interval(Duration::from_millis(500));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tick.tick().await;
+                let Some(mk) = a.maker.clone() else { return };
+                let due = mk.lock().poll_due(now_ns() / 1_000_000, &last);
+                for (slug, yes, no) in due {
+                    last.insert(slug.clone(), now_ns() / 1_000_000);
+                    match d.events(&slug).await {
+                        Ok(body) => {
+                            let prints = maker::parse_prints(&body, &yes, &no);
+                            let t = now_ns();
+                            let fresh = mk.lock().on_prints(&slug, prints, t);
+                            for p in fresh {
+                                a.tape('l', t, &json!({"ev": "trade", "slug": slug, "d": p}).to_string());
+                            }
+                        }
+                        Err(e) => {
+                            a.maker_errors.fetch_add(1, Ordering::Relaxed);
+                            *a.last_maker_error.lock() = Some(format!("events {slug}: {e}"));
+                        }
+                    }
+                }
+                last.retain(|_, t| now_ns() / 1_000_000 - *t < 3_600_000);
             }
         });
     }
@@ -509,6 +671,9 @@ async fn run(settings: Settings, lim: LimSettings) -> anyhow::Result<()> {
                 if let Some(h) = &a.hourly {
                     h.lock().tick(t);
                 }
+                if let Some(m) = &a.maker {
+                    m.lock().tick(t);
+                }
             }
         });
     }
@@ -527,6 +692,14 @@ async fn run(settings: Settings, lim: LimSettings) -> anyhow::Result<()> {
                     for (open, slug) in due {
                         if let Ok(Some(outcome)) = d.outcome(&slug).await {
                             h.lock().settle(open, outcome, now_ns());
+                        }
+                    }
+                }
+                if let Some(m) = a.maker.clone() {
+                    let due = m.lock().unsettled(now_ns());
+                    for slug in due {
+                        if let Ok(Some(outcome)) = d.outcome(&slug).await {
+                            m.lock().settle(&slug, outcome, now_ns());
                         }
                     }
                 }
@@ -594,6 +767,9 @@ async fn run(settings: Settings, lim: LimSettings) -> anyhow::Result<()> {
                     a.engine.lock().set_rtt(p50);
                     if let Some(h) = &a.hourly {
                         h.lock().set_rtt(p50);
+                    }
+                    if let Some(m) = &a.maker {
+                        m.lock().set_rtt(p50);
                     }
                 }
                 if now_ns() - last_summary >= 60 * NS {

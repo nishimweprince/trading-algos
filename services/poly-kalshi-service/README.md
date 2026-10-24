@@ -190,6 +190,38 @@ but another binary can.
   This opens a second Helius LaserStream subscription (the observer has the other),
   which counts against the same Helius credits.
 
+- **Maker arm (paper, `PK_LIMM_ENABLED`; `crates/pk-limitless/src/maker/`).** The
+  10-23/24 review found the taker side adversely selected. In every missed entry
+  the book repriced 7–74¢ within the 500 ms hold. The fills that remained lost
+  (−13.7¢/share), and with instant fills the Kalshi signal earned −2.6¢ ± 8.1.
+  Resting post-only orders and cancels are never held, so this arm quotes
+  instead:
+  - **Markets:** every Limitless crypto mirror of Polymarket in `PK_LIMM_SERIES`.
+    The default is BTC/ETH 15-min, and BTC, ETH, SOL, XRP, BNB and DOGE hourly
+    and daily. They come from `/markets/active`, with Polymarket's Up/Down
+    tokens from Gamma via `metadata.externalSlug`.
+  - **Fair value:** Polymarket's Up mid (same rules, same oracle), when its
+    spread is ≤ 0.04.
+  - **Quotes:** buy YES at `fair − h − skew` and buy NO at `1 − (fair + h − skew)`.
+    `h` is 0.02, capped at the market's `maxSpread`, and `skew` leans against
+    inventory (`PK_LIMM_MAX_POS` 30). Quotes stay post-only and stop 60 s,
+    300 s or 1800 s before a 15-minute, hourly or daily close.
+  - **Pauses:** a 2¢ Kalshi or Polymarket jump in 1 s pulls both quotes for
+    1.5 s.
+  - **Fills** come from Limitless's own trade prints (`/markets/<slug>/events`,
+    polled every 2 s or 10 s), matched against the quote that was live at the
+    print's time. A print through our price fills us; at our price, the queue
+    ahead trades first.
+  - **Inventory:** YES + NO pairs are locked at $1, and the net settles on
+    Limitless's outcome. Makers pay no fee; the rebate is estimated, not
+    counted.
+  - **Measured:** spread captured, 5 s / 30 s markouts against fair, uptime,
+    and net ¢ per share.
+  - **Gate before live:** ≥ 300 fills over ≥ 3 days including US hours, net ¢/share
+    > 0 at t ≥ 2, 30 s markout better than −h, uptime ≥ 80%.
+  - **Flow (10-24, 24 h):** BTC 15-min 466 prints / 4,327 shares; ETH 240 /
+    1,709; hourly and daily a few dollars each.
+
 | Journal record (`limitless/journal`) | |
 |---|---|
 | `lim_window` | a window identified on both venues |

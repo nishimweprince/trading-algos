@@ -92,6 +92,12 @@ impl Discovery {
         Ok(Some(market))
     }
 
+    /// Any Polymarket event's first market by its slug (a mirror's `externalSlug`).
+    pub async fn poly_event_market(&self, slug: &str) -> anyhow::Result<Option<Value>> {
+        let events = self.get(&format!("{}/events", self.gamma), &[("slug", slug.to_owned())]).await?;
+        Ok(events.get(0).and_then(|e| e.get("markets")).and_then(|m| m.get(0)).cloned())
+    }
+
     pub async fn kalshi_market(&self, asset: &str, open_unix: i64) -> anyhow::Result<Option<Value>> {
         let close = open_unix + WINDOW_S;
         let key = (asset.to_owned(), close);
