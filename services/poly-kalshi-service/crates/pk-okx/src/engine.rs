@@ -12,10 +12,13 @@
 //! - **Paper fills are delayed** by the measured round trip (no venue hold on
 //!   OKX): a paper entry fills against the book at decision + round trip, never
 //!   at the decision's touch. The instant fill is journaled beside it.
-//! - **Fees** are an assumption until `pk-okx check` reads the account's:
-//!   taker `rate · (p(1 − p))^exponent` per share, and a settlement fee per
-//!   winning share. Every fill journals its fee apart from its gross, so a
-//!   corrected fee re-scores the journal without a re-run.
+//! - **Fees** come from the account (`pk-okx check`, `account/trade-fee?instType=EVENTS`):
+//!   on 2026-10-25, Lv1, taker 4.5% of notional (`rate · p` per share, the
+//!   `notional` model) and no settlement fee. The entry cap and the exit floor
+//!   are computed for that model: buying at `px` and selling at Kalshi's price
+//!   must net `min_net_edge` after both fees, and an exit must cover the entry,
+//!   both fees and a cent. The older `rate · (p(1 − p))^exponent` model stays
+//!   for replays. Every fill journals its fee apart from its gross.
 //! - **Thin books:** an entry the touch cannot fill in full is counted
 //!   (`entries_partial`); the fill rate is measured, not assumed.
 //! - **Kalshi → OKX response:** each Kalshi YES-mid move of ≥ 2¢ within 1 s
@@ -61,6 +64,8 @@ pub struct EngineCfg {
     pub active_exit: bool,
     pub fee_rate: f64,
     pub fee_exponent: f64,
+    /// Taker fee = `fee_rate · p` per share (OKX's), else `fee_rate · (p(1 − p))^fee_exponent`.
+    pub fee_notional: bool,
     pub settle_fee: f64,
     pub paper_latency_ms: f64,
     pub paper_extra_ms: f64,
@@ -588,7 +593,29 @@ impl Engine {
     }
 
     fn fee(&self, price: f64, shares: f64) -> f64 {
-        taker_fee(price, shares, self.cfg.fee_rate, self.cfg.fee_exponent)
+        if self.cfg.fee_notional {
+            if shares <= 0.0 || !(0.0 < price && price < 1.0) { 0.0 } else { self.cfg.fee_rate * price * shares }
+        } else {
+            taker_fee(price, shares, self.cfg.fee_rate, self.cfg.fee_exponent)
+        }
+    }
+
+    /// The highest entry price that still nets `min_net_edge` after both notional fees,
+    /// selling at `fair`: `fair(1 − r) − px(1 + r) ≥ m`.
+    fn notional_cap(&self, fair: f64) -> f64 {
+        let r = self.cfg.fee_rate;
+        let m = self.cfg.params.min_net_edge.unwrap_or(0.0);
+        (fair * (1.0 - r) - m) / (1.0 + r)
+    }
+
+    /// The lowest exit price whose proceeds after the fee cover the entry, its fee and a cent.
+    fn exit_floor(&self, vwap: f64, tick: f64) -> f64 {
+        if self.cfg.fee_notional {
+            let r = self.cfg.fee_rate;
+            round_dp((((vwap * (1.0 + r) + 0.01) / (1.0 - r)) / tick - 1e-6).ceil() * tick, 4)
+        } else {
+            exit_floor(vwap, self.cfg.fee_rate, self.cfg.fee_exponent)
+        }
     }
 
     fn hold_ns(&self) -> i64 {
@@ -605,7 +632,8 @@ impl Engine {
         let sec_into = t as f64 / 1e9 - w.open_unix as f64;
         let hour = chrono::DateTime::from_timestamp_nanos(t).format("%H").to_string().parse().ok();
         let t0 = std::time::Instant::now();
-        let fee = (self.cfg.fee_rate, self.cfg.fee_exponent);
+        // The notional fee is checked below, with its own cap; decide() sees none.
+        let fee = if self.cfg.fee_notional { (0.0, 1.0) } else { (self.cfg.fee_rate, self.cfg.fee_exponent) };
         let d = decide(&k, &oy, &on, &self.cfg.params, sec_into, false, hour, None, fee);
         self.decide_ns.record(t0.elapsed().as_nanos() as u64);
         let a = &mut self.assets[i];
@@ -620,13 +648,20 @@ impl Engine {
         if d.action == Action::None {
             return;
         }
-        let a = &mut self.assets[i];
-        a.consumed = true;
         let yes = d.buy_yes.unwrap_or(true);
         let touch = d.entry_px.unwrap_or(0.0);
+        let cap = (self.cfg.fee_notional && d.action == Action::Enter)
+            .then(|| kalshi_fair(&k, yes).map(|f| self.notional_cap(f)))
+            .flatten();
+        let a = &mut self.assets[i];
+        a.consumed = true;
         let mut limit = (touch + self.cfg.limit_offset).min(d.max_px.unwrap_or(0.999)).min(0.999);
+        if let Some(c) = cap {
+            limit = limit.min(c);
+        }
         limit = (limit / w.tick + 1e-6).floor() * w.tick;
         limit = round_dp(limit, 4);
+        let net_edge_blocked = cap.is_some_and(|c| touch > c + 1e-9);
         let instant = take(&a.obook, yes, true, limit, self.cfg.shares);
         let mut rec = json!({
             "asset": w.asset, "open_unix": w.open_unix, "inst_id": w.inst_id, "sec_into": round_dp(sec_into, 3),
@@ -638,7 +673,9 @@ impl Engine {
         if d.action == Action::Enter {
             self.count("entries_decided");
             let cost = limit * self.cfg.shares;
-            let blocked = if self.ledger.open_notional() + cost > self.cfg.max_open_usd + 1e-9 {
+            let blocked = if net_edge_blocked {
+                Some("net_edge")
+            } else if self.ledger.open_notional() + cost > self.cfg.max_open_usd + 1e-9 {
                 Some("max_open")
             } else if -self.ledger.realised_today(t) >= self.cfg.daily_loss_usd {
                 Some("daily_loss")
@@ -680,7 +717,7 @@ impl Engine {
         let bid = if yes { oy.bid } else { on.bid };
         let (Some(bid), Some(fair)) = (bid, kalshi_fair(&k, yes)) else { return };
         let vwap = p.vwap();
-        let floor = exit_floor(vwap, self.cfg.fee_rate, self.cfg.fee_exponent);
+        let floor = self.exit_floor(vwap, w.tick);
         if !should_exit(bid, fair, vwap) || bid < floor - 1e-9 {
             return;
         }
@@ -918,7 +955,9 @@ impl Engine {
             "params": self.cfg.params,
             "shares": self.cfg.shares,
             "limit_offset": self.cfg.limit_offset,
-            "fee": {"rate": self.cfg.fee_rate, "exponent": self.cfg.fee_exponent, "settle": self.cfg.settle_fee},
+            "fee": {"rate": self.cfg.fee_rate, "exponent": self.cfg.fee_exponent, "settle": self.cfg.settle_fee,
+                    "model": if self.cfg.fee_notional { "notional" } else { "p(1-p)" },
+                    "paper_extra_ms": self.cfg.paper_extra_ms},
             "assets": assets,
             "ledger": {
                 "start_cash": round_dp(l.start_cash, 2), "cash": round_dp(l.cash, 2),
@@ -966,6 +1005,7 @@ mod tests {
             active_exit: true,
             fee_rate: 0.07,
             fee_exponent: 1.0,
+            fee_notional: false,
             settle_fee: 0.01,
             paper_latency_ms: 30.0,
             paper_extra_ms: 0.0,
@@ -1047,6 +1087,33 @@ mod tests {
         let expect = 10.0 - 4.9 - taker_fee(0.49, 10.0, 0.07, 1.0) - 0.1;
         assert!((p.pnl.unwrap() - expect).abs() < 1e-9, "{:?}", p.pnl);
         assert_eq!(e.status(t)["settlement"]["okx_vs_kalshi"], 0);
+    }
+
+    #[test]
+    fn notional_fee_caps_the_entry_and_sets_the_exit_floor() {
+        let mut e = engine();
+        e.cfg.fee_notional = true;
+        e.cfg.fee_rate = 0.045;
+        e.cfg.params.min_net_edge = Some(0.03);
+        // Kalshi 0.70 → cap (0.70·0.955 − 0.03)/1.045 = 0.6110; the touch 0.46 is well under it.
+        assert!((e.notional_cap(0.70) - 0.61100478).abs() < 1e-6);
+        assert!((e.fee(0.46, 10.0) - 0.207).abs() < 1e-12);
+        // Exit floor for a 0.46 entry: (0.46·1.045 + 0.01)/0.955 = 0.5138 → 0.514.
+        assert!((e.exit_floor(0.46, 0.001) - 0.514).abs() < 1e-9);
+        let open = 1_792_765_800;
+        let t = (open + 100) * NS;
+        e.set_window(window(open), t);
+        // A wide OKX book (0.40 / 0.62) is allowed here; the fee-aware cap is what bounds the entry.
+        e.cfg.params.max_entry_px = 0.80;
+        e.cfg.params.max_poly_spread = None;
+        e.on_okx(&snap(r#"[["0.62","50","0","1"]]"#, r#"[["0.40","50","0","1"]]"#, 1), t);
+        let k = r#"{"type":"orderbook_snapshot","msg":{"market_ticker":"KX","yes_dollars_fp":[["0.84","100"]],"no_dollars_fp":[["0.15","100"]]}}"#;
+        e.on_kalshi(k, t + 1);
+        e.tick(t + 100_000_000);
+        // Kalshi fair 0.845 → cap 0.744: the 0.62 touch passes and fills.
+        assert_eq!(e.counters.get("entries_filled"), Some(&1));
+        let p = e.ledger.positions.values().next().unwrap();
+        assert!((p.fee - 0.045 * 0.62 * 10.0).abs() < 1e-9);
     }
 
     #[test]

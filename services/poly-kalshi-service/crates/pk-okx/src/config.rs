@@ -27,6 +27,8 @@ pub struct OkxSettings {
     /// Taker fee per share: `rate · (p(1 − p))^exponent` (exponent 0: flat per share).
     pub fee_rate: f64,
     pub fee_exponent: f64,
+    /// `notional` (OKX: rate · p per share) or `pp` (rate · (p(1 − p))^exponent).
+    pub fee_notional: bool,
     /// Taken from each winning share's 1 USDT at settlement (not on exits).
     pub settle_fee: f64,
     pub paper_cash: f64,
@@ -125,8 +127,13 @@ impl OkxSettings {
             limit_offset: e.num("PK_OKX_LIMIT_OFFSET", 0.06)?,
             exit_slip: e.num("PK_OKX_EXIT_SLIP", 0.01)?,
             active_exit: e.flag("PK_OKX_ACTIVE_EXIT", true)?,
-            fee_rate: e.num("PK_OKX_FEE_RATE", 0.07)?,
+            fee_rate: e.num("PK_OKX_FEE_RATE", 0.045)?,
             fee_exponent: e.num("PK_OKX_FEE_EXPONENT", 1.0)?,
+            fee_notional: match e.or("PK_OKX_FEE_MODEL", "notional").to_lowercase().as_str() {
+                "notional" => true,
+                "pp" | "p(1-p)" => false,
+                other => anyhow::bail!("PK_OKX_FEE_MODEL={other} is not notional or pp"),
+            },
             settle_fee: e.num("PK_OKX_SETTLE_FEE", 0.0)?,
             paper_cash: e.num("PK_OKX_PAPER_CASH", 100.0)?,
             paper_latency_ms: e.num("PK_OKX_PAPER_LATENCY_MS", 30.0)?,
@@ -174,6 +181,7 @@ impl OkxSettings {
             "active_exit": self.active_exit,
             "fee_rate": self.fee_rate,
             "fee_exponent": self.fee_exponent,
+            "fee_notional": self.fee_notional,
             "settle_fee": self.settle_fee,
             "paper_extra_ms": self.paper_extra_ms,
         })

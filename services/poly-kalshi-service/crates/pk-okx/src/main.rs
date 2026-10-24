@@ -68,7 +68,7 @@ enum Cmd {
         #[arg(long, default_value_t = 1.0)]
         shares: f64,
         /// The order's `tdMode`.
-        #[arg(long, default_value = "cash")]
+        #[arg(long, default_value = "isolated")]
         td_mode: String,
         /// Read only: no order.
         #[arg(long)]
@@ -233,7 +233,8 @@ async fn check(okx: &OkxSettings, shares: f64, td_mode: &str, no_order: bool) ->
     anyhow::ensure!(best_ask.is_none_or(|a| px < a - 1e-9), "an ask at the lowest tick would cross");
     anyhow::ensure!(px * shares <= 1.0 + 1e-9, "probe notional above $1");
     let cl = format!("pkokx{}", now_ns() / 1_000_000);
-    let order = json!({"instId": w.inst_id, "tdMode": td_mode, "side": "buy", "ordType": "post_only",
+    // Event contracts: `outcome` yes (Up) / no (Down), tdMode isolated; post-only needs no speedBump.
+    let order = json!({"instId": w.inst_id, "tdMode": td_mode, "side": "buy", "outcome": "yes", "ordType": "post_only",
                        "px": format!("{px}"), "sz": format!("{shares}"), "clOrdId": cl});
     let t0 = Instant::now();
     let r = client.post("/api/v5/trade/order", &order).await?;
@@ -285,6 +286,7 @@ async fn run(settings: Settings, okx: OkxSettings) -> anyhow::Result<()> {
         active_exit: okx.active_exit,
         fee_rate: okx.fee_rate,
         fee_exponent: okx.fee_exponent,
+        fee_notional: okx.fee_notional,
         settle_fee: okx.settle_fee,
         paper_latency_ms: okx.paper_latency_ms,
         paper_extra_ms: okx.paper_extra_ms,
