@@ -137,7 +137,8 @@ impl PredictMarket {
             underlying,
             outcome: "up".into(),
             operator: ">=".into(),
-            threshold: self.variant_data.get("startPrice").map(Value::to_string),
+            // `startPrice` is JSON null until the window opens: no threshold yet.
+            threshold: self.variant_data.get("startPrice").filter(|v| !v.is_null()).map(Value::to_string),
             open_ms: self.open_ms(),
             close_ms: self.close_ms(),
             decision_ms: self.close_ms(),
