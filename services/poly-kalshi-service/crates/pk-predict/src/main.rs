@@ -70,6 +70,9 @@ struct App {
     kalshi_signer: Arc<KalshiSigner>,
     markouts: Mutex<MarkoutTracker>,
     series_ms: Mutex<i64>,
+    /// Each market's rules as last discovered, for telling a rule change
+    /// from the start price Predict sets when the window opens.
+    contracts: Mutex<std::collections::HashMap<String, NormalizedContract>>,
 }
 
 impl App {
@@ -561,6 +564,7 @@ async fn run(cfg: Config, client: Arc<Client>) -> anyhow::Result<()> {
         client,
         markouts: Mutex::new(MarkoutTracker::new()),
         series_ms: Mutex::new(0),
+        contracts: Mutex::new(Default::default()),
     });
 
     // Reconcile before readiness. Discovery runs before cancellation so every
@@ -635,8 +639,10 @@ async fn discover(app: &Arc<App>) -> anyhow::Result<()> {
         "Predict discovery returned no eligible direct-linked BTC/ETH markets"
     );
     let mut decisions = std::collections::HashMap::new();
+    let mut contracts = std::collections::HashMap::new();
     let mut executable = Vec::new();
     for mut market in markets {
+        contracts.insert(market.id.to_string(), market.normalized());
         let ticker = market.kalshi_ticker.clone().unwrap_or_default();
         let kalshi = fetch_kalshi_for(app, &market).await.unwrap_or_else(|error| NormalizedContract {
             venue: "kalshi".into(),
@@ -657,14 +663,23 @@ async fn discover(app: &Arc<App>) -> anyhow::Result<()> {
     // A market missing from this pass has closed (15-minute windows roll off
     // the OPEN list); only one present in both passes with different rules,
     // or a different Kalshi link, is a semantic change.
+    // Predict sets the window's start price (`threshold`) when it opens;
+    // that first value is not a rule change, a later different one is.
     let changed = {
         let state = app.state.lock();
+        let before = app.contracts.lock();
         state.matches.iter().any(|(id, old)| {
             decisions.get(id).is_some_and(|new| {
-                old.venue_fingerprint != new.venue_fingerprint || old.kalshi_ticker != new.kalshi_ticker
+                old.kalshi_ticker != new.kalshi_ticker
+                    || (old.venue_fingerprint != new.venue_fingerprint
+                        && match (before.get(id), contracts.get(id)) {
+                            (Some(a), Some(b)) => rules_changed(a, b),
+                            _ => true,
+                        })
             })
         })
     };
+    *app.contracts.lock() = contracts;
     if changed {
         app.state.lock().latch("Predict market rules, ticker link, or outcome mapping changed");
         app.cancel_all("semantic match changed").await;
@@ -681,6 +696,19 @@ async fn discover(app: &Arc<App>) -> anyhow::Result<()> {
         feed.set_wanted(kalshi_wanted(app));
     }
     Ok(())
+}
+
+/// A rule change between two passes over one market, ignoring the start
+/// price appearing for the first time (it is set at the window's open).
+fn rules_changed(before: &NormalizedContract, after: &NormalizedContract) -> bool {
+    if before.threshold.is_some() && before.threshold != after.threshold {
+        return true;
+    }
+    let mut a = before.clone();
+    let mut b = after.clone();
+    a.threshold = None;
+    b.threshold = None;
+    a != b
 }
 
 fn kalshi_contract(ticker: &str, market: &Value) -> anyhow::Result<NormalizedContract> {
@@ -1337,4 +1365,23 @@ fn order_rows(value: &Value) -> &[Value] {
         .and_then(Value::as_array)
         .map(Vec::as_slice)
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn start_price_set_at_the_open_is_not_a_rule_change() {
+        let before = NormalizedContract { venue_market_id: "1".into(), close_ms: Some(900_000), ..Default::default() };
+        let mut after = before.clone();
+        after.threshold = Some("80064.715".into());
+        assert!(!rules_changed(&before, &after), "first start price");
+        let mut moved = after.clone();
+        moved.threshold = Some("80100.0".into());
+        assert!(rules_changed(&after, &moved), "a start price that changes");
+        let mut other = after.clone();
+        other.resolution_source = "PYTH".into();
+        assert!(rules_changed(&after, &other), "any other field");
+    }
 }
