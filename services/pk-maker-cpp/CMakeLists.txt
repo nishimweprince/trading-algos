@@ -39,10 +39,16 @@ endif()
 set(PKM_WARNINGS -Wall -Wextra -Wconversion -Wshadow -Werror)
 
 add_library(pkm_core
+  src/book.cpp
   src/clob.cpp
   src/crypto.cpp
   src/eip712.cpp
+  src/engine.cpp
+  src/feeds.cpp
+  src/http.cpp
   src/json.cpp
+  src/net.cpp
+  src/ws.cpp
 )
 target_include_directories(pkm_core PUBLIC include)
 target_link_libraries(pkm_core PUBLIC OpenSSL::SSL OpenSSL::Crypto Threads::Threads secp256k1)
@@ -58,7 +64,10 @@ if(PKM_BUILD_TESTS)
   add_executable(pkm-tests
     tests/test_main.cpp
     tests/test_crypto.cpp
+    tests/test_engine.cpp
+    tests/test_feeds.cpp
     tests/test_json.cpp
+    tests/test_net.cpp
   )
   target_link_libraries(pkm-tests PRIVATE pkm_core)
   target_compile_options(pkm-tests PRIVATE ${PKM_WARNINGS})

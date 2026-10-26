@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 // The hand-rolled harness the other C++ services use: `require` throws, a
@@ -31,11 +32,11 @@ void require_eq(const A& got, const B& want, std::string_view message) {
   ++checks();
   if (!(got == want)) {
     std::string text(message);
-    if constexpr (requires(std::string& s, const A& a, const B& b) { s += a; s += b; }) {
+    if constexpr (std::is_convertible_v<A, std::string_view> && std::is_convertible_v<B, std::string_view>) {
       text += "\n  got:  ";
-      text += got;
+      text += std::string_view(got);
       text += "\n  want: ";
-      text += want;
+      text += std::string_view(want);
     } else if constexpr (requires { std::to_string(got); std::to_string(want); }) {
       text += "\n  got:  " + std::to_string(got) + "\n  want: " + std::to_string(want);
     }
