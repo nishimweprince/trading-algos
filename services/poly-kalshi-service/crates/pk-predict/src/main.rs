@@ -653,8 +653,11 @@ async fn discover(app: &Arc<App>) -> anyhow::Result<()> {
     let changed = {
         let state = app.state.lock();
         let before = app.contracts.lock();
-        state.matches.iter().any(|(id, old)| {
-            decisions.get(id).is_some_and(|new| {
+        // Only a market executable in both passes counts: one that drops to
+        // E2 (a transient Kalshi lookup failure, an empty link) is simply not
+        // quoted, which is already the safe outcome (19:30Z latch, 10-26).
+        state.matches.iter().filter(|(_, old)| old.grade != MatchGrade::E2).any(|(id, old)| {
+            decisions.get(id).filter(|new| new.grade != MatchGrade::E2).is_some_and(|new| {
                 old.kalshi_ticker != new.kalshi_ticker
                     || (old.venue_fingerprint != new.venue_fingerprint
                         && match (before.get(id), contracts.get(id)) {
