@@ -25,6 +25,11 @@
 //! - **Fills** come from the venue's own order state (`size_matched`), polled
 //!   by the executor; makers pay no fee. Up + Down pairs pay $1 whatever the
 //!   outcome; the net settles on Polymarket's resolution.
+//! - **First legs** (a bid that opens or adds to a one-sided position) only in
+//!   the window's first `open_leg_s` and while q is within
+//!   `open_min_fair..=open_max_fair`. A second leg takes minutes to come (p50
+//!   ~200 s on 2026-10-26), so later or extreme first legs mostly settled
+//!   one-sided. Bids that pair existing shares run until `stop_s`.
 //! - **Cash:** a post refused for "not enough balance" carries the venue's
 //!   free balance; for `CASH_HOLD_MS` only bids that balance covers are sent
 //!   (each one sent spends it), so a starved wallet waits instead of firing
@@ -78,6 +83,11 @@ pub struct PmCfg {
     pub max_open_cost_usd: f64,
     /// Least profit per share a completed Up + Down pair must lock.
     pub pair_margin: f64,
+    /// First legs only in the window's first `open_leg_s` …
+    pub open_leg_s: i64,
+    /// … and while Kalshi's fair is within this band.
+    pub open_min_fair: f64,
+    pub open_max_fair: f64,
 }
 
 /// What the executor must do.
@@ -113,6 +123,17 @@ pub fn free_balance(error: &str) -> Option<f64> {
     let rest = &error[error.find("balance: ")? + "balance: ".len()..];
     let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
     digits.parse::<f64>().ok().map(|b| b / 1e6)
+}
+
+/// Would a fill of this side open or add to a one-sided position? (Up when
+/// net ≥ 0, Down when net ≤ 0; flat counts as opening.)
+pub fn opens(net: f64, up: bool) -> bool {
+    if up { net >= -1e-9 } else { net <= 1e-9 }
+}
+
+/// May a first leg be quoted `s` seconds into the window at fair `q`?
+pub fn first_leg_ok(cfg: &PmCfg, s: i64, q: f64) -> bool {
+    s < cfg.open_leg_s && (cfg.open_min_fair - 1e-9..=cfg.open_max_fair + 1e-9).contains(&q)
 }
 
 /// The pair guard: with shares held on the other side at average cost `c`, a
@@ -680,6 +701,9 @@ impl Engine {
                         let (u, d) = desired_px(&cfg, q, net, ua, da);
                         for (n, px) in [u, d].into_iter().enumerate() {
                             let up = n == 0;
+                            if opens(net, up) && !first_leg_ok(&cfg, s, q) {
+                                continue;
+                            }
                             let opposite = held_avg.and_then(|h| h[1 - n]);
                             let Some(px) = pair_cap(&cfg, px, opposite) else { continue };
                             let Some(size) = room(&cfg, net, up) else { continue };
@@ -1231,6 +1255,9 @@ mod tests {
             daily_loss_usd: 15.0,
             max_open_cost_usd: 60.0,
             pair_margin: 0.02,
+            open_leg_s: 300,
+            open_min_fair: 0.15,
+            open_max_fair: 0.85,
         }
     }
 
@@ -1271,6 +1298,32 @@ mod tests {
                    "asks": [{"price": format!("{a:.2}"), "size": "50"}]})
         };
         e.on_poly(&json!([book("BTC-up", up), book("BTC-down", down)]).to_string(), t);
+    }
+
+    #[test]
+    fn first_legs_only_early_and_inside_the_band() {
+        let c = cfg();
+        assert!(opens(0.0, true) && opens(0.0, false));
+        assert!(opens(5.0, true) && !opens(5.0, false));
+        assert!(!opens(-5.0, true) && opens(-5.0, false));
+        assert!(first_leg_ok(&c, 100, 0.50));
+        assert!(!first_leg_ok(&c, 300, 0.50), "deadline");
+        assert!(!first_leg_ok(&c, 100, 0.90) && !first_leg_ok(&c, 100, 0.10), "band");
+
+        let dir = tmp("firstleg");
+        let mut e = engine(&dir);
+        // Flat at minute 6: no bids at all.
+        let t6 = (OPEN + 360) * NS;
+        books(&mut e, 0.54, 0.56, (0.53, 0.57), (0.43, 0.47), t6);
+        e.tick(t6, &Gates { kill: false, feeds_ok: true });
+        assert!(e.take_actions().is_empty());
+        // Long 5 Up from minute 2: only the Down (pairing) bid is quoted at minute 6.
+        e.inv.insert(wkey("BTC", OPEN), Inventory { asset: "BTC".into(), open_unix: OPEN, up: 5.0, up_cost: 2.5, ..Default::default() });
+        e.tick(t6 + NS, &Gates { kill: false, feeds_ok: true });
+        let a = e.take_actions();
+        assert_eq!(a.len(), 1, "{a:?}");
+        assert!(matches!(&a[0], Action::Post { up: false, .. }));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

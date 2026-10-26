@@ -332,6 +332,12 @@ per share filled at h = 0.02; at h = 0.05 it lost.
   (`PK_PM_ADVERSE_MS`). One below its target is raised after 300 ms, once the
   gap is ≥ 1¢. Jumps of 2¢ pull at once (the pause). Posts are capped at 8 per
   second.
+- **First legs.** A bid that opens or adds to a one-sided position is quoted
+  only in the window's first 5 min (`PK_PM_OPEN_LEG_S`) and while Kalshi's fair
+  is within 0.15–0.85 (`PK_PM_OPEN_MIN_FAIR`/`MAX_FAIR`). On 2026-10-26 a
+  second leg took ~200 s (p50) to come; windows whose first fill came after
+  minute 5 paired 11–20% of the time and lost $23.92, those before paired 59%
+  and made $14.24. Bids that pair held shares run until the stop.
 - **Pair guard.** With shares held on one side at average cost c, the other
   side bids at most `1 − c − PK_PM_PAIR_MARGIN` (0.02), so every completed
   Up + Down pair locks at least 2¢ a share.
