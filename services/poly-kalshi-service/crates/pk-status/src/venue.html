@@ -112,22 +112,33 @@ async function tick() {
   put("alerts", al.length ? `<ul>${al.map((a) => `<li>${a}</li>`).join("")}</ul>` : "ready · all clear");
 
   const r = (s.risk || {}).state || {}, lim = (s.risk || {}).limits || {};
+  const orders = s.recent_orders || [], fills = s.recent_fills || [], marks = s.markouts || [];
+  const inv = s.inventory || {};
+  const positions = s.positions || {};
+  const fillShares = fills.reduce((a, x) => a + (Number(x.quantity) || 0), 0);
+  const meanMark = (horizon) => {
+    const xs = marks.filter((m) => Number(m.horizon_s) === horizon).map((m) => Number(m.markout)).filter((v) => Number.isFinite(v));
+    if (!xs.length) return null;
+    return xs.reduce((a, b) => a + b, 0) / xs.length;
+  };
+  const m5 = meanMark(5), m30 = meanMark(30), m60 = meanMark(60);
+  const cents = (v) => v == null ? "–" : `${(v * 100).toFixed(2)}¢`;
   put("risk", kv([
     ["Realised P&L", money(r.realised_pnl), sgn(r.realised_pnl)],
     ["Marked P&L", money(r.marked_pnl), sgn(r.marked_pnl)],
+    ["Fills (recent buffer)", `${fills.length} · ${f(fillShares, 1)} sh`],
+    ["Markout 5s / 30s / 60s", `${cents(m5)} / ${cents(m30)} / ${cents(m60)}`],
     ["Open orders", `${r.open_orders ?? 0} of ${lim.max_orders ?? "–"}`],
     ["Open notional", `${money(r.open_usd)} of $${f(lim.max_open_usd, 0)}`],
     ["Active markets", `${r.active_markets ?? 0} of ${lim.max_markets ?? "–"}`],
     ["Order size / daily loss cap", `$${f(lim.order_usd, 0)} / $${f(lim.daily_loss_usd, 0)}`],
     ["Halted", r.halted ? (r.halt_reason || "yes") : "no", r.halted ? "bad" : "good"],
   ]));
-  const orders = s.recent_orders || [], fills = s.recent_fills || [], marks = s.markouts || [];
-  const inv = s.inventory || {};
   put("activity", kv([
     ["Orders (recent)", orders.length],
     ["Fills (recent)", fills.length],
     ["Markouts (recent)", marks.length],
-    ["Positions held", Object.values(inv).filter((q) => Math.abs(q) > 1e-9).length],
+    ["Positions held", Object.values(positions).filter((p) => Math.abs(p.yes_qty || 0) > 1e-9 || Math.abs(p.no_qty || 0) > 1e-9).length || Object.values(inv).filter((q) => Math.abs(q) > 1e-9).length],
     ["Settlements", (s.settlements || []).length],
     ["Last heartbeat", ago(s.last_heartbeat_ms)],
   ]));

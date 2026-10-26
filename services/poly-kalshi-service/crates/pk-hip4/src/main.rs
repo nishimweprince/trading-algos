@@ -347,14 +347,10 @@ impl App {
                 });
             }
             for fill in &fills {
-                *state.inventory.entry(fill.market.clone()).or_default() +=
-                    if fill.side == "YES" { fill.quantity } else { -fill.quantity };
+                state.book_fill(fill);
                 state.risk.state.open_orders = state.risk.state.open_orders.saturating_sub(1);
                 state.risk.state.open_usd = (state.risk.state.open_usd - fill.price * fill.quantity).max(0.0);
-                state.push_fill(fill.clone());
             }
-            state.risk.state.active_markets =
-                state.inventory.values().filter(|quantity| quantity.abs() > 1e-9).count();
             state.risk.save();
         }
         for fill in fills {
@@ -904,18 +900,10 @@ fn handle_fills(app: &Arc<App>, value: &Value) {
             order.status = "filled".into();
             order.updated_ms = record.time_ms;
         }
-        *state.inventory.entry(record.market.clone()).or_default() +=
-            if record.side.eq_ignore_ascii_case("b") || record.side.eq_ignore_ascii_case("buy") {
-                record.quantity
-            } else {
-                -record.quantity
-            };
+        state.book_fill(&record);
         state.risk.state.open_orders = state.risk.state.open_orders.saturating_sub(1);
         state.risk.state.open_usd = (state.risk.state.open_usd - record.price * record.quantity).max(0.0);
-        state.risk.state.active_markets =
-            state.inventory.values().filter(|quantity| quantity.abs() > 1e-9).count();
         state.risk.save();
-        state.push_fill(record.clone());
         drop(state);
         app.markouts.lock().watch(&record.market, &record.side, record.price, record.time_ms);
         app.record("fill", serde_json::to_value(record).unwrap_or_default());
@@ -958,6 +946,14 @@ async fn strategy(app: Arc<App>) {
             for markout in app.markouts.lock().poll(now, &mids) {
                 app.record("markout", markout.clone());
                 app.state.lock().push_markout(markout);
+            }
+            {
+                let yes_mids: std::collections::HashMap<String, f64> = mids
+                    .iter()
+                    .filter(|((_, side), _)| side.eq_ignore_ascii_case("YES"))
+                    .map(|((market, _), mid)| (market.clone(), *mid))
+                    .collect();
+                app.state.lock().mark_to_market(&yes_mids);
             }
             if now - *app.series_ms.lock() >= 1000 {
                 *app.series_ms.lock() = now;

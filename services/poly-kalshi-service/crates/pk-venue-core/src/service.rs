@@ -41,6 +41,75 @@ pub struct FillRecord {
     pub simulated: bool,
 }
 
+/// Open YES/NO inventory for one market, with cash cost basis (price × qty + fees).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Position {
+    pub yes_qty: f64,
+    pub yes_cost: f64,
+    pub no_qty: f64,
+    pub no_cost: f64,
+}
+
+impl Position {
+    pub fn is_flat(&self) -> bool {
+        self.yes_qty.abs() <= 1e-9 && self.no_qty.abs() <= 1e-9
+    }
+
+    pub fn net(&self) -> f64 {
+        self.yes_qty - self.no_qty
+    }
+
+    /// Mark-to-market vs the venue's YES mid: YES marks at `mid`, NO at `1 − mid`.
+    pub fn marked(&self, yes_mid: f64) -> f64 {
+        self.yes_qty * yes_mid + self.no_qty * (1.0 - yes_mid) - self.yes_cost - self.no_cost
+    }
+
+    pub fn apply_buy(&mut self, side: &str, price: f64, quantity: f64, fee: f64) {
+        if quantity <= 1e-12 {
+            return;
+        }
+        let cost = quantity * price + fee;
+        if is_yes_side(side) {
+            self.yes_qty += quantity;
+            self.yes_cost += cost;
+        } else {
+            self.no_qty += quantity;
+            self.no_cost += cost;
+        }
+    }
+
+    /// Realise `amount` balanced YES/NO pairs at $1 (a merge). Returns realised $.
+    pub fn realise_merge(&mut self, amount: f64) -> f64 {
+        let pairs = amount.min(self.yes_qty).min(self.no_qty).max(0.0);
+        if pairs <= 1e-12 {
+            return 0.0;
+        }
+        let yes_avg = self.yes_cost / self.yes_qty;
+        let no_avg = self.no_cost / self.no_qty;
+        self.yes_qty -= pairs;
+        self.no_qty -= pairs;
+        self.yes_cost = (self.yes_cost - pairs * yes_avg).max(0.0);
+        self.no_cost = (self.no_cost - pairs * no_avg).max(0.0);
+        pairs * (1.0 - yes_avg - no_avg)
+    }
+
+    /// Realise resolution payoffs (YES/NO each 0 or 1) and clear the position.
+    pub fn realise_resolution(&mut self, yes_payoff: f64, no_payoff: f64) -> f64 {
+        let realised =
+            self.yes_qty * yes_payoff + self.no_qty * no_payoff - self.yes_cost - self.no_cost;
+        *self = Self::default();
+        realised
+    }
+}
+
+/// YES / buy-side fills (Predict `YES`/`yes`, HIP-4 `YES`/`b`/`buy`).
+pub fn is_yes_side(side: &str) -> bool {
+    matches!(
+        side.trim().to_ascii_lowercase().as_str(),
+        "yes" | "y" | "b" | "buy" | "long" | "bid"
+    )
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct FeedHealth {
     pub connected: bool,
@@ -68,7 +137,10 @@ pub struct AdapterState {
     pub matches: HashMap<String, MatchDecision>,
     pub orders: VecDeque<OrderRecord>,
     pub fills: VecDeque<FillRecord>,
+    /// Signed net inventory (YES − NO) per market; kept for strategy gates.
     pub inventory: HashMap<String, f64>,
+    /// Cost-basis positions used for marked / realised P&L.
+    pub positions: HashMap<String, Position>,
     pub settlements: VecDeque<Value>,
     pub markouts: VecDeque<Value>,
     pub actions: VecDeque<Value>,
@@ -99,6 +171,7 @@ impl AdapterState {
             orders: VecDeque::new(),
             fills: VecDeque::new(),
             inventory: HashMap::new(),
+            positions: HashMap::new(),
             settlements: VecDeque::new(),
             markouts: VecDeque::new(),
             actions: VecDeque::new(),
@@ -108,6 +181,79 @@ impl AdapterState {
             deadman_armed: false,
             last_heartbeat_ms: now,
         }
+    }
+
+    /// Book a buy fill into cost basis + signed inventory, and append the fill.
+    pub fn book_fill(&mut self, fill: &FillRecord) {
+        let yes = is_yes_side(&fill.side);
+        self.positions.entry(fill.market.clone()).or_default().apply_buy(
+            &fill.side,
+            fill.price,
+            fill.quantity,
+            fill.fee,
+        );
+        *self.inventory.entry(fill.market.clone()).or_default() +=
+            if yes { fill.quantity } else { -fill.quantity };
+        if self.inventory.get(&fill.market).is_some_and(|q| q.abs() <= 1e-9) {
+            self.inventory.remove(&fill.market);
+        }
+        if self.positions.get(&fill.market).is_some_and(Position::is_flat) {
+            self.positions.remove(&fill.market);
+        }
+        self.risk.state.active_markets =
+            self.positions.values().filter(|p| !p.is_flat()).count();
+        self.push_fill(fill.clone());
+    }
+
+    /// Refresh marked P&L from YES mids (`market → yes mid`). May latch daily loss.
+    pub fn mark_to_market(&mut self, yes_mids: &HashMap<String, f64>) {
+        let mut marked = 0.0;
+        for (market, pos) in &self.positions {
+            if pos.is_flat() {
+                continue;
+            }
+            let Some(&mid) = yes_mids.get(market) else { continue };
+            if mid.is_finite() {
+                marked += pos.marked(mid);
+            }
+        }
+        self.risk.state.marked_pnl = marked;
+        let _ = self.risk.check_latches();
+    }
+
+    /// Realise resolution for a market (YES/NO payoffs in [0, 1]) and clear it.
+    pub fn realise_resolution(&mut self, market: &str, yes_payoff: f64, no_payoff: f64) -> f64 {
+        let Some(mut pos) = self.positions.remove(market) else {
+            self.inventory.remove(market);
+            return 0.0;
+        };
+        let realised = pos.realise_resolution(yes_payoff, no_payoff);
+        self.inventory.remove(market);
+        self.risk.state.realised_pnl += realised;
+        self.risk.state.active_markets =
+            self.positions.values().filter(|p| !p.is_flat()).count();
+        let _ = self.risk.check_latches();
+        self.risk.save();
+        realised
+    }
+
+    /// Realise a YES/NO merge of `amount` shares at $1.
+    pub fn realise_merge(&mut self, market: &str, amount: f64) -> f64 {
+        let Some(pos) = self.positions.get_mut(market) else { return 0.0 };
+        let realised = pos.realise_merge(amount);
+        *self.inventory.entry(market.into()).or_default() = pos.net();
+        if pos.is_flat() {
+            self.positions.remove(market);
+            self.inventory.remove(market);
+        } else if self.inventory.get(market).is_some_and(|q| q.abs() <= 1e-9) {
+            self.inventory.remove(market);
+        }
+        self.risk.state.realised_pnl += realised;
+        self.risk.state.active_markets =
+            self.positions.values().filter(|p| !p.is_flat()).count();
+        let _ = self.risk.check_latches();
+        self.risk.save();
+        realised
     }
 
     pub fn latch(&mut self, reason: impl Into<String>) {
@@ -157,6 +303,7 @@ impl AdapterState {
             "kalshi_fairs": self.kalshi_fairs,
             "matches": self.matches,
             "inventory": self.inventory,
+            "positions": self.positions,
             "risk": self.risk.status(),
             "latched": self.latched,
             "degraded": self.degraded,
@@ -438,6 +585,65 @@ mod tests {
         assert_eq!(tracker.poll(1_000_000 + 30_000, &mids).len(), 1);
         assert_eq!(tracker.poll(1_000_000 + 60_000, &mids).len(), 1);
         assert!(tracker.poll(1_000_000 + 61_000, &mids).is_empty());
+    }
+
+    #[test]
+    fn position_cost_basis_marks_and_realises() {
+        let mut p = Position::default();
+        p.apply_buy("YES", 0.40, 10.0, 0.0);
+        p.apply_buy("NO", 0.55, 10.0, 0.0);
+        // Locked pair: 10 × (1 − 0.40 − 0.55) = +0.50 at any mid.
+        assert!((p.marked(0.50) - 0.50).abs() < 1e-9);
+        assert!((p.realise_merge(10.0) - 0.50).abs() < 1e-9);
+        assert!(p.is_flat());
+
+        p.apply_buy("yes", 0.30, 5.0, 0.1);
+        assert!((p.marked(0.50) - (5.0 * 0.50 - 1.6)).abs() < 1e-9);
+        let r = p.realise_resolution(1.0, 0.0);
+        assert!((r - (5.0 - 1.6)).abs() < 1e-9);
+        assert!(p.is_flat());
+        assert!(is_yes_side("BUY") && is_yes_side("b") && !is_yes_side("NO"));
+    }
+
+    #[test]
+    fn adapter_books_fill_marks_and_realises_into_risk() {
+        let dir = std::env::temp_dir().join(format!("pk-venue-pnl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let risk = RiskGuard::open(
+            crate::RiskLimits {
+                order_usd: 10.0,
+                max_open_usd: 50.0,
+                daily_loss_usd: 25.0,
+                max_markets: 4,
+                max_orders: 16,
+                max_rejections: 5,
+            },
+            dir.join("risk.json"),
+        )
+        .unwrap();
+        let mut state = AdapterState::new("predict", VenueMode::Shadow, "cfg".into(), risk);
+        let fill = FillRecord {
+            id: "f1".into(),
+            order_id: "o1".into(),
+            market: "7".into(),
+            side: "YES".into(),
+            price: 0.40,
+            quantity: 5.0,
+            fee: 0.0,
+            time_ms: 1,
+            simulated: true,
+        };
+        state.book_fill(&fill);
+        assert_eq!(state.inventory.get("7"), Some(&5.0));
+        assert_eq!(state.fills.len(), 1);
+        state.mark_to_market(&HashMap::from([("7".into(), 0.50)]));
+        assert!((state.risk.state.marked_pnl - 0.50).abs() < 1e-9);
+        let realised = state.realise_resolution("7", 1.0, 0.0);
+        assert!((realised - 3.0).abs() < 1e-9);
+        assert!((state.risk.state.realised_pnl - 3.0).abs() < 1e-9);
+        assert!(state.positions.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

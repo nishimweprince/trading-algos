@@ -392,11 +392,9 @@ impl App {
                 }
             }
             for fill in &fills {
-                *state.inventory.entry(fill.market.clone()).or_default() +=
-                    if fill.side == "YES" { fill.quantity } else { -fill.quantity };
+                state.book_fill(fill);
                 state.risk.state.open_orders = state.risk.state.open_orders.saturating_sub(1);
                 state.risk.state.open_usd = (state.risk.state.open_usd - fill.price * fill.quantity).max(0.0);
-                state.push_fill(fill.clone());
             }
             state.risk.save();
         }
@@ -860,6 +858,14 @@ async fn strategy_loop(app: Arc<App>) {
                 app.record("markout", markout.clone());
                 app.state.lock().push_markout(markout);
             }
+            {
+                let yes_mids: std::collections::HashMap<String, f64> = mids
+                    .iter()
+                    .filter(|((_, side), _)| side.eq_ignore_ascii_case("YES"))
+                    .map(|((market, _), mid)| (market.clone(), *mid))
+                    .collect();
+                app.state.lock().mark_to_market(&yes_mids);
+            }
             if now - *app.series_ms.lock() >= 1000 {
                 *app.series_ms.lock() = now;
                 let mut state = app.state.lock();
@@ -992,12 +998,17 @@ async fn settle_positions(app: &Arc<App>, positions: &Value) {
                 .await;
             match receipt {
                 Ok(receipt) => {
-                    app.record("redeemed", json!({"candidate": candidate, "receipt": receipt}));
-                    let mut state = app.state.lock();
-                    state.inventory.remove(&candidate.market_id);
-                    state.risk.state.active_markets =
-                        state.inventory.values().filter(|q| q.abs() > 1e-9).count();
-                    state.risk.save();
+                    let (yes_pay, no_pay) =
+                        if candidate.index_set == 1 { (1.0, 0.0) } else { (0.0, 1.0) };
+                    let realised = app.state.lock().realise_resolution(
+                        &candidate.market_id,
+                        yes_pay,
+                        no_pay,
+                    );
+                    app.record(
+                        "redeemed",
+                        json!({"candidate": candidate, "receipt": receipt, "realised": realised}),
+                    );
                 }
                 Err(error) => {
                     app.record(
@@ -1029,7 +1040,17 @@ async fn settle_positions(app: &Arc<App>, positions: &Value) {
             let receipt = chain.as_ref().unwrap().merge_positions(condition, amount, is_yield, is_neg).await;
             match receipt {
                 Ok(receipt) => {
-                    app.record("merged", json!({"candidate": candidate, "receipt": receipt}));
+                    let shares = candidate
+                        .amount_wei
+                        .parse::<f64>()
+                        .ok()
+                        .map(|wei| wei / 1e18)
+                        .unwrap_or(0.0);
+                    let realised = app.state.lock().realise_merge(&candidate.market_id, shares);
+                    app.record(
+                        "merged",
+                        json!({"candidate": candidate, "receipt": receipt, "realised": realised}),
+                    );
                 }
                 Err(error) => {
                     app.record(
@@ -1231,14 +1252,10 @@ fn handle_wallet_event(app: &Arc<App>, value: &Value) {
                 order.status = "filled".into();
                 order.updated_ms = record.time_ms;
             }
-            *state.inventory.entry(record.market.clone()).or_default() +=
-                if record.side.eq_ignore_ascii_case("yes") { record.quantity } else { -record.quantity };
+            state.book_fill(&record);
             state.risk.state.open_orders = state.risk.state.open_orders.saturating_sub(1);
             state.risk.state.open_usd = (state.risk.state.open_usd - record.price * record.quantity).max(0.0);
-            state.risk.state.active_markets =
-                state.inventory.values().filter(|quantity| quantity.abs() > 1e-9).count();
             state.risk.save();
-            state.push_fill(record.clone());
             drop(state);
             app.markouts.lock().watch(&record.market, &record.side, record.price, record.time_ms);
         }
