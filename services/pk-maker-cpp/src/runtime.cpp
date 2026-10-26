@@ -1112,18 +1112,23 @@ class Control final {
       to_hot_.push(std::move(m));
     }
     // Orders resting on the account that the engine does not track (a post
-    // whose answer was lost): cancel them once they are 10 s old.
+    // whose answer was lost): cancelled once two passes in a row saw them
+    // untracked and they are 10 s old, so a post still being acknowledged is safe.
     std::vector<venue::Clob::OpenOrder> open;
     if (!clob_.open_orders(open, error)) return;
     std::set<std::string> tracked;
     for (const auto& [id, posted] : snapshot_->tracked) tracked.insert(id);
     const std::int64_t now_s = net::now_ns() / kSec;
+    std::set<std::string> untracked;
     for (const auto& o : open) {
-      if (tracked.contains(o.id) || (o.created_s > 0 && now_s - o.created_s < 10)) continue;
+      if (tracked.contains(o.id)) continue;
+      untracked.insert(o.id);
+      if (!orphans_.contains(o.id) || (o.created_s > 0 && now_s - o.created_s < 10)) continue;
       std::string why;
       const bool ok = clob_.cancel(o.id, why);
       platform::log("orphan order " + o.id + (ok ? " cancelled" : " cancel failed: " + why));
     }
+    orphans_ = std::move(untracked);
   }
 
   void settle() {
@@ -1158,6 +1163,7 @@ class Control final {
   std::shared_ptr<const Snapshot> snapshot_;
   std::vector<ToControl> batch_;
   std::set<std::string> hints_;
+  std::set<std::string> orphans_;  // untracked on the last reconcile pass
   std::vector<std::int64_t> sent_open_;
   std::int64_t last_discovery_ = 0, last_fills_ = 0, last_reconcile_ = 0, last_settle_ = 0, last_files_ = 0;
   bool killed_ = false;

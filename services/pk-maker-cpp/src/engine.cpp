@@ -346,6 +346,7 @@ void Engine::step_slot(std::size_t i, std::size_t n, std::optional<std::pair<dou
   s.px = px;
   s.remaining = size;
   s.last_change_ms = now_ms;
+  s.post_key = c.key;
   Action a;
   a.kind = ActionKind::post;
   a.coin = static_cast<int>(i);
@@ -372,7 +373,8 @@ void Engine::on_posted(int coin, bool up, double px, double size, bool ok, std::
     s->last_change_ms = now_ms;
     OrderRec rec;
     rec.id = s->order;
-    rec.key = c.window ? c.key : std::string();
+    // The window it was sent for, even if the coin rolled while it was in flight.
+    rec.key = !s->post_key.empty() ? s->post_key : c.window ? c.key : std::string();
     rec.coin = coin;
     rec.up = up;
     rec.px = px;

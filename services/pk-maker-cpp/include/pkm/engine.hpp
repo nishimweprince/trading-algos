@@ -298,6 +298,7 @@ class Engine final {
  private:
   struct Slot {
     std::string order;  // empty = none
+    std::string post_key;  // the window a post in flight was sent for
     double px = 0;
     double remaining = 0;
     bool inflight = false;

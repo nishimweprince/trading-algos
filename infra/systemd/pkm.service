@@ -1,0 +1,36 @@
+# pkm (services/pk-maker-cpp): the live Kalshi-priced maker on Polymarket's
+# 15-minute Up/Down markets, in C++. It replaces pk-polymaker, which must not
+# run on the same wallet. Refuses to start without PKM_LIVE_CONFIRM=yes.
+# Its hot thread busy-polls one core (PKM_HOT_CORE) and the pre-signer sits on
+# another (PKM_SIGNER_CORE); keep both inside CPUAffinity. No ports: it serves
+# nothing. Stopping it pulls every quote and cancels every order on the account.
+# Secrets live in /etc/pkm.env (chmod 600).
+[Unit]
+Description=pkm (Kalshi-priced Polymarket maker, C++)
+OnFailure=pk-unit-alert@%n.service
+Wants=network-online.target
+After=network-online.target time-sync.target
+
+[Service]
+Type=simple
+User=pk
+Group=pk
+WorkingDirectory=/home/pk/trading-algos/services/pk-maker-cpp
+EnvironmentFile=/etc/pkm.env
+ExecStart=/home/pk/trading-algos/services/pk-maker-cpp/build/release/pkm run
+Restart=always
+RestartSec=5
+# Room for the shutdown cancel-all and the final order states.
+TimeoutStopSec=30
+KillSignal=SIGTERM
+# Core 1: control threads; 2: hot thread; 3: signer (a 4-vCPU host).
+CPUAffinity=1-3
+Nice=-5
+MemoryMax=256M
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

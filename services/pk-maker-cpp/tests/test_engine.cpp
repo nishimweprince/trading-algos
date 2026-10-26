@@ -385,3 +385,26 @@ PKM_TEST(engine_loads_pk_polymaker_state) {
   const std::int64_t day = (1'793'016'000LL + 3600) * NS;  // 2026-10-26 13:00 UTC
   require(near(e.today_realised(day), -2.25), "ack base read from the pair");
 }
+
+PKM_TEST(engine_post_in_flight_across_a_roll_keeps_its_window) {
+  auto e = make();
+  const std::int64_t t0 = (OPEN + 100) * NS;
+  books(e, 0.54, 0.56, {0.53, 0.57}, {0.43, 0.47}, t0);
+  auto a = take(e);
+  require(a.size() == 2, "posts in flight");
+  auto w = btc_window();
+  w.open_unix = OPEN + 900;
+  w.kalshi_ticker = "KXBTC15M-Y";
+  w.up_token = "BTC-up2";
+  w.down_token = "BTC-down2";
+  e.set_window(w, (OPEN + 900) * NS);
+  e.on_posted(0, true, 0.53, 5, true, "late", (OPEN + 900) * NS);
+  require(e.orders().at("late").key == window_key("BTC", OPEN), "booked to the window it was sent for");
+  e.tick((OPEN + 901) * NS);
+  bool cancelled = false;
+  for (const auto& x : take(e)) cancelled = cancelled || (x.kind == ActionKind::cancel && x.order_id == "late");
+  require(cancelled, "and cancelled as the old window's bid");
+  e.on_order("late", 5, true, (OPEN + 901) * NS);
+  require(e.inventories().contains(window_key("BTC", OPEN)) && !e.inventories().contains(window_key("BTC", OPEN + 900)),
+          "its fill lands in the old window's inventory");
+}

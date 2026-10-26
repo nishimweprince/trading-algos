@@ -37,7 +37,7 @@ void Presigner::want(int slot, std::uint32_t gen, std::int64_t price_cents, std:
 }
 
 bool Presigner::take(int slot, std::uint32_t gen, std::int64_t price_cents, std::int64_t shares, std::string& out) noexcept {
-  if (slot < 0 || slot >= kMaxSlots) return false;
+  if (ttl_ms_ <= 0 || slot < 0 || slot >= kMaxSlots) return false;
   const std::int64_t now_ms = net::now_ns() / 1'000'000;
   for (auto& e : (*slots_)[static_cast<std::size_t>(slot)].entries) {
     const std::uint32_t s1 = e.seq.load(std::memory_order_acquire);
@@ -77,6 +77,7 @@ void Presigner::sign_into(Entry& entry, const Want& w, std::int64_t price_cents,
 }
 
 bool Presigner::refresh(std::int64_t now_ms) {
+  if (ttl_ms_ <= 0) return false;  // pre-signing off: every post is signed inline
   bool any = false;
   for (auto& slot : *slots_) {
     // A consistent copy of the want.

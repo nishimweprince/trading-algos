@@ -33,6 +33,7 @@ project was deleted.)
 | `ofi-status` (in `services/ofi-scalper-service`) | Python / FastAPI | 8040 | Read-only status page for colleagues (collection, health, research, trading); published only via Cloudflare Tunnel + Access |
 | `services/poly-kalshi-service` | Rust / axum (Cargo workspace) | 8050 (trader) · 8052 (observer, loopback) | Kalshi-signal / Polymarket-leg convergence on 15-min crypto binaries: two-venue recorder, window identity, decision, paper venue, settlement ledger; an order-path probe that posts post-only orders it cancels at once (no fills, no live trading); the `pk` research CLI |
 | `pk-status` (in `services/poly-kalshi-service`) | Rust / axum | 8051 | Read-only poly-kalshi status page and gate progress |
+| `services/pk-maker-cpp` (`pkm`) | C++20 | — | The live Kalshi-priced post-only maker on Polymarket's 15-min Up/Down markets (pk-polymaker's rule, which it replaces): busy-polled hot thread, pre-signed orders, fills from the user channel; no API, journal or metrics. Live needs `PKM_LIVE_CONFIRM=yes` |
 | `services/zone-trend` | Python (`zt` CLI) | — | Binance USDⓈ-M zone-trend swing strategy: Binance Vision data, pure core, backtester; live runner only after the M4 gate (see its PLAN.md) |
 | `services/bar-portion-mm-service` | C++20 | 8060 | Binance USDⓈ-M Bar Portion market maker: verified public books, deterministic replay and queue-aware mainnet shadow fills; live modes are refused |
 
