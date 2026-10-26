@@ -602,7 +602,7 @@ async fn run(cfg: Config, client: Arc<Client>) -> anyhow::Result<()> {
     tokio::spawn(kill_loop(app.clone()));
     tokio::spawn(clock_loop(app.clone()));
     tokio::spawn(settlement_loop(app.clone()));
-    tokio::spawn(shadow_settlement_loop(app.clone()));
+    tokio::spawn(settlement_accounting_loop(app.clone()));
 
     app.state.lock().ready = true;
     let routes = routes(app.clone());
@@ -915,14 +915,13 @@ fn position_meta(m: &model::PredictMarket, now: i64) -> pk_venue_core::service::
     }
 }
 
-/// Settle simulated positions the way the venue settles live ones: once a
-/// window closes, read its market from Predict (`RESOLVED`, the Up/Yes
-/// outcome `WON` or `LOST`) and realise at $1 / $0. Kalshi's result for the
-/// mirrored contract is the fallback when Predict has not resolved after 20 min.
-async fn shadow_settlement_loop(app: Arc<App>) {
-    if app.cfg.mode != VenueMode::Shadow {
-        return;
-    }
+/// Settle the books once a window closes: read its market from Predict
+/// (`RESOLVED`, the Up/Yes outcome `WON` or `LOST`) and realise at $1 / $0.
+/// Kalshi's result for the mirrored contract is the fallback when Predict has
+/// not resolved after 20 min. Runs live too: a losing leg is never redeemed,
+/// so redemption alone would leave it on the books (and its slot taken);
+/// redemption only collects what won.
+async fn settlement_accounting_loop(app: Arc<App>) {
     let mut interval = tokio::time::interval(Duration::from_secs(20));
     loop {
         interval.tick().await;
@@ -1043,17 +1042,11 @@ async fn settle_positions(app: &Arc<App>, positions: &Value) {
                 .await;
             match receipt {
                 Ok(receipt) => {
-                    let (yes_pay, no_pay) =
-                        if candidate.index_set == 1 { (1.0, 0.0) } else { (0.0, 1.0) };
-                    let realised = app.state.lock().realise_resolution(
-                        &candidate.market_id,
-                        yes_pay,
-                        no_pay,
-                    );
-                    app.record(
-                        "redeemed",
-                        json!({"candidate": candidate, "receipt": receipt, "realised": realised}),
-                    );
+                    // Usually already settled by the accounting loop; if not,
+                    // the redeemed (winning) leg settles it here, once.
+                    let settled =
+                        app.state.lock().settle_position(&candidate.market_id, candidate.index_set == 1, "predict (redeemed)");
+                    app.record("redeemed", json!({"candidate": candidate, "receipt": receipt, "settled": settled}));
                 }
                 Err(error) => {
                     app.record(
