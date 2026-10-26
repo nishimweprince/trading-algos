@@ -134,7 +134,6 @@ void Engine::set_window(const Window& w, std::int64_t t_ns) {
   c.window = w;
   c.key = window_key(w.asset, w.open_unix);
   ++counters_.windows;
-  note("window " + c.key + " kalshi " + w.kalshi_ticker);
   (void)t_ns;
 }
 
@@ -226,6 +225,7 @@ void Engine::tick_coin(std::size_t i, std::int64_t t_ns) {
     }
   }
   std::array<std::optional<std::pair<double, double>>, 2> want{};
+  std::array<std::optional<std::pair<double, double>>, 2> hint{};
   const auto q = fair(c, now_ms);
   if (stopped_) {
     c.gate = "stopped";
@@ -239,19 +239,14 @@ void Engine::tick_coin(std::size_t i, std::int64_t t_ns) {
     c.gate = "no window";
   } else {
     const std::int64_t s = t_ns / kNs - c.window->open_unix;
-    if (s < cfg_.entry_early_s) {
-      c.gate = "window start";
-    } else if (s >= kWindowS - cfg_.stop_s) {
-      c.gate = "window end";
-    } else if (now_ms < c.pause_until_ms) {
-      c.gate = "pause";
-    } else if (q) {
+    // What the rule would bid with the books as they are, before the time gates.
+    std::array<std::optional<std::pair<double, double>>, 2> rule{};
+    bool books_ok = false;
+    if (q) {
       const auto ua = c.upb.quote().valid ? c.upb.best_ask() : std::nullopt;
       const auto da = c.downb.quote().valid ? c.downb.best_ask() : std::nullopt;
-      if (!ua || !da) {
-        c.gate = "no poly book";
-      } else {
-        c.gate = "quoting";
+      books_ok = ua && da;
+      if (books_ok) {
         const auto [u, d] = desired_px(cfg_, *q, net, ua, da);
         const std::array<std::optional<double>, 2> pxs{u, d};
         for (std::size_t n = 0; n < 2; ++n) {
@@ -264,15 +259,31 @@ void Engine::tick_coin(std::size_t i, std::int64_t t_ns) {
           // The resting order's own notional is already in open cost.
           const double mine = c.slots[n].order.empty() ? 0.0 : c.slots[n].px * c.slots[n].remaining;
           if (cost - mine + *px * *size > cfg_.max_open_cost_usd + 1e-9) continue;
-          want[n] = std::pair<double, double>{*px, *size};
+          rule[n] = std::pair<double, double>{*px, *size};
         }
       }
-    } else {
+    }
+    hint = rule;
+    if (s < cfg_.entry_early_s) {
+      c.gate = "window start";
+    } else if (s >= kWindowS - cfg_.stop_s) {
+      c.gate = "window end";
+      hint = {};
+    } else if (now_ms < c.pause_until_ms) {
+      c.gate = "pause";
+    } else if (!q) {
       c.gate = "no fair";
+    } else if (!books_ok) {
+      c.gate = "no poly book";
+    } else {
+      c.gate = "quoting";
+      want = rule;
     }
   }
   for (std::size_t n = 0; n < 2; ++n) {
     c.slots[n].want = want[n];
+    // The signer prepares for what the slot will want once a pause or the window start ends.
+    c.slots[n].hint = want[n] ? want[n] : hint[n];
     step_slot(i, n, want[n], now_ms);
   }
 }
@@ -592,7 +603,7 @@ std::optional<std::pair<std::string, double>> Engine::resting(int coin, bool up)
 
 std::optional<std::pair<double, double>> Engine::target(int coin, bool up) const noexcept {
   if (coin < 0 || static_cast<std::size_t>(coin) >= coins_.size()) return std::nullopt;
-  return coins_[static_cast<std::size_t>(coin)].slots[up ? 0 : 1].want;
+  return coins_[static_cast<std::size_t>(coin)].slots[up ? 0 : 1].hint;
 }
 
 std::string Engine::save_json() const {

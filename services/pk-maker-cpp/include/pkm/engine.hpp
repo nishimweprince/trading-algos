@@ -216,7 +216,8 @@ class Engine final {
   }
   // Resting bid of a slot: (order id, px), or none.
   [[nodiscard]] std::optional<std::pair<std::string, double>> resting(int coin, bool up) const;
-  // The price each slot wants now (for the pre-signer), or none.
+  // The price each slot wants now, or will want once a pause or the window
+  // start ends (for the pre-signer); none otherwise.
   [[nodiscard]] std::optional<std::pair<double, double>> target(int coin, bool up) const noexcept;
 
  private:
@@ -232,6 +233,7 @@ class Engine final {
     std::int64_t off_since_ms = 0;
     bool has_off = false;
     std::optional<std::pair<double, double>> want;
+    std::optional<std::pair<double, double>> hint;
   };
   struct Coin {
     std::string name;

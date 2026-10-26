@@ -41,6 +41,7 @@ set(PKM_WARNINGS -Wall -Wextra -Wconversion -Wshadow -Werror)
 add_library(pkm_core
   src/book.cpp
   src/clob.cpp
+  src/config.cpp
   src/crypto.cpp
   src/eip712.cpp
   src/engine.cpp
@@ -48,6 +49,10 @@ add_library(pkm_core
   src/http.cpp
   src/json.cpp
   src/net.cpp
+  src/platform.cpp
+  src/presign.cpp
+  src/runtime.cpp
+  src/venue.cpp
   src/ws.cpp
 )
 target_include_directories(pkm_core PUBLIC include)
@@ -58,6 +63,10 @@ if(PKM_ENABLE_SANITIZERS)
   target_compile_options(pkm_core PUBLIC -fsanitize=address,undefined -fno-omit-frame-pointer)
   target_link_options(pkm_core PUBLIC -fsanitize=address,undefined)
 endif()
+
+add_executable(pkm src/main.cpp)
+target_link_libraries(pkm PRIVATE pkm_core)
+target_compile_options(pkm PRIVATE ${PKM_WARNINGS})
 
 if(PKM_BUILD_TESTS)
   enable_testing()
@@ -72,4 +81,15 @@ if(PKM_BUILD_TESTS)
   target_link_libraries(pkm-tests PRIVATE pkm_core)
   target_compile_options(pkm-tests PRIVATE ${PKM_WARNINGS})
   add_test(NAME pkm-tests COMMAND pkm-tests ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures)
+  add_executable(pkm-e2e tests/e2e_main.cpp)
+  target_link_libraries(pkm-e2e PRIVATE pkm_core)
+  target_compile_options(pkm-e2e PRIVATE ${PKM_WARNINGS})
+  add_test(NAME pkm-e2e COMMAND pkm-e2e)
+  add_test(NAME pkm-usage COMMAND pkm)
+  set_tests_properties(pkm-usage PROPERTIES WILL_FAIL TRUE)
+  # Live is refused without PKM_LIVE_CONFIRM=yes (and without keys).
+  add_test(NAME pkm-run-refused COMMAND pkm --env ${CMAKE_CURRENT_SOURCE_DIR}/config.example.env run)
+  set_tests_properties(pkm-run-refused PROPERTIES WILL_FAIL TRUE)
 endif()
+
+install(TARGETS pkm RUNTIME DESTINATION bin)
