@@ -16,7 +16,11 @@
 //! | `GET /api/okx/status` | allowlisted `pk-okx` status |
 //! | `GET /api/okx/series?since=` | its per-second Kalshi and OKX points |
 //!
-//! `pk-limitless` and `pk-okx` are polled the same way, only when
+//! | `GET /polymaker` | the Polymarket maker's page |
+//! | `GET /api/pm/status` | allowlisted `pk-polymaker` status |
+//! | `GET /api/pm/series` | its realised P&L after each settled window |
+//!
+//! `pk-limitless`, `pk-okx` and `pk-polymaker` are polled the same way, only when
 //! `PK_LIM_ENABLED` / `PK_OKX_ENABLED`, each on its own schedule: an outage of
 //! one never delays the others. With `PK_STATUS_HOME=okx` or `limitless` (a
 //! host that runs only that process), `/` serves its page and the trader is
@@ -51,6 +55,7 @@ use serde_json::{Map, Value, json};
 const PAGE: &str = include_str!("page.html");
 const LIM_PAGE: &str = include_str!("limitless.html");
 const OKX_PAGE: &str = include_str!("okx.html");
+const PM_PAGE: &str = include_str!("polymaker.html");
 const LIVE_POLL: Duration = Duration::from_secs(5);
 const JOURNAL_EVERY: Duration = Duration::from_secs(30);
 const SERIES_POINTS: usize = 1800;
@@ -286,6 +291,34 @@ pub fn pick_okx(status: Option<&Value>) -> Option<Value> {
     Some(p)
 }
 
+/// The allowlisted subset of `pk-polymaker`'s status: error texts stay in the process.
+pub fn pick_pm(status: Option<&Value>) -> Option<Value> {
+    let st = status?;
+    let feeds = st.get("feeds").and_then(Value::as_object).map(|f| {
+        f.iter()
+            .map(|(k, v)| {
+                let v = match v {
+                    Value::Object(o) => Value::Object(o.iter().filter(|(k, _)| k.as_str() != "last_error").map(|(k, v)| (k.clone(), v.clone())).collect()),
+                    other => other.clone(),
+                };
+                (k.clone(), v)
+            })
+            .collect::<Map<String, Value>>()
+    });
+    let mut out = Map::new();
+    for k in [
+        "mode", "halted", "halt", "kill", "realised_today", "loss_today_vs_limit", "daily_loss_usd", "realised_total",
+        "realised_by_day", "open_cost", "max_open_cost_usd", "orders_tracked", "coins", "held", "totals", "counters",
+        "recent", "cfg", "host", "uptime_s",
+    ] {
+        out.insert(k.into(), st.get(k).cloned().unwrap_or(Value::Null));
+    }
+    out.insert("feeds".into(), feeds.map(Value::Object).unwrap_or(Value::Null));
+    out.insert("order_path".into(), keep(st.get("order_path"), &["live", "exec", "post_ack_ms", "cash", "deadman_fired"]));
+    out.insert("discovery".into(), keep(st.get("discovery"), &["errors"]));
+    Some(Value::Object(out))
+}
+
 /// Append a series answer's new points, capped per asset; returns the newest second.
 fn merge_series(series: &mut HashMap<String, VecDeque<Value>>, mut last: i64, body: Option<Value>) -> i64 {
     for (asset, points) in body.and_then(|b| b.get("points").cloned()).and_then(|p| p.as_object().cloned()).unwrap_or_default() {
@@ -377,6 +410,9 @@ struct Cache {
     okx_at: Option<f64>,
     okx_series: HashMap<String, VecDeque<Value>>,
     okx_series_last: i64,
+    pm: Option<Value>,
+    pm_at: Option<f64>,
+    pm_series: Option<Value>,
 }
 
 struct App {
@@ -448,6 +484,19 @@ impl App {
         c.okx_at = Some(now);
         let last = c.okx_series_last;
         c.okx_series_last = merge_series(&mut c.okx_series, last, series);
+    }
+
+    async fn refresh_pm(&self) {
+        let base = format!("http://127.0.0.1:{}", self.settings.pm_port);
+        let status = pick_pm(self.get(&format!("{base}/v1/pm/status"), &[]).await.as_ref());
+        let series = self.get(&format!("{base}/v1/pm/series"), &[]).await;
+        let now = chrono::Utc::now().timestamp_millis() as f64 / 1e3;
+        let mut c = self.cache.lock();
+        c.pm = status;
+        c.pm_at = Some(now);
+        if series.is_some() {
+            c.pm_series = series;
+        }
     }
 
     async fn refresh_series(&self) {
@@ -541,6 +590,13 @@ async fn lim_poller(app: Arc<App>) {
 async fn okx_poller(app: Arc<App>) {
     loop {
         app.refresh_okx().await;
+        tokio::time::sleep(LIVE_POLL).await;
+    }
+}
+
+async fn pm_poller(app: Arc<App>) {
+    loop {
+        app.refresh_pm().await;
         tokio::time::sleep(LIVE_POLL).await;
     }
 }
@@ -823,6 +879,25 @@ fn router(app: Arc<App>) -> Router {
                 json_response(json!({"threshold": params.get("gap_threshold"), "points": points}))
             }),
         )
+        .route("/polymaker", get(|| async { Html(PM_PAGE) }))
+        .route(
+            "/api/pm/status",
+            get(|State(app): State<Arc<App>>| async move {
+                let c = app.cache.lock();
+                json_response(json!({
+                    "enabled": app.settings.pm_enabled,
+                    "fetched_at": c.pm_at,
+                    "service_up": c.pm.is_some(),
+                    "status": c.pm,
+                }))
+            }),
+        )
+        .route(
+            "/api/pm/series",
+            get(|State(app): State<Arc<App>>| async move {
+                json_response(app.cache.lock().pm_series.clone().unwrap_or(json!([])))
+            }),
+        )
         .route("/health/live", get(|| async { axum::Json(json!({"status": "ok"})) }))
         .layer(tower_http::compression::CompressionLayer::new())
         .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
@@ -875,6 +950,9 @@ fn main() -> anyhow::Result<()> {
         }
         if settings.okx_enabled {
             tokio::spawn(okx_poller(app.clone()));
+        }
+        if settings.pm_enabled {
+            tokio::spawn(pm_poller(app.clone()));
         }
         let listener =
             tokio::net::TcpListener::bind((settings.status_host.as_str(), settings.status_port)).await?;
@@ -935,6 +1013,23 @@ mod tests {
         assert!(p["discovery"].get("last_error").is_none());
         assert!(p.get("anything_else").is_none());
         assert_eq!(p["assets"]["BTC"]["gap"], 0.1);
+    }
+
+    #[test]
+    fn pick_pm_drops_errors_and_unknown_keys() {
+        let st = json!({
+            "mode": "live", "halted": false, "coins": [{"asset": "BTC"}], "secret": "x",
+            "feeds": {"kalshi": {"connected": true, "last_error": "token"}, "ok": true},
+            "order_path": {"live": true, "cash": 50.0, "key": "k"},
+            "discovery": {"errors": 2, "last_error": "url?key"},
+        });
+        let p = pick_pm(Some(&st)).unwrap();
+        assert!(p.get("secret").is_none());
+        assert_eq!(p["feeds"]["kalshi"], json!({"connected": true}));
+        assert_eq!(p["feeds"]["ok"], json!(true));
+        assert!(p["order_path"].get("key").is_none());
+        assert_eq!(p["order_path"]["cash"], json!(50.0));
+        assert_eq!(p["discovery"], json!({"errors": 2}));
     }
 
     #[test]

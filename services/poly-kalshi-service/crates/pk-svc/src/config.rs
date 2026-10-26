@@ -181,6 +181,9 @@ pub struct Settings {
     /// `pk-okx`, likewise; `status_home` picks the page `/` serves (`polymarket`, `limitless` or `okx`).
     pub okx_enabled: bool,
     pub okx_port: u16,
+    /// `pk-polymaker`, likewise (the Polymarket maker; `/polymaker`).
+    pub pm_enabled: bool,
+    pub pm_port: u16,
     pub status_home: String,
 
     pub telegram_bot_token: Option<String>,
@@ -549,6 +552,8 @@ impl Settings {
             lim_port: e.num("PK_LIM_PORT", 8053)?,
             okx_enabled: e.flag("PK_OKX_ENABLED", false)?,
             okx_port: e.num("PK_OKX_PORT", 8054)?,
+            pm_enabled: e.flag("PK_PM_ENABLED", false)?,
+            pm_port: e.num("PK_PM_PORT", 8055)?,
             status_home: {
                 let h = e.or("PK_STATUS_HOME", "polymarket").to_lowercase();
                 anyhow::ensure!(

@@ -1,0 +1,36 @@
+# pk-polymaker: post-only bids on both sides of Polymarket's 15-minute Up/Down
+# markets, priced off Kalshi's YES mid. Shadow unless PK_PM_MODE=live and
+# PK_PM_LIVE_CONFIRM=yes; refuses live while the trader is live on the same
+# wallet. Its own Kalshi and Polymarket sockets, state
+# (data/state/<profile>/polymaker) and loopback API (PK_PM_PORT, 8055).
+# Stopping it cancels every order on the account (cancel-all) before exit.
+# Secrets stay in .env.<profile>.
+[Unit]
+Description=pk-polymaker (Kalshi-priced Polymarket maker, profile dev)
+OnFailure=pk-unit-alert@%n.service
+Wants=network-online.target
+After=network-online.target time-sync.target
+RequiresMountsFor=/data
+
+[Service]
+Type=simple
+User=pk
+Group=pk
+WorkingDirectory=/home/pk/trading-algos/services/poly-kalshi-service
+ExecStart=/home/pk/trading-algos/services/poly-kalshi-service/target/release/pk-polymaker --profile dev
+Restart=always
+RestartSec=5
+# Room for the shutdown cancel-all and the final order states.
+TimeoutStopSec=30
+# Off the trader's hot core (PK_HOT_CORE=-1, core 3 on a 4-vCPU host).
+CPUAffinity=0-2
+Nice=5
+CPUWeight=50
+MemoryMax=512M
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

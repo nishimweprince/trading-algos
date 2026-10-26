@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Polymarket maker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400..700&display=swap" rel="stylesheet">
+<style>
+:root { --bg:#f7f7f5; --panel:#ffffff; --ink:#1d1d1b; --muted:#6b6b66; --line:#e3e3de; --good:#1f7a4d; --bad:#b3261e; --warn:#9a6700; --kalshi:#2563c9; --lim:#7c3aed; --shade:rgba(120,120,110,.10); }
+@media (prefers-color-scheme: dark) { :root { --bg:#141413; --panel:#1d1d1b; --ink:#ededea; --muted:#a3a39c; --line:#33332f; --good:#5cc58f; --bad:#f2847b; --warn:#e0b04a; --kalshi:#7aa7ff; --lim:#b794f6; --shade:rgba(200,200,190,.08); } }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 "DM Sans", ui-sans-serif, system-ui, sans-serif; }
+svg text { font-family:"DM Sans", ui-sans-serif, system-ui, sans-serif; }
+main { max-width:1320px; margin:0 auto; padding:16px; }
+h1 { font-size:18px; margin:0 0 4px; } h2 { font-size:14px; margin:0 0 8px; color:var(--muted); font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
+.sub { color:var(--muted); margin-bottom:16px; }
+.grid { display:grid; gap:12px; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); margin-bottom:12px; }
+.card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; overflow-x:auto; min-height:48px; }
+.kv { display:flex; justify-content:space-between; gap:8px; } .kv span:first-child { color:var(--muted); }
+table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+th, td { text-align:right; padding:4px 6px; border-bottom:1px solid var(--line); white-space:nowrap; }
+th:first-child, td:first-child { text-align:left; } th { color:var(--muted); font-weight:500; }
+h3.section { font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:22px 0 8px; font-weight:600; border-bottom:1px solid var(--line); padding-bottom:4px; }
+.alerts { border:1px solid var(--line); border-radius:8px; padding:8px 12px; margin:4px 0; background:var(--panel); }
+.alerts.ok { color:var(--good); } .alerts.bad { border-color:var(--bad); } .alerts ul { margin:0; padding-left:18px; } .alerts li { color:var(--bad); }
+.good { color:var(--good); } .bad { color:var(--bad); } .warn { color:var(--warn); } .muted { color:var(--muted); }
+.tabs { display:flex; gap:4px; border-bottom:1px solid var(--line); margin:0 0 12px; }
+.tab { padding:6px 12px; color:var(--muted); text-decoration:none; border:1px solid transparent; border-bottom:none; border-radius:6px 6px 0 0; margin-bottom:-1px; }
+.tab:hover { color:var(--ink); } .tab.on { color:var(--ink); font-weight:600; background:var(--panel); border-color:var(--line); }
+.pill { display:inline-block; padding:1px 7px; border-radius:10px; font-size:12px; border:1px solid var(--line); }
+.pill.enter { border-color:var(--good); color:var(--good); } .pill.skip { border-color:var(--warn); color:var(--warn); }
+.charts { display:grid; gap:16px; grid-template-columns:repeat(auto-fit, minmax(min(100%, 430px), 1fr)); }
+.chart h4 { font-size:14px; margin:0 0 4px; display:flex; justify-content:space-between; font-weight:600; } .chart h4 span { font-weight:400; color:var(--muted); font-size:12px; }
+svg.mkt { width:100%; height:auto; display:block; } svg.mkt text { font-size:12px; fill:var(--muted); }
+svg.mkt .grid { stroke:var(--line); } svg.mkt polyline { fill:none; stroke-width:2; stroke-linejoin:round; }
+svg.mkt .k { stroke:var(--kalshi); } svg.mkt .l { stroke:var(--lim); } svg.mkt .band { fill:var(--lim); opacity:.12; stroke:none; }
+.legend { display:flex; gap:14px; color:var(--muted); font-size:12px; margin:4px 0 10px; flex-wrap:wrap; }
+.sw { display:inline-block; width:14px; height:3px; vertical-align:middle; margin-right:5px; border-radius:2px; }
+.note { color:var(--muted); font-size:12px; margin-top:6px; }
+</style>
+</head>
+<body>
+<main>
+<nav class="tabs" aria-label="Venues"><a class="tab" href="./">Polymarket</a><a class="tab on" href="polymaker" aria-current="page">Maker</a><a class="tab" href="limitless">Limitless</a><a class="tab" href="https://crossex.nishimweprince.dev/" target="_blank" rel="noopener" title="Kalshi → OKX on the Tokyo host; opens in a new tab">OKX ↗</a></nav>
+<div><h1>Kalshi-priced maker on Polymarket</h1><div class="sub"><span id="sub">connecting…</span> · <span id="age" class="muted"></span></div></div>
+<div class="alerts" id="alerts" role="status">checking…</div>
+
+<h3 class="section">Performance</h3>
+<div class="grid">
+  <div class="card"><h2>P&amp;L</h2><div id="pnl"></div></div>
+  <div class="card"><h2>Fills</h2><div id="fills"></div></div>
+  <div class="card"><h2>Order path</h2><div id="path"></div></div>
+</div>
+<div class="card"><h2>Realised P&amp;L by settled window</h2><div id="chart" class="muted">no settled windows yet</div></div>
+
+<h3 class="section">Quotes</h3>
+<div class="card"><table id="coins"></table><div class="note">Fair = Kalshi YES mid. Our bids: Up at fair − h − skew, Down at 1 − (fair + h − skew), post-only, 1¢ ticks. Capture = fair at fill − price; markouts = Kalshi's mid 5 s / 30 s later − price (negative = adverse selection). Uptime = share of the window with a bid resting.</div></div>
+
+<h3 class="section">Windows held</h3>
+<div class="card"><table id="held"></table></div>
+
+<h3 class="section">Recent</h3>
+<div class="card"><table id="recent"></table></div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (v) => String(v ?? "–").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const f = (v, d = 2) => (v === null || v === undefined || Number.isNaN(v)) ? "–" : Number(v).toFixed(d);
+const kv = (rows) => rows.map(([k, v, cls]) => `<div class="kv"><span>${esc(k)}</span><span class="${cls || ""}">${esc(v)}</span></div>`).join("");
+const put = (id, html) => { const el = $(id); if (el && el.innerHTML !== html) el.innerHTML = html; };
+const money = (v) => v == null ? "–" : (v < 0 ? "−$" : "$") + f(Math.abs(v));
+const sgn = (v) => v == null ? "" : v < 0 ? "bad" : "good";
+const c = (s) => s && s.n ? `${f(s.mean_c, 2)}¢ ± ${f(s.se_c, 2)} (n ${s.n})` : "–";
+const px = (v) => v == null ? "–" : f(v, 2);
+let FETCHED = null;
+const JOBS = [];
+function every(fn, ms) { JOBS.push(fn); fn(); setInterval(() => { if (!document.hidden) fn(); }, ms); }
+document.addEventListener("visibilitychange", () => { if (!document.hidden) JOBS.forEach((fn) => fn()); });
+setInterval(() => { if (FETCHED) { const a = Math.round(Date.now() / 1000 - FETCHED); put("age", `<span class="${a > 30 ? "bad" : "muted"}">data ${a}s old</span>`); } }, 1000);
+const hhmm = (ns) => new Date(ns / 1e6).toISOString().slice(11, 19) + "Z";
+
+async function tick() {
+  let body;
+  try { const r = await fetch("api/pm/status"); if (!r.ok) throw new Error(r.status); body = await r.json(); } catch (e) { return; }
+  FETCHED = body.fetched_at;
+  const s = body.status;
+  if (!body.enabled) { put("sub", '<span class="warn">pk-polymaker is not enabled on this host (PK_PM_ENABLED)</span>'); put("alerts", "disabled"); return; }
+  if (!s) { put("sub", '<span class="bad">pk-polymaker unreachable</span>'); $("alerts").className = "alerts bad"; put("alerts", "<ul><li>pk-polymaker API down</li></ul>"); return; }
+  const cfg = s.cfg || {}, op = s.order_path || {}, t = s.totals || {};
+  put("sub", `${s.mode === "live" ? '<b class="bad">LIVE</b>' : "<b>shadow</b>"} · ${esc(s.host)} · h ${f(cfg.half_spread)} · ${esc(cfg.shares)} shares · net cap ${esc(cfg.max_net)} · pause ${f(cfg.pause_jump)} · <span class="muted">up ${f((s.uptime_s || 0) / 3600, 1)} h</span>`);
+  const al = [];
+  if (s.halted) al.push(`halted: ${esc(s.halt && s.halt.reason)}`);
+  if (s.kill) al.push("KILL file present: no quotes");
+  if (s.feeds && s.feeds.ok === false) al.push("a feed is stale: quotes pulled");
+  if (op.deadman_fired) al.push("dead man fired (quote loop stalled)");
+  $("alerts").className = al.length ? "alerts bad" : "alerts ok";
+  put("alerts", al.length ? `<ul>${al.map((a) => `<li>${a}</li>`).join("")}</ul>` : "all clear");
+  put("pnl", kv([
+    ["Realised today", money(s.realised_today), sgn(s.realised_today)],
+    ["Against the limit", `${money(s.loss_today_vs_limit)} of −$${f(s.daily_loss_usd)}`],
+    ["Realised total", money(s.realised_total), sgn(s.realised_total)],
+    ["Per share filled", t.pnl_per_share_c == null ? "–" : `${f(t.pnl_per_share_c)}¢`, sgn(t.pnl_per_share_c)],
+    ["Open cost", `${money(s.open_cost)} of $${f(s.max_open_cost_usd, 0)}`],
+    ["Wallet cash", op.cash == null ? "–" : money(op.cash)],
+  ]));
+  put("fills", kv([
+    ["Fills / shares", `${t.fills || 0} / ${f(t.shares, 0)}`],
+    ["Windows settled", t.windows || 0],
+    ["Capture at fill", c(t.capture)],
+    ["Markout 5 s", c(t.markout5)],
+    ["Markout 30 s", c(t.markout30)],
+    ["Replay expectation", "+1.00¢ ± 0.41 per share"],
+  ]));
+  const ex = op.exec || {}, k = s.counters || {};
+  const qd = (o) => o && o.n ? `${f(o.p50, 0)} / ${f(o.p90, 0)} ms` : "–";
+  put("path", kv([
+    ["Post → ack p50 / p90", qd(ex.decision_to_ack_ms)],
+    ["Cancel p50 / p90", qd(ex.cancel_rtt_ms)],
+    ["Posts / cancels", `${k.posts || 0} / ${k.cancels || 0}`],
+    ["Post-only rejects", k.post_only_rejects || 0],
+    ["Errors (post / cancel)", `${k.post_errors || 0} / ${k.cancel_errors || 0}`],
+    ["Rate-limited", k.rate_limited || 0],
+    ["Orders tracked", s.orders_tracked],
+  ]));
+  const rows = (s.coins || []).map((x) => {
+    const st = x.stats || {};
+    const bid = (b) => b && b.order ? `<b>${px(b.px)}</b>×${f(b.remaining, 0)}` : (b && b.inflight ? "…" : "–");
+    const pu = x.poly_up || {}, pd = x.poly_down || {};
+    return `<tr><td>${esc(x.asset)}</td><td class="${x.gate === "quoting" ? "good" : "muted"}">${esc(x.gate)}</td><td>${px(x.kalshi && x.kalshi.bid)} / ${px(x.kalshi && x.kalshi.ask)}</td><td>${f(x.fair, 3)}</td>
+      <td>${px(pu.bid)} / ${px(pu.ask)}</td><td>${bid(x.bid_up)}</td><td>${px(pd.bid)} / ${px(pd.ask)}</td><td>${bid(x.bid_down)}</td>
+      <td>${x.net == null ? "–" : f(x.net, 0)}</td><td>${x.uptime == null ? "–" : f(x.uptime * 100, 0) + "%"}</td><td>${x.pauses}</td>
+      <td>${st.fills || 0}</td><td>${c(st.markout30)}</td><td class="${sgn(st.pnl)}">${money(st.pnl)}</td></tr>`;
+  }).join("");
+  put("coins", `<tr><th>Coin</th><th>State</th><th>Kalshi bid / ask</th><th>Fair</th><th>Up bid / ask</th><th>Our Up bid</th><th>Down bid / ask</th><th>Our Down bid</th><th>Net</th><th>Uptime</th><th>Pauses</th><th>Fills</th><th>Markout 30 s</th><th>P&amp;L</th></tr>${rows}`);
+  const held = (s.held || []).map((h) => `<tr><td>${esc(h.key)}</td><td>${f(h.up, 0)}</td><td>${f(h.down, 0)}</td><td>${money(h.cost)}</td><td>${esc(h.settled || "open")}</td><td class="${sgn(h.pnl)}">${money(h.pnl)}</td><td>${h.settled ? (h.redeemed ? "redeemed" : "to redeem") : ""}</td></tr>`).join("");
+  put("held", held ? `<tr><th>Window</th><th>Up</th><th>Down</th><th>Cost</th><th>Outcome</th><th>P&amp;L</th><th></th></tr>${held}` : '<tr><td class="muted">nothing held</td></tr>');
+  const rec = (s.recent || []).slice(0, 40).map((r) => {
+    const what = r.type === "pm_fill" ? `${r.asset} ${r.up ? "Up" : "Down"} ${f(r.shares, 0)} @ ${px(r.px)} · fair ${f(r.fair, 3)} · capture ${r.capture == null ? "–" : f(r.capture * 100, 1) + "¢"} · net ${f(r.net, 0)}`
+      : r.type === "pm_settle" ? `${r.asset} ${r.outcome} · ${f(r.up, 0)} Up / ${f(r.down, 0)} Down · P&L ${money(r.pnl)}`
+      : r.type === "pm_markout" ? `${r.asset} ${r.up ? "Up" : "Down"} @ ${px(r.px)} → 30 s ${f(r.m30 * 100, 1)}¢`
+      : r.type === "pm_redeem" ? (r.tx ? `redeemed ${r.key}` : `redeem ${r.key} failed (try ${r.tries})`)
+      : r.type === "pm_window" ? `${r.asset} window ${r.open_unix}`
+      : esc(JSON.stringify(Object.fromEntries(Object.entries(r).filter(([k]) => !["type", "t_ns", "epoch", "build", "config", "mode"].includes(k)))));
+    return `<tr><td>${hhmm(r.t_ns)}</td><td>${esc(r.type.replace("pm_", ""))}</td><td style="text-align:left">${r.type === "pm_fill" || r.type === "pm_settle" || r.type === "pm_markout" || r.type === "pm_redeem" || r.type === "pm_window" ? esc(what) : what}</td></tr>`;
+  }).join("");
+  put("recent", rec || '<tr><td class="muted">nothing yet</td></tr>');
+}
+
+async function chart() {
+  let pts;
+  try { const r = await fetch("api/pm/series"); if (!r.ok) return; pts = await r.json(); } catch (e) { return; }
+  if (!Array.isArray(pts) || pts.length < 2) return;
+  const W = 900, H = 200, P = 36;
+  const ys = pts.map((p) => p.realised), lo = Math.min(0, ...ys), hi = Math.max(0, ...ys), span = (hi - lo) || 1;
+  const x = (i) => P + (W - 2 * P) * i / (pts.length - 1), y = (v) => H - P / 2 - (H - P) * (v - lo) / span;
+  const line = pts.map((p, i) => `${x(i).toFixed(1)},${y(p.realised).toFixed(1)}`).join(" ");
+  put("chart", `<svg class="mkt" viewBox="0 0 ${W} ${H}" role="img" aria-label="realised P&L"><line class="grid" x1="${P}" x2="${W - P}" y1="${y(0)}" y2="${y(0)}"/><text x="2" y="${y(hi) + 4}">${money(hi)}</text><text x="2" y="${y(lo) + 4}">${money(lo)}</text><polyline class="l" points="${line}"/></svg><div class="note">${pts.length} settled windows · last ${money(ys[ys.length - 1])}</div>`);
+}
+
+every(tick, 5000);
+every(chart, 30000);
+</script>
+</body>
+</html>

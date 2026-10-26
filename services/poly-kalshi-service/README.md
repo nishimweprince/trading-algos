@@ -302,6 +302,62 @@ behind it is in `research/VENUES.md`.
 | `okx_resp` | one Kalshi ≥ 2¢ move and OKX's answer |
 | `okx_probe` | the minute's network-probe summary |
 
+## pk-polymaker: Kalshi-priced maker on Polymarket (a process of its own)
+
+The taker fills only about a quarter of its entries: Polymarket holds each
+taker order ~210 ms, and its makers pull the good trades in that time. Resting
+orders and cancels are not held. `pk-polymaker` therefore quotes instead of
+taking. The 4.5-day tape replay of this rule (2026-10-25) made +1.00¢ ± 0.41
+per share filled at h = 0.02; at h = 0.05 it lost.
+
+- **Quotes**, per coin, on the current 15-minute Up/Down market. The fair
+  price is q = Kalshi's YES mid (spread ≤ 0.02, book ≤ 10 s old).
+  - Buy Up at `floor(q − h − skew)` and buy Down at `floor(1 − (q + h − skew))`,
+    in 1¢ ticks, post-only GTC.
+  - `skew = PK_PM_SKEW_K · net / PK_PM_MAX_NET`, net = Up − Down shares.
+  - Each bid stays below its token's best ask, within 0.05–0.95.
+- **Pulled or not quoted:**
+  - a Kalshi mid move of ≥ 2¢ within 1 s, which pauses both sides for 1.5 s;
+  - the window's first 20 s and last 60 s;
+  - a feed silent for 5 s or reconnected;
+  - the `KILL` file, which also sends a cancel-all;
+  - a side whose fill would take |net| past 20, or open cost past $60.
+- **Requotes.** A bid now above its target is cancelled at once. One below its
+  target rises after 300 ms, once the gap is ≥ 1¢. Posts are capped at 8 per
+  second.
+- **Fills** come from the venue: every second, `size_matched` of each order
+  (`/data/orders`, then `/data/order/{id}` once it is gone). Makers pay no fee.
+  - Every 30 s, each held token's wallet balance is checked against the booked
+    inventory. Three checks in a row with the wallet short halt the maker.
+  - Up + Down pairs pay $1; the net settles on Polymarket's resolution, and
+    winners are redeemed (relayer for a deposit wallet).
+- **Risk.** Realised P&L today at −$15 latches a halt (persisted), which lasts
+  until the next UTC day or `touch data/state/<profile>/polymaker/ACK`.
+  Cancel-all runs at start, on halt and on stop; a quote loop stalled for 2 s
+  triggers cancel-all too.
+- **Modes.**
+  - `PK_PM_MODE=shadow` (the default) decides and journals every order and
+    sends none.
+  - `live` needs `PK_PM_LIVE_CONFIRM=yes`. It is refused while
+    `PK_EXECUTION_MODE=live`, because the taker and the maker share the wallet.
+    Pause the taker (`paper`) first.
+- **Isolation.** `infra/systemd/pk-polymaker.service`: state
+  `data/state/<profile>/polymaker`, API `127.0.0.1:8055` (`/v1/pm/status`,
+  `/v1/pm/series`).
+- **Page:** `pk-status` with `PK_PM_ENABLED=true` serves `/polymaker`, which is
+  the "Maker" tab on the main page.
+
+| Journal record (`polymaker/journal`) | |
+|---|---|
+| `pm_window` | a window found on both venues |
+| `pm_order` | post, reject, cancel, cancel_failed |
+| `pm_fill` | shares matched, with the fair at fill, the capture, the net and the order's age |
+| `pm_markout` | Kalshi's mid 30 s after a fill against its price |
+| `pm_settle` | a window's inventory settled: pairs locked, P&L |
+| `pm_redeem` | a redemption's transaction, or its error |
+| `pm_drift` | the wallet's token balance differing from the booked inventory |
+| `pm_halt`, `pm_ack`, `pm_kill` | the risk latch and the kill file |
+
 ## Order path (the latency review's step 2)
 
 `pk probe-orders` times the real order path without trading. With

@@ -3857,6 +3857,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "pk-polymaker"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum 0.8.9",
+ "clap",
+ "dotenvy",
+ "parking_lot",
+ "pk-core",
+ "pk-engine",
+ "pk-exec",
+ "pk-feeds",
+ "pk-stats",
+ "pk-svc",
+ "rust_decimal",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "pk-research"
 version = "0.1.0"
 dependencies = [
