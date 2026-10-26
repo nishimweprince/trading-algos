@@ -943,7 +943,7 @@ async fn settlement_accounting_loop(app: Arc<App>) {
             let Some((yes_won, source)) = outcome else { continue };
             let settled = app.state.lock().settle_position(&market, yes_won, source);
             if let Some(record) = settled {
-                app.record("shadow_settlement", record);
+                app.record("position_settled", record);
             }
         }
     }
