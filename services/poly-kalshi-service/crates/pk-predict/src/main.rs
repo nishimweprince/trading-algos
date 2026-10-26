@@ -629,18 +629,21 @@ async fn discover(app: &Arc<App>) -> anyhow::Result<()> {
     );
     let mut decisions = std::collections::HashMap::new();
     let mut executable = Vec::new();
-    for market in markets {
-        let ticker = market.kalshi_ticker.as_deref().unwrap_or_default();
-        let kalshi = fetch_kalshi(app, ticker).await.unwrap_or_else(|error| NormalizedContract {
+    for mut market in markets {
+        let ticker = market.kalshi_ticker.clone().unwrap_or_default();
+        let kalshi = fetch_kalshi_for(app, &market).await.unwrap_or_else(|error| NormalizedContract {
             venue: "kalshi".into(),
-            venue_market_id: ticker.into(),
-            kalshi_ticker: ticker.into(),
+            venue_market_id: ticker.clone(),
+            kalshi_ticker: ticker,
             correction_rule: format!("unavailable:{}", public_error(&error)),
             ..Default::default()
         });
         let decision = market.match_decision(app.cfg.basis_buffer, &kalshi);
         decisions.insert(market.id.to_string(), decision.clone());
         if decision.grade != MatchGrade::E2 {
+            // Engine/feed are keyed by Kalshi ticker; store the resolved
+            // (explicit or timing-derived) ticker on the executable market.
+            market.kalshi_ticker = Some(decision.kalshi_ticker.clone());
             executable.push(market);
         }
     }
@@ -668,16 +671,7 @@ async fn discover(app: &Arc<App>) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn fetch_kalshi(app: &Arc<App>, ticker: &str) -> anyhow::Result<NormalizedContract> {
-    anyhow::ensure!(!ticker.is_empty(), "Predict market has no Kalshi ticker");
-    let path = format!("/trade-api/v2/markets/{ticker}");
-    let mut request =
-        app.kalshi_http.get(format!("{}/markets/{ticker}", app.cfg.kalshi_rest_url.trim_end_matches('/')));
-    for (key, value) in app.kalshi_signer.headers("GET", &path, None) {
-        request = request.header(key, value);
-    }
-    let value = request.send().await?.error_for_status()?.json::<Value>().await?;
-    let market = value.get("market").or_else(|| value.pointer("/data/market")).unwrap_or(&value);
+fn kalshi_contract(ticker: &str, market: &Value) -> anyhow::Result<NormalizedContract> {
     let text = |key: &str| market.get(key).and_then(Value::as_str).unwrap_or_default().to_owned();
     let time = |key: &str| {
         market.get(key).and_then(|value| {
@@ -713,6 +707,60 @@ async fn fetch_kalshi(app: &Arc<App>, ticker: &str) -> anyhow::Result<Normalized
         tie_rule: text("expiration_value"),
         correction_rule: text("rules_primary"),
     })
+}
+
+async fn fetch_kalshi(app: &Arc<App>, ticker: &str) -> anyhow::Result<NormalizedContract> {
+    anyhow::ensure!(!ticker.is_empty(), "Predict market has no Kalshi ticker");
+    let path = format!("/trade-api/v2/markets/{ticker}");
+    let mut request =
+        app.kalshi_http.get(format!("{}/markets/{ticker}", app.cfg.kalshi_rest_url.trim_end_matches('/')));
+    for (key, value) in app.kalshi_signer.headers("GET", &path, None) {
+        request = request.header(key, value);
+    }
+    let value = request.send().await?.error_for_status()?.json::<Value>().await?;
+    let market = value.get("market").or_else(|| value.pointer("/data/market")).unwrap_or(&value);
+    kalshi_contract(ticker, market)
+}
+
+/// Resolve the Kalshi contract for a Predict market: explicit ticker when
+/// the venue supplies one, else the `KX<ASSET>15M` market whose
+/// open/close match the Predict window from `seriesSlug`/`categorySlug`.
+async fn fetch_kalshi_for(
+    app: &Arc<App>,
+    market: &crate::model::PredictMarket,
+) -> anyhow::Result<NormalizedContract> {
+    if let Some(ticker) = market.kalshi_ticker.as_deref().filter(|t| !t.is_empty()) {
+        return fetch_kalshi(app, ticker).await;
+    }
+    let asset = market.series_asset().ok_or_else(|| anyhow::anyhow!("Predict market has no series asset"))?;
+    let open_s = market.window_open_s().ok_or_else(|| anyhow::anyhow!("Predict market has no 15m window"))?;
+    let close_s = open_s + 900;
+    let mut request = app
+        .kalshi_http
+        .get(format!("{}/markets", app.cfg.kalshi_rest_url.trim_end_matches('/')))
+        .query(&[
+            ("series_ticker", format!("KX{asset}15M")),
+            ("min_close_ts", (close_s - 1).to_string()),
+            ("max_close_ts", (close_s + 901).to_string()),
+        ]);
+    for (key, value) in app.kalshi_signer.headers("GET", "/trade-api/v2/markets", None) {
+        request = request.header(key, value);
+    }
+    let value = request.send().await?.error_for_status()?.json::<Value>().await?;
+    let markets = value.get("markets").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+    let parse_s = |m: &Value, key: &str| {
+        m.get(key).and_then(|v| {
+            v.as_i64().map(|s| s).or_else(|| {
+                v.as_str().and_then(|raw| chrono::DateTime::parse_from_rfc3339(raw).ok()).map(|d| d.timestamp())
+            })
+        })
+    };
+    let found = markets.iter().find(|m| {
+        parse_s(m, "open_time") == Some(open_s) && parse_s(m, "close_time") == Some(close_s)
+    });
+    let found = found.ok_or_else(|| anyhow::anyhow!("no Kalshi KX{asset}15M market for window {open_s}"))?;
+    let ticker = found.get("ticker").and_then(Value::as_str).unwrap_or_default();
+    kalshi_contract(ticker, found)
 }
 
 async fn discovery_loop(app: Arc<App>) {
