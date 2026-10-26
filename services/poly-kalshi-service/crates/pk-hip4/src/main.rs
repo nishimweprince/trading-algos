@@ -567,11 +567,17 @@ async fn discover(app: &Arc<App>) -> anyhow::Result<()> {
     app.record("discovery",json!({"outcomes_seen":model::outcomes(&meta).len(),"matched":matched.iter().map(|m|json!({"outcome":m.outcome.outcome,"ticker":m.ticker,"grade":m.decision.grade})).collect::<Vec<_>>() }));
     let changed = {
         let s = app.state.lock();
+        // A contract whose allowlist entry expired at its decision (Kalshi's
+        // rules record its result then, so its fingerprint moves too) or that
+        // left the venue's list has simply finished: not a rule change. Only
+        // a live contract whose rules changed under it counts (20:00Z latch).
         s.matches.iter().filter(|(_, d)| d.grade != MatchGrade::E2).any(|(id, old)| {
-            decisions.get(id).is_none_or(|new| {
-                new.grade == MatchGrade::E2
-                    || new.venue_fingerprint != old.venue_fingerprint
-                    || new.kalshi_fingerprint != old.kalshi_fingerprint
+            decisions.get(id).is_some_and(|new| {
+                let expired = new.rejected.iter().any(|r| r.contains("expired"));
+                !expired
+                    && (new.venue_fingerprint != old.venue_fingerprint
+                        || new.kalshi_fingerprint != old.kalshi_fingerprint
+                        || new.rejected.iter().any(|r| r.contains("fingerprint changed")))
             })
         })
     };

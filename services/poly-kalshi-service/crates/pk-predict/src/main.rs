@@ -73,6 +73,9 @@ struct App {
     /// Each market's rules as last discovered, for telling a rule change
     /// from the start price Predict sets when the window opens.
     contracts: Mutex<std::collections::HashMap<String, NormalizedContract>>,
+    /// Until when new first legs wait after Predict refused an order for
+    /// insufficient collateral (free USDT below the total bid).
+    collateral_pause_until: Mutex<i64>,
 }
 
 impl App {
@@ -242,6 +245,10 @@ impl App {
                 && if outcome == "YES" { held.no_qty > held.yes_qty + 1e-9 } else { held.yes_qty > held.no_qty + 1e-9 };
             (new_market, pairing)
         };
+        if !pairing && now_ms() < *self.collateral_pause_until.lock() {
+            self.record("risk_reject", json!({"market":market.id,"lane":lane,"reason":"collateral pause"}));
+            return;
+        }
         let checked = {
             let mut state = self.state.lock();
             if pairing { state.risk.check_pairing_order(cost) } else { state.risk.check_order(cost, new_market) }
@@ -327,8 +334,15 @@ impl App {
             Err(error) => {
                 let reason = public_error(&error);
                 let mut state = self.state.lock();
-                state.risk.state.consecutive_rejections += 1;
-                let _ = state.risk.check_latches();
+                // Not enough free USDT for the bids resting plus this one is the
+                // venue's own cap, not a broken order path: pause first legs and
+                // let funds free up, without counting toward the latch.
+                if is_collateral_refusal(&reason) {
+                    *self.collateral_pause_until.lock() = now_ms() + COLLATERAL_PAUSE_MS;
+                } else {
+                    state.risk.state.consecutive_rejections += 1;
+                    let _ = state.risk.check_latches();
+                }
                 state.risk.save();
                 drop(state);
                 self.record("order_rejected", json!({"market":market.id,"lane":lane,"reason":reason}));
@@ -558,6 +572,7 @@ async fn run(cfg: Config, client: Arc<Client>) -> anyhow::Result<()> {
         markouts: Mutex::new(MarkoutTracker::new()),
         series_ms: Mutex::new(0),
         contracts: Mutex::new(Default::default()),
+        collateral_pause_until: Mutex::new(0),
     });
 
     // Reconcile before readiness. Discovery runs before cancellation so every
@@ -1346,6 +1361,14 @@ fn handle_wallet_event(app: &Arc<App>, value: &Value) {
     }
 }
 
+const COLLATERAL_PAUSE_MS: i64 = 30_000;
+
+/// Predict's refusal for free USDT below the total bid amount.
+fn is_collateral_refusal(reason: &str) -> bool {
+    let r = reason.to_ascii_lowercase();
+    r.contains("insufficient collateral") || r.contains("available balance is less")
+}
+
 /// Predict's refusal of a post-only order that would have crossed
 /// (`rejectedPostOnly`).
 fn is_post_only_refusal(reason: &str) -> bool {
@@ -1464,6 +1487,10 @@ mod tests {
     fn post_only_refusals_do_not_count_as_rejections() {
         assert!(is_post_only_refusal("rejectedPostOnly"));
         assert!(!is_post_only_refusal("insufficientBalance"));
+        assert!(is_collateral_refusal(
+            "Predict HTTP 400: Insufficient collateral: available balance is less than the total bid amount."
+        ));
+        assert!(!is_collateral_refusal("Predict HTTP 400: invalid signature"));
     }
 
     #[test]
