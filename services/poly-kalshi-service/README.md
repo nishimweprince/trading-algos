@@ -347,7 +347,8 @@ per share filled at h = 0.02; at h = 0.05 it lost.
   `data/state/<profile>/polymaker`, API `127.0.0.1:8055` (`/v1/pm/status`,
   `/v1/pm/series`).
 - **Page:** `pk-status` with `PK_PM_ENABLED=true` serves `/polymaker`, which is
-  the "Maker" tab on the main page.
+  the "Maker" tab on the main page. `PK_STATUS_HOME=polymaker` serves it at `/`
+  and stops polling the taker (Dublin since 2026-10-26, with the taker stopped).
 
 | Journal record (`polymaker/journal`) | |
 |---|---|

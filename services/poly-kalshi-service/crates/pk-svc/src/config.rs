@@ -178,7 +178,7 @@ pub struct Settings {
     /// `pk-limitless`, a separate process: the status page reads its API on this port.
     pub lim_enabled: bool,
     pub lim_port: u16,
-    /// `pk-okx`, likewise; `status_home` picks the page `/` serves (`polymarket`, `limitless` or `okx`).
+    /// `pk-okx`, likewise; `status_home` picks the page `/` serves (`polymarket`, `limitless`, `okx` or `polymaker`).
     pub okx_enabled: bool,
     pub okx_port: u16,
     /// `pk-polymaker`, likewise (the Polymarket maker; `/polymaker`).
@@ -557,8 +557,8 @@ impl Settings {
             status_home: {
                 let h = e.or("PK_STATUS_HOME", "polymarket").to_lowercase();
                 anyhow::ensure!(
-                    ["polymarket", "limitless", "okx"].contains(&h.as_str()),
-                    "PK_STATUS_HOME must be polymarket, limitless or okx"
+                    ["polymarket", "limitless", "okx", "polymaker"].contains(&h.as_str()),
+                    "PK_STATUS_HOME must be polymarket, limitless, okx or polymaker"
                 );
                 h
             },

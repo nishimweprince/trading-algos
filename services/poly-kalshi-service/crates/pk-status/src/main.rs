@@ -24,7 +24,8 @@
 //! `PK_LIM_ENABLED` / `PK_OKX_ENABLED`, each on its own schedule: an outage of
 //! one never delays the others. With `PK_STATUS_HOME=okx` or `limitless` (a
 //! host that runs only that process), `/` serves its page and the trader is
-//! not polled.
+//! not polled. `PK_STATUS_HOME=polymaker` serves the maker's page at `/` and
+//! does not poll the taker either.
 //!
 //! **Load on the trader is fixed, not per viewer.** One poller reads the
 //! trader's `/v1/status` (and the observer's `/v1/obs/status`) every 5 s and
@@ -727,6 +728,7 @@ fn build_export(
 fn router(app: Arc<App>) -> Router {
     let home = match app.settings.status_home.as_str() {
         "okx" => OKX_PAGE,
+        "polymaker" => PM_PAGE,
         "limitless" => LIM_PAGE,
         _ => PAGE,
     };
