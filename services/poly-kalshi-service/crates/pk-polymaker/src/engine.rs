@@ -1011,10 +1011,11 @@ impl Engine {
         self.save();
     }
 
-    /// Shares the engine believes it holds per token (unsettled windows).
-    pub fn held_tokens(&self) -> BTreeMap<String, f64> {
+    /// Shares the engine believes it holds per token, in windows still open
+    /// (after the close the CLOB reports a resolving market's tokens as 0).
+    pub fn held_tokens(&self, t_ns: i64) -> BTreeMap<String, f64> {
         let mut m = BTreeMap::new();
-        for v in self.inv.values().filter(|v| v.settled.is_none()) {
+        for v in self.inv.values().filter(|v| v.settled.is_none() && t_ns < v.close_ns()) {
             if !v.up_token.is_empty() {
                 *m.entry(v.up_token.clone()).or_insert(0.0) += v.up;
             }
@@ -1029,7 +1030,10 @@ impl Engine {
     /// with the engine holding more than the wallet halt (fills booked that
     /// did not happen, or shares gone).
     pub fn on_balance(&mut self, token: &str, wallet: f64, t_ns: i64) {
-        let ours = self.held_tokens().get(token).copied().unwrap_or(0.0);
+        let Some(&ours) = self.held_tokens(t_ns).get(token) else {
+            self.drift.remove(token);
+            return;
+        };
         let d = wallet - ours;
         let e = self.drift.entry(token.to_owned()).or_insert((0, 0.0));
         if d < -0.5 {

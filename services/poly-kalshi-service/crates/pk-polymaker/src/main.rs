@@ -369,7 +369,7 @@ async fn run(settings: Settings, pm: PmSettings) -> anyhow::Result<()> {
                     Ok(c) => *a.cash.lock() = Some(c),
                     Err(e) => a.note_error(format!("cash: {e}")),
                 }
-                let held = a.engine.lock().held_tokens();
+                let held = a.engine.lock().held_tokens(now_ns());
                 for token in held.keys() {
                     match x.token_balance(token).await {
                         Ok(b) => a.engine.lock().on_balance(token, b, now_ns()),
