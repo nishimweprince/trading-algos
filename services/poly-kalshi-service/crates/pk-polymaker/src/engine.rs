@@ -22,9 +22,14 @@
 //!   has lasted `adverse_ms`, one below it is raised once a gap of
 //!   `requote_cents` has lasted `min_requote_ms`. Jumps of `pause_jump` pull
 //!   at once (the pause), as do the gates above.
-//! - **Fills** come from the venue's own order state (`size_matched`), polled
-//!   by the executor; makers pay no fee. Up + Down pairs pay $1 whatever the
+//! - **Fills (live):** the venue's own order state (`size_matched`), polled by
+//!   the executor; makers pay no fee. Up + Down pairs pay $1 whatever the
 //!   outcome; the net settles on Polymarket's resolution.
+//! - **Fills (shadow):** no CLOB orders exist. Resting paper bids fill from the
+//!   live Polymarket tape: a `last_trade_price` with side `SELL` at or below
+//!   the bid (seller hit the book), sized by `min(remaining, trade size)`, or
+//!   when the book's best ask crosses down through the bid. Cancels remove the
+//!   paper order before any later trade can fill it.
 //! - **First legs** (a bid that opens or adds to a one-sided position) only in
 //!   the window's first `open_leg_s` and while q is within
 //!   `open_min_fair..=open_max_fair`. A second leg takes minutes to come (p50
@@ -579,8 +584,62 @@ impl Engine {
                         b.set_level(side, px_key(ch.price.0), ch.size.0, t_ns);
                     }
                 }
+                Some("last_trade_price") if self.shadow => {
+                    let Some(id) = msg.asset_id.as_ref().map(|i| i.as_str()) else { continue };
+                    let Some(price) = msg.price.as_ref().map(|p| p.0) else { continue };
+                    let Some(size) = msg.size.as_ref().map(|s| s.0) else { continue };
+                    let side = msg.side.as_deref().unwrap_or("");
+                    self.shadow_on_trade(id, price, size, side, t_ns);
+                }
                 _ => {}
             }
+        }
+        if self.shadow {
+            self.shadow_match_crossed(t_ns);
+        }
+    }
+
+    /// Shadow: a seller hit the book at `price`. Our resting bid fills when the
+    /// trade prints at or below our price, for `min(remaining, size)` shares.
+    fn shadow_on_trade(&mut self, asset_id: &str, price: f64, size: f64, side: &str, t_ns: i64) {
+        if !side.eq_ignore_ascii_case("SELL") || size <= 1e-9 {
+            return;
+        }
+        let Some(&(i, up)) = self.owner.get(asset_id) else { return };
+        let asset = self.coins[i].name.clone();
+        let hit: Vec<(String, f64, f64)> = self
+            .orders
+            .values()
+            .filter(|o| o.asset == asset && o.up == up && !o.closing && price <= o.px + 1e-9)
+            .map(|o| {
+                let rem = (o.size - o.matched).max(0.0);
+                (o.id.clone(), o.matched, rem.min(size))
+            })
+            .filter(|(_, _, fill)| *fill > 1e-9)
+            .collect();
+        for (id, matched, fill) in hit {
+            let new_matched = matched + fill;
+            let done = self.orders.get(&id).is_some_and(|o| new_matched >= o.size - 1e-9);
+            self.on_order(&id, new_matched, done, t_ns);
+        }
+    }
+
+    /// Shadow: if the live ask has crossed down through a resting bid, fill the
+    /// remainder (the book is through our price even without a trade frame).
+    fn shadow_match_crossed(&mut self, t_ns: i64) {
+        let crossed: Vec<(String, f64)> = self
+            .orders
+            .values()
+            .filter(|o| !o.closing)
+            .filter_map(|o| {
+                let c = self.coins.iter().find(|c| c.name == o.asset)?;
+                let book = if o.up { &c.upb } else { &c.downb };
+                let ask = book.best_ask()?;
+                (ask <= o.px + 1e-9).then_some((o.id.clone(), o.size))
+            })
+            .collect();
+        for (id, size) in crossed {
+            self.on_order(&id, size, true, t_ns);
         }
     }
 
@@ -1619,6 +1678,92 @@ mod tests {
             e.on_balance("BTC-up", 0.0, t);
         }
         assert!(e.halted(t));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn shadow_engine(dir: &std::path::Path) -> Engine {
+        let mut e = Engine::new(cfg(), &["BTC".into()], dir, Map::new(), true);
+        e.set_window(window("BTC"), OPEN * NS);
+        e
+    }
+
+    #[test]
+    fn shadow_fills_from_last_trade_at_or_below_the_bid() {
+        let dir = tmp("shadow-trade");
+        let mut e = shadow_engine(&dir);
+        let t0 = (OPEN + 100) * NS;
+        books(&mut e, 0.54, 0.56, (0.53, 0.57), (0.43, 0.47), t0);
+        e.on_posted("BTC", true, 0.52, 5.0, Ok("shadow-1".into()), t0);
+
+        // BUY aggressor lifts asks: our bid does not fill.
+        let buy = json!({"event_type":"last_trade_price","asset_id":"BTC-up","price":"0.52","size":"5","side":"BUY"});
+        e.on_poly(&buy.to_string(), t0 + NS);
+        assert!(e.orders.contains_key("shadow-1"));
+        assert!(e.inv.is_empty());
+
+        // Trade above our bid: seller hit a better bid, not us.
+        let high = json!({"event_type":"last_trade_price","asset_id":"BTC-up","price":"0.53","size":"5","side":"SELL"});
+        e.on_poly(&high.to_string(), t0 + 2 * NS);
+        assert!(e.orders.contains_key("shadow-1"));
+
+        // Partial then full at/below our bid.
+        let part = json!({"event_type":"last_trade_price","asset_id":"BTC-up","price":"0.52","size":"2","side":"SELL"});
+        e.on_poly(&part.to_string(), t0 + 3 * NS);
+        assert_eq!(e.orders.get("shadow-1").map(|o| o.matched), Some(2.0));
+        assert_eq!(e.inv[wkey("BTC", OPEN).as_str()].up, 2.0);
+
+        let rest = json!({"event_type":"last_trade_price","asset_id":"BTC-up","price":"0.51","size":"10","side":"SELL"});
+        e.on_poly(&rest.to_string(), t0 + 4 * NS);
+        assert!(!e.orders.contains_key("shadow-1"));
+        assert_eq!(e.inv[wkey("BTC", OPEN).as_str()].up, 5.0);
+        assert_eq!(e.totals.fills, 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn shadow_fills_when_the_ask_crosses_the_bid() {
+        let dir = tmp("shadow-cross");
+        let mut e = shadow_engine(&dir);
+        let t0 = (OPEN + 100) * NS;
+        books(&mut e, 0.54, 0.56, (0.53, 0.57), (0.43, 0.47), t0);
+        e.on_posted("BTC", true, 0.52, 5.0, Ok("shadow-1".into()), t0);
+
+        // Ask drops to our bid: book is through us.
+        let cross = json!([{"event_type":"book","asset_id":"BTC-up",
+            "bids":[{"price":"0.51","size":"50"}],
+            "asks":[{"price":"0.52","size":"50"}]}]);
+        e.on_poly(&cross.to_string(), t0 + NS);
+        assert!(!e.orders.contains_key("shadow-1"));
+        assert_eq!(e.inv[wkey("BTC", OPEN).as_str()].up, 5.0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn shadow_cancel_blocks_a_later_trade_fill() {
+        let dir = tmp("shadow-cancel");
+        let mut e = shadow_engine(&dir);
+        let t0 = (OPEN + 100) * NS;
+        books(&mut e, 0.54, 0.56, (0.53, 0.57), (0.43, 0.47), t0);
+        e.on_posted("BTC", true, 0.52, 5.0, Ok("shadow-1".into()), t0);
+        e.on_cancelled("BTC", true, "shadow-1", true, None, t0 + NS);
+        let trade = json!({"event_type":"last_trade_price","asset_id":"BTC-up","price":"0.52","size":"5","side":"SELL"});
+        e.on_poly(&trade.to_string(), t0 + 2 * NS);
+        assert!(e.inv.is_empty());
+        assert_eq!(e.totals.fills, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn live_mode_ignores_tape_fills() {
+        let dir = tmp("live-no-tape");
+        let mut e = engine(&dir);
+        let t0 = (OPEN + 100) * NS;
+        books(&mut e, 0.54, 0.56, (0.53, 0.57), (0.43, 0.47), t0);
+        e.on_posted("BTC", true, 0.52, 5.0, Ok("o1".into()), t0);
+        let trade = json!({"event_type":"last_trade_price","asset_id":"BTC-up","price":"0.52","size":"5","side":"SELL"});
+        e.on_poly(&trade.to_string(), t0 + NS);
+        assert!(e.orders.contains_key("o1"));
+        assert!(e.inv.is_empty(), "live fills only from the CLOB poll");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

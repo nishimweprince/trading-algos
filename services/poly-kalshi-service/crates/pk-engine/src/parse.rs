@@ -90,6 +90,13 @@ pub struct PolyMsg<'a> {
     pub best_bid: Option<Num>,
     #[serde(default)]
     pub best_ask: Option<Num>,
+    /// `last_trade_price` prints these on the frame itself.
+    #[serde(default)]
+    pub price: Option<Num>,
+    #[serde(default)]
+    pub size: Option<Num>,
+    #[serde(borrow, default)]
+    pub side: Option<Cow<'a, str>>,
     #[serde(borrow, default)]
     pub market: Option<Id<'a>>,
     #[serde(borrow, default)]
@@ -238,6 +245,13 @@ mod tests {
         assert_eq!(m[0].as_ref().unwrap().kind(), Some("book"));
         assert!(m[1].is_none());
         assert!(poly_msgs("{not json").is_err());
+        let trade = r#"{"event_type":"last_trade_price","asset_id":"7","market":"0x","price":"0.45","size":"3.5","side":"SELL","timestamp":"1700"}"#;
+        let m = poly_msgs(trade).unwrap();
+        let m = m[0].as_ref().unwrap();
+        assert_eq!(m.kind(), Some("last_trade_price"));
+        assert_eq!(m.price.as_ref().unwrap().0, 0.45);
+        assert_eq!(m.size.as_ref().unwrap().0, 3.5);
+        assert_eq!(m.side.as_deref(), Some("SELL"));
     }
 
     #[test]
