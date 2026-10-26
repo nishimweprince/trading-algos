@@ -1,4 +1,10 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
+
+/// The Kalshi feed is dead when no ticker has updated for this long; a quiet
+/// hourly contract (KXBTCD, KXINXU) can go minutes without a change.
+const KALSHI_SILENT_MS: i64 = 10_000;
+/// Hyperliquid re-sends an unchanged HIP-4 book about every 5 s.
+const BOOK_MAX_AGE_MS: i64 = 15_000;
 
 use pk_venue_core::service::now_ms;
 use pk_venue_core::{Book, MatchDecision};
@@ -42,6 +48,8 @@ pub struct Engine {
     kalshi_ms: HashMap<String, i64>,
     pub books: HashMap<u32, Book>,
     quotes: HashMap<u64, Quote>,
+    /// Outcomes with quotes resting (pulled if one stops being quotable).
+    quoted: HashSet<u64>,
     stale_cancelled: bool,
 }
 impl Engine {
@@ -52,6 +60,7 @@ impl Engine {
             kalshi_ms: HashMap::new(),
             books: HashMap::new(),
             quotes: HashMap::new(),
+            quoted: HashSet::new(),
             stale_cancelled: false,
         }
     }
@@ -101,13 +110,12 @@ impl Engine {
     }
     pub fn evaluate(&mut self, cfg: &Config) -> Vec<Batch> {
         let now = now_ms();
-        let stale = self.matched.iter().any(|m| {
-            self.kalshi_ms.get(&m.ticker).is_none_or(|t| now - *t > cfg.freshness_ms)
-                || [m.outcome.side_asset(0), m.outcome.side_asset(1)]
-                    .iter()
-                    .any(|a| self.books.get(a).is_none_or(|b| b.age_ms(now) > cfg.freshness_ms || !b.valid()))
-        });
-        if stale {
+        // Each market is judged on its own: a fair from a two-sided Kalshi book
+        // and both HIP-4 side books recent. Everything is pulled only when the
+        // Kalshi feed itself goes silent.
+        let kalshi_alive = self.kalshi_ms.values().max().is_some_and(|t| now - *t <= KALSHI_SILENT_MS);
+        if !kalshi_alive {
+            self.quoted.clear();
             if self.stale_cancelled {
                 return vec![];
             }
@@ -115,9 +123,27 @@ impl Engine {
             return vec![Batch::Cancel("stale feed".into())];
         }
         self.stale_cancelled = false;
+        let max_age = cfg.freshness_ms.max(BOOK_MAX_AGE_MS);
+        let fresh = |a: u32| self.books.get(&a).is_some_and(|b| b.age_ms(now) <= max_age && b.valid());
+        let quotable: HashSet<u64> = self
+            .matched
+            .iter()
+            .filter(|m| self.levels.get(&m.ticker).and_then(Levels::fair).is_some())
+            .filter(|m| fresh(m.outcome.side_asset(0)) && fresh(m.outcome.side_asset(1)))
+            .map(|m| m.outcome.outcome)
+            .collect();
+        if self.quoted.iter().any(|o| !quotable.contains(o)) {
+            // Cancels are account-wide: pull everything, requote the rest next pass.
+            self.quoted.clear();
+            self.quotes.clear();
+            return vec![Batch::Cancel("a quoted market went stale".into())];
+        }
         let mut alo = vec![];
         let mut ioc = vec![];
         for m in self.matched.clone() {
+            if !quotable.contains(&m.outcome.outcome) {
+                continue;
+            }
             let Some(fair) = self.levels.get(&m.ticker).and_then(Levels::fair) else { continue };
             let q = self.quotes.entry(m.outcome.outcome).or_default();
             if cfg.maker && m.decision.maker && ((fair - q.fair).abs() >= 0.01 || now - q.last >= 5000) {
@@ -144,6 +170,7 @@ impl Engine {
                     ));
                 }
                 *q = Quote { fair, last: now };
+                self.quoted.insert(m.outcome.outcome);
             }
             if cfg.taker && m.decision.taker {
                 for side in 0..2 {
@@ -246,6 +273,31 @@ mod tests {
                 rejected: vec![],
             },
         }
+    }
+
+    #[test]
+    fn one_quiet_market_does_not_block_the_others() {
+        let mut e = Engine::new();
+        let a = matched();
+        let mut b = matched();
+        b.outcome.outcome = 17589;
+        b.ticker = "KXQUIET".into();
+        e.matched = vec![a.clone(), b];
+        let cfg = cfg();
+        let _ = e.kalshi(r#"{"type":"orderbook_snapshot","msg":{"market_ticker":"KXBTC","yes_dollars_fp":[["0.45","3"]],"no_dollars_fp":[["0.50","2"]]}}"#);
+        // Books 5 s old (Hyperliquid's resend period) still quote.
+        for side in 0..2 {
+            e.books.insert(a.outcome.side_asset(side), Book { bid: Some(0.40), bid_size: 5.0, ask: Some(0.50), ask_size: 5.0, update_ms: now_ms() - 5_000 });
+        }
+        let batches = e.evaluate(&cfg);
+        let [Batch::Alo(items)] = batches.as_slice() else { panic!("expected one ALO batch") };
+        assert_eq!(items.len(), 2, "only the market with a fair and books");
+        // Its book goes stale: everything is pulled once.
+        for side in 0..2 {
+            e.books.get_mut(&a.outcome.side_asset(side)).unwrap().update_ms = now_ms() - 60_000;
+        }
+        assert!(matches!(e.evaluate(&cfg).as_slice(), [Batch::Cancel(_)]));
+        assert!(e.evaluate(&cfg).is_empty());
     }
 
     #[test]

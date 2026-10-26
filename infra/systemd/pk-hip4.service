@@ -10,7 +10,7 @@ Type=simple
 User=pk
 Group=pk
 WorkingDirectory=/home/pk/trading-algos/services/poly-kalshi-service
-ExecStartPre=/bin/sh -c 'test "$(/usr/bin/stat -c %a .env.tokyo)" = 600'
+ExecStartPre=/bin/sh -c 'test "$(/usr/bin/stat -c %%a .env.tokyo)" = 600'
 ExecStartPre=/usr/bin/chronyc waitsync 10 0.1
 ExecStart=/home/pk/trading-algos/services/poly-kalshi-service/target/release/pk-hip4 --profile tokyo
 Restart=always
