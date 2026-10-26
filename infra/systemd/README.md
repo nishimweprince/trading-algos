@@ -218,6 +218,16 @@ sudo systemctl daemon-reload && sudo systemctl enable --now poly-kalshi-service 
 Before this (until 2026-10-07) they were started by hand, and a reboot left the
 tunnel (`poly.nishimweprince.dev` → `127.0.0.1:8051`) answering 502.
 
+## pkm (C++ maker) on the Dublin host
+
+`pkm.service` runs `services/pk-maker-cpp` (`pkm run`). It replaced
+`pk-polymaker` on 2026-10-26; never enable both, as they would quote the same
+wallet. It reads secrets from `/etc/pkm.env` and needs no port. Install,
+cutover and the kill switch are covered in `services/pk-maker-cpp/RUNBOOK.md`.
+Its `CPUAffinity=1-3` holds the busy-polling hot thread (`PKM_HOT_CORE=2`)
+and the signer (`PKM_SIGNER_CORE=3`). On a host that also runs the Rust
+trader, give the two services disjoint cores.
+
 ## Moving poly-kalshi to AWS eu-west-1 (Dublin)
 
 Polymarket's CLOB origin is AWS eu-west-2 (London), behind Cloudflare. eu-west-1 is

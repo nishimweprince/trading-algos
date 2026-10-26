@@ -309,6 +309,13 @@ behind it is in `research/VENUES.md`.
 
 ## pk-polymaker: Kalshi-priced maker on Polymarket (a process of its own)
 
+**Retired (2026-10-26).** The live maker is now `services/pk-maker-cpp`
+(`pkm`), a C++ process with the same rule and defaults (the `PK_PM_*`
+settings) that re-quotes on every book update instead of every 50 ms and
+reads fills from the user channel. Do not run both on one wallet. The
+cutover, including carrying `polymaker/state.json` over, is in that
+service's RUNBOOK. The section below describes the Rust implementation.
+
 The taker fills only about a quarter of its entries: Polymarket holds each
 taker order ~210 ms, and its makers pull the good trades in that time. Resting
 orders and cancels are not held. `pk-polymaker` therefore quotes instead of
