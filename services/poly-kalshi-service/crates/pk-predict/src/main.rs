@@ -1126,7 +1126,10 @@ async fn predict_ws_session(app: &Arc<App>) -> anyhow::Result<()> {
             }
             continue;
         };
+        // Predict's keep-alive is `{"type":"M","topic":"heartbeat","data":<ms>}`
+        // about every 31 s; unanswered, the server closes the socket.
         if value.get("type").and_then(Value::as_str) == Some("H")
+            || value.get("topic").and_then(Value::as_str) == Some("heartbeat")
             || value.get("method").and_then(Value::as_str) == Some("heartbeat")
         {
             let data = value.get("data").cloned().unwrap_or(Value::Null);
