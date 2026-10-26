@@ -1,8 +1,8 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
-#include <deque>
 #include <functional>
 #include <map>
 #include <optional>
@@ -66,6 +66,26 @@ struct Window {
 std::string window_key(std::string_view asset, std::int64_t open_unix);
 std::string utc_day(std::int64_t t_ns);
 
+// An order id held inline, so a cancel is built without allocating (the CLOB's
+// ids are "0x" + 64 hex).
+class OrderId final {
+ public:
+  OrderId() = default;
+  OrderId(std::string_view id) noexcept { assign(id); }  // NOLINT: implicit on purpose
+  void assign(std::string_view id) noexcept {
+    len_ = static_cast<std::uint8_t>(std::min(id.size(), data_.size()));
+    std::copy_n(id.data(), len_, data_.data());
+  }
+  [[nodiscard]] std::string_view view() const noexcept { return {data_.data(), len_}; }
+  operator std::string_view() const noexcept { return view(); }  // NOLINT
+  [[nodiscard]] bool empty() const noexcept { return len_ == 0; }
+  bool operator==(std::string_view other) const noexcept { return view() == other; }
+
+ private:
+  std::array<char, 128> data_{};
+  std::uint8_t len_ = 0;
+};
+
 enum class ActionKind : std::uint8_t { post, cancel, cancel_all };
 struct Action {
   ActionKind kind = ActionKind::post;
@@ -73,7 +93,7 @@ struct Action {
   bool up = true;
   double px = 0;      // post: price
   double size = 0;    // post: shares
-  std::string order_id;  // cancel
+  OrderId order_id;      // cancel
   std::string reason;    // cancel_all
 };
 
@@ -137,6 +157,61 @@ struct Counters {
   std::uint64_t posts = 0, cancels = 0, post_only_rejects = 0, balance_rejects = 0, post_errors = 0,
                 cancel_errors = 0, rate_limited = 0, cash_waits = 0, pauses = 0, fills = 0, orders_unknown = 0,
                 windows = 0, drift_checks = 0;
+};
+
+// The highest and lowest value seen in the last `span_ms`, in O(1) amortized
+// per push and without allocating (monotonic queues over fixed rings; past
+// `kCap` values in one span the oldest are dropped).
+class MinMaxWindow final {
+ public:
+  static constexpr std::size_t kCap = 1024;
+  void clear() noexcept { max_.clear(); min_.clear(); }
+  void evict_before(std::int64_t t) noexcept {
+    max_.evict_before(t);
+    min_.evict_before(t);
+  }
+  void push(std::int64_t t, double v) noexcept {
+    while (!max_.empty() && max_.back().v <= v) max_.pop_back();
+    max_.push_back({t, v});
+    while (!min_.empty() && min_.back().v >= v) min_.pop_back();
+    min_.push_back({t, v});
+  }
+  [[nodiscard]] bool empty() const noexcept { return max_.empty(); }
+  [[nodiscard]] double max() const noexcept { return max_.front().v; }
+  [[nodiscard]] double min() const noexcept { return min_.front().v; }
+
+ private:
+  struct Point {
+    std::int64_t t;
+    double v;
+  };
+  class Ring final {
+   public:
+    [[nodiscard]] bool empty() const noexcept { return size_ == 0; }
+    void clear() noexcept { head_ = size_ = 0; }
+    [[nodiscard]] const Point& front() const noexcept { return data_[head_]; }
+    [[nodiscard]] const Point& back() const noexcept { return data_[(head_ + size_ - 1) % kCap]; }
+    void pop_back() noexcept { --size_; }
+    void pop_front() noexcept {
+      head_ = (head_ + 1) % kCap;
+      --size_;
+    }
+    void push_back(Point p) noexcept {
+      if (size_ == kCap) pop_front();
+      data_[(head_ + size_) % kCap] = p;
+      ++size_;
+    }
+    void evict_before(std::int64_t t) noexcept {
+      while (size_ > 0 && front().t < t) pop_front();
+    }
+
+   private:
+    std::array<Point, kCap> data_{};
+    std::size_t head_ = 0;
+    std::size_t size_ = 0;
+  };
+  Ring max_;
+  Ring min_;
 };
 
 class Engine final {
@@ -242,7 +317,7 @@ class Engine final {
     Book kbook;
     Book upb;
     Book downb;
-    std::deque<std::pair<std::int64_t, double>> trail;
+    MinMaxWindow trail;  // Kalshi mids of the last second
     std::int64_t pause_until_ms = 0;
     std::array<Slot, 2> slots;
     const char* gate = "no window";

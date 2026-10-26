@@ -12,7 +12,6 @@ namespace pkm::engine {
 namespace {
 
 constexpr std::int64_t kNs = 1'000'000'000LL;
-constexpr std::int64_t kTrailMs = 5'000;
 constexpr std::int64_t kCashHoldMs = 3'000;
 
 double round_dp2(double x) noexcept { return std::nearbyint(x * 100.0) / 100.0; }
@@ -164,11 +163,10 @@ void Engine::on_kalshi_update(int coin, std::int64_t t_ns) {
   if (mid) {
     const double m = *mid;
     const std::int64_t now_ms = t_ns / 1'000'000;
-    double moved = 0;
-    for (const auto& [ts, v] : c.trail)
-      if (ts >= now_ms - 1000) moved = std::max(moved, std::abs(m - v));
-    c.trail.emplace_back(now_ms, m);
-    while (!c.trail.empty() && c.trail.front().first < now_ms - kTrailMs) c.trail.pop_front();
+    // The largest move from any mid of the last second.
+    c.trail.evict_before(now_ms - 1000);
+    const double moved = c.trail.empty() ? 0.0 : std::max(std::abs(m - c.trail.max()), std::abs(m - c.trail.min()));
+    c.trail.push(now_ms, m);
     if (moved >= cfg_.pause_jump - 1e-9) {
       if (c.pause_until_ms < now_ms) ++counters_.pauses;
       c.pause_until_ms = now_ms + cfg_.pause_ms;
@@ -324,7 +322,7 @@ void Engine::step_slot(std::size_t i, std::size_t n, std::optional<std::pair<dou
       a.kind = ActionKind::cancel;
       a.coin = static_cast<int>(i);
       a.up = up;
-      a.order_id = s.order;
+      a.order_id.assign(s.order);
       actions_.push_back(std::move(a));
       ++counters_.cancels;
     }
@@ -731,7 +729,9 @@ bool Engine::load_json(std::string_view text, std::string& error) {
   }
   for (const auto r : root["realised_by_day"]) realised_by_day_[std::string(r.key())] = r.number_or(0);
   if (const auto h = root["halt"]; h.is_object()) halt_ = Halt{h["day"].string(), h["reason"].string(), h["t_ns"].integer_or(0)};
+  // pk-polymaker writes the ack as a [day, realised] pair: its state.json loads as is.
   if (const auto a = root["ack"]; a.is_object()) ack_ = std::pair<std::string, double>{a["day"].string(), a["realised"].number_or(0)};
+  else if (a.is_array() && a.size() == 2) ack_ = std::pair<std::string, double>{a.at(0).string(), a.at(1).number_or(0)};
   return true;
 }
 

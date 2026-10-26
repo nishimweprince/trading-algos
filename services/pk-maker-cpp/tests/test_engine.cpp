@@ -355,3 +355,33 @@ PKM_TEST(engine_unknown_order_closes_after_ten_seconds) {
   require(e.tracked().empty() && e.counters().orders_unknown == 1, "closed past 10 s");
   require(!e.resting(0, true), "slot freed");
 }
+
+PKM_TEST(engine_loads_pk_polymaker_state) {
+  // The shape serde writes for pk-polymaker's Persist (Options as null, ack as a pair).
+  const std::string rust = R"({
+  "inventories": {
+    "BTC-1793050200": {"asset": "BTC", "open_unix": 1793050200, "condition_id": "0xc", "up_token": "11", "down_token": "22",
+      "up": 5.0, "up_cost": 2.65, "down": 0.0, "down_cost": 0.0, "fills": 1, "settled": null, "pnl": null,
+      "settled_ns": null, "redeemed": null, "redeem_tries": 0},
+    "ETH-1793049300": {"asset": "ETH", "open_unix": 1793049300, "condition_id": "0xd", "up_token": "33", "down_token": "44",
+      "up": 5.0, "up_cost": 2.0, "down": 5.0, "down_cost": 2.5, "fills": 2, "settled": "yes", "pnl": 0.5,
+      "settled_ns": 1793050230000000000, "redeemed": null, "redeem_tries": 3}
+  },
+  "realised_by_day": {"2026-10-26": -3.25},
+  "orders": {"0xabc": {"id": "0xabc", "key": "BTC-1793050200", "asset": "BTC", "up": true, "px": 0.53, "size": 5.0,
+    "matched": 0.0, "posted_ns": 1793050300000000000, "closing": false}},
+  "halt": null,
+  "ack": ["2026-10-26", -1.0]
+})";
+  Engine e(Config{}, {"BTC", "ETH"});
+  std::string error;
+  require(e.load_json(rust, error), error);
+  require(e.inventories().size() == 2 && e.inventories().at("BTC-1793050200").settled.empty(), "null settled reads as open");
+  const auto& eth = e.inventories().at("ETH-1793049300");
+  require(eth.settled == "yes" && eth.redeemed.empty() && eth.redeem_tries == 3, "settled, not yet redeemed");
+  require(e.redeem_due().size() == 1, "the ETH winner is due for redemption");
+  require(e.orders().size() == 1 && e.tracked()[0] == "0xabc", "orders carried over");
+  require(!e.halt_state(), "no halt");
+  const std::int64_t day = (1'793'016'000LL + 3600) * NS;  // 2026-10-26 13:00 UTC
+  require(near(e.today_realised(day), -2.25), "ack base read from the pair");
+}

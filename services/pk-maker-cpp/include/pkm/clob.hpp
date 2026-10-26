@@ -46,6 +46,9 @@ class L2Signer final {
                      std::string_view body);
   [[nodiscard]] std::string signature(std::int64_t timestamp_s, std::string_view method, std::string_view path,
                                       std::string_view body);
+  // The same, URL-safe base64 into `out` (44 bytes): no allocation.
+  void signature_into(char (&out)[48], std::size_t& len, std::int64_t timestamp_s, std::string_view method,
+                      std::string_view path, std::string_view body);
   [[nodiscard]] const Credentials& credentials() const noexcept { return credentials_; }
 
  private:

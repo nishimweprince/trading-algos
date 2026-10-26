@@ -1,5 +1,7 @@
 #include "pkm/clob.hpp"
 
+#include <openssl/evp.h>
+
 #include <charconv>
 
 #include "pkm/json.hpp"
@@ -82,6 +84,14 @@ L2Signer::L2Signer(Credentials credentials) : credentials_(std::move(credentials
 }
 
 std::string L2Signer::signature(std::int64_t timestamp_s, std::string_view method, std::string_view path, std::string_view body) {
+  char out[48];
+  std::size_t len = 0;
+  signature_into(out, len, timestamp_s, method, path, body);
+  return std::string(out, len);
+}
+
+void L2Signer::signature_into(char (&out)[48], std::size_t& len, std::int64_t timestamp_s, std::string_view method,
+                              std::string_view path, std::string_view body) {
   char ts[24];
   const auto r = std::to_chars(ts, ts + sizeof(ts), timestamp_s);
   hmac_.begin();
@@ -97,7 +107,8 @@ std::string L2Signer::signature(std::int64_t timestamp_s, std::string_view metho
     hmac_.update(scratch_);
   }
   const Hmac32 mac = hmac_.finish();
-  return base64_encode(mac.data(), mac.size(), true);
+  len = static_cast<std::size_t>(EVP_EncodeBlock(reinterpret_cast<unsigned char*>(out), mac.data(), static_cast<int>(mac.size())));
+  for (std::size_t i = 0; i < len; ++i) out[i] = out[i] == '+' ? '-' : out[i] == '/' ? '_' : out[i];
 }
 
 void L2Signer::write_headers(std::string& out, std::int64_t timestamp_s, std::string_view method, std::string_view path,
@@ -105,7 +116,10 @@ void L2Signer::write_headers(std::string& out, std::int64_t timestamp_s, std::st
   out.append("POLY_ADDRESS: ").append(credentials_.address).append("\r\n");
   out.append("POLY_API_KEY: ").append(credentials_.api_key).append("\r\n");
   out.append("POLY_PASSPHRASE: ").append(credentials_.passphrase).append("\r\n");
-  out.append("POLY_SIGNATURE: ").append(signature(timestamp_s, method, path, body)).append("\r\n");
+  char sig[48];
+  std::size_t len = 0;
+  signature_into(sig, len, timestamp_s, method, path, body);
+  out.append("POLY_SIGNATURE: ").append(sig, len).append("\r\n");
   out.append("POLY_TIMESTAMP: ");
   append_i64(out, timestamp_s);
   out.append("\r\n");

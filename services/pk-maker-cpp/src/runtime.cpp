@@ -190,6 +190,7 @@ class Hot final {
     orders_.resize(static_cast<std::size_t>(config_.order_channels));
     touched_.assign(n, 0);
     body_.reserve(presign::kBodyMax);
+    queued_.reserve(128);
     request_.reserve(4096);
     headers_.reserve(512);
     updates_.reserve(16);
@@ -248,7 +249,8 @@ class Hot final {
     bool up = true;
     double px = 0;
     double size = 0;
-    std::string order_id;
+    engine::OrderId order_id;
+    std::string reason;  // cancel-all
   };
   struct Order {
     std::unique_ptr<http::Channel> ch;
@@ -554,7 +556,7 @@ class Hot final {
         method = "DELETE";
         path = "/cancel-all";
         p.kind = Pending::Kind::cancel_all;
-        p.order_id = a.reason;
+        p.reason = a.reason;
         break;
     }
     l2_.write_headers(headers_, ts, method, path, body_);
@@ -576,7 +578,7 @@ class Hot final {
         engine_.on_posted(p.coin, p.up, p.px, p.size, false, why, wall);
         break;
       case Pending::Kind::cancel: engine_.on_cancelled(p.coin, p.up, p.order_id, false, wall); break;
-      case Pending::Kind::cancel_all: log("cancel-all (" + p.order_id + ") failed: " + std::string(why)); break;
+      case Pending::Kind::cancel_all: log("cancel-all (" + p.reason + ") failed: " + std::string(why)); break;
       default: break;
     }
   }
@@ -608,7 +610,7 @@ class Hot final {
         break;
       }
       case Pending::Kind::cancel_all:
-        log("cancel-all (" + p.order_id + "): http " + std::to_string(status));
+        log("cancel-all (" + p.reason + "): http " + std::to_string(status));
         break;
       default: break;
     }
@@ -624,13 +626,14 @@ class Hot final {
     auto& actions = engine_.actions();
     for (auto& a : actions) queued_.push_back({std::move(a), mono});
     actions.clear();
-    while (!queued_.empty()) {
+    std::size_t sent = 0;
+    while (sent < queued_.size()) {
       Order* o = free_channel();
       if (o == nullptr) break;
-      engine::Action a = std::move(queued_.front().action);
-      queued_.pop_front();
-      send_action(*o, a);
+      send_action(*o, queued_[sent].action);
+      ++sent;
     }
+    if (sent > 0) queued_.erase(queued_.begin(), queued_.begin() + static_cast<std::ptrdiff_t>(sent));
     // A post that waited 100 ms for a connection is stale: refuse it.
     for (auto it = queued_.begin(); it != queued_.end();) {
       if (it->action.kind == engine::ActionKind::post && mono - it->since > 100 * kMs) {
@@ -823,7 +826,7 @@ class Hot final {
   Feed user_;
   std::vector<Feed> poly_;
   std::vector<Order> orders_;
-  std::deque<Queued> queued_;
+  std::vector<Queued> queued_;
   std::vector<std::uint32_t> gen_;
   feeds::KalshiSession session_;
   bool kalshi_dead_ = false;
