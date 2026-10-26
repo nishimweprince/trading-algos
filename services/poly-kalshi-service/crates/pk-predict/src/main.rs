@@ -309,6 +309,8 @@ impl App {
                 let mut state = self.state.lock();
                 state.push_order(record.clone());
                 state.recount();
+                // An accepted order ends a run of rejections.
+                state.risk.state.consecutive_rejections = 0;
                 state.risk.save();
                 drop(state);
                 self.record("order_submitted", json!({"order":record,"edge":edge}));
@@ -1307,8 +1309,13 @@ fn handle_wallet_event(app: &Arc<App>, value: &Value) {
                 order.updated_ms = now_ms();
             }
             state.recount();
-            state.risk.state.consecutive_rejections += 1;
-            let _ = state.risk.check_latches();
+            // A maker quote the book moved through is refused post-only: the
+            // venue doing its job, not a failing order path. Only other
+            // refusals count toward the consecutive-rejection latch.
+            if !is_post_only_refusal(&reason) {
+                state.risk.state.consecutive_rejections += 1;
+                let _ = state.risk.check_latches();
+            }
             state.risk.save();
         }
         "orderExpired" | "orderCancelled" | "orderTransactionFailed" => {
@@ -1325,6 +1332,12 @@ fn handle_wallet_event(app: &Arc<App>, value: &Value) {
         }
         _ => {}
     }
+}
+
+/// Predict's refusal of a post-only order that would have crossed
+/// (`rejectedPostOnly`).
+fn is_post_only_refusal(reason: &str) -> bool {
+    reason.to_ascii_lowercase().contains("postonly")
 }
 
 fn routes(app: Arc<App>) -> Router {
@@ -1434,6 +1447,12 @@ fn order_rows(value: &Value) -> &[Value] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn post_only_refusals_do_not_count_as_rejections() {
+        assert!(is_post_only_refusal("rejectedPostOnly"));
+        assert!(!is_post_only_refusal("insufficientBalance"));
+    }
 
     #[test]
     fn start_price_set_at_the_open_is_not_a_rule_change() {
