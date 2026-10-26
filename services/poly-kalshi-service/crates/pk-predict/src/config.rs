@@ -40,6 +40,8 @@ pub struct Config {
     pub risk: RiskLimits,
     pub state_dir: PathBuf,
     pub kill_file: PathBuf,
+    /// Record every raw Kalshi/Predict frame (`PK_PRED_RAW`): ~2 GB an hour.
+    pub raw: bool,
     pub fingerprint: String,
 }
 
@@ -145,14 +147,15 @@ impl Config {
         let state_dir = path(base, get("PK_PRED_STATE_DIR").as_deref().unwrap_or("data/state-predict"));
         let kill_file = path(base, get("PK_PRED_KILL_FILE").as_deref().unwrap_or("data/KILL.predict"));
         let assets: Vec<String> = get("PK_PRED_ASSETS")
-            .unwrap_or_else(|| "BTC,ETH".into())
+            .unwrap_or_else(|| "BTC,ETH,BNB".into())
             .split(',')
             .map(|s| s.trim().to_ascii_uppercase())
             .filter(|s| !s.is_empty())
             .collect();
         anyhow::ensure!(
-            assets.iter().all(|a| a == "BTC" || a == "ETH"),
-            "Predict v1 supports only BTC and ETH"
+            assets.iter().all(|a| crate::model::ASSETS.contains(&a.as_str())),
+            "PK_PRED_ASSETS: each must have a Kalshi 15-minute series ({:?})",
+            crate::model::ASSETS
         );
         let api_key = required("API_KEY")?;
         anyhow::ensure!(api_key.len() >= 16, "API_KEY must be at least 16 characters");
@@ -201,6 +204,7 @@ impl Config {
             risk,
             state_dir,
             kill_file,
+            raw: flag("PK_PRED_RAW", false)?,
             fingerprint,
         })
     }

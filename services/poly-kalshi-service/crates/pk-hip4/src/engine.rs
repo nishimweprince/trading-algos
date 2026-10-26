@@ -84,7 +84,8 @@ impl Engine {
             let side = m.get("side")?.as_str()?;
             let px = number(m.get("price_dollars").or_else(|| m.get("price"))?)?;
             let px = if px > 1.0 { px / 100.0 } else { px };
-            let delta = number(m.get("delta")?)?;
+            // Kalshi sends the size change as `delta_fp` (fixed-point string).
+            let delta = number(m.get("delta_fp").or_else(|| m.get("delta"))?)?;
             let map = if side == "yes" { &mut levels.yes } else { &mut levels.no };
             let key = (px * 1e4).round() as i32;
             let q = map.get(&key).copied().unwrap_or(0.0) + delta;

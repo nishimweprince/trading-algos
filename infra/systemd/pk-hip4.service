@@ -1,8 +1,8 @@
 [Unit]
 Description=pk-hip4 (isolated Kalshi signal to Hyperliquid HIP-4)
 OnFailure=pk-unit-alert-tokyo@%n.service
-Wants=network-online.target chrony.service
-After=network-online.target time-sync.target chrony.service
+Wants=network-online.target chrony.service chronyd.service
+After=network-online.target time-sync.target chrony.service chronyd.service
 ConditionPathExists=/home/pk/trading-algos/services/poly-kalshi-service/.env.tokyo
 
 [Service]

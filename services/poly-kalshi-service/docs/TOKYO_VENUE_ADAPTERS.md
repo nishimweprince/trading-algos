@@ -41,13 +41,29 @@ Hyperliquid: override `HL_API_URL`/`HL_WS_URL` to the testnet endpoints and run 
 
 ## Allowlist entries (HIP-4)
 
-`config/hip4-allowlist.json` ships empty. To enable an `E1` contract:
+`pk-hip4 --profile tokyo build-allowlist [--write]` matches every upcoming HIP-4
+`binaryPrice` contract to the Kalshi "above" contract (`KXBTCD`, `KXETHD`,
+`KXINXU`, `KXNASDAQ100U`, `KXGOLDD`, …) with the same underlying, strike
+(Kalshi's `79,999.99 greater` or `80,000 greater_or_equal` is HIP-4's `> 80000`)
+and decision time, and writes both rule fingerprints, a 0.02 basis for the
+different settlement index, maker only, expiring at the decision time.
+`pk-hip4-allowlist.timer` runs it every 30 minutes into
+`data/hip4-allowlist.json` (`PK_HIP4_MATCH_ALLOWLIST`), since Kalshi lists its
+hourly contracts only a day or two ahead. `config/hip4-allowlist.json` stays the
+empty template. To add an entry by hand instead:
 
 1. Run shadow discovery and find the candidate in `/v1/hip4/markets` or the journal's `match` records: HIP-4 outcome ID, Kalshi ticker, and both rule fingerprints.
 2. Add an entry with the venue, outcome ID, ticker, both fingerprints, side mapping, maximum basis adjustment, lane flags, and the basis reason. Discovery reloads the file every 60 seconds; no restart is needed.
 3. Confirm the next `match` record flips the grade from `E2` to `E1` with the expected executable lanes.
 
 Any rule change on either side invalidates the entry automatically (the fingerprints stop matching). Expired entries fail closed to `E2`.
+
+## Units (Tokyo host, 2026-10-26)
+
+Installed from `infra/systemd` with `User=ec2-user` and `/home/ec2-user` paths
+(the host has no `pk` user): `pk-predict`, `pk-hip4`, `pk-hip4-allowlist.timer`,
+`pk-unit-alert-tokyo@`. Both adapters run `shadow` (simulated fills). Raw frame
+recording is off (`PK_PRED_RAW`, `PK_HIP4_RAW`); on, it wrote 3 GB in 90 minutes.
 
 ## Settlement (Predict)
 

@@ -49,6 +49,13 @@ enum Command {
         #[arg(long)]
         confirm: bool,
     },
+    /// Match every upcoming HIP-4 price contract to the Kalshi contract with
+    /// the same underlying, strike and decision time; print the allowlist,
+    /// or replace the allowlist file with `--write`.
+    BuildAllowlist {
+        #[arg(long)]
+        write: bool,
+    },
 }
 struct App {
     cfg: Config,
@@ -57,12 +64,19 @@ struct App {
     engine: Mutex<Engine>,
     state: Mutex<AdapterState>,
     journal: Mutex<Journal>,
-    raw: Mutex<Journal>,
+    /// Every raw frame, only with `PK_HIP4_RAW=yes`.
+    raw: Mutex<Option<Journal>>,
     kalshi: Mutex<Option<FeedHandle>>,
     markouts: Mutex<MarkoutTracker>,
     series_ms: Mutex<i64>,
 }
 impl App {
+    fn raw(&self, kind: &str, value: impl FnOnce() -> Value) {
+        if let Some(raw) = self.raw.lock().as_mut() {
+            let _ = raw.record(kind, value());
+        }
+    }
+
     fn record(&self, k: &str, v: Value) {
         if let Err(e) = self.journal.lock().record(k, v) {
             tracing::error!(error=%e,"journal")
@@ -368,6 +382,7 @@ fn main() -> anyhow::Result<()> {
         match a.command {
             Some(Command::Preflight) => preflight(&cfg, &client).await,
             Some(Command::ProbeOrders { confirm }) => probe(&cfg, client, confirm).await,
+            Some(Command::BuildAllowlist { write }) => build_allowlist(&cfg, &client, write).await,
             None => run(cfg, client).await,
         }
     })
@@ -436,7 +451,7 @@ async fn run(cfg: Config, client: Arc<Client>) -> anyhow::Result<()> {
     let app = Arc::new(App {
         state: Mutex::new(AdapterState::new("hip4", cfg.mode, cfg.fingerprint.clone(), risk)),
         journal: Mutex::new(Journal::open(cfg.state_dir.join("journal"))?),
-        raw: Mutex::new(Journal::open(cfg.state_dir.join("raw"))?),
+        raw: Mutex::new(if cfg.raw { Some(Journal::open(cfg.state_dir.join("raw"))?) } else { None }),
         engine: Mutex::new(Engine::new()),
         kalshi: Mutex::new(None),
         cfg,
@@ -459,11 +474,17 @@ async fn run(cfg: Config, client: Arc<Client>) -> anyhow::Result<()> {
     let weak = Arc::downgrade(&app);
     let emit = Arc::new(move |_: char, text: String| {
         if let Some(app) = weak.upgrade() {
-            let _ = app.raw.lock().record("kalshi", json!({"raw":text}));
+            app.raw("kalshi", || json!({"raw":text}));
             if text.contains("\"type\":\"resync\"") {
                 let mut s = app.state.lock();
                 s.feeds.entry("kalshi".into()).or_default().sequence_gaps += 1;
-                s.latch("Kalshi sequence gap requires reconciliation");
+                // The feed resubscribes for fresh snapshots on a gap. Live
+                // positions need a human to reconcile; shadow just waits.
+                if app.cfg.mode == VenueMode::Live {
+                    s.latch("Kalshi sequence gap requires reconciliation");
+                } else {
+                    s.ready = false;
+                }
             } else if text.contains("\"type\":\"reconnect\"") {
                 app.state.lock().ready = false;
             } else if let Some((ticker, fair)) = app.engine.lock().kalshi(&text) {
@@ -496,7 +517,7 @@ async fn run(cfg: Config, client: Arc<Client>) -> anyhow::Result<()> {
 
 async fn discover(app: &Arc<App>) -> anyhow::Result<()> {
     let meta = app.client.outcome_meta().await?;
-    app.raw.lock().record("outcome_meta", json!({"raw":meta.clone()}))?;
+    app.raw("outcome_meta", || json!({"raw":meta.clone()}));
     let outcomes = model::outcomes(&meta);
     let allow = Allowlist::load(&app.cfg.allowlist)?;
     let mut matched = vec![];
@@ -589,11 +610,14 @@ async fn discovery_loop(app: Arc<App>) {
     }
 }
 async fn fetch_kalshi(app: &Arc<App>, ticker: &str) -> anyhow::Result<NormalizedContract> {
+    kalshi_contract(&app.client.http, &app.cfg, ticker).await
+}
+
+async fn kalshi_contract(http: &reqwest::Client, cfg: &Config, ticker: &str) -> anyhow::Result<NormalizedContract> {
     let path = format!("/trade-api/v2/markets/{ticker}");
-    let pem = std::fs::read_to_string(&app.cfg.kalshi_private_key_path)?;
-    let signer = KalshiSigner::from_pem(&app.cfg.kalshi_api_key_id, &pem)?;
-    let mut req =
-        app.client.http.get(format!("{}/markets/{ticker}", app.cfg.kalshi_rest_url.trim_end_matches('/')));
+    let pem = std::fs::read_to_string(&cfg.kalshi_private_key_path)?;
+    let signer = KalshiSigner::from_pem(&cfg.kalshi_api_key_id, &pem)?;
+    let mut req = http.get(format!("{}/markets/{ticker}", cfg.kalshi_rest_url.trim_end_matches('/')));
     for (k, v) in signer.headers("GET", &path, None) {
         req = req.header(k, v)
     }
@@ -625,12 +649,140 @@ async fn fetch_kalshi(app: &Arc<App>, ticker: &str) -> anyhow::Result<Normalized
     })
 }
 
+/// Kalshi's daily/hourly "above" series per HIP-4 underlying (`perp` with any
+/// `xyz:` prefix dropped).
+fn kalshi_series(underlying: &str) -> &'static [&'static str] {
+    match underlying {
+        "BTC" => &["KXBTCD"],
+        "ETH" => &["KXETHD"],
+        "SOL" => &["KXSOLD"],
+        "XRP" => &["KXXRPD"],
+        "BNB" => &["KXBNBD"],
+        "DOGE" => &["KXDOGED"],
+        "HYPE" => &["KXHYPED"],
+        "ZEC" => &["KXZECD"],
+        "SP500" => &["KXINXU"],
+        "XYZ100" => &["KXNASDAQ100U"],
+        "GOLD" => &["KXGOLDD"],
+        "SILVER" => &["KXSILVERD"],
+        "CL" => &["KXWTID", "KXWTI"],
+        _ => &[],
+    }
+}
+
+/// Kalshi "above" markets in `series` that decide at `decision_ms`.
+async fn kalshi_above(http: &reqwest::Client, cfg: &Config, series: &str, decision_ms: i64) -> anyhow::Result<Vec<Value>> {
+    let s = decision_ms / 1000;
+    let pem = std::fs::read_to_string(&cfg.kalshi_private_key_path)?;
+    let signer = KalshiSigner::from_pem(&cfg.kalshi_api_key_id, &pem)?;
+    let mut req = http
+        .get(format!("{}/markets", cfg.kalshi_rest_url.trim_end_matches('/')))
+        .query(&[("series_ticker", series.to_owned()), ("min_close_ts", (s - 1).to_string()), ("max_close_ts", (s + 1).to_string()), ("limit", "1000".into())]);
+    for (k, v) in signer.headers("GET", "/trade-api/v2/markets", None) {
+        req = req.header(k, v)
+    }
+    let value = req.send().await?.error_for_status()?.json::<Value>().await?;
+    Ok(value
+        .get("markets")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|m| matches!(m.get("strike_type").and_then(Value::as_str), Some("greater" | "greater_or_equal")))
+        .cloned()
+        .collect())
+}
+
+/// Kalshi writes "above 80,000" as a floor strike of 79,999.99 (`greater`)
+/// or 80,000 (`greater_or_equal`): both are HIP-4's `> 80000` within a cent.
+pub fn same_strike(kalshi_floor: f64, threshold: f64) -> bool {
+    (kalshi_floor - threshold).abs() <= 0.0101
+}
+
+async fn build_allowlist(cfg: &Config, client: &Client, write: bool) -> anyhow::Result<()> {
+    let meta = client.outcome_meta().await?;
+    let now = chrono::Utc::now();
+    let mut entries = Vec::new();
+    let mut seen = 0;
+    let mut unmatched: std::collections::BTreeMap<String, u32> = Default::default();
+    let mut lists: std::collections::HashMap<(String, i64), Vec<Value>> = Default::default();
+    for outcome in model::outcomes(&meta) {
+        if outcome.name != "template:binaryPrice" {
+            continue;
+        }
+        let Some(probe) = outcome.normalized("") else { continue };
+        let Some(decision_ms) = probe.decision_ms else { continue };
+        if decision_ms <= now.timestamp_millis() + 60_000 {
+            continue;
+        }
+        let Some(threshold) = probe.threshold.as_deref().and_then(|t| t.parse::<f64>().ok()) else { continue };
+        let underlying = probe.underlying.trim_start_matches("XYZ:").to_owned();
+        seen += 1;
+        let mut found = None;
+        for series in kalshi_series(&underlying) {
+            let key = (series.to_string(), decision_ms);
+            if !lists.contains_key(&key) {
+                let got = kalshi_above(&client.http, cfg, series, decision_ms).await.unwrap_or_default();
+                lists.insert(key.clone(), got);
+            }
+            found = lists[&key].iter().find(|m| m.get("floor_strike").and_then(Value::as_f64).is_some_and(|f| same_strike(f, threshold))).cloned();
+            if found.is_some() {
+                break;
+            }
+        }
+        let Some(market) = found else {
+            *unmatched.entry(underlying).or_default() += 1;
+            continue;
+        };
+        let ticker = market.get("ticker").and_then(Value::as_str).unwrap_or_default().to_owned();
+        let Some(venue) = outcome.normalized(&ticker) else { continue };
+        let kalshi = kalshi_contract(&client.http, cfg, &ticker).await?;
+        let description = outcome.fields().get("priceDescription").cloned().unwrap_or_default();
+        entries.push(pk_venue_core::AllowlistEntry {
+            venue: "hip4".into(),
+            venue_market_id: venue.venue_market_id.clone(),
+            kalshi_ticker: ticker,
+            venue_fingerprint: venue.fingerprint(),
+            kalshi_fingerprint: kalshi.fingerprint(),
+            side_mapping: SideMapping { kalshi_yes_is_venue_side: 0, venue_side_names: ["Yes".into(), "No".into()] },
+            max_basis: 0.02,
+            expires_at: chrono::DateTime::from_timestamp_millis(decision_ms),
+            maker: true,
+            taker: false,
+            reason: format!(
+                "same underlying, strike and decision time; HIP-4 settles on {description} ({}s), Kalshi on {}",
+                venue.averaging_window_s.unwrap_or(0),
+                if kalshi.resolution_source.is_empty() { "its index" } else { kalshi.resolution_source.as_str() }
+            ),
+        });
+    }
+    let list = Allowlist { version: 1, entries };
+    println!(
+        "HIP-4 price contracts deciding later: {seen}; matched to Kalshi: {}; unmatched by underlying: {unmatched:?}",
+        list.entries.len()
+    );
+    for e in &list.entries {
+        println!("  {} -> {} (expires {})", e.venue_market_id, e.kalshi_ticker, e.expires_at.map(|t| t.to_rfc3339()).unwrap_or_default());
+    }
+    if write {
+        let tmp = cfg.allowlist.with_extension("json.tmp");
+        std::fs::write(&tmp, serde_json::to_vec_pretty(&list)?)?;
+        std::fs::rename(&tmp, &cfg.allowlist)?;
+        println!("wrote {}", cfg.allowlist.display());
+    }
+    Ok(())
+}
+
 async fn public_ws(app: Arc<App>) {
     loop {
         match tokio_tungstenite::connect_async(&app.cfg.ws_url).await {
             Ok((mut ws, _)) => {
-                let coins = { app.engine.lock().coins() };
-                for (coin, _) in coins {
+                // Coins join as allowlist entries match (discovery reloads it
+                // every 60 s), so the book subscriptions follow the engine.
+                let mut subscribed = std::collections::HashSet::new();
+                let follow = |subscribed: &mut std::collections::HashSet<String>| -> Vec<String> {
+                    app.engine.lock().coins().into_iter().map(|(c, _)| c).filter(|c| subscribed.insert(c.clone())).collect()
+                };
+                for coin in follow(&mut subscribed) {
                     let _ = ws
                         .send(Message::Text(
                             json!({"method":"subscribe","subscription":{"type":"l2Book","coin":coin}})
@@ -644,7 +796,29 @@ async fn public_ws(app: Arc<App>) {
                         let _=ws.send(Message::Text(json!({"method":"subscribe","subscription":{"type":kind,"user":app.client.account}}).to_string().into())).await;
                     }
                 }
-                while let Some(frame) = ws.next().await {
+                // Hyperliquid closes a socket idle for 60 s; ping every 30 s.
+                let mut tick = tokio::time::interval(Duration::from_secs(30));
+                tick.tick().await;
+                loop {
+                    let frame = tokio::select! {
+                        frame = ws.next() => frame,
+                        _ = tick.tick() => {
+                            if ws.send(Message::Text(json!({"method":"ping"}).to_string().into())).await.is_err() {
+                                break;
+                            }
+                            for coin in follow(&mut subscribed) {
+                                let _ = ws
+                                    .send(Message::Text(
+                                        json!({"method":"subscribe","subscription":{"type":"l2Book","coin":coin}})
+                                            .to_string()
+                                            .into(),
+                                    ))
+                                    .await;
+                            }
+                            continue;
+                        }
+                    };
+                    let Some(frame) = frame else { break };
                     match frame {
                         Ok(frame) if frame.is_ping() => {
                             let _ = ws.send(Message::Pong(frame.into_data())).await;
@@ -652,7 +826,7 @@ async fn public_ws(app: Arc<App>) {
                         Ok(frame) if frame.is_text() => {
                             let text = frame.to_text().unwrap_or("{}");
                             if let Ok(v) = serde_json::from_str::<Value>(text) {
-                                let _ = app.raw.lock().record("hip4", json!({"raw":v.clone()}));
+                                app.raw("hip4", || json!({"raw":v.clone()}));
                                 match v.get("channel").and_then(Value::as_str) {
                                     Some("l2Book") => {
                                         let coin =
@@ -680,7 +854,9 @@ async fn public_ws(app: Arc<App>) {
                                 }
                             }
                         }
-                        _ => break,
+                        Ok(frame) if frame.is_close() => break,
+                        Ok(_) => {}
+                        Err(_) => break,
                     }
                 }
             }
@@ -971,5 +1147,20 @@ async fn shutdown() {
     #[cfg(not(unix))]
     {
         let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
+#[cfg(test)]
+mod allowlist_tests {
+    use super::*;
+
+    #[test]
+    fn kalshi_above_strikes_match_hip4_thresholds() {
+        assert!(same_strike(79_999.99, 80_000.0), "greater at a cent below");
+        assert!(same_strike(29_400.0, 29_400.0), "greater_or_equal at the strike");
+        assert!(!same_strike(80_199.99, 80_152.0));
+        assert_eq!(kalshi_series("BTC"), ["KXBTCD"]);
+        assert_eq!(kalshi_series("SP500"), ["KXINXU"]);
+        assert!(kalshi_series("SPCX").is_empty());
     }
 }

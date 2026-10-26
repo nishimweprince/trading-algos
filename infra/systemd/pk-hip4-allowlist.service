@@ -1,0 +1,25 @@
+# Rebuilds the HIP-4 allowlist: every upcoming HIP-4 price contract matched to
+# the Kalshi "above" contract with the same underlying, strike and decision
+# time, with both rule fingerprints (`pk-hip4 build-allowlist --write`).
+# pk-hip4 reloads the file every 60 s. Kalshi lists hourly contracts a day or
+# two ahead, so the list grows as listings appear; entries expire at decision.
+[Unit]
+Description=Rebuild the HIP-4 allowlist from current Kalshi listings
+OnFailure=pk-unit-alert-tokyo@%n.service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=pk
+Group=pk
+WorkingDirectory=/home/pk/trading-algos/services/poly-kalshi-service
+ExecStart=/home/pk/trading-algos/services/poly-kalshi-service/target/release/pk-hip4 --profile tokyo build-allowlist --write
+TimeoutStartSec=300
+Nice=10
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/pk/trading-algos/services/poly-kalshi-service/data

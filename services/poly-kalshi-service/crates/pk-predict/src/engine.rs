@@ -38,7 +38,6 @@ struct QuoteState {
 
 pub struct Engine {
     markets: HashMap<String, PredictMarket>,
-    ticker_to_market: HashMap<String, String>,
     kalshi: HashMap<String, KalshiLevels>,
     kalshi_update: HashMap<String, i64>,
     venue_books: HashMap<String, Book>,
@@ -50,7 +49,6 @@ impl Engine {
     pub fn new() -> Self {
         Self {
             markets: HashMap::new(),
-            ticker_to_market: HashMap::new(),
             kalshi: HashMap::new(),
             kalshi_update: HashMap::new(),
             venue_books: HashMap::new(),
@@ -61,18 +59,21 @@ impl Engine {
 
     pub fn set_markets(&mut self, markets: Vec<PredictMarket>) {
         self.markets.clear();
-        self.ticker_to_market.clear();
         for market in markets {
             let id = market.id.to_string();
-            if let Some(ticker) = &market.kalshi_ticker {
-                self.ticker_to_market.insert(ticker.clone(), id.clone());
-            }
             self.markets.insert(id, market);
         }
     }
 
-    pub fn tickers(&self) -> std::collections::BTreeSet<String> {
-        self.ticker_to_market.keys().cloned().collect()
+    /// Markets open now or opening within `ahead_ms` (what the venue socket follows).
+    pub fn upcoming(&self, now: i64, ahead_ms: i64) -> Vec<PredictMarket> {
+        self.markets
+            .values()
+            .filter(|m| {
+                window_open_ms(m).is_none_or(|o| o <= now + ahead_ms) && m.close_ms().is_none_or(|c| now < c)
+            })
+            .cloned()
+            .collect()
     }
     pub fn markets(&self) -> Vec<PredictMarket> {
         self.markets.values().cloned().collect()
@@ -100,7 +101,8 @@ impl Engine {
             let side = msg.get("side").and_then(Value::as_str)?;
             let price = msg.get("price_dollars").or_else(|| msg.get("price"))?;
             let price = parse_price(price)?;
-            let delta = msg.get("delta").and_then(number)?;
+            // Kalshi sends the size change as `delta_fp` (fixed-point string).
+            let delta = msg.get("delta_fp").or_else(|| msg.get("delta")).and_then(number)?;
             let side_levels = if side == "yes" { &mut levels.yes } else { &mut levels.no };
             let key = (price * 10_000.0).round() as i32;
             let value = side_levels.get(&key).copied().unwrap_or(0.0) + delta;
@@ -118,7 +120,12 @@ impl Engine {
     pub fn evaluate(&mut self, cfg: &Config, inventory: &HashMap<String, f64>) -> Vec<Action> {
         let now = now_ms();
         let mut actions = Vec::new();
-        let any_stale = self.markets.values().any(|m| {
+        // Only windows trading now are quoted or need fresh books; later
+        // windows are listed hours ahead with neither.
+        let live = |m: &PredictMarket| {
+            window_open_ms(m).is_none_or(|o| o <= now) && m.close_ms().is_none_or(|c| now < c)
+        };
+        let any_stale = self.markets.values().filter(|m| live(m)).any(|m| {
             let ticker = m.kalshi_ticker.as_deref().unwrap_or_default();
             let kalshi_stale = self.kalshi_update.get(ticker).is_none_or(|t| now - *t > cfg.freshness_ms);
             let venue_stale = self
@@ -135,7 +142,7 @@ impl Engine {
             return actions;
         }
         self.stale_cancelled = false;
-        for market in self.markets.values() {
+        for market in self.markets.values().filter(|m| live(m)) {
             if market.close_ms().is_some_and(|close| close - now <= cfg.close_buffer_s * 1000) {
                 continue;
             }
@@ -237,6 +244,12 @@ impl Engine {
     }
 }
 
+/// When the market's window starts trading: the 15-minute window's open
+/// (from its slug) before any listing time.
+fn window_open_ms(m: &PredictMarket) -> Option<i64> {
+    m.window_open_s().map(|s| s * 1000).or_else(|| m.open_ms())
+}
+
 fn load_levels(msg: &Value, dollars: &str, cents: &str, out: &mut BTreeMap<i32, f64>) {
     let value = msg.get(dollars).or_else(|| msg.get(cents));
     for row in value.and_then(Value::as_array).into_iter().flatten() {
@@ -304,6 +317,16 @@ mod tests {
             e.kalshi_frame(r#"{"type":"ticker","msg":{"market_ticker":"KX"}}"#).is_none(),
             "non-book frames are ignored"
         );
+    }
+
+    #[test]
+    fn kalshi_delta_fp_moves_the_fair() {
+        let mut e = Engine::new();
+        let _ = e.kalshi_frame(r#"{"type":"orderbook_snapshot","msg":{"market_ticker":"KX","yes_dollars_fp":[["0.45","3"]],"no_dollars_fp":[["0.50","2"]]}}"#);
+        let (_, fair) = e
+            .kalshi_frame(r#"{"type":"orderbook_delta","msg":{"market_ticker":"KX","price_dollars":"0.4700","delta_fp":"1.00","side":"yes"}}"#)
+            .unwrap();
+        assert!((fair - 0.485).abs() < 1e-9);
     }
 
     #[test]

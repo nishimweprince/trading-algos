@@ -63,7 +63,8 @@ struct App {
     engine: Mutex<Engine>,
     state: Mutex<AdapterState>,
     journal: Mutex<Journal>,
-    raw: Mutex<Journal>,
+    /// Every raw frame, only with `PK_PRED_RAW=yes` (it writes ~2 GB an hour).
+    raw: Mutex<Option<Journal>>,
     kalshi: Mutex<Option<FeedHandle>>,
     kalshi_http: reqwest::Client,
     kalshi_signer: Arc<KalshiSigner>,
@@ -72,6 +73,12 @@ struct App {
 }
 
 impl App {
+    fn raw(&self, kind: &str, value: impl FnOnce() -> Value) {
+        if let Some(raw) = self.raw.lock().as_mut() {
+            let _ = raw.record(kind, value());
+        }
+    }
+
     fn record(&self, kind: &str, value: Value) {
         if let Err(error) = self.journal.lock().record(kind, value) {
             tracing::error!(error = %error, "journal_write");
@@ -541,7 +548,7 @@ async fn run(cfg: Config, client: Arc<Client>) -> anyhow::Result<()> {
     let kalshi_signer = Arc::new(KalshiSigner::from_pem(&cfg.kalshi_api_key_id, &pem)?);
     let app = Arc::new(App {
         journal: Mutex::new(Journal::open(cfg.state_dir.join("journal"))?),
-        raw: Mutex::new(Journal::open(cfg.state_dir.join("raw"))?),
+        raw: Mutex::new(if cfg.raw { Some(Journal::open(cfg.state_dir.join("raw"))?) } else { None }),
         engine: Mutex::new(Engine::new()),
         state: Mutex::new(state),
         kalshi: Mutex::new(None),
@@ -580,7 +587,7 @@ async fn run(cfg: Config, client: Arc<Client>) -> anyhow::Result<()> {
     let emit = Arc::new(move |_venue: char, text: String| {
         if let Some(app) = weak.upgrade() {
             let now = now_ms();
-            let _ = app.raw.lock().record("kalshi", json!({"raw":text}));
+            app.raw("kalshi", || json!({"raw":text}));
             if text.contains("\"type\":\"reconnect\"") || text.contains("\"type\":\"resync\"") {
                 let mut state = app.state.lock();
                 state.ready = false;
@@ -600,7 +607,7 @@ async fn run(cfg: Config, client: Arc<Client>) -> anyhow::Result<()> {
         FeedKind::Kalshi { signer: app.kalshi_signer.clone() },
         emit,
     );
-    kalshi.set_wanted(app.engine.lock().tickers());
+    kalshi.set_wanted(kalshi_wanted(&app));
     *app.kalshi.lock() = Some(kalshi);
 
     tokio::spawn(predict_ws(app.clone()));
@@ -647,10 +654,13 @@ async fn discover(app: &Arc<App>) -> anyhow::Result<()> {
             executable.push(market);
         }
     }
+    // A market missing from this pass has closed (15-minute windows roll off
+    // the OPEN list); only one present in both passes with different rules,
+    // or a different Kalshi link, is a semantic change.
     let changed = {
         let state = app.state.lock();
         state.matches.iter().any(|(id, old)| {
-            decisions.get(id).is_none_or(|new| {
+            decisions.get(id).is_some_and(|new| {
                 old.venue_fingerprint != new.venue_fingerprint || old.kalshi_ticker != new.kalshi_ticker
             })
         })
@@ -662,11 +672,13 @@ async fn discover(app: &Arc<App>) -> anyhow::Result<()> {
     {
         let mut state = app.state.lock();
         state.matches = decisions.clone();
+        // A pass that succeeded clears an earlier failed one.
+        state.degraded.clear();
     }
     app.record("discovery", json!({"markets":executable,"decisions":decisions}));
     app.engine.lock().set_markets(executable);
     if let Some(feed) = app.kalshi.lock().as_ref() {
-        feed.set_wanted(app.engine.lock().tickers());
+        feed.set_wanted(kalshi_wanted(app));
     }
     Ok(())
 }
@@ -685,7 +697,7 @@ fn kalshi_contract(ticker: &str, market: &Value) -> anyhow::Result<NormalizedCon
     };
     let returned = text("ticker");
     anyhow::ensure!(returned.is_empty() || returned == ticker, "Kalshi returned a different ticker");
-    let underlying = ["BTC", "ETH"].into_iter().find(|asset| ticker.contains(asset)).unwrap_or("");
+    let underlying = crate::model::ASSETS.into_iter().find(|asset| ticker.contains(asset)).unwrap_or("");
     anyhow::ensure!(!underlying.is_empty(), "unsupported Kalshi underlying");
     Ok(NormalizedContract {
         venue: "kalshi".into(),
@@ -761,6 +773,20 @@ async fn fetch_kalshi_for(
     let found = found.ok_or_else(|| anyhow::anyhow!("no Kalshi KX{asset}15M market for window {open_s}"))?;
     let ticker = found.get("ticker").and_then(Value::as_str).unwrap_or_default();
     kalshi_contract(ticker, found)
+}
+
+/// How far ahead the Kalshi and Predict sockets follow upcoming windows.
+const FOLLOW_AHEAD_MS: i64 = 30 * 60 * 1000;
+
+/// Kalshi tickers of windows open now or within `FOLLOW_AHEAD_MS` (Kalshi lists
+/// the whole day ahead; following every one floods the socket with deltas).
+fn kalshi_wanted(app: &Arc<App>) -> std::collections::BTreeSet<String> {
+    app.engine
+        .lock()
+        .upcoming(now_ms(), FOLLOW_AHEAD_MS)
+        .into_iter()
+        .filter_map(|m| m.kalshi_ticker)
+        .collect()
 }
 
 async fn discovery_loop(app: Arc<App>) {
@@ -1033,16 +1059,8 @@ async fn predict_ws_session(app: &Arc<App>) -> anyhow::Result<()> {
         feed.connected = true;
         feed.reconnects += 1;
     }
-    let markets = app.engine.lock().markets();
-    for market in &markets {
-        let id = app.client.next_request_id();
-        ws.send(Message::Text(
-            json!({"method":"subscribe","requestId":id,"params":[format!("predictOrderbook/{}",market.id)]})
-                .to_string()
-                .into(),
-        ))
-        .await?;
-    }
+    let mut subscribed = std::collections::HashSet::new();
+    subscribe_new(app, &mut ws, &mut subscribed).await?;
     if let Some(jwt) = app.client.jwt() {
         let id = app.client.next_request_id();
         ws.send(Message::Text(
@@ -1052,14 +1070,34 @@ async fn predict_ws_session(app: &Arc<App>) -> anyhow::Result<()> {
         ))
         .await?;
     }
-    while let Some(frame) = ws.next().await {
+    let mut follow = tokio::time::interval(Duration::from_secs(5));
+    loop {
+        let frame = tokio::select! {
+            frame = ws.next() => frame,
+            _ = follow.tick() => {
+                subscribe_new(app, &mut ws, &mut subscribed).await?;
+                continue;
+            }
+        };
+        let Some(frame) = frame else { break };
         let frame = frame?;
         if frame.is_ping() {
             ws.send(Message::Pong(frame.into_data())).await?;
             continue;
         }
+        if frame.is_close() {
+            break;
+        }
         let Some(text) = frame.to_text().ok() else { continue };
-        let value: Value = serde_json::from_str(text)?;
+        // Empty and non-JSON frames (keep-alives) are skipped, not fatal:
+        // failing the session on them reconnected every ~30 s.
+        let Ok(value) = serde_json::from_str::<Value>(text) else {
+            if !text.trim().is_empty() {
+                let mut state = app.state.lock();
+                state.feeds.entry("predict".into()).or_default().errors += 1;
+            }
+            continue;
+        };
         if value.get("type").and_then(Value::as_str) == Some("H")
             || value.get("method").and_then(Value::as_str) == Some("heartbeat")
         {
@@ -1067,7 +1105,7 @@ async fn predict_ws_session(app: &Arc<App>) -> anyhow::Result<()> {
             ws.send(Message::Text(json!({"method":"heartbeat","data":data}).to_string().into())).await?;
             continue;
         }
-        app.raw.lock().record("predict", json!({"raw":value.clone()}))?;
+        app.raw("predict", || json!({"raw":value.clone()}));
         if let Some((id, book)) = model::book_from_ws(&value) {
             if book.valid() {
                 app.engine.lock().venue_book(id.clone(), book);
@@ -1080,6 +1118,30 @@ async fn predict_ws_session(app: &Arc<App>) -> anyhow::Result<()> {
         handle_wallet_event(app, &value);
     }
     anyhow::bail!("Predict WebSocket closed")
+}
+
+/// Subscribe the Predict socket to every window open now or within
+/// `FOLLOW_AHEAD_MS` that it does not follow yet (windows roll every 15 min).
+async fn subscribe_new<S>(app: &Arc<App>, ws: &mut S, subscribed: &mut std::collections::HashSet<String>) -> anyhow::Result<()>
+where
+    S: futures_util::Sink<Message> + Unpin,
+    S::Error: std::error::Error + Send + Sync + 'static,
+{
+    let markets = app.engine.lock().upcoming(now_ms(), FOLLOW_AHEAD_MS);
+    for market in markets {
+        let id = market.id.to_string();
+        if !subscribed.insert(id.clone()) {
+            continue;
+        }
+        let request = app.client.next_request_id();
+        ws.send(Message::Text(
+            json!({"method":"subscribe","requestId":request,"params":[format!("predictOrderbook/{id}")]})
+                .to_string()
+                .into(),
+        ))
+        .await?;
+    }
+    Ok(())
 }
 
 fn handle_wallet_event(app: &Arc<App>, value: &Value) {

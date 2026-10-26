@@ -3,6 +3,10 @@ use pk_venue_core::{Book, MatchDecision, MatchGrade, NormalizedContract, SideMap
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+/// Underlyings with a Kalshi `KX<ASSET>15M` series (Predict lists 15-minute
+/// up/down for BTC, ETH and BNB as of 2026-10-26).
+pub const ASSETS: [&str; 8] = ["BTC", "ETH", "BNB", "SOL", "XRP", "DOGE", "HYPE", "ZEC"];
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Outcome {
     pub name: String,
@@ -57,7 +61,7 @@ impl PredictMarket {
     pub fn series_asset(&self) -> Option<String> {
         let slug = self.series_slug.as_deref()?;
         let asset = slug.split('-').next()?.to_ascii_uppercase();
-        ["BTC", "ETH"].contains(&asset.as_str()).then_some(asset)
+        ASSETS.contains(&asset.as_str()).then_some(asset)
     }
 
     pub fn is_15m_series(&self) -> bool {
@@ -119,7 +123,7 @@ impl PredictMarket {
 
     pub fn normalized(&self) -> NormalizedContract {
         let ticker = self.kalshi_ticker.clone().unwrap_or_default();
-        let underlying = ["BTC", "ETH"]
+        let underlying = ASSETS
             .into_iter()
             .find(|a| ticker.contains(a))
             .map(str::to_owned)

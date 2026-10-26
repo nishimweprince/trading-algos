@@ -1,4 +1,177 @@
-<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Venue adapter</title><style>
-:root{color-scheme:dark;font:14px ui-monospace,SFMono-Regular,Menlo,monospace;background:#0a0d12;color:#d9e2ef}body{margin:0;padding:22px;max-width:1500px}header{display:flex;align-items:center;gap:14px}h1{font-size:22px;margin:0}.pill{padding:5px 9px;border:1px solid #34445a;border-radius:20px}.ok{color:#72e2a7}.bad{color:#ff7885}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;margin-top:18px}.card{background:#111721;border:1px solid #263346;border-radius:9px;padding:14px;overflow:auto}h2{font-size:13px;color:#87a7cf;text-transform:uppercase;margin:0 0 10px}pre{white-space:pre-wrap;word-break:break-word;margin:0;line-height:1.45}a{color:#83b8ff}</style></head><body>
-<header><h1 id="title">Venue adapter</h1><span id="ready" class="pill">loading</span><a href="/">home</a></header><div class="grid"><section class="card"><h2>Feeds & clock</h2><pre id="health"></pre></section><section class="card"><h2>Risk & readiness</h2><pre id="risk"></pre></section><section class="card"><h2>Matches & rule fingerprints</h2><pre id="matches"></pre></section><section class="card"><h2>Books, fair & inventory</h2><pre id="books"></pre></section><section class="card"><h2>Orders & actions</h2><pre id="orders"></pre></section></div>
-<script>const venue=location.pathname.includes('hip4')?'hip4':'predict';title.textContent=venue==='hip4'?'Hyperliquid HIP-4':'Predict.fun';const show=(id,v)=>document.getElementById(id).textContent=JSON.stringify(v,null,2);async function poll(){try{const r=await fetch('/api/'+venue+'/status');const x=await r.json();const s=x.status||{};ready.textContent=s.ready?'ready':'not ready';ready.className='pill '+(s.ready?'ok':'bad');show('health',{mode:s.mode,uptime_s:s.uptime_s,clock_offset_ms:s.clock_offset_ms,feeds:s.feeds,deadman_armed:s.deadman_armed,onchain_cancel_pending:s.onchain_cancel_pending});show('risk',{latched:s.latched,degraded:s.degraded,reconciling:s.reconciling,risk:s.risk});show('matches',s.matches);show('books',{kalshi_fairs:s.kalshi_fairs,books:s.books,inventory:s.inventory,settlements:s.settlements,markouts:s.markouts});show('orders',{orders:s.recent_orders,fills:s.recent_fills,actions:s.recent_actions})}catch(e){ready.textContent='offline';ready.className='pill bad'}setTimeout(poll,2000)}poll()</script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Venue adapters</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400..700&display=swap" rel="stylesheet">
+<style>
+:root { --bg:#f7f7f5; --panel:#ffffff; --ink:#1d1d1b; --muted:#6b6b66; --line:#e3e3de; --good:#1f7a4d; --bad:#b3261e; --warn:#9a6700; --kalshi:#2563c9; --lim:#7c3aed; --shade:rgba(120,120,110,.10); }
+@media (prefers-color-scheme: dark) { :root { --bg:#141413; --panel:#1d1d1b; --ink:#ededea; --muted:#a3a39c; --line:#33332f; --good:#5cc58f; --bad:#f2847b; --warn:#e0b04a; --kalshi:#7aa7ff; --lim:#b794f6; --shade:rgba(200,200,190,.08); } }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 "DM Sans", ui-sans-serif, system-ui, sans-serif; }
+svg text { font-family:"DM Sans", ui-sans-serif, system-ui, sans-serif; }
+main { max-width:1320px; margin:0 auto; padding:16px; }
+h1 { font-size:18px; margin:0 0 4px; } h2 { font-size:14px; margin:0 0 8px; color:var(--muted); font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
+.sub { color:var(--muted); margin-bottom:16px; }
+.grid { display:grid; gap:12px; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); margin-bottom:12px; }
+.card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; overflow-x:auto; min-height:48px; }
+.kv { display:flex; justify-content:space-between; gap:8px; } .kv span:first-child { color:var(--muted); }
+table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+th, td { text-align:right; padding:4px 6px; border-bottom:1px solid var(--line); white-space:nowrap; }
+th:first-child, td:first-child { text-align:left; } th { color:var(--muted); font-weight:500; }
+h3.section { font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:22px 0 8px; font-weight:600; border-bottom:1px solid var(--line); padding-bottom:4px; }
+.alerts { border:1px solid var(--line); border-radius:8px; padding:8px 12px; margin:4px 0; background:var(--panel); }
+.alerts.ok { color:var(--good); } .alerts.bad { border-color:var(--bad); } .alerts ul { margin:0; padding-left:18px; } .alerts li { color:var(--bad); }
+.good { color:var(--good); } .bad { color:var(--bad); } .warn { color:var(--warn); } .muted { color:var(--muted); }
+.tabs { display:flex; gap:4px; border-bottom:1px solid var(--line); margin:0 0 12px; }
+.tab { padding:6px 12px; color:var(--muted); text-decoration:none; border:1px solid transparent; border-bottom:none; border-radius:6px 6px 0 0; margin-bottom:-1px; }
+.tab:hover { color:var(--ink); } .tab.on { color:var(--ink); font-weight:600; background:var(--panel); border-color:var(--line); }
+.pill { display:inline-block; padding:1px 7px; border-radius:10px; font-size:12px; border:1px solid var(--line); }
+.pill.enter { border-color:var(--good); color:var(--good); } .pill.skip { border-color:var(--warn); color:var(--warn); }
+.charts { display:grid; gap:16px; grid-template-columns:repeat(auto-fit, minmax(min(100%, 430px), 1fr)); }
+.chart h4 { font-size:14px; margin:0 0 4px; display:flex; justify-content:space-between; font-weight:600; } .chart h4 span { font-weight:400; color:var(--muted); font-size:12px; }
+svg.mkt { width:100%; height:auto; display:block; } svg.mkt text { font-size:12px; fill:var(--muted); }
+svg.mkt .grid { stroke:var(--line); } svg.mkt polyline { fill:none; stroke-width:2; stroke-linejoin:round; }
+svg.mkt .k { stroke:var(--kalshi); } svg.mkt .l { stroke:var(--lim); } svg.mkt .band { fill:var(--lim); opacity:.12; stroke:none; }
+.legend { display:flex; gap:14px; color:var(--muted); font-size:12px; margin:4px 0 10px; flex-wrap:wrap; }
+.sw { display:inline-block; width:14px; height:3px; vertical-align:middle; margin-right:5px; border-radius:2px; }
+.note { color:var(--muted); font-size:12px; margin-top:6px; }
+</style>
+</head>
+<body>
+<main>
+<nav class="tabs" aria-label="Venues"><a class="tab" id="tab-predict" href="predict">Predict.fun</a><a class="tab" id="tab-hip4" href="hip4">HIP-4</a><a class="tab" href="https://poly.nishimweprince.dev/" target="_blank" rel="noopener" title="Dublin host; opens in a new tab">Polymarket ↗</a><a class="tab" href="https://limitless.nishimweprince.dev/" target="_blank" rel="noopener" title="Belgium host; opens in a new tab">Limitless ↗</a></nav>
+<div><h1 id="title">Kalshi → venue</h1><div class="sub"><span id="sub">connecting…</span> · <span id="age" class="muted"></span></div></div>
+<div class="alerts" id="alerts" role="status">checking…</div>
+
+<h3 class="section">Performance</h3>
+<div class="grid">
+  <div class="card"><h2>Simulated P&amp;L and risk</h2><div id="risk"></div></div>
+  <div class="card"><h2>Activity</h2><div id="activity"></div></div>
+  <div class="card"><h2>Feeds &amp; clock</h2><div id="feeds"></div></div>
+</div>
+
+<h3 class="section">Markets</h3>
+<div class="card"><table id="markets"></table><div class="note" id="mnote">Fair = Kalshi's YES mid for the matched contract. Venue bid / ask is the venue's YES book. Markets are quoted only while their window is open and both books are fresh.</div></div>
+
+<h3 class="section">Contract matching</h3>
+<div class="card"><div id="grades"></div><table id="rejects"></table><div class="note">E0: identical rules. E1: allowlisted with a stated basis (different settlement index). E2: no safe mapping, never traded.</div></div>
+
+<h3 class="section">Orders and fills (simulated in shadow)</h3>
+<div class="grid">
+  <div class="card"><h2>Recent orders</h2><table id="orders"></table></div>
+  <div class="card"><h2>Recent fills</h2><table id="fills"></table></div>
+</div>
+<div class="card" style="margin-top:12px"><h2>Markouts</h2><table id="markouts"></table><div class="note">Same-side venue mid 5, 30 and 60 s after a fill, minus the fill price (negative = adverse selection).</div></div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (v) => String(v ?? "–").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const f = (v, d = 2) => (v === null || v === undefined || Number.isNaN(Number(v))) ? "–" : Number(v).toFixed(d);
+const kv = (rows) => rows.map(([k, v, cls]) => `<div class="kv"><span>${esc(k)}</span><span class="${cls || ""}">${esc(v)}</span></div>`).join("");
+const put = (id, html) => { const el = $(id); if (el && el.innerHTML !== html) el.innerHTML = html; };
+const money = (v) => v == null ? "–" : (v < 0 ? "−$" : "$") + f(Math.abs(v));
+const sgn = (v) => v == null ? "" : v < 0 ? "bad" : v > 0 ? "good" : "";
+const hhmm = (ms) => ms ? new Date(ms).toISOString().slice(11, 19) + "Z" : "–";
+const ago = (ms) => ms ? `${Math.max(0, Math.round((Date.now() - ms) / 1000))} s ago` : "never";
+const venue = location.pathname.includes("hip4") ? "hip4" : "predict";
+const NAME = venue === "hip4" ? "Hyperliquid HIP-4" : "Predict.fun";
+$("tab-" + venue).classList.add("on"); $("tab-" + venue).setAttribute("aria-current", "page");
+document.title = NAME + " status";
+put("title", "Kalshi → " + NAME);
+let FETCHED = null;
+setInterval(() => { if (FETCHED) { const a = Math.round(Date.now() / 1000 - FETCHED); put("age", `<span class="${a > 30 ? "bad" : "muted"}">data ${a}s old</span>`); } }, 1000);
+
+// HIP-4 books are keyed by side asset (1e8 + 10·outcome + side); Predict's by market id.
+function bookFor(s, id) {
+  const b = s.books || {};
+  if (venue !== "hip4") return b[id];
+  const n = Number(String(id).split(":").pop());
+  return Number.isFinite(n) ? b[String(100000000 + 10 * n)] : undefined;
+}
+
+async function tick() {
+  let body;
+  try { const r = await fetch("api/" + venue + "/status"); if (!r.ok) throw new Error(r.status); body = await r.json(); } catch (e) { return; }
+  FETCHED = body.fetched_at;
+  const s = body.status;
+  if (!body.enabled) { put("sub", `<span class="warn">${NAME} adapter is not enabled on this host</span>`); put("alerts", "disabled"); return; }
+  if (!s) { put("sub", `<span class="bad">${NAME} adapter unreachable</span>`); $("alerts").className = "alerts bad"; put("alerts", "<ul><li>adapter API down</li></ul>"); return; }
+  const live = s.mode === "live";
+  put("sub", `${live ? '<b class="bad">LIVE</b>' : "<b>shadow (simulated fills)</b>"} · ${esc(s.venue)} · build ${esc(s.build)} · config ${esc(String(s.config || "").slice(0, 10))} · <span class="muted">up ${f((s.uptime_s || 0) / 3600, 1)} h</span>`);
+  const al = [];
+  (s.latched || []).forEach((x) => al.push("latched: " + esc(x)));
+  (s.degraded || []).forEach((x) => al.push("degraded: " + esc(x)));
+  if (s.reconciling) al.push("reconciling");
+  if (s.onchain_cancel_pending) al.push("on-chain cancellation pending");
+  if (!s.ready && !al.length) al.push("not ready");
+  $("alerts").className = al.length ? "alerts bad" : "alerts ok";
+  put("alerts", al.length ? `<ul>${al.map((a) => `<li>${a}</li>`).join("")}</ul>` : "ready · all clear");
+
+  const r = (s.risk || {}).state || {}, lim = (s.risk || {}).limits || {};
+  put("risk", kv([
+    ["Realised P&L", money(r.realised_pnl), sgn(r.realised_pnl)],
+    ["Marked P&L", money(r.marked_pnl), sgn(r.marked_pnl)],
+    ["Open orders", `${r.open_orders ?? 0} of ${lim.max_orders ?? "–"}`],
+    ["Open notional", `${money(r.open_usd)} of $${f(lim.max_open_usd, 0)}`],
+    ["Active markets", `${r.active_markets ?? 0} of ${lim.max_markets ?? "–"}`],
+    ["Order size / daily loss cap", `$${f(lim.order_usd, 0)} / $${f(lim.daily_loss_usd, 0)}`],
+    ["Halted", r.halted ? (r.halt_reason || "yes") : "no", r.halted ? "bad" : "good"],
+  ]));
+  const orders = s.recent_orders || [], fills = s.recent_fills || [], marks = s.markouts || [];
+  const inv = s.inventory || {};
+  put("activity", kv([
+    ["Orders (recent)", orders.length],
+    ["Fills (recent)", fills.length],
+    ["Markouts (recent)", marks.length],
+    ["Positions held", Object.values(inv).filter((q) => Math.abs(q) > 1e-9).length],
+    ["Settlements", (s.settlements || []).length],
+    ["Last heartbeat", ago(s.last_heartbeat_ms)],
+  ]));
+  const feeds = s.feeds || {};
+  put("feeds", kv([
+    ...Object.entries(feeds).map(([k, v]) => [k, `${v.connected ? "connected" : "down"} · last ${ago(v.last_message_ms)} · reconnects ${v.reconnects ?? 0} · errors ${v.errors ?? 0}`, v.connected && v.last_message_ms && Date.now() - v.last_message_ms < 10000 ? "good" : "bad"]),
+    ["Clock offset", s.clock_offset_ms == null ? "–" : `${s.clock_offset_ms} ms`, (s.clock_offset_ms ?? 0) > 100 ? "bad" : ""],
+  ]));
+
+  const matches = Object.entries(s.matches || {});
+  const exe = matches.filter(([, m]) => m.grade !== "E2");
+  const fairs = s.kalshi_fairs || {};
+  const rows = exe.map(([id, m]) => {
+    const b = bookFor(s, id) || {}, fair = fairs[m.kalshi_ticker];
+    const mid = b.bid != null && b.ask != null ? (b.bid + b.ask) / 2 : null;
+    const gap = fair != null && mid != null ? fair - mid : null;
+    const fresh = b.update_ms && Date.now() - b.update_ms < 10000;
+    return { id, m, b, fair, mid, gap, fresh, q: inv[id] };
+  }).sort((a, c) => (c.fresh - a.fresh) || (c.fair != null) - (a.fair != null) || String(a.m.kalshi_ticker).localeCompare(String(c.m.kalshi_ticker)));
+  const lanes = (m) => [m.maker ? "maker" : "", m.taker ? "taker" : ""].filter(Boolean).join("+") || "–";
+  put("markets", `<tr><th>Market</th><th>Kalshi contract</th><th>Grade</th><th>Lanes</th><th>Kalshi fair</th><th>Venue bid / ask</th><th>Gap (fair − mid)</th><th>Book</th><th>Position</th></tr>` +
+    (rows.length ? rows.slice(0, 40).map((x) => `<tr><td>${esc(x.id)}</td><td>${esc(x.m.kalshi_ticker)}</td><td>${esc(x.m.grade)}</td><td>${lanes(x.m)}</td><td>${f(x.fair, 3)}</td><td>${f(x.b.bid)} / ${f(x.b.ask)}</td><td class="${x.gap == null ? "" : Math.abs(x.gap) >= 0.05 ? "warn" : ""}">${x.gap == null ? "–" : (x.gap * 100).toFixed(1) + "¢"}</td><td class="${x.fresh ? "good" : "muted"}">${x.b.update_ms ? ago(x.b.update_ms) : "none"}</td><td>${x.q == null ? "–" : f(x.q, 0)}</td></tr>`).join("")
+     : `<tr><td class="muted" colspan="9">no executable (E0/E1) contracts</td></tr>`));
+  put("mnote", `${rows.length} executable of ${matches.length} discovered; showing up to 40, freshest first. Fair = Kalshi's YES mid; venue bid / ask is the venue's YES book.`);
+
+  const grades = {};
+  matches.forEach(([, m]) => { grades[m.grade] = (grades[m.grade] || 0) + 1; });
+  put("grades", kv(Object.entries(grades).sort().map(([g, n]) => ["Grade " + g, n])));
+  const why = {};
+  matches.filter(([, m]) => m.grade === "E2").forEach(([, m]) => (m.rejected || ["(none)"]).forEach((r) => { why[r] = (why[r] || 0) + 1; }));
+  put("rejects", Object.keys(why).length ? `<tr><th>Why not executable</th><th>Contracts</th></tr>` + Object.entries(why).sort((a, b) => b[1] - a[1]).map(([r, n]) => `<tr><td style="text-align:left">${esc(r)}</td><td>${n}</td></tr>`).join("") : "");
+
+  put("orders", `<tr><th>Time</th><th>Market</th><th>Lane</th><th>Side</th><th>Price</th><th>Qty</th><th>Status</th></tr>` +
+    (orders.slice(-25).reverse().map((o) => `<tr><td>${hhmm(o.created_ms)}</td><td>${esc(o.market)}</td><td>${esc(o.lane)}</td><td>${esc(o.side)}</td><td>${f(o.price, 3)}</td><td>${f(o.quantity, 2)}</td><td>${esc(o.status)}</td></tr>`).join("") || '<tr><td class="muted" colspan="7">none yet</td></tr>'));
+  put("fills", `<tr><th>Time</th><th>Market</th><th>Side</th><th>Price</th><th>Qty</th><th>Fee</th></tr>` +
+    (fills.slice(-25).reverse().map((x) => `<tr><td>${hhmm(x.time_ms)}</td><td>${esc(x.market)}</td><td>${esc(x.side)}</td><td>${f(x.price, 3)}</td><td>${f(x.quantity, 2)}</td><td>${f(x.fee, 4)}</td></tr>`).join("") || '<tr><td class="muted" colspan="6">none yet</td></tr>'));
+  const byH = {};
+  marks.forEach((m) => { const h = m.horizon_s; (byH[h] = byH[h] || []).push(m.markout); });
+  const stat = (xs) => { if (!xs || !xs.length) return "–"; const mu = xs.reduce((a, b) => a + b, 0) / xs.length; const sd = xs.length > 1 ? Math.sqrt(xs.reduce((a, b) => a + (b - mu) ** 2, 0) / (xs.length - 1)) : 0; return `${(mu * 100).toFixed(2)}¢ ± ${(sd / Math.sqrt(xs.length) * 100).toFixed(2)} (n ${xs.length})`; };
+  put("markouts", `<tr><th>Horizon</th><th>Mean markout</th></tr>` + [5, 30, 60].map((h) => `<tr><td>${h} s</td><td>${stat(byH[h])}</td></tr>`).join("") +
+    `<tr><th>Recent</th><th>Market · side · fill → markout</th></tr>` +
+    (marks.slice(-15).reverse().map((m) => `<tr><td>${m.horizon_s} s</td><td>${esc(m.market)} · ${esc(m.side)} · ${f(m.fill_px, 3)} → <span class="${sgn(m.markout)}">${(m.markout * 100).toFixed(1)}¢</span></td></tr>`).join("") || '<tr><td class="muted" colspan="2">none yet</td></tr>'));
+}
+tick(); setInterval(() => { if (!document.hidden) tick(); }, 3000);
+</script>
+</body>
+</html>

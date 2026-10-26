@@ -32,6 +32,8 @@ pub struct Config {
     pub risk: RiskLimits,
     pub state_dir: PathBuf,
     pub kill_file: PathBuf,
+    /// Record every raw Kalshi/HIP-4 frame (`PK_HIP4_RAW`).
+    pub raw: bool,
     pub fingerprint: String,
 }
 
@@ -157,6 +159,7 @@ impl Config {
             risk,
             state_dir: p("PK_HIP4_STATE_DIR", "data/state-hip4"),
             kill_file: p("PK_HIP4_KILL_FILE", "data/KILL.hip4"),
+            raw: flag("PK_HIP4_RAW", false)?,
             fingerprint: format!("{:x}", Sha256::digest(public.as_bytes())),
         })
     }
