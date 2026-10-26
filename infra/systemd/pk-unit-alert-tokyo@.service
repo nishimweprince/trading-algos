@@ -1,0 +1,18 @@
+# Tokyo variant of pk-unit-alert@.service: the Tokyo host carries only
+# .env.tokyo, so the shared template's .env.dev path would never resolve.
+# Units opt in with:
+#   OnFailure=pk-unit-alert-tokyo@%n.service
+[Unit]
+Description=Alert that %i failed (Tokyo)
+
+[Service]
+Type=oneshot
+User=pk
+Group=pk
+SupplementaryGroups=systemd-journal
+StateDirectory=pk-unit-alert
+ExecStart=/home/pk/trading-algos/services/poly-kalshi-service/target/release/pk-unit-alert %i --env-file /home/pk/trading-algos/services/poly-kalshi-service/.env.tokyo
+TimeoutStartSec=60
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full

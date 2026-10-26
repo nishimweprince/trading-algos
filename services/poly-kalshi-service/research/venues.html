@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Prediction-market venue research for poly-kalshi-service, researched 2026-10-23.">
+  <meta name="description" content="Prediction-market venue and low-latency infrastructure research for poly-kalshi-service, updated 2026-10-25.">
   <link rel="icon" href="data:,">
   <title>Prediction-market venue research · poly-kalshi-service</title>
   <style>
@@ -180,9 +180,12 @@
     .tier-b { color: var(--warn); }
 
     .grade-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+    .region-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
     .mini-card { padding: 17px; }
     .mini-card h3 { margin: 0; font-size: .92rem; }
     .mini-card p { margin: 8px 0 0; color: var(--muted); font-size: .82rem; }
+    .region-code { display: inline-block; margin-bottom: 8px; color: var(--accent); font-family: var(--mono); font-size: .72rem; font-weight: 760; }
+    .confidence { display: inline-block; border: 1px solid var(--line); border-radius: 999px; padding: 2px 7px; color: var(--muted); font-size: .68rem; font-weight: 760; white-space: nowrap; }
 
     .roadmap { display: grid; grid-template-columns: repeat(5, 1fr); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--surface); }
     .step { padding: 17px; border-right: 1px solid var(--line); }
@@ -202,6 +205,7 @@
       .status { justify-self: start; }
       .split { grid-template-columns: 1fr; }
       .grade-grid { grid-template-columns: repeat(2, 1fr); }
+      .region-grid { grid-template-columns: 1fr; }
       .roadmap { grid-template-columns: 1fr; }
       .step { border-right: 0; border-bottom: 1px solid var(--line); }
       .step:last-child { border-bottom: 0; }
@@ -211,7 +215,7 @@
       .shell { width: min(100% - 24px, 1500px); }
       header { padding-top: 30px; }
       .hero { padding-left: 15px; }
-      .grade-grid, .source-grid { grid-template-columns: 1fr; }
+      .grade-grid, .region-grid, .source-grid { grid-template-columns: 1fr; }
       .metrics { grid-template-columns: 1fr; }
       .metric:nth-child(odd) { border-right: 0; }
       .metric:not(:last-child) { border-bottom: 1px solid var(--line); }
@@ -233,9 +237,9 @@
   <header class="shell">
     <div class="hero">
       <div>
-        <p class="eyebrow">poly-kalshi-service · venue research · 2026-10-23</p>
+        <p class="eyebrow">poly-kalshi-service · venue research · infrastructure update 2026-10-25</p>
         <h1>Where the strategy should look next</h1>
-        <p class="lede">A ranked map of short-duration crypto prediction markets, settlement compatibility, execution constraints, duplicated frontends, and the adjacent FX path.</p>
+        <p class="lede">A ranked map of short-duration crypto prediction markets, settlement compatibility, execution constraints, and where each adapter should run for the lowest defensible end-to-end latency.</p>
       </div>
       <span class="status">Research complete</span>
     </div>
@@ -243,6 +247,7 @@
 
   <nav class="shell tabs" role="tablist" aria-label="Research sections">
     <button class="tab" id="tab-direct" role="tab" aria-controls="panel-direct" aria-selected="true" tabindex="0">Ranked direct matches</button>
+    <button class="tab" id="tab-latency" role="tab" aria-controls="panel-latency" aria-selected="false" tabindex="-1">Latency placement</button>
     <button class="tab" id="tab-inventory" role="tab" aria-controls="panel-inventory" aria-selected="false" tabindex="-1">Broader venue inventory</button>
     <button class="tab" id="tab-sources" role="tab" aria-controls="panel-sources" aria-selected="false" tabindex="-1">Primary sources</button>
   </nav>
@@ -285,7 +290,7 @@
             <thead><tr><th>Rank</th><th>Venue</th><th>Overlap</th><th>Structure</th><th>Data & execution</th><th>Settlement</th><th>Action</th></tr></thead>
             <tbody>
               <tr><td class="rank">01</td><td class="venue tier-a">Gemini Predictions</td><td>BTC · ETH · SOL · XRP</td><td>Native 5m / 15m CLOB</td><td>Public REST discovery and public book/depth/trade WS; REST/WS trading</td><td>Gemini reference index; equality resolves YES</td><td><strong>Build first.</strong> Data/paper first; jurisdiction-dependent execution.</td></tr>
-              <tr><td class="rank">02</td><td class="venue tier-a">OKX Event Contracts</td><td>BTC · ETH · SOL</td><td>Native 5m / 15m USDT CLOB</td><td>Public REST/WS; private trading API; taker speed bump</td><td>OKX spot index; 60-second average for 15m</td><td><strong>Build second.</strong> Validate account region and real depth.</td></tr>
+              <tr><td class="rank">02</td><td class="venue tier-a">OKX Event Contracts</td><td>BTC · ETH · SOL</td><td>Native 5m / 15m USDT CLOB</td><td>Public REST/WS; private trading API; taker speed bump</td><td>OKX spot index; 60-second average for 15m</td><td><strong>Built as <code>pk-okx</code>.</strong> Keep paper trading in Tokyo while validating depth.</td></tr>
               <tr><td class="rank">03</td><td class="venue tier-a">Nadex / CDNA</td><td>BTC · ETH plus wider catalog</td><td>$1 short-duration event contracts</td><td>FIX now; prediction REST/WS trading listed as coming soon</td><td>Nadex asset index and defined sampling</td><td><strong>High-value observer.</strong> US-only FCM access is the main blocker.</td></tr>
               <tr><td class="rank">04</td><td class="venue tier-a">Predict.fun</td><td>BTC · ETH verified</td><td>BNB Chain conditional tokens + off-chain CLOB</td><td>Beta REST/CLOB SDK; API key</td><td>Chainlink DataLink from Binance; equality 50/50</td><td><strong>Build direct.</strong> Binance Wallet is the same upstream book.</td></tr>
               <tr><td class="rank">05</td><td class="venue">Polymarket US</td><td>BTC · ETH · SOL · XRP</td><td>Independent US-regulated book</td><td>Live pages; programmatic onboarding less clear than global Polymarket</td><td>Capture per contract</td><td><strong>Onboard for data.</strong> Keep separate from the Polygon CLOB.</td></tr>
@@ -332,6 +337,75 @@
       </section>
     </section>
 
+    <section id="panel-latency" role="tabpanel" aria-labelledby="tab-latency" class="stack" hidden>
+      <div class="callout">
+        <div class="callout-body">
+          <h2>Decision: add Virginia and Tokyo; keep Dublin</h2>
+          <p>No single cloud region is optimal for this venue set. Use independent venue processes in <strong>AWS us-east-1</strong>, <strong>AWS ap-northeast-1</strong>, and the existing <strong>AWS eu-west-1</strong> deployment. Publish normalized observations to the shared stream; do not put a cross-region coordinator synchronously in the order path.</p>
+        </div>
+      </div>
+
+      <section>
+        <h2>Recommended worker footprint</h2>
+        <p class="section-note">This separates venue-documented infrastructure from live network observations and informed placement choices.</p>
+        <div class="region-grid">
+          <article class="mini-card"><span class="region-code">AWS us-east-1 · N. Virginia</span><h3>US prediction worker</h3><p>Gemini public REST/WebSocket, Polymarket US public REST/gRPC, and temporary CDNA probes. Kalshi alone is closer to its current <code>us-east-2</code> origin; Gemini FIX belongs in Equinix NY5.</p></article>
+          <article class="mini-card"><span class="region-code">AWS ap-northeast-1 · Tokyo</span><h3>Asia prediction worker</h3><p>OKX, Predict.fun, Pascal and Hyperliquid. Predict.fun and Pascal publish this region; Hyperliquid’s Foundation low-latency node is in AZ1; the project has already measured OKX near 18 ms from Tokyo.</p></article>
+          <article class="mini-card"><span class="region-code">AWS eu-west-1 · Ireland</span><h3>Polymarket-global worker</h3><p>Keep the existing trader in Dublin: project measurements put the London CLOB path near 10 ms while Ireland remains usable for opening positions. Start Limitless here and measure before splitting it out.</p></article>
+        </div>
+      </section>
+
+      <section>
+        <h2>Priority and existing venues</h2>
+        <p class="section-note">“Observed” locations can change. Cloudflare and CloudFront edges are not proof of matching-engine location.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Venue</th><th>Known server location / platform</th><th>Lowest-latency starting point</th><th>Confidence</th></tr></thead>
+            <tbody>
+              <tr><td class="venue">Kalshi</td><td>Current public API DNS exposes an <strong>AWS ELB in us-east-2 (Ohio)</strong>.</td><td><strong>AWS us-east-2</strong> for Kalshi alone; <strong>us-east-1</strong> for the shared US worker.</td><td><span class="confidence">High · observed</span> Origin can change.</td></tr>
+              <tr><td class="venue">Polymarket global</td><td>Cloudflare ingress; project network work identifies the CLOB origin as <strong>AWS eu-west-2 (London)</strong>.</td><td><strong>AWS eu-west-1 Ireland</strong> for trading; retain the measured Dublin deployment.</td><td><span class="confidence">High · project evidence</span> London is close-only.</td></tr>
+              <tr><td class="venue">Limitless</td><td>Cloudflare edge; matching-engine cloud and region are unpublished.</td><td>Keep on the <strong>Ireland worker</strong> initially and use the built-in Socket.IO/REST probes.</td><td><span class="confidence">Low</span> Empirical placement.</td></tr>
+              <tr><td class="venue tier-a">Gemini Predictions</td><td>Public WebSocket: <strong>AWS us-east-1</strong>. Institutional primary trading PoP: <strong>Equinix NY5, Secaucus</strong>.</td><td><strong>AWS us-east-1</strong> for REST/WS; NY5 or an NY2/NY4/NY5 cross-connect for FIX.</td><td><span class="confidence">High · documented</span></td></tr>
+              <tr><td class="venue tier-a">OKX Event Contracts</td><td>Cloudflare ingress; engine cloud is unpublished. Project evidence places matching in <strong>Tokyo</strong> and measures about 18 ms through NRT.</td><td>Keep <code>pk-okx</code> in <strong>AWS ap-northeast-1 Tokyo</strong>; re-run <code>pk netprobe</code> after endpoint changes.</td><td><span class="confidence">Medium-high · measured</span></td></tr>
+              <tr><td class="venue tier-a">Nadex / CDNA</td><td>FIX uses <strong>AWS PrivateLink</strong>; exact region is provisioned during institutional onboarding.</td><td>Deploy in the <strong>same AWS region as the assigned PrivateLink endpoint</strong>; use us-east-1 only for public probes.</td><td><span class="confidence">High AWS · region unknown</span></td></tr>
+              <tr><td class="venue tier-a">Predict.fun</td><td>Primary servers explicitly documented as <strong>AWS ap-northeast-1</strong>.</td><td><strong>AWS ap-northeast-1 Tokyo</strong>, same AZ if the venue later discloses it.</td><td><span class="confidence">High · documented</span></td></tr>
+              <tr><td class="venue">Polymarket US</td><td><strong>AWS</strong>: FIX uses PrivateLink; public gRPC traverses an ALB. Current production DNS maps to US-East AWS space.</td><td><strong>AWS us-east-1</strong> for public REST/gRPC; exact assigned region for FIX.</td><td><span class="confidence">Medium-high</span> Region is observed, not promised.</td></tr>
+              <tr><td class="venue">Jupiter / BisonFi</td><td><code>api.jup.ag</code> uses <strong>AWS CloudFront</strong>; final execution lands on Solana. No single engine region is published.</td><td>Start with the <strong>Tokyo worker</strong>, call Jupiter <code>/submit</code>, and broadcast in parallel through Helius.</td><td><span class="confidence">Medium edge · low origin</span></td></tr>
+              <tr><td class="venue tier-b">Forsee</td><td>Cloudflare edge; origin cloud and region are undisclosed.</td><td>No dedicated host. Compare polling RTT from Ireland, Tokyo and US East.</td><td><span class="confidence">Low</span> Locked-position flow is not latency-critical.</td></tr>
+              <tr><td class="venue tier-b">PancakeSwap</td><td>No central matcher; contracts execute on <strong>BNB Smart Chain</strong> through the chosen RPC.</td><td>Co-locate with a premium BSC WebSocket/private RPC; begin in <strong>Tokyo or Singapore</strong> and measure inclusion.</td><td><span class="confidence">High · RPC-dependent</span></td></tr>
+              <tr><td class="venue">Hyperliquid HIP-4</td><td>Foundation low-latency non-validating node: <strong>AWS ap-northeast-1, AZ1</strong>.</td><td><strong>AWS ap-northeast-1 Tokyo</strong>; eligible users should run a local non-validator and local order-book server.</td><td><span class="confidence">High · documented</span></td></tr>
+              <tr><td class="venue">Deriv Rise/Fall</td><td>Public WebSocket is behind Cloudflare; origin platform and region are undisclosed.</td><td>Benchmark warm proposal/buy RTT from all three workers before assigning a region.</td><td><span class="confidence">Low</span></td></tr>
+              <tr><td class="venue">CME event contracts</td><td>Central exchange and FCM connectivity, not a generic public-cloud matching endpoint.</td><td>Use the broker’s recommended <strong>Chicago/Aurora proximity or colo</strong>, or deploy beside its gateway.</td><td><span class="confidence">Medium · broker-dependent</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2>Broader venue placement</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Venue</th><th>Platform / region evidence</th><th>Recommended starting point</th></tr></thead>
+            <tbody>
+              <tr><td class="venue">Pascal</td><td>Matching engine explicitly <strong>AWS ap-northeast-1</strong>.</td><td><strong>AWS Tokyo</strong>; high-confidence if matching contracts appear.</td></tr>
+              <tr><td class="venue">Opinion</td><td>Cloudflare ingress; origin undisclosed.</td><td>Probe Tokyo, Singapore and N. Virginia; no defensible winner yet.</td></tr>
+              <tr><td class="venue">Futuur</td><td>Current DNS exposes an <strong>AWS us-east-1 ELB</strong>.</td><td><strong>AWS N. Virginia</strong> for market making.</td></tr>
+              <tr><td class="venue">Bayse Markets</td><td>Current API addresses map to <strong>AWS eu-west-2 London</strong>.</td><td><strong>AWS London</strong> for data; verify trading jurisdiction separately.</td></tr>
+              <tr><td class="venue">Myriad · Rain</td><td>On-chain settlement; no single published matching region.</td><td>Co-locate with the selected chain RPC and private transaction route.</td></tr>
+              <tr><td class="venue">XO Market</td><td>Off-chain matching; engine region unpublished.</td><td>Benchmark write endpoints from all three workers before enabling orders.</td></tr>
+              <tr><td class="venue">SX Bet · ProphetX · Novig · Sporttrade</td><td>Region and private connectivity are partner-gated or unpublished.</td><td>Request the institutional connectivity sheet; US East is only the first probe.</td></tr>
+              <tr><td class="venue">ForecastEx / IBKR</td><td>Broker-managed connectivity.</td><td>Run IB Gateway where IBKR recommends; website latency is irrelevant.</td></tr>
+              <tr><td class="venue">PredictIt · Manifold · Metaculus</td><td>Public web/API services; not executable latency legs.</td><td>Use the research worker; no latency-specific spend is justified.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <div class="callout warning">
+        <div class="callout-body"><h2>Measure the order path, not the CDN</h2><p>Before placement, run at least 24 hours from every candidate region and record market-event timestamp → receive, warm order probe → acknowledgement, acknowledgement → private update, disconnects, and p50/p95/p99 by UTC hour. For on-chain legs, add block arrival and signed transaction → inclusion. Promote a region only when end-to-end execution improves.</p></div>
+      </div>
+    </section>
+
     <section id="panel-inventory" role="tabpanel" aria-labelledby="tab-inventory" class="stack" hidden>
       <div class="callout info"><div class="callout-body"><h2>Broader market map</h2><p>These venues are worth cataloging, but no recurring contract equivalent to the service’s current 15-minute crypto window was verified. Put them behind a general-event discovery layer.</p></div></div>
       <section>
@@ -363,27 +437,35 @@
     </section>
 
     <section id="panel-sources" role="tabpanel" aria-labelledby="tab-sources" class="stack" hidden>
-      <div class="callout"><div class="callout-body"><h2>Source quality</h2><p>Primary venue and developer documentation was used wherever available. Live catalogs were checked on 2026-10-23 to verify current listings. Recheck availability, jurisdiction, fees and rules before rollout.</p></div></div>
+      <div class="callout"><div class="callout-body"><h2>Source quality</h2><p>Primary venue and developer documentation was used wherever available. Live catalogs were checked on 2026-10-23; infrastructure documentation and DNS observations were updated on 2026-10-25. Recheck availability, jurisdiction, fees, rules and endpoint topology before rollout.</p></div></div>
       <section>
         <h2>Primary references</h2>
         <div class="source-grid">
           <div class="source"><strong>Gemini tickers</strong><a href="https://developer.gemini.com/prediction-markets/tickers-crypto">developer.gemini.com/prediction-markets/tickers-crypto</a></div>
           <div class="source"><strong>Gemini markets API</strong><a href="https://developer.gemini.com/prediction-markets-spec/markets">developer.gemini.com/prediction-markets-spec/markets</a></div>
           <div class="source"><strong>Gemini WebSockets</strong><a href="https://developer.gemini.com/trading/websocket/streams">developer.gemini.com/trading/websocket/streams</a></div>
+          <div class="source"><strong>Gemini WebSocket infrastructure</strong><a href="https://developer.gemini.com/websocket/introduction">developer.gemini.com/websocket/introduction</a></div>
+          <div class="source"><strong>Gemini FIX / NY5 connectivity</strong><a href="https://developer.gemini.com/trading/fix/overview/connecting">developer.gemini.com/trading/fix/overview/connecting</a></div>
           <div class="source"><strong>OKX Event Contracts FAQ</strong><a href="https://www.okx.com/en-gb/help/event-contracts-faq">okx.com/en-gb/help/event-contracts-faq</a></div>
           <div class="source"><strong>OKX settlement logic</strong><a href="https://www.okx.com/en-gb/help/how-to-trade-event-contracts-and-settlement-logic">okx.com/en-gb/help/how-to-trade-event-contracts-and-settlement-logic</a></div>
           <div class="source"><strong>OKX API v5</strong><a href="https://www.okx.com/docs-v5/">okx.com/docs-v5</a></div>
           <div class="source"><strong>Nadex crypto specifications</strong><a href="https://www.nadex.com/crypto/">nadex.com/crypto</a></div>
           <div class="source"><strong>Nadex fees</strong><a href="https://website-prod.nadex.com/pricing/">nadex.com/pricing</a></div>
           <div class="source"><strong>Crypto.com / CDNA relationship</strong><a href="https://help.crypto.com/en/articles/17213297-overview">help.crypto.com/predict-pro/overview</a></div>
+          <div class="source"><strong>CDNA AWS PrivateLink FIX</strong><a href="https://exchange-developer.crypto.com/exchange/v1/docs/api/fix-fix-endpoints">exchange-developer.crypto.com/.../fix-endpoints</a></div>
           <div class="source"><strong>Predict.fun developer API</strong><a href="https://dev.predict.fun/">dev.predict.fun</a></div>
           <div class="source"><strong>Predict.fun BTC 15m rules</strong><a href="https://predict.fun/market/btc-updown-15m-1792671300">predict.fun/market/btc-updown-15m</a></div>
           <div class="source"><strong>Binance Wallet upstream disclosure</strong><a href="https://developers.binance.com/en/docs/products/w3w-prediction/websocket-streams/orderbook">developers.binance.com/w3w-prediction/orderbook</a></div>
           <div class="source"><strong>Polymarket US</strong><a href="https://polymarket.us/">polymarket.us</a></div>
+          <div class="source"><strong>Polymarket US environments</strong><a href="https://docs.polymarket.us/trader-guide/environments">docs.polymarket.us/trader-guide/environments</a></div>
+          <div class="source"><strong>Polymarket US connectivity</strong><a href="https://docs.polymarket.us/trader-guide/connection-options">docs.polymarket.us/trader-guide/connection-options</a></div>
           <div class="source"><strong>Jupiter Forecast API</strong><a href="https://developers.jup.ag/docs/prediction/forecast">developers.jup.ag/docs/prediction/forecast</a></div>
+          <div class="source"><strong>Jupiter transaction submission</strong><a href="https://developers.jup.ag/changelog/2026-04">developers.jup.ag/changelog/2026-04</a></div>
           <div class="source"><strong>Forsee API</strong><a href="https://api.forsee.market/">api.forsee.market</a></div>
           <div class="source"><strong>PancakeSwap Prediction</strong><a href="https://docs.pancakeswap.finance/play/prediction">docs.pancakeswap.finance/play/prediction</a></div>
           <div class="source"><strong>Hyperliquid outcome assets</strong><a href="https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/asset-ids">hyperliquid.gitbook.io/.../asset-ids</a></div>
+          <div class="source"><strong>Hyperliquid low-latency node</strong><a href="https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/nodes/foundation-non-validating-node">hyperliquid.gitbook.io/.../foundation-non-validating-node</a></div>
+          <div class="source"><strong>Hyperliquid latency guide</strong><a href="https://hyperliquid.gitbook.io/Hyperliquid-docs/for-developers/api/optimizing-latency">hyperliquid.gitbook.io/.../optimizing-latency</a></div>
           <div class="source"><strong>Opinion API</strong><a href="https://docs.opinion.trade/developer-guide/opinion-open-api/overview">docs.opinion.trade/.../overview</a></div>
           <div class="source"><strong>Pascal API</strong><a href="https://docs.pascal.trade/">docs.pascal.trade</a></div>
           <div class="source"><strong>Kalshi 15-minute financials</strong><a href="https://kalshi.com/category/financials/frequency/fifteen_min">kalshi.com/category/financials/frequency/fifteen_min</a></div>
