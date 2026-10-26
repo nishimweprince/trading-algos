@@ -172,8 +172,11 @@ impl Client {
         // Market buys need isMinAmountOut so the venue applies slippageBps
         // against the taker amount; without it slippage is silently ignored.
         let market = input.strategy == "MARKET";
+        // `pricePerShare` is an 18-decimal integer like the order amounts
+        // (0.42 USDT = "420000000000000000"); a decimal string is refused
+        // with HTTP 400 "invalid numeric value".
         let body = json!({"data": {
-            "order": signed.clone(), "pricePerShare": input.price.to_string(), "strategy": input.strategy,
+            "order": signed.clone(), "pricePerShare": price_wei(input.price), "strategy": input.strategy,
             "slippageBps": input.slippage_bps, "isFillOrKill": market,
             "isPostOnly": input.post_only, "isMinAmountOut": market, "selfTradePrevention": "CANCEL_MAKER"
         }});
@@ -224,6 +227,13 @@ fn public_api_error(value: &Value) -> String {
         .chars()
         .take(180)
         .collect()
+}
+
+/// A price in USDT as Predict's 18-decimal integer string, rounded to 1e-9
+/// first exactly as the signed order amounts are.
+fn price_wei(price: f64) -> String {
+    let nanos = (price * 1_000_000_000.0).round().max(0.0) as u128;
+    (nanos * 1_000_000_000).to_string()
 }
 
 #[cfg(test)]
@@ -374,7 +384,7 @@ mod tests {
         assert_eq!(submitted.order["tokenId"], "9");
         let body = mock.seen.lock().last().cloned().unwrap();
         assert_eq!(body["data"]["strategy"], "LIMIT");
-        assert_eq!(body["data"]["pricePerShare"], "0.42");
+        assert_eq!(body["data"]["pricePerShare"], "420000000000000000");
         assert_eq!(body["data"]["isPostOnly"], true);
         assert_eq!(body["data"]["isFillOrKill"], false);
         assert_eq!(body["data"]["isMinAmountOut"], false);
