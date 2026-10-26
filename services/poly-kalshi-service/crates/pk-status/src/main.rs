@@ -732,111 +732,119 @@ fn router(app: Arc<App>) -> Router {
         "limitless" => LIM_PAGE,
         _ => PAGE,
     };
+    // The taker's routes read its journal (tens of MB) on demand: a host whose
+    // home is another page serves none of them, so stale tabs cannot load it.
+    let taker = if app.settings.status_home == "polymarket" {
+        Router::new()
+            .route(
+                "/api/summary",
+                get(|State(app): State<Arc<App>>| async move {
+                    app.ensure_fresh().await;
+                    json_response(app.summary())
+                }),
+            )
+            .route(
+                "/api/state",
+                get(|State(app): State<Arc<App>>| async move {
+                    app.ensure_fresh().await;
+                    let c = app.cache.lock();
+                    let live = c.live.clone().unwrap_or(json!({}));
+                    json_response(json!({
+                        "fetched_at": c.live_at,
+                        "service_up": c.live.is_some(),
+                        "kalshi_closed": live.get("kalshi_closed") == Some(&Value::Bool(true)),
+                        "params": live.get("params"),
+                        "feed_age_s": live.get("feed_age_s"),
+                        "rates": c.rates,
+                        "assets": live.get("assets").cloned().unwrap_or(json!({})),
+                    }))
+                }),
+            )
+            .route(
+                "/api/series",
+                get(|State(app): State<Arc<App>>, Query(q): Query<Since>| async move {
+                    app.ensure_fresh().await;
+                    let since = q.since.unwrap_or(0);
+                    let c = app.cache.lock();
+                    let live = c.live.clone().unwrap_or(json!({}));
+                    let decisions: Vec<Value> = live
+                        .get("recent")
+                        .and_then(Value::as_array)
+                        .map(|r| {
+                            r.iter().filter(|x| x.get("type") == Some(&json!("decision"))).cloned().collect()
+                        })
+                        .unwrap_or_default();
+                    let points: Map<String, Value> = app
+                        .settings
+                        .assets
+                        .iter()
+                        .map(|a| {
+                            let pts: Vec<Value> = c
+                                .series
+                                .get(a)
+                                .map(|s| {
+                                    s.iter()
+                                        .filter(|p| p.get(0).and_then(Value::as_i64).is_some_and(|t| t > since))
+                                        .cloned()
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            (a.clone(), Value::Array(pts))
+                        })
+                        .collect();
+                    let params = live.get("params").cloned().unwrap_or(json!({}));
+                    json_response(json!({
+                        "threshold": params.get("gap_threshold"),
+                        "entry_early_s": params.get("entry_early_s"),
+                        "entry_late_s": params.get("entry_late_s"),
+                        "points": points,
+                        "decisions": decisions,
+                    }))
+                }),
+            )
+            .route(
+                "/api/export",
+                get(|State(app): State<Arc<App>>| async move {
+                    app.ensure_fresh().await;
+                    let _one = app.export_lock.lock().await; // one export at a time
+                    let summary = app.summary();
+                    let series: HashMap<String, Vec<Value>> = app
+                        .cache
+                        .lock()
+                        .series
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.iter().cloned().collect()))
+                        .collect();
+                    let settings = app.settings.clone();
+                    let built =
+                        tokio::task::spawn_blocking(move || build_export(&settings, &summary, &series)).await;
+                    match built {
+                        Ok(Ok(bytes)) => {
+                            let name = format!(
+                                "pk-export-{}-{}-{}.zip",
+                                app.settings.host_tag,
+                                app.settings.profile.as_deref().unwrap_or("default"),
+                                chrono::Utc::now().format("%Y%m%dT%H%M%SZ")
+                            );
+                            (
+                                [
+                                    (header::CONTENT_TYPE, "application/zip".to_owned()),
+                                    (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{name}\"")),
+                                ],
+                                bytes,
+                            )
+                                .into_response()
+                        }
+                        _ => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "export failed").into_response(),
+                    }
+                }),
+            )
+    } else {
+        Router::new()
+    };
     Router::new()
         .route("/", get(move || async move { Html(home) }))
-        .route(
-            "/api/summary",
-            get(|State(app): State<Arc<App>>| async move {
-                app.ensure_fresh().await;
-                json_response(app.summary())
-            }),
-        )
-        .route(
-            "/api/state",
-            get(|State(app): State<Arc<App>>| async move {
-                app.ensure_fresh().await;
-                let c = app.cache.lock();
-                let live = c.live.clone().unwrap_or(json!({}));
-                json_response(json!({
-                    "fetched_at": c.live_at,
-                    "service_up": c.live.is_some(),
-                    "kalshi_closed": live.get("kalshi_closed") == Some(&Value::Bool(true)),
-                    "params": live.get("params"),
-                    "feed_age_s": live.get("feed_age_s"),
-                    "rates": c.rates,
-                    "assets": live.get("assets").cloned().unwrap_or(json!({})),
-                }))
-            }),
-        )
-        .route(
-            "/api/series",
-            get(|State(app): State<Arc<App>>, Query(q): Query<Since>| async move {
-                app.ensure_fresh().await;
-                let since = q.since.unwrap_or(0);
-                let c = app.cache.lock();
-                let live = c.live.clone().unwrap_or(json!({}));
-                let decisions: Vec<Value> = live
-                    .get("recent")
-                    .and_then(Value::as_array)
-                    .map(|r| {
-                        r.iter().filter(|x| x.get("type") == Some(&json!("decision"))).cloned().collect()
-                    })
-                    .unwrap_or_default();
-                let points: Map<String, Value> = app
-                    .settings
-                    .assets
-                    .iter()
-                    .map(|a| {
-                        let pts: Vec<Value> = c
-                            .series
-                            .get(a)
-                            .map(|s| {
-                                s.iter()
-                                    .filter(|p| p.get(0).and_then(Value::as_i64).is_some_and(|t| t > since))
-                                    .cloned()
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                        (a.clone(), Value::Array(pts))
-                    })
-                    .collect();
-                let params = live.get("params").cloned().unwrap_or(json!({}));
-                json_response(json!({
-                    "threshold": params.get("gap_threshold"),
-                    "entry_early_s": params.get("entry_early_s"),
-                    "entry_late_s": params.get("entry_late_s"),
-                    "points": points,
-                    "decisions": decisions,
-                }))
-            }),
-        )
-        .route(
-            "/api/export",
-            get(|State(app): State<Arc<App>>| async move {
-                app.ensure_fresh().await;
-                let _one = app.export_lock.lock().await; // one export at a time
-                let summary = app.summary();
-                let series: HashMap<String, Vec<Value>> = app
-                    .cache
-                    .lock()
-                    .series
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.iter().cloned().collect()))
-                    .collect();
-                let settings = app.settings.clone();
-                let built =
-                    tokio::task::spawn_blocking(move || build_export(&settings, &summary, &series)).await;
-                match built {
-                    Ok(Ok(bytes)) => {
-                        let name = format!(
-                            "pk-export-{}-{}-{}.zip",
-                            app.settings.host_tag,
-                            app.settings.profile.as_deref().unwrap_or("default"),
-                            chrono::Utc::now().format("%Y%m%dT%H%M%SZ")
-                        );
-                        (
-                            [
-                                (header::CONTENT_TYPE, "application/zip".to_owned()),
-                                (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{name}\"")),
-                            ],
-                            bytes,
-                        )
-                            .into_response()
-                    }
-                    _ => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "export failed").into_response(),
-                }
-            }),
-        )
+        .merge(taker)
         .route("/limitless", get(|| async { Html(LIM_PAGE) }))
         .route(
             "/api/lim/status",
