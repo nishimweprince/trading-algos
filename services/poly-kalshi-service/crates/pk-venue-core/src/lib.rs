@@ -358,6 +358,21 @@ impl RiskGuard {
         }
     }
 
+    /// An order that pairs shares already held (the other side of a one-sided
+    /// position): it caps the position's worst-case loss, so the aggregate
+    /// open-notional cap does not block it. Latches, the per-order cap and the
+    /// order-count cap still apply.
+    pub fn check_pairing_order(&mut self, cost: f64) -> Result<(), String> {
+        self.check_latches()?;
+        if !cost.is_finite() || cost <= 0.0 || cost > self.limits.order_usd + 1e-9 {
+            return Err("order cost exceeds cap".into());
+        }
+        if self.state.open_orders >= self.limits.max_orders {
+            return Err("maximum open orders reached".into());
+        }
+        Ok(())
+    }
+
     pub fn check_order(&mut self, cost: f64, new_market: bool) -> Result<(), String> {
         self.check_latches()?;
         if !cost.is_finite() || cost <= 0.0 || cost > self.limits.order_usd + 1e-9 {

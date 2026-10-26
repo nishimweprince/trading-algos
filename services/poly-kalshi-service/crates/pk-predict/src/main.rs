@@ -230,14 +230,23 @@ impl App {
     ) {
         let cost = price * quantity;
         let market_id = market.id.to_string();
-        let new_market = {
+        let (new_market, pairing) = {
             let mut state = self.state.lock();
             state.recount();
-            !state.orders.iter().any(|order| {
+            let held = state.positions.get(&market_id).cloned().unwrap_or_default();
+            let new_market = !state.orders.iter().any(|order| {
                 order.market == market_id && (order.status == "submitted" || order.status == "shadow_open")
-            }) && state.positions.get(&market_id).is_none_or(|p| p.is_flat())
+            }) && held.is_flat();
+            // A maker bid on the side opposite a one-sided position pairs it.
+            let pairing = lane == "maker"
+                && if outcome == "YES" { held.no_qty > held.yes_qty + 1e-9 } else { held.yes_qty > held.no_qty + 1e-9 };
+            (new_market, pairing)
         };
-        if let Err(reason) = self.state.lock().risk.check_order(cost, new_market) {
+        let checked = {
+            let mut state = self.state.lock();
+            if pairing { state.risk.check_pairing_order(cost) } else { state.risk.check_order(cost, new_market) }
+        };
+        if let Err(reason) = checked {
             self.record("risk_reject", json!({"market":market.id,"lane":lane,"reason":reason}));
             return;
         }

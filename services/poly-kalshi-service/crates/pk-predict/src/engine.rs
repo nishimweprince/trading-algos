@@ -130,10 +130,11 @@ impl Engine {
         let any_stale = self.markets.values().filter(|m| live(m)).any(|m| {
             let ticker = m.kalshi_ticker.as_deref().unwrap_or_default();
             let kalshi_stale = self.kalshi_update.get(ticker).is_none_or(|t| now - *t > cfg.freshness_ms);
+            // Predict sends a book only when it changes; a quiet book is not stale.
             let venue_stale = self
                 .venue_books
                 .get(&m.id.to_string())
-                .is_none_or(|b| b.age_ms(now) > cfg.freshness_ms || !b.valid());
+                .is_none_or(|b| b.age_ms(now) > cfg.freshness_ms.max(VENUE_BOOK_MAX_AGE_MS) || !b.valid());
             kalshi_stale || venue_stale
         });
         if any_stale {
@@ -261,6 +262,9 @@ impl Engine {
         actions
     }
 }
+
+/// Oldest a Predict book may be and still count as live (it is sent on change).
+const VENUE_BOOK_MAX_AGE_MS: i64 = 15_000;
 
 /// Would a fill of this side open or add to a one-sided position? (YES when
 /// net ≥ 0, NO when net ≤ 0; flat counts as opening.)
