@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use pk_venue_core::Book;
 use pk_venue_core::service::{Position, now_ms};
@@ -40,6 +40,8 @@ pub struct Engine {
     markets: HashMap<String, PredictMarket>,
     kalshi: HashMap<String, KalshiLevels>,
     kalshi_update: HashMap<String, i64>,
+    /// Recent Kalshi fairs per ticker `(ms, fair)`, for the first-leg calm check.
+    kalshi_trail: HashMap<String, VecDeque<(i64, f64)>>,
     venue_books: HashMap<String, Book>,
     quotes: HashMap<String, QuoteState>,
     stale_cancelled: bool,
@@ -51,6 +53,7 @@ impl Engine {
             markets: HashMap::new(),
             kalshi: HashMap::new(),
             kalshi_update: HashMap::new(),
+            kalshi_trail: HashMap::new(),
             venue_books: HashMap::new(),
             quotes: HashMap::new(),
             stale_cancelled: false,
@@ -113,7 +116,15 @@ impl Engine {
             }
         }
         let fair = levels.fair()?;
-        self.kalshi_update.insert(ticker.clone(), now_ms());
+        let now = now_ms();
+        self.kalshi_update.insert(ticker.clone(), now);
+        let trail = self.kalshi_trail.entry(ticker.clone()).or_default();
+        if trail.back().is_none_or(|(_, f)| (f - fair).abs() > 1e-9) {
+            trail.push_back((now, fair));
+        }
+        while trail.front().is_some_and(|(t, _)| now - t > TRAIL_KEEP_MS) {
+            trail.pop_front();
+        }
         Some((ticker, fair))
     }
 
@@ -172,7 +183,11 @@ impl Engine {
             // First legs (opening or adding to a one-sided position) only early
             // in the window and away from 0/1, where pairs have time to form.
             let window_s = window_open_ms(market).map(|o| (now - o) / 1000).unwrap_or(0);
-            let first_ok = first_leg_ok(cfg, window_s, fair);
+            // A first leg also needs the venues to agree and Kalshi to be calm:
+            // the losing first legs filled as Kalshi moved and Predict lagged.
+            let venue_mid = book.bid.zip(book.ask).map(|(b, a)| (b + a) / 2.0);
+            let moved = self.kalshi_trail.get(ticker).map(|t| recent_move(t, now, cfg.open_move_ms, fair)).unwrap_or(0.0);
+            let first_ok = first_leg_ok(cfg, window_s, fair) && calm_and_agreed(cfg, fair, venue_mid, moved);
             let quote_yes = side_price(yes, held.no_qty, held.no_cost, cfg.pair_margin, tick, precision)
                 .filter(|_| !opens(inv, true) || first_ok);
             let quote_no = side_price(no, held.yes_qty, held.yes_cost, cfg.pair_margin, tick, precision)
@@ -270,6 +285,21 @@ const VENUE_BOOK_MAX_AGE_MS: i64 = 15_000;
 /// net ≥ 0, NO when net ≤ 0; flat counts as opening.)
 pub fn opens(net: f64, yes: bool) -> bool {
     if yes { net >= -1e-9 } else { net <= 1e-9 }
+}
+
+/// How long a Kalshi fair trail is kept.
+const TRAIL_KEEP_MS: i64 = 30_000;
+
+/// The largest move of Kalshi's fair from `fair` within the last `window_ms`.
+pub fn recent_move(trail: &VecDeque<(i64, f64)>, now: i64, window_ms: i64, fair: f64) -> f64 {
+    trail.iter().filter(|(t, _)| now - t <= window_ms).map(|(_, f)| (f - fair).abs()).fold(0.0, f64::max)
+}
+
+/// First legs only when Predict's own mid is within `open_max_gap` of
+/// Kalshi's fair (both sides of its book present) and Kalshi has moved at
+/// most `open_max_move` in the last `open_move_ms`.
+pub fn calm_and_agreed(cfg: &Config, fair: f64, venue_mid: Option<f64>, moved: f64) -> bool {
+    venue_mid.is_some_and(|m| (m - fair).abs() <= cfg.open_max_gap + 1e-9) && moved <= cfg.open_max_move + 1e-9
 }
 
 /// May a first leg be quoted `window_s` seconds into the window at fair `q`?
@@ -373,6 +403,18 @@ mod tests {
             e.kalshi_frame(r#"{"type":"ticker","msg":{"market_ticker":"KX"}}"#).is_none(),
             "non-book frames are ignored"
         );
+    }
+
+    #[test]
+    fn first_legs_need_agreement_and_a_calm_kalshi() {
+        let c = cfg();
+        assert!(calm_and_agreed(&c, 0.50, Some(0.52), 0.01));
+        assert!(!calm_and_agreed(&c, 0.50, Some(0.56), 0.0), "venues disagree by 6c");
+        assert!(!calm_and_agreed(&c, 0.50, None, 0.0), "one-sided venue book");
+        assert!(!calm_and_agreed(&c, 0.50, Some(0.50), 0.03), "Kalshi moved 3c");
+        let trail: VecDeque<(i64, f64)> = [(1_000, 0.55), (4_000, 0.52), (9_000, 0.50)].into_iter().collect();
+        assert!((recent_move(&trail, 10_000, 5_000, 0.50) - 0.0).abs() < 1e-9, "only the last 5 s");
+        assert!((recent_move(&trail, 10_000, 7_000, 0.50) - 0.02).abs() < 1e-9);
     }
 
     #[test]

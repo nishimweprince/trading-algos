@@ -57,6 +57,13 @@ pub struct Config {
     /// … and while Kalshi's fair is within this band (`PK_PRED_OPEN_MIN_FAIR` / `MAX_FAIR`).
     pub open_min_fair: f64,
     pub open_max_fair: f64,
+    /// First legs only while Predict's mid is within this of Kalshi's fair
+    /// (`PK_PRED_OPEN_MAX_GAP`) …
+    pub open_max_gap: f64,
+    /// … and Kalshi has moved at most `open_max_move` in `open_move_ms`
+    /// (`PK_PRED_OPEN_MAX_MOVE`, `PK_PRED_OPEN_MOVE_MS`).
+    pub open_max_move: f64,
+    pub open_move_ms: i64,
     pub fingerprint: String,
 }
 
@@ -228,6 +235,9 @@ impl Config {
             open_leg_s: integer("PK_PRED_OPEN_LEG_S", 300)? as i64,
             open_min_fair: number("PK_PRED_OPEN_MIN_FAIR", 0.15)?,
             open_max_fair: number("PK_PRED_OPEN_MAX_FAIR", 0.85)?,
+            open_max_gap: number("PK_PRED_OPEN_MAX_GAP", 0.04)?,
+            open_max_move: number("PK_PRED_OPEN_MAX_MOVE", 0.02)?,
+            open_move_ms: integer("PK_PRED_OPEN_MOVE_MS", 5_000)? as i64,
             fingerprint,
         })
     }
