@@ -66,6 +66,7 @@ pk-svc = { path = "crates/pk-svc" }
 pk-feeds = { path = "crates/pk-feeds" }
 pk-results = { path = "crates/pk-results" }
 pk-research = { path = "crates/pk-research" }
+pk-venue-core = { path = "crates/pk-venue-core" }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

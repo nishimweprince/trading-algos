@@ -3806,6 +3806,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "pk-hip4"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "axum 0.8.9",
+ "chrono",
+ "clap",
+ "dotenvy",
+ "futures-util",
+ "parking_lot",
+ "pk-feeds",
+ "pk-svc",
+ "pk-venue-core",
+ "reqwest 0.13.5",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
 name = "pk-limitless"
 version = "0.1.0"
 dependencies = [
@@ -3876,6 +3902,33 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "pk-predict"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "axum 0.8.9",
+ "chrono",
+ "clap",
+ "dotenvy",
+ "futures-util",
+ "parking_lot",
+ "pk-feeds",
+ "pk-svc",
+ "pk-venue-core",
+ "rand 0.8.8",
+ "reqwest 0.13.5",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "tracing-subscriber",
+ "url",
 ]
 
 [[package]]
@@ -4008,6 +4061,17 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "pk-venue-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
