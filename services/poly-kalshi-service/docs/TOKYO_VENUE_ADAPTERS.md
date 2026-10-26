@@ -18,6 +18,10 @@ Do not expose 8056 or 8057 publicly. Both listeners bind to `127.0.0.1`; access 
 6. Copy `infra/systemd/pk-predict.service`, `pk-hip4.service`, and `pk-unit-alert-tokyo@.service` to `/etc/systemd/system/` (the Tokyo alert template reads `.env.tokyo`; the shared template points at `.env.dev`, which does not exist on this host). A failing adapter triggers `pk-unit-alert-tokyo@<unit>.service`, which sends a Telegram alert via `pk-unit-alert`.
 7. Run `systemctl daemon-reload`, but do not enable live mode.
 
+## Predict market discovery
+
+Live Predict markets carry no `kalshiMarketTicker` (always `null`) and 15m markets resolve via `CHAINLINK`, not `PYTH`. Discovery therefore pages `GET /v1/markets?status=OPEN` by cursor, keeps `*-updown-15m` series for the configured assets, derives the window open from `categorySlug` (`<series>-<open_unix>`, close = open + 900s), and resolves the Kalshi contract by querying series `KX<ASSET>15M` for the market with matching open/close. An explicit venue ticker, when present, still takes precedence. Anything unresolved fails closed to grade `E2`.
+
 ## Testnets
 
 Protocol tests run against testnets before mainnet shadow soak. Neither venue needs mainnet credentials for these steps.
