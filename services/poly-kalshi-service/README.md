@@ -344,6 +344,10 @@ per share filled at h = 0.02; at h = 0.05 it lost.
     inventory. Three checks in a row with the wallet short halt the maker.
   - Up + Down pairs pay $1; the net settles on Polymarket's resolution, and
     winners are redeemed (relayer for a deposit wallet).
+- **Cash.** A post refused for "not enough balance" carries the venue's free
+  balance. For 3 s only bids it covers are sent, so a wallet waiting on
+  Polymarket's redemptions after a close holds its bids instead of firing
+  rejects (`balance_rejects`, `cash_waits`).
 - **Risk.** Realised P&L today at −$15 latches a halt (persisted), which lasts
   until the next UTC day or `touch data/state/<profile>/polymaker/ACK`.
   Cancel-all runs at start, on halt and on stop; a quote loop stalled for 2 s

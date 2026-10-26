@@ -25,6 +25,10 @@
 //! - **Fills** come from the venue's own order state (`size_matched`), polled
 //!   by the executor; makers pay no fee. Up + Down pairs pay $1 whatever the
 //!   outcome; the net settles on Polymarket's resolution.
+//! - **Cash:** a post refused for "not enough balance" carries the venue's
+//!   free balance; for `CASH_HOLD_MS` only bids that balance covers are sent
+//!   (each one sent spends it), so a starved wallet waits instead of firing
+//!   rejects until Polymarket's redemptions land.
 //! - **Risk:** realised P&L today at or below −`daily_loss_usd` latches a
 //!   halt (persisted) until the next UTC day or an ack.
 
@@ -44,6 +48,7 @@ const TRAIL_MS: i64 = 5_000;
 const RECENT: usize = 80;
 /// Markout horizons after a fill; the last three stop at the window's close,
 /// and one more is taken at the close itself (Kalshi's mid 1 s before it).
+const CASH_HOLD_MS: i64 = 3_000;
 const MARKOUTS_MS: [i64; 4] = [5_000, 30_000, 120_000, 300_000];
 const MARKOUT_NAMES: [&str; 5] = ["markout5", "markout30", "markout120", "markout300", "markout_close"];
 
@@ -96,6 +101,16 @@ pub fn desired_px(cfg: &PmCfg, q: f64, net: f64, up_ask: Option<f64>, down_ask: 
     let up = clamp(floor_tick(q - cfg.half_spread - skew), up_ask);
     let down = clamp(floor_tick(1.0 - (q + cfg.half_spread - skew)), down_ask);
     (up, down)
+}
+
+/// The free balance in a CLOB refusal: `"... balance: 385700, order amount: 2700000"` → 0.3857.
+pub fn free_balance(error: &str) -> Option<f64> {
+    if !error.contains("not enough balance") {
+        return None;
+    }
+    let rest = &error[error.find("balance: ")? + "balance: ".len()..];
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse::<f64>().ok().map(|b| b / 1e6)
 }
 
 /// The pair guard: with shares held on the other side at average cost `c`, a
@@ -330,6 +345,8 @@ pub struct Engine {
     drift: HashMap<String, (u32, f64)>,
     shadow_n: u64,
     shadow: bool,
+    /// The venue's free balance from a "not enough balance" refusal, until when.
+    cash_hint: Option<(f64, i64)>,
 }
 
 impl Engine {
@@ -362,6 +379,7 @@ impl Engine {
             drift: HashMap::new(),
             shadow_n: 0,
             shadow,
+            cash_hint: None,
             cfg,
         }
     }
@@ -731,6 +749,15 @@ impl Engine {
             return;
         }
         let Some((px, size)) = want else { return };
+        if let Some((free, until)) = self.cash_hint
+            && now_ms < until
+        {
+            if px * size > free + 1e-9 {
+                self.count("cash_waits");
+                return;
+            }
+            self.cash_hint = Some((free - px * size, until));
+        }
         if !self.take_token(now_ms) {
             self.count("rate_limited");
             return;
@@ -792,7 +819,14 @@ impl Engine {
             Err(why) => {
                 s.order = None;
                 s.cooldown_until_ms = now_ms + cooldown;
-                let k = if why.contains("cross") { "post_only_rejects" } else { "post_errors" };
+                let k = if why.contains("cross") {
+                    "post_only_rejects"
+                } else if let Some(free) = free_balance(&why) {
+                    self.cash_hint = Some((free, now_ms + CASH_HOLD_MS));
+                    "balance_rejects"
+                } else {
+                    "post_errors"
+                };
                 self.count(k);
                 self.record(t_ns, "pm_order", json!({"event": "reject", "asset": asset, "up": up, "px": px, "size": size, "error": why}));
             }
@@ -1142,6 +1176,7 @@ impl Engine {
             "open_cost": round_dp(self.open_cost(), 4),
             "max_open_cost_usd": self.cfg.max_open_cost_usd,
             "orders_tracked": self.orders.len(),
+            "cash_hint": self.cash_hint.filter(|(_, u)| now_ms < *u).map(|(f, _)| round_dp(f, 4)),
             "coins": coins,
             "held": held,
             "totals": self.totals.json(),
@@ -1224,6 +1259,30 @@ mod tests {
                    "asks": [{"price": format!("{a:.2}"), "size": "50"}]})
         };
         e.on_poly(&json!([book("BTC-up", up), book("BTC-down", down)]).to_string(), t);
+    }
+
+    #[test]
+    fn a_balance_refusal_holds_posts_the_wallet_cannot_cover() {
+        let why = r#"{"error":"not enough balance / allowance: the balance is not enough -> balance: 385700, order amount: 2700000"}"#;
+        assert_eq!(free_balance(why), Some(0.3857));
+        assert_eq!(free_balance("order crosses book"), None);
+        let dir = tmp("cash");
+        let mut e = engine(&dir);
+        let t0 = (OPEN + 100) * NS;
+        books(&mut e, 0.54, 0.56, (0.53, 0.57), (0.43, 0.47), t0);
+        e.tick(t0, &Gates { kill: false, feeds_ok: true });
+        e.take_actions();
+        // Up is refused for balance ($2.40 free); Down was already on its way and rests.
+        let why = why.replace("385700", "2400000");
+        e.on_posted("BTC", true, 0.53, 5.0, Err(why), t0);
+        e.on_posted("BTC", false, 0.43, 5.0, Ok("o2".into()), t0);
+        // The Up bid ($2.65) is held while the hint lasts, then tried again.
+        e.tick(t0 + NS, &Gates { kill: false, feeds_ok: true });
+        assert!(e.take_actions().is_empty());
+        assert_eq!(e.counters.get("cash_waits"), Some(&1));
+        e.tick(t0 + 4 * NS, &Gates { kill: false, feeds_ok: true });
+        assert_eq!(e.take_actions().len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
