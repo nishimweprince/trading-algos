@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 use pk_venue_core::{RiskLimits, VenueMode};
 use sha2::{Digest, Sha256};
 
+/// Predict's minimum order expiry is 2 minutes from now; keep a margin.
+pub const MIN_QUOTE_TTL_S: u64 = 150;
+
 #[derive(Clone)]
 pub struct Config {
     pub enabled: bool,
@@ -192,7 +195,9 @@ impl Config {
             assets,
             freshness_ms: integer("PK_PRED_FRESHNESS_MS", 2_000)? as i64,
             basis_buffer: number("PK_PRED_BASIS_BUFFER", 0.02)?,
-            quote_ttl_s: integer("PK_PRED_QUOTE_TTL_S", 20)?,
+            // Predict refuses an expiry under 2 minutes from now; requotes
+            // remove orders off-book, so this only bounds a signed order's life.
+            quote_ttl_s: integer("PK_PRED_QUOTE_TTL_S", 180)?.max(MIN_QUOTE_TTL_S),
             half_spread: number("PK_PRED_HALF_SPREAD", 0.03)?,
             requote_cents: number("PK_PRED_REQUOTE_CENTS", 0.01)?,
             min_requote_ms: integer("PK_PRED_MIN_REQUOTE_MS", 500)?,

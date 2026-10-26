@@ -475,7 +475,7 @@ async fn probe(cfg: &Config, client: &Client, confirm: bool) -> anyhow::Result<(
         .find(|m| m.supported(&cfg.assets))
         .ok_or_else(|| anyhow::anyhow!("no eligible market"))?;
     let token = market.yes_outcome().ok_or_else(|| anyhow::anyhow!("YES token missing"))?.token_id.clone();
-    let expiration = (now_ms() / 1000 + 20) as u64;
+    let expiration = (now_ms() / 1000) as u64 + config::MIN_QUOTE_TTL_S;
     let started = std::time::Instant::now();
     let submitted = client
         .submit(Submit {
