@@ -49,6 +49,8 @@ const RECENT: usize = 80;
 /// Markout horizons after a fill; the last three stop at the window's close,
 /// and one more is taken at the close itself (Kalshi's mid 1 s before it).
 const CASH_HOLD_MS: i64 = 3_000;
+/// A markout without a two-sided Kalshi book takes the last mid up to this old.
+const MID_MAX_AGE_MS: i64 = 30_000;
 const MARKOUTS_MS: [i64; 4] = [5_000, 30_000, 120_000, 300_000];
 const MARKOUT_NAMES: [&str; 5] = ["markout5", "markout30", "markout120", "markout300", "markout_close"];
 
@@ -235,6 +237,9 @@ struct Coin {
     last_tick_ms: Option<i64>,
     pauses: u64,
     gate: &'static str,
+    /// Kalshi's last two-sided mid (venue-received ms): markouts near the
+    /// close use it, as Kalshi's book thins out there.
+    last_mid: Option<(i64, f64)>,
 }
 
 impl Coin {
@@ -252,6 +257,7 @@ impl Coin {
             live_ms: 0,
             last_tick_ms: None,
             pauses: 0,
+            last_mid: None,
             gate: "no window",
         }
     }
@@ -454,6 +460,7 @@ impl Engine {
         c.upb = Book::default();
         c.downb = Book::default();
         c.trail.clear();
+        c.last_mid = None;
         c.pause_until_ms = 0;
         c.window = Some(w.clone());
         self.count("windows");
@@ -490,6 +497,7 @@ impl Engine {
         }
         let Some(m) = c.kbook.quote(None).mid() else { return };
         let now_ms = t / 1_000_000;
+        c.last_mid = Some((now_ms, m));
         let base = c.trail.iter().filter(|(ts, _)| *ts >= now_ms - 1000).map(|(_, v)| *v);
         let moved = base.fold(0.0_f64, |acc, v| acc.max((m - v).abs()));
         c.trail.push_back((now_ms, m));
@@ -973,7 +981,11 @@ impl Engine {
             if c.window.as_ref().is_none_or(|w| w.open_unix != d.open_unix) {
                 continue;
             }
-            let Some(q) = c.kbook.quote(None).mid() else { continue };
+            let last = c.last_mid.filter(|(t, _)| now_ms - t <= MID_MAX_AGE_MS).map(|(_, m)| m);
+            let Some(q) = c.kbook.quote(None).mid().or(last) else {
+                self.count("markouts_missed");
+                continue;
+            };
             let m = (if d.up { q } else { 1.0 - q }) - d.px;
             for st in [&mut self.totals, self.per.entry(d.asset.clone()).or_default()] {
                 st.markouts[d.horizon].push(m);
@@ -1259,6 +1271,28 @@ mod tests {
                    "asks": [{"price": format!("{a:.2}"), "size": "50"}]})
         };
         e.on_poly(&json!([book("BTC-up", up), book("BTC-down", down)]).to_string(), t);
+    }
+
+    #[test]
+    fn close_markout_uses_the_last_mid_when_kalshi_thins_out() {
+        let dir = tmp("lastmid");
+        let mut e = engine(&dir);
+        let t0 = (OPEN + 100) * NS;
+        books(&mut e, 0.54, 0.56, (0.53, 0.57), (0.43, 0.47), t0);
+        e.tick(t0, &Gates { kill: false, feeds_ok: true });
+        e.take_actions();
+        e.on_posted("BTC", true, 0.53, 5.0, Ok("o1".into()), t0);
+        e.on_order("o1", 5.0, true, t0 + NS);
+        let close = (OPEN + WINDOW_S) * NS - NS;
+        // 10 s before the close Kalshi's mid is 0.61; then its YES side empties.
+        books(&mut e, 0.60, 0.62, (0.59, 0.63), (0.37, 0.41), close - 10 * NS);
+        let empty = json!({"type": "orderbook_snapshot", "msg": {"market_ticker": "KXBTC15M-X", "no_dollars_fp": [["0.40", "100"]]}});
+        e.on_kalshi(&empty.to_string(), close - 5 * NS);
+        assert_eq!(e.coins[0].kbook.quote(None).mid(), None);
+        e.tick(close, &Gates { kill: false, feeds_ok: true });
+        assert_eq!(e.totals.markouts[4].n(), 1);
+        assert!((e.totals.markouts[4].mean().unwrap() - (0.61 - 0.53)).abs() < 1e-9);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
