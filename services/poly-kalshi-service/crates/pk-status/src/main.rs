@@ -45,7 +45,7 @@ use std::time::{Duration, Instant};
 use axum::Router;
 use axum::extract::{Query, State};
 use axum::http::{HeaderValue, header};
-use axum::response::{Html, IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::get;
 use clap::Parser;
 use parking_lot::Mutex;
@@ -57,6 +57,7 @@ const PAGE: &str = include_str!("page.html");
 const LIM_PAGE: &str = include_str!("limitless.html");
 const OKX_PAGE: &str = include_str!("okx.html");
 const PM_PAGE: &str = include_str!("polymaker.html");
+const VENUE_PAGE: &str = include_str!("venue.html");
 const LIVE_POLL: Duration = Duration::from_secs(5);
 const JOURNAL_EVERY: Duration = Duration::from_secs(30);
 const SERIES_POINTS: usize = 1800;
@@ -320,6 +321,50 @@ pub fn pick_pm(status: Option<&Value>) -> Option<Value> {
     Some(Value::Object(out))
 }
 
+/// Public subset of the isolated adapters. Adapter diagnostics never include
+/// credentials or signed payloads; this second allowlist also excludes raw
+/// error text and any future fields until explicitly reviewed.
+pub fn pick_adapter(status: &Value) -> Option<Value> {
+    let mut out = Map::new();
+    for key in [
+        "venue",
+        "mode",
+        "ready",
+        "reconciling",
+        "uptime_s",
+        "build",
+        "config",
+        "clock_offset_ms",
+        "feeds",
+        "books",
+        "kalshi_fairs",
+        "matches",
+        "inventory",
+        "risk",
+        "latched",
+        "degraded",
+        "onchain_cancel_pending",
+        "deadman_armed",
+        "last_heartbeat_ms",
+        "recent_actions",
+        "recent_orders",
+        "recent_fills",
+        "settlements",
+        "markouts",
+    ] {
+        out.insert(key.into(), status.get(key).cloned().unwrap_or(Value::Null));
+    }
+    // Feed error strings can contain upstream response fragments; strip them.
+    if let Some(feeds) = out.get_mut("feeds").and_then(Value::as_object_mut) {
+        for feed in feeds.values_mut() {
+            if let Some(object) = feed.as_object_mut() {
+                object.remove("last_error");
+            }
+        }
+    }
+    Some(Value::Object(out))
+}
+
 /// Append a series answer's new points, capped per asset; returns the newest second.
 fn merge_series(series: &mut HashMap<String, VecDeque<Value>>, mut last: i64, body: Option<Value>) -> i64 {
     for (asset, points) in body.and_then(|b| b.get("points").cloned()).and_then(|p| p.as_object().cloned()).unwrap_or_default() {
@@ -414,6 +459,10 @@ struct Cache {
     pm: Option<Value>,
     pm_at: Option<f64>,
     pm_series: Option<Value>,
+    pred: Option<Value>,
+    pred_at: Option<f64>,
+    hip4: Option<Value>,
+    hip4_at: Option<f64>,
 }
 
 struct App {
@@ -497,6 +546,24 @@ impl App {
         c.pm_at = Some(now);
         if series.is_some() {
             c.pm_series = series;
+        }
+    }
+
+    async fn refresh_adapter(&self, venue: &str, port: u16) {
+        let url = format!("http://127.0.0.1:{port}/v1/{venue}/status");
+        let status = self.get(&url, &[]).await.as_ref().and_then(pick_adapter);
+        let now = chrono::Utc::now().timestamp_millis() as f64 / 1e3;
+        let mut c = self.cache.lock();
+        match venue {
+            "predict" => {
+                c.pred = status;
+                c.pred_at = Some(now);
+            }
+            "hip4" => {
+                c.hip4 = status;
+                c.hip4_at = Some(now);
+            }
+            _ => {}
         }
     }
 
@@ -598,6 +665,13 @@ async fn okx_poller(app: Arc<App>) {
 async fn pm_poller(app: Arc<App>) {
     loop {
         app.refresh_pm().await;
+        tokio::time::sleep(LIVE_POLL).await;
+    }
+}
+
+async fn adapter_poller(app: Arc<App>, venue: &'static str, port: u16) {
+    loop {
+        app.refresh_adapter(venue, port).await;
         tokio::time::sleep(LIVE_POLL).await;
     }
 }
@@ -730,7 +804,13 @@ fn router(app: Arc<App>) -> Router {
         "okx" => OKX_PAGE,
         "polymaker" => PM_PAGE,
         "limitless" => LIM_PAGE,
+        "predict" | "hip4" => VENUE_PAGE,
         _ => PAGE,
+    };
+    let home_venue = match app.settings.status_home.as_str() {
+        "predict" => Some("/predict"),
+        "hip4" => Some("/hip4"),
+        _ => None,
     };
     // The taker's routes read its journal (tens of MB) on demand: a host whose
     // home is another page serves none of them, so stale tabs cannot load it.
@@ -843,7 +923,16 @@ fn router(app: Arc<App>) -> Router {
         Router::new()
     };
     Router::new()
-        .route("/", get(move || async move { Html(home) }))
+        .route(
+            "/",
+            get(move || async move {
+                if let Some(path) = home_venue {
+                    Redirect::temporary(path).into_response()
+                } else {
+                    Html(home).into_response()
+                }
+            }),
+        )
         .merge(taker)
         .route("/limitless", get(|| async { Html(LIM_PAGE) }))
         .route(
@@ -890,6 +979,22 @@ fn router(app: Arc<App>) -> Router {
             }),
         )
         .route("/polymaker", get(|| async { Html(PM_PAGE) }))
+        .route("/predict", get(|| async { Html(VENUE_PAGE) }))
+        .route("/hip4", get(|| async { Html(VENUE_PAGE) }))
+        .route(
+            "/api/predict/status",
+            get(|State(app): State<Arc<App>>| async move {
+                let c = app.cache.lock();
+                json_response(json!({"enabled": app.settings.pred_enabled, "fetched_at": c.pred_at, "service_up": c.pred.is_some(), "status": c.pred}))
+            }),
+        )
+        .route(
+            "/api/hip4/status",
+            get(|State(app): State<Arc<App>>| async move {
+                let c = app.cache.lock();
+                json_response(json!({"enabled": app.settings.hip4_enabled, "fetched_at": c.hip4_at, "service_up": c.hip4.is_some(), "status": c.hip4}))
+            }),
+        )
         .route(
             "/api/pm/status",
             get(|State(app): State<Arc<App>>| async move {
@@ -963,6 +1068,12 @@ fn main() -> anyhow::Result<()> {
         }
         if settings.pm_enabled {
             tokio::spawn(pm_poller(app.clone()));
+        }
+        if settings.pred_enabled {
+            tokio::spawn(adapter_poller(app.clone(), "predict", settings.pred_port));
+        }
+        if settings.hip4_enabled {
+            tokio::spawn(adapter_poller(app.clone(), "hip4", settings.hip4_port));
         }
         let listener =
             tokio::net::TcpListener::bind((settings.status_host.as_str(), settings.status_port)).await?;

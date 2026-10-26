@@ -184,6 +184,12 @@ pub struct Settings {
     /// `pk-polymaker`, likewise (the Polymarket maker; `/polymaker`).
     pub pm_enabled: bool,
     pub pm_port: u16,
+    /// Isolated adapters, surfaced by status but not part of the existing
+    /// trader's dependency graph or readiness chain.
+    pub pred_enabled: bool,
+    pub pred_port: u16,
+    pub hip4_enabled: bool,
+    pub hip4_port: u16,
     pub status_home: String,
 
     pub telegram_bot_token: Option<String>,
@@ -554,11 +560,15 @@ impl Settings {
             okx_port: e.num("PK_OKX_PORT", 8054)?,
             pm_enabled: e.flag("PK_PM_ENABLED", false)?,
             pm_port: e.num("PK_PM_PORT", 8055)?,
+            pred_enabled: e.flag("PK_PRED_ENABLED", false)?,
+            pred_port: e.num("PK_PRED_PORT", 8056)?,
+            hip4_enabled: e.flag("PK_HIP4_ENABLED", false)?,
+            hip4_port: e.num("PK_HIP4_PORT", 8057)?,
             status_home: {
                 let h = e.or("PK_STATUS_HOME", "polymarket").to_lowercase();
                 anyhow::ensure!(
-                    ["polymarket", "limitless", "okx", "polymaker"].contains(&h.as_str()),
-                    "PK_STATUS_HOME must be polymarket, limitless, okx or polymaker"
+                    ["polymarket", "limitless", "okx", "polymaker", "predict", "hip4"].contains(&h.as_str()),
+                    "PK_STATUS_HOME must be polymarket, limitless, okx, polymaker, predict or hip4"
                 );
                 h
             },
