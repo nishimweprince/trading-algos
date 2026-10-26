@@ -2,6 +2,8 @@
 
 Research date: **2026-10-23**
 
+Infrastructure and placement update: **2026-10-25**
+
 ## Bottom line
 
 The strongest new independent books for the existing Kalshi-led, 15-minute crypto
@@ -60,6 +62,83 @@ settlement index is part of the instrument.
 | **Hyperliquid HIP-4** | Public outcome-market catalog and normal Hyperliquid book APIs; BTC/ETH/SOL daily and short threshold events were live | No recurring start-vs-end 15m family was verified. Many short contracts are price-threshold-at-time instruments settled by Pyth or Hyperliquid mark. Watch `outcomeMeta`. |
 | **Deriv Rise/Fall** | Quote, buy, monitor and in some cases sell APIs across FX and other instruments | Broker/dealer binary, not a crowd CLOB; tick and entry-relative rules do not map cleanly to fixed UTC windows. |
 | **CME event contracts / broker distribution** | Regulated crypto and macro events and potential institutional routing | Different underlyings/expiries and broker entitlements; treat as a separate strategy until exact listings and access are verified. |
+
+## Server locations and lowest-latency placement
+
+### Conclusion: add two execution regions and keep Dublin
+
+A single host is not the lowest-latency answer for this venue set. The practical
+topology is:
+
+1. **US worker — AWS `us-east-1` (N. Virginia).** Gemini's public WebSocket is
+   explicitly served from `us-east-1`; Polymarket US uses AWS infrastructure and its
+   production addresses currently map to the same US-East network family; CDNA FIX
+   requires AWS PrivateLink. If Gemini FIX becomes available, Equinix NY5 in Secaucus
+   is the true institutional endpoint. Kalshi itself currently resolves to an AWS
+   `us-east-2` load balancer in Ohio, so `us-east-1` is the best compromise among the
+   US legs rather than the absolute minimum for Kalshi alone.
+2. **Asia worker — AWS `ap-northeast-1` (Tokyo).** Predict.fun and Pascal explicitly
+   locate their engines in `ap-northeast-1`; Hyperliquid's Foundation low-latency node
+   is there; and the service's own OKX measurements already show about 18 ms from the
+   Tokyo host. Run OKX, Predict.fun, Pascal and Hyperliquid adapters here.
+3. **Keep the existing Polymarket-global worker in AWS `eu-west-1` (Ireland).** The
+   repository's measured path is about 10 ms to Polymarket's London origin while still
+   being in a jurisdiction allowed to open positions. Do not move that trader merely
+   to simplify the architecture.
+
+These should be independent venue processes that publish normalized observations to a
+shared stream. A cross-region coordinator must never sit synchronously in the order
+path.
+
+### Priority and existing venues
+
+| Venue | Venue/API location and platform | Lowest-latency deployment | Confidence and caveat |
+|---|---|---|---|
+| **Kalshi** | Live DNS on 2026-10-25 exposed an AWS ELB in **`us-east-2` (Ohio)** | **AWS `us-east-2`** for Kalshi alone; use **`us-east-1`** for a shared US prediction worker | **High for current API origin**, but DNS and load-balancer topology can change. |
+| **Polymarket global** | Cloudflare ingress; repository network work identifies the CLOB origin as **AWS `eu-west-2` (London)** | **AWS `eu-west-1` (Ireland)** for trading, because London is close-only; retain the measured Dublin deployment | **High from project measurements**; Cloudflare edge IPs do not identify the origin. |
+| **Limitless** | Cloudflare edge; matching-engine cloud/region is not published | Keep with the **Ireland worker** initially and run the built-in Socket.IO/REST probes before separating it | **Low**. Placement is an empirical choice, not a documented engine location. |
+| **Gemini Predictions** | Public WebSocket: **AWS `us-east-1`**. Institutional primary trading PoP: **Equinix NY5, Secaucus, NJ** | **AWS `us-east-1`** for REST/WS; **Equinix NY5** or an NY2/NY4/NY5 cross-connect for FIX | **High**, directly documented by Gemini. |
+| **OKX Event Contracts** | Public endpoints enter through Cloudflare; exact engine platform is not public. Project evidence says matching moved to **Tokyo** and measures about 18 ms through Cloudflare NRT | Keep **AWS `ap-northeast-1` Tokyo**. Re-run `pk netprobe` after endpoint or account-domain changes | **Medium-high from live project measurements**, not a public OKX cloud-region declaration. |
+| **Nadex / CDNA** | FIX connectivity uses **AWS PrivateLink**; the exact service region is provisioned during institutional onboarding | Deploy in the **same AWS region as the assigned PrivateLink endpoint**. Use `us-east-1` only as a temporary public-API probe host | **High for AWS**, **unknown region until onboarding**. Do not guess across-region PrivateLink. |
+| **Predict.fun** | Primary servers explicitly documented as **`ap-northeast-1`** | **AWS `ap-northeast-1` Tokyo**, in the same AZ when the provider reveals it | **High**, directly documented. |
+| **Polymarket US** | **AWS**: FIX uses PrivateLink and public gRPC traverses an AWS ALB. Current production DNS maps to US-East AWS address space | **AWS `us-east-1`** for public REST/gRPC; use the exact region provided for FIX PrivateLink | **Medium-high**: AWS is documented; `us-east-1` is a current network observation, not a contractual region promise. |
+| **Jupiter Forecast / BisonFi** | `api.jup.ag` uses **AWS CloudFront**; the matching/settlement path ultimately lands on Solana. Jupiter does not publish one engine region | Region matters less for the gateway. Start on **AWS `ap-northeast-1`** with the Asia worker, call Jupiter `/submit`, and broadcast in parallel through the existing Helius path | **Medium for AWS edge, low for origin**. Optimize transaction landing rather than CDN RTT alone. |
+| **Forsee** | Cloudflare edge; origin cloud and region are undisclosed | No dedicated host. Poll from the nearest existing worker and compare Dublin/Tokyo/US RTT before choosing | **Low** and not latency-critical: REST polling, cached quotes and locked positions dominate. |
+| **PancakeSwap Prediction** | No central matching server; contracts execute on **BNB Smart Chain** through the selected RPC | Co-locate with a premium BSC WebSocket/private RPC. Start with **Tokyo or Singapore**, then select by block-arrival and submission measurements | **High that placement is RPC-dependent**, not venue-host-dependent. |
+| **Hyperliquid HIP-4** | Hyper Foundation's low-latency non-validating node is explicitly **AWS `ap-northeast-1`, AZ1** | **AWS `ap-northeast-1` Tokyo**; eligible high-volume users should run a local non-validating node and local order-book server | **High**, directly documented. Public `api.hyperliquid.xyz` is an AWS edge, not the lowest-latency state source. |
+| **Deriv Rise/Fall** | Public WebSocket is behind Cloudflare; origin platform and region are undisclosed | Do not assign a cloud region yet. Benchmark warm WebSocket proposal/buy RTT from the three workers | **Low**. Its broker contract model makes region a secondary issue. |
+| **CME event contracts** | Central exchange infrastructure rather than a public-cloud matching API; access is through an FCM | For direct institutional access, use the broker's recommended **Chicago/Aurora proximity or colo**; otherwise deploy beside the broker gateway | **Medium**; the broker path, not a generic AWS region, controls latency. |
+
+### Broader venue placement map
+
+| Venue | Platform/region evidence | Recommended starting point |
+|---|---|---|
+| **Pascal** | Matching engine explicitly **AWS `ap-northeast-1`** | **AWS Tokyo**. This is a high-confidence placement if Pascal gains matching contracts. |
+| **Opinion** | Cloudflare ingress; origin undisclosed | Probe Tokyo, Singapore and N. Virginia; no defensible winner yet. |
+| **Futuur** | Live DNS exposed an **AWS `us-east-1` ELB** on 2026-10-25 | **AWS N. Virginia** for market making. |
+| **Bayse Markets** | Live API addresses map to **AWS `eu-west-2` (London)** | **AWS London** for data; verify account/jurisdiction before trading. |
+| **Myriad** | On-chain markets plus web/API edge; no single published matcher region | Co-locate with the RPC for the chain carrying the target market. |
+| **Rain** | Arbitrum settlement; API origin undisclosed | Co-locate with the chosen Arbitrum RPC and private transaction route. |
+| **XO Market** | Off-chain matching but no published engine region | Benchmark its write endpoint from all three workers before enabling orders. |
+| **SX Bet, ProphetX, Novig, Sporttrade** | Region/private connectivity is partner-gated or unpublished | Ask for an institutional connectivity sheet; use **US East** only as the first probe. |
+| **ForecastEx / IBKR** | Broker-managed connectivity | Run IB Gateway where IBKR recommends for the account; generic website latency is irrelevant. |
+| **PredictIt, Manifold, Metaculus, Good Judgment** | Public web/API infrastructure; not an executable latency leg | Use the existing research worker. No latency-specific spend is justified. |
+
+### Measurement rule
+
+CDN anycast makes `ping`, DNS geolocation and a fast TLS handshake insufficient: they
+usually identify the closest Cloudflare/CloudFront edge, not the matching engine.
+Before a live adapter is placed, measure from each candidate region for at least 24
+hours:
+
+- market-data event timestamp → local receive time;
+- warm order or safe post-only probe → acknowledgement;
+- acknowledgement → private fill/update stream;
+- disconnects, p50/p95/p99 and tail bursts by UTC hour; and
+- for on-chain legs, block arrival and signed transaction → inclusion time.
+
+Promote a region only when it improves the **end-to-end order path**, not just REST
+health-check RTT.
 
 ## Tier C — broader prediction-market inventory
 
@@ -171,16 +250,19 @@ registry before the alphabet becomes an opaque protocol.
 ## Primary sources
 
 - Gemini Predictions: [ticker rules](https://developer.gemini.com/prediction-markets/tickers-crypto), [market discovery](https://developer.gemini.com/prediction-markets-spec/markets), [WebSocket streams](https://developer.gemini.com/trading/websocket/streams)
+- Gemini infrastructure: [WebSocket latency tiers and AWS `us-east-1`](https://developer.gemini.com/websocket/introduction), [Equinix NY5 FIX connectivity](https://developer.gemini.com/trading/fix/overview/connecting)
 - OKX: [Event Contracts FAQ](https://www.okx.com/en-gb/help/event-contracts-faq), [settlement logic](https://www.okx.com/en-gb/help/how-to-trade-event-contracts-and-settlement-logic), [API v5](https://www.okx.com/docs-v5/)
 - Nadex/CDNA: [crypto contract specifications](https://www.nadex.com/crypto/), [event-contract fees](https://website-prod.nadex.com/pricing/), [Crypto.com Predict Pro relationship and availability](https://help.crypto.com/en/articles/17213297-overview), [prediction API status](https://crypto.com/exchange-pro/en-GB/api)
+- CDNA connectivity: [FIX endpoints and AWS PrivateLink](https://exchange-developer.crypto.com/exchange/v1/docs/api/fix-fix-endpoints)
 - Predict.fun: [developer API](https://dev.predict.fun/), [BTC 15m rules](https://predict.fun/market/btc-updown-15m-1792671300), [Binance Wallet upstream disclosure](https://developers.binance.com/en/docs/products/w3w-prediction/websocket-streams/orderbook)
-- Polymarket US: [live market site](https://polymarket.us/)
+- Polymarket US: [live market site](https://polymarket.us/), [environments](https://docs.polymarket.us/trader-guide/environments), [connection options and AWS PrivateLink](https://docs.polymarket.us/trader-guide/connection-options)
 - Jupiter Forecast: [Prediction / Forecast API](https://developers.jup.ag/docs/prediction/forecast)
+- Jupiter transaction path: [Jupiter Beam and `/submit`](https://developers.jup.ag/changelog/2026-04)
 - Forsee: [API documentation](https://api.forsee.market/)
 - PancakeSwap: [Prediction](https://docs.pancakeswap.finance/play/prediction), [Dumb Mode](https://docs.pancakeswap.finance/trade/perpetual-trading/perpetual-trading-v2/dumb-mode)
-- Hyperliquid: [outcome asset IDs and API model](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/asset-ids)
+- Hyperliquid: [outcome asset IDs and API model](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/asset-ids), [AWS Tokyo non-validating node](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/nodes/foundation-non-validating-node), [latency optimization](https://hyperliquid.gitbook.io/Hyperliquid-docs/for-developers/api/optimizing-latency)
 - Opinion: [Open API overview](https://docs.opinion.trade/developer-guide/opinion-open-api/overview)
-- Pascal: [developer documentation](https://docs.pascal.trade/)
+- Pascal: [developer documentation and AWS Tokyo engine location](https://docs.pascal.trade/)
 - Kalshi 15-minute financials: [category page](https://kalshi.com/category/financials/frequency/fifteen_min)
 - FX reference APIs: [OANDA v20 pricing stream](https://developer.oanda.com/rest-live-v20/pricing-ep/), [Saxo pricing](https://www.developer.saxo/openapi/learn/pricing), [IBKR streaming market data](https://interactivebrokers.github.io/tws-api/market_data.html)
 

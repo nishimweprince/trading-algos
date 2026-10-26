@@ -1,0 +1,32 @@
+[Unit]
+Description=pk-hip4 (isolated Kalshi signal to Hyperliquid HIP-4)
+OnFailure=pk-unit-alert-tokyo@%n.service
+Wants=network-online.target chrony.service
+After=network-online.target time-sync.target chrony.service
+ConditionPathExists=/home/pk/trading-algos/services/poly-kalshi-service/.env.tokyo
+
+[Service]
+Type=simple
+User=pk
+Group=pk
+WorkingDirectory=/home/pk/trading-algos/services/poly-kalshi-service
+ExecStartPre=/bin/sh -c 'test "$(/usr/bin/stat -c %a .env.tokyo)" = 600'
+ExecStartPre=/usr/bin/chronyc waitsync 10 0.1
+ExecStart=/home/pk/trading-algos/services/poly-kalshi-service/target/release/pk-hip4 --profile tokyo
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+Nice=5
+CPUWeight=50
+CPUAffinity=2 3
+MemoryMax=1536M
+LimitNOFILE=65536
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/pk/trading-algos/services/poly-kalshi-service/data /home/pk/trading-algos/services/poly-kalshi-service/logs
+
+[Install]
+WantedBy=multi-user.target
