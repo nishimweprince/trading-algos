@@ -116,11 +116,26 @@ impl Client {
         self.jwt.read().clone()
     }
 
+    /// All OPEN crypto up/down markets. The API orders by creation, so a
+    /// single first page is only old CLOSED markets; follow `cursor`.
     pub async fn markets(&self) -> anyhow::Result<Vec<PredictMarket>> {
-        let value = self
-            .request(Method::GET, "/v1/markets?first=100&marketVariant=CRYPTO_UP_DOWN", None, false)
-            .await?;
-        Ok(markets_from_response(&value))
+        let mut all = Vec::new();
+        let mut cursor: Option<String> = None;
+        for _ in 0..20 {
+            let mut path = "/v1/markets?first=100&marketVariant=CRYPTO_UP_DOWN&status=OPEN".to_string();
+            if let Some(c) = &cursor {
+                path.push_str(&format!("&after={c}"));
+            }
+            let value = self.request(Method::GET, &path, None, false).await?;
+            let page = markets_from_response(&value);
+            let empty = page.is_empty();
+            all.extend(page);
+            cursor = value.get("cursor").and_then(Value::as_str).map(str::to_owned);
+            if empty || cursor.as_deref().is_none_or(str::is_empty) {
+                break;
+            }
+        }
+        Ok(all)
     }
 
     pub async fn orderbook(&self, market_id: u64) -> anyhow::Result<Value> {
@@ -261,11 +276,27 @@ mod tests {
         async fn boom() -> (axum::http::StatusCode, axum::Json<Value>) {
             (axum::http::StatusCode::INTERNAL_SERVER_ERROR, axum::Json(json!({"message": "bad"})))
         }
+        async fn markets(uri: axum::http::Uri) -> axum::Json<Value> {
+            let row = |id: u64| {
+                json!({"id": id, "title":"BTC", "question":"up?", "tradingStatus":"OPEN", "isNegRisk":false,
+                    "isYieldBearing":false, "feeRateBps":100, "outcomes":[{"name":"Up","indexSet":1,"onChainId":"9"},{"name":"Down","indexSet":2,"onChainId":"10"}],
+                    "kalshiMarketTicker":null, "decimalPrecision":2, "marketVariant":"CRYPTO_UP_DOWN",
+                    "seriesSlug":"btc-updown-15m", "categorySlug":"btc-updown-15m-1793017800",
+                    "variantData":{"priceFeedProvider":"CHAINLINK"}})
+            };
+            if uri.query().is_some_and(|q| q.contains("after=page2")) {
+                axum::Json(json!({"success": true, "cursor": null, "data": [row(8)]}))
+            } else {
+                assert!(uri.query().is_some_and(|q| q.contains("status=OPEN")));
+                axum::Json(json!({"success": true, "cursor": "page2", "data": [row(7)]}))
+            }
+        }
         let app = Router::new()
             .route("/v1/auth/message", get(auth_message))
             .route("/v1/auth", post(auth))
             .route("/v1/orders", post(orders).get(list))
             .route("/v1/orders/remove", post(remove))
+            .route("/v1/markets", get(markets))
             .route("/v1/boom", get(boom))
             .with_state(mock);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -291,6 +322,16 @@ mod tests {
         assert_eq!(seen[0]["signer"], ACCOUNT);
         assert_eq!(seen[0]["message"], "sign-me");
         assert!(seen[0]["signature"].as_str().unwrap().starts_with("0x01"));
+    }
+
+    #[tokio::test]
+    async fn markets_paginates_open_pages_by_cursor() {
+        let mock = Mock::default();
+        let base = serve(mock.clone()).await;
+        let client = client(&base);
+        let markets = client.markets().await.unwrap();
+        assert_eq!(markets.iter().map(|m| m.id).collect::<Vec<_>>(), vec![7, 8]);
+        assert!(markets.iter().all(|m| m.supported(&["BTC".into()])));
     }
 
     #[tokio::test]
