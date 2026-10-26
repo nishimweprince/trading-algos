@@ -913,23 +913,33 @@ async fn clock_loop(app: Arc<App>) {
     }
 }
 
+const RECONCILE_FAILURES_TO_LATCH: u32 = 3;
+
 async fn settlement_loop(app: Arc<App>) {
     if app.cfg.privy_private_key.is_none() {
         return;
     }
     let mut interval = tokio::time::interval(Duration::from_secs(30));
+    let mut failures = 0u32;
     loop {
         interval.tick().await;
         match app.client.positions().await {
             Ok(positions) => {
+                failures = 0;
                 app.record("position_reconcile", json!({"positions": positions}));
                 settle_positions(&app, &positions).await;
             }
             Err(error) => {
+                failures += 1;
                 let reason = format!("position reconciliation failed: {}", public_error(&error));
-                app.state.lock().latch(reason.clone());
-                app.record("reconcile_error", json!({"reason": reason}));
-                app.cancel_all("position reconciliation failed").await;
+                app.record("reconcile_error", json!({"reason": reason, "consecutive": failures}));
+                // One failed request is a network blip. Live latches after
+                // three in a row (90 s blind to the wallet); shadow holds no
+                // real positions and only records.
+                if app.cfg.mode == VenueMode::Live && failures >= RECONCILE_FAILURES_TO_LATCH {
+                    app.state.lock().latch(reason);
+                    app.cancel_all("position reconciliation failed").await;
+                }
             }
         }
     }
