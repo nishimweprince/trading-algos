@@ -176,7 +176,7 @@ impl Engine {
                         token: yes_token,
                         outcome: "YES".into(),
                         price: yes,
-                        quantity: 1.0,
+                        quantity: shares_for(yes, cfg.min_order_usd),
                     });
                     if let Some(token) = no_token {
                         actions.push(Action::Maker {
@@ -184,7 +184,7 @@ impl Engine {
                             token,
                             outcome: "NO".into(),
                             price: no,
-                            quantity: 1.0,
+                            quantity: shares_for(no, cfg.min_order_usd),
                         });
                     }
                     *quote = QuoteState { last_ms: now, fair, yes, no };
@@ -205,7 +205,7 @@ impl Engine {
                                 (ask + cfg.taker_slippage).min(0.99),
                                 precision,
                             ),
-                            quantity: 1.0,
+                            quantity: shares_for((ask + cfg.taker_slippage).min(0.99), cfg.min_order_usd),
                             edge,
                         });
                     }
@@ -232,7 +232,7 @@ impl Engine {
                                     (no_ask + cfg.taker_slippage).min(0.99),
                                     precision,
                                 ),
-                                quantity: 1.0,
+                                quantity: shares_for((no_ask + cfg.taker_slippage).min(0.99), cfg.min_order_usd),
                                 edge,
                             });
                         }
@@ -242,6 +242,15 @@ impl Engine {
         }
         actions
     }
+}
+
+/// The fewest whole shares worth at least `min_usd` at `price` (Predict
+/// refuses an order under $0.90).
+pub fn shares_for(price: f64, min_usd: f64) -> f64 {
+    if price <= 0.0 {
+        return 1.0;
+    }
+    (min_usd / price - 1e-9).ceil().max(1.0)
 }
 
 /// When the market's window starts trading: the 15-minute window's open
@@ -317,6 +326,15 @@ mod tests {
             e.kalshi_frame(r#"{"type":"ticker","msg":{"market_ticker":"KX"}}"#).is_none(),
             "non-book frames are ignored"
         );
+    }
+
+    #[test]
+    fn orders_meet_the_venue_minimum() {
+        assert_eq!(shares_for(0.40, 1.0), 3.0);
+        assert_eq!(shares_for(0.10, 1.0), 10.0);
+        assert_eq!(shares_for(0.50, 1.0), 2.0);
+        assert_eq!(shares_for(0.99, 1.0), 2.0);
+        assert!(shares_for(0.01, 1.0) * 0.01 >= 0.9);
     }
 
     #[test]

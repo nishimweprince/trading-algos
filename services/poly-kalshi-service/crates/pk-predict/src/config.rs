@@ -47,6 +47,9 @@ pub struct Config {
     pub raw: bool,
     /// The bankroll the P&L view starts from in shadow (`PK_PRED_SIM_CAPITAL`).
     pub sim_capital: f64,
+    /// Each order is sized to at least this much (`PK_PRED_MIN_ORDER_USD`;
+    /// Predict's floor is $0.90).
+    pub min_order_usd: f64,
     pub fingerprint: String,
 }
 
@@ -213,6 +216,7 @@ impl Config {
             kill_file,
             raw: flag("PK_PRED_RAW", false)?,
             sim_capital: number("PK_PRED_SIM_CAPITAL", 100.0)?,
+            min_order_usd: number("PK_PRED_MIN_ORDER_USD", 1.0)?.max(0.9),
             fingerprint,
         })
     }

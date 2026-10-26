@@ -483,7 +483,7 @@ async fn probe(cfg: &Config, client: &Client, confirm: bool) -> anyhow::Result<(
             token_id: &token,
             side: Side::Buy,
             price: 0.01,
-            quantity: 1.0,
+            quantity: engine::shares_for(0.01, cfg.min_order_usd),
             strategy: "LIMIT",
             expiration,
             slippage_bps: None,
