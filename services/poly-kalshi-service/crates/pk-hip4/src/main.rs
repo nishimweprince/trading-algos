@@ -441,6 +441,9 @@ async fn run(cfg: Config, client: Arc<Client>) -> anyhow::Result<()> {
         state: Mutex::new({
             let mut s = AdapterState::new("hip4", cfg.mode, cfg.fingerprint.clone(), risk);
             s.pnl = pk_venue_core::service::PnlBook::open(cfg.state_dir.join("pnl.json"), cfg.sim_capital);
+            if cfg.mode == VenueMode::Shadow {
+                s.restore_open();
+            }
             s
         }),
         journal: Mutex::new(Journal::open(cfg.state_dir.join("journal"))?),

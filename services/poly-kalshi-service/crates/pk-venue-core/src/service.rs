@@ -126,6 +126,12 @@ pub struct PnlBook {
     pub losses: u64,
     /// `[t_ms, realised_total, marked]`, one point a minute.
     pub series: VecDeque<(i64, f64, f64)>,
+    /// Open positions and their metadata, so a restart keeps what is held
+    /// (live, the wallet is the record; shadow has only this).
+    #[serde(default)]
+    pub open: HashMap<String, Position>,
+    #[serde(default)]
+    pub open_meta: HashMap<String, PositionMeta>,
     #[serde(skip)]
     path: Option<PathBuf>,
 }
@@ -282,6 +288,22 @@ impl AdapterState {
         self.pnl.fees_total += fill.fee;
         self.push_fill(fill.clone());
         self.recount();
+        self.persist_open();
+    }
+
+    /// Copy open positions into the persisted P&L book.
+    fn persist_open(&mut self) {
+        self.pnl.open = self.positions.clone();
+        self.pnl.open_meta = self.position_meta.clone();
+        self.pnl.save();
+    }
+
+    /// After a restart: positions held before it, from the P&L book.
+    pub fn restore_open(&mut self) {
+        self.positions = self.pnl.open.clone();
+        self.position_meta = self.pnl.open_meta.clone();
+        self.inventory = self.positions.iter().filter(|(_, p)| !p.is_flat()).map(|(k, p)| (k.clone(), p.net())).collect();
+        self.recount();
     }
 
     /// Work the risk counters out from the orders and positions themselves,
@@ -331,6 +353,7 @@ impl AdapterState {
         });
         bounded_push(&mut self.settlements, record.clone(), 500);
         self.recount();
+        self.persist_open();
         Some(record)
     }
 
@@ -815,9 +838,16 @@ mod tests {
         assert_eq!((state.pnl.settled, state.pnl.wins), (1, 1));
         assert!((state.pnl.fees_total - 0.05).abs() < 1e-9);
         assert_eq!(state.risk.state.active_markets, 1);
-        // The book persists.
+        // The book persists, with what is still held.
+        state.book_fill(&FillRecord { id: "g".into(), order_id: "y".into(), market: "11".into(), side: "NO".into(), price: 0.45, quantity: 4.0, fee: 0.0, time_ms: 0, simulated: true });
         let again = PnlBook::open(dir.join("pnl.json"), 100.0);
         assert!((again.realised_total - 6.95).abs() < 1e-9);
+        let risk = RiskGuard::open(limits, dir.join("risk2.json")).unwrap();
+        let mut restarted = AdapterState::new("predict", VenueMode::Shadow, "cfg".into(), risk);
+        restarted.pnl = again;
+        restarted.restore_open();
+        assert_eq!(restarted.inventory.get("11"), Some(&-4.0));
+        assert!((restarted.risk.state.open_usd - 1.8).abs() < 1e-9);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

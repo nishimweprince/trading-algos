@@ -526,6 +526,9 @@ async fn run(cfg: Config, client: Arc<Client>) -> anyhow::Result<()> {
     let risk = RiskGuard::open(cfg.risk, cfg.state_dir.join("risk.json"))?;
     let mut state = AdapterState::new("predict", cfg.mode, cfg.fingerprint.clone(), risk);
     state.pnl = pk_venue_core::service::PnlBook::open(cfg.state_dir.join("pnl.json"), cfg.sim_capital);
+    if cfg.mode == VenueMode::Shadow {
+        state.restore_open();
+    }
     let pem = std::fs::read_to_string(&cfg.kalshi_private_key_path)?;
     let kalshi_signer = Arc::new(KalshiSigner::from_pem(&cfg.kalshi_api_key_id, &pem)?);
     let app = Arc::new(App {
