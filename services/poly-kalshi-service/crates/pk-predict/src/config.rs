@@ -50,6 +50,13 @@ pub struct Config {
     /// Each order is sized to at least this much (`PK_PRED_MIN_ORDER_USD`;
     /// Predict's floor is $0.90).
     pub min_order_usd: f64,
+    /// Least profit per share a completed YES+NO pair must lock (`PK_PRED_PAIR_MARGIN`).
+    pub pair_margin: f64,
+    /// First legs only in the window's first `open_leg_s` (`PK_PRED_OPEN_LEG_S`) …
+    pub open_leg_s: i64,
+    /// … and while Kalshi's fair is within this band (`PK_PRED_OPEN_MIN_FAIR` / `MAX_FAIR`).
+    pub open_min_fair: f64,
+    pub open_max_fair: f64,
     pub fingerprint: String,
 }
 
@@ -217,6 +224,10 @@ impl Config {
             raw: flag("PK_PRED_RAW", false)?,
             sim_capital: number("PK_PRED_SIM_CAPITAL", 100.0)?,
             min_order_usd: number("PK_PRED_MIN_ORDER_USD", 1.0)?.max(0.9),
+            pair_margin: number("PK_PRED_PAIR_MARGIN", 0.02)?,
+            open_leg_s: integer("PK_PRED_OPEN_LEG_S", 300)? as i64,
+            open_min_fair: number("PK_PRED_OPEN_MIN_FAIR", 0.15)?,
+            open_max_fair: number("PK_PRED_OPEN_MAX_FAIR", 0.85)?,
             fingerprint,
         })
     }

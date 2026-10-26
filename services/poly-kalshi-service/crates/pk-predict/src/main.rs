@@ -820,8 +820,8 @@ async fn strategy_loop(app: Arc<App>) {
     loop {
         interval.tick().await;
         app.simulate_shadow_fills();
-        let inventory = app.state.lock().inventory.clone();
-        let actions = app.engine.lock().evaluate(&app.cfg, &inventory);
+        let positions = app.state.lock().positions.clone();
+        let actions = app.engine.lock().evaluate(&app.cfg, &positions);
         if actions.iter().any(|a| matches!(a, Action::Maker { .. })) {
             app.fast_remove_quotes("requote").await;
         }

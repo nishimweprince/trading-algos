@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use pk_venue_core::Book;
-use pk_venue_core::service::now_ms;
+use pk_venue_core::service::{Position, now_ms};
 use serde_json::Value;
 
 use crate::config::Config;
@@ -117,7 +117,9 @@ impl Engine {
         Some((ticker, fair))
     }
 
-    pub fn evaluate(&mut self, cfg: &Config, inventory: &HashMap<String, f64>) -> Vec<Action> {
+    /// `positions`: what each market already holds (YES/NO quantity and cost),
+    /// for the inventory skew, the pair guard and the first-leg rules.
+    pub fn evaluate(&mut self, cfg: &Config, positions: &HashMap<String, Position>) -> Vec<Action> {
         let now = now_ms();
         let mut actions = Vec::new();
         // Only windows trading now are quoted or need fresh books; later
@@ -151,7 +153,8 @@ impl Engine {
             let Some(book) = self.venue_books.get(&market.id.to_string()).copied() else { continue };
             let precision = market.decimal_precision;
             let tick = 10_f64.powi(-(precision as i32));
-            let inv = inventory.get(&market.id.to_string()).copied().unwrap_or(0.0);
+            let held = positions.get(&market.id.to_string()).cloned().unwrap_or_default();
+            let inv = held.net();
             let skew = (inv / cfg.risk.max_open_usd.max(1.0) * 0.02).clamp(-0.02, 0.02);
             let yes = (fair - cfg.half_spread - cfg.basis_buffer - skew).clamp(tick, 1.0 - tick);
             let no = (crate::model::complement_price(fair, precision) - cfg.half_spread - cfg.basis_buffer
@@ -162,6 +165,19 @@ impl Engine {
             let no = no_touch.map_or(no, |ask| no.min(ask - tick)).max(tick);
             let yes = crate::model::quantize_price(yes, precision);
             let no = crate::model::quantize_price(no, precision);
+            // Second leg: with shares held on one side, the other side pays at
+            // most 1 − their average cost − pair_margin, so a completed pair
+            // locks at least pair_margin a share (and auto-merge books it).
+            // First legs (opening or adding to a one-sided position) only early
+            // in the window and away from 0/1, where pairs have time to form.
+            let window_s = window_open_ms(market).map(|o| (now - o) / 1000).unwrap_or(0);
+            let first_ok = first_leg_ok(cfg, window_s, fair);
+            let quote_yes = side_price(yes, held.no_qty, held.no_cost, cfg.pair_margin, tick, precision)
+                .filter(|_| !opens(inv, true) || first_ok);
+            let quote_no = side_price(no, held.yes_qty, held.yes_cost, cfg.pair_margin, tick, precision)
+                .filter(|_| !opens(inv, false) || first_ok);
+            let yes = quote_yes.unwrap_or(-1.0);
+            let no = quote_no.unwrap_or(-1.0);
             let quote = self.quotes.entry(market.id.to_string()).or_default();
             let changed = (fair - quote.fair).abs() >= cfg.requote_cents
                 || (yes - quote.yes).abs() >= tick
@@ -171,14 +187,16 @@ impl Engine {
                 if let Some(yes_token) = market.yes_outcome().map(|o| o.token_id.clone()) {
                     let no_token =
                         market.outcomes.iter().find(|o| o.token_id != yes_token).map(|o| o.token_id.clone());
-                    actions.push(Action::Maker {
-                        market: market.clone(),
-                        token: yes_token,
-                        outcome: "YES".into(),
-                        price: yes,
-                        quantity: shares_for(yes, cfg.min_order_usd),
-                    });
-                    if let Some(token) = no_token {
+                    if quote_yes.is_some() {
+                        actions.push(Action::Maker {
+                            market: market.clone(),
+                            token: yes_token,
+                            outcome: "YES".into(),
+                            price: yes,
+                            quantity: shares_for(yes, cfg.min_order_usd),
+                        });
+                    }
+                    if let Some(token) = no_token.filter(|_| quote_no.is_some()) {
                         actions.push(Action::Maker {
                             market: market.clone(),
                             token,
@@ -242,6 +260,31 @@ impl Engine {
         }
         actions
     }
+}
+
+/// Would a fill of this side open or add to a one-sided position? (YES when
+/// net ≥ 0, NO when net ≤ 0; flat counts as opening.)
+pub fn opens(net: f64, yes: bool) -> bool {
+    if yes { net >= -1e-9 } else { net <= 1e-9 }
+}
+
+/// May a first leg be quoted `window_s` seconds into the window at fair `q`?
+pub fn first_leg_ok(cfg: &Config, window_s: i64, q: f64) -> bool {
+    window_s < cfg.open_leg_s && (cfg.open_min_fair - 1e-9..=cfg.open_max_fair + 1e-9).contains(&q)
+}
+
+/// A side's bid after the pair guard: with `other_qty` held on the other
+/// side at total cost `other_cost`, at most 1 − their average − margin
+/// (floored to the tick). None when that leaves nothing to bid.
+pub fn side_price(px: f64, other_qty: f64, other_cost: f64, margin: f64, tick: f64, precision: u32) -> Option<f64> {
+    let px = if other_qty > 1e-9 {
+        let scale = 10_f64.powi(precision as i32);
+        let cap = ((1.0 - other_cost / other_qty - margin) * scale + 1e-6).floor() / scale;
+        px.min(cap)
+    } else {
+        px
+    };
+    (px >= tick - 1e-9).then_some(px)
 }
 
 /// The fewest whole shares worth at least `min_usd` at `price` (Predict
@@ -326,6 +369,21 @@ mod tests {
             e.kalshi_frame(r#"{"type":"ticker","msg":{"market_ticker":"KX"}}"#).is_none(),
             "non-book frames are ignored"
         );
+    }
+
+    #[test]
+    fn pair_guard_and_first_leg_rules() {
+        // Holding 10 NO at 0.55: YES pays at most 1 − 0.55 − 0.02 = 0.43.
+        assert_eq!(side_price(0.48, 10.0, 5.5, 0.02, 0.01, 2), Some(0.43));
+        assert_eq!(side_price(0.30, 10.0, 5.5, 0.02, 0.01, 2), Some(0.30));
+        assert_eq!(side_price(0.48, 0.0, 0.0, 0.02, 0.01, 2), Some(0.48));
+        // Holding YES at 0.985: the NO cap is below a tick, so no NO bid.
+        assert_eq!(side_price(0.10, 4.0, 3.94, 0.02, 0.01, 2), None);
+        assert!(opens(0.0, true) && opens(0.0, false) && opens(3.0, true) && !opens(3.0, false));
+        let c = cfg();
+        assert!(first_leg_ok(&c, 100, 0.5));
+        assert!(!first_leg_ok(&c, 300, 0.5), "after 5 min");
+        assert!(!first_leg_ok(&c, 100, 0.9), "outside 0.15–0.85");
     }
 
     #[test]
