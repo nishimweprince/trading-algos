@@ -56,7 +56,7 @@ svg.mkt .k { stroke:var(--kalshi); } svg.mkt .l { stroke:var(--lim); } svg.mkt .
 <div class="card"><h2>Realised P&amp;L by settled window</h2><div id="chart" class="muted">no settled windows yet</div></div>
 
 <h3 class="section">Quotes</h3>
-<div class="card"><table id="coins"></table><div class="note">Fair = Kalshi YES mid. Our bids: Up at fair − h − skew, Down at 1 − (fair + h − skew), post-only, 1¢ ticks. Capture = fair at fill − price; markouts = Kalshi's mid 5 s / 30 s later − price (negative = adverse selection). Uptime = share of the window with a bid resting.</div></div>
+<div class="card"><table id="coins"></table><div class="note">Fair = Kalshi YES mid. Our bids: Up at fair − h − skew, Down at 1 − (fair + h − skew), post-only, 1¢ ticks. Capture = fair at fill − price; markouts = Kalshi's mid 5 s / 30 s later − price (negative = adverse selection); 2 min and 5 min stop at the close, and "at close" is Kalshi's mid 1 s before it. Pair guard: with shares held on one side, the other side bids at most 1 − their average cost − 2¢, so every completed pair locks ≥ 2¢. Uptime = share of the window with a bid resting.</div></div>
 
 <h3 class="section">Windows held</h3>
 <div class="card"><table id="held"></table></div>
@@ -111,6 +111,9 @@ async function tick() {
     ["Capture at fill", c(t.capture)],
     ["Markout 5 s", c(t.markout5)],
     ["Markout 30 s", c(t.markout30)],
+    ["Markout 2 min", c(t.markout120)],
+    ["Markout 5 min", c(t.markout300)],
+    ["Markout at close", c(t.markout_close)],
     ["Replay expectation", "+1.00¢ ± 0.41 per share"],
   ]));
   const ex = op.exec || {}, k = s.counters || {};

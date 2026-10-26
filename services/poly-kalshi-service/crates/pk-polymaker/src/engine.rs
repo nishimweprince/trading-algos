@@ -42,7 +42,10 @@ use serde_json::{Map, Value, json};
 const TICK: f64 = 0.01;
 const TRAIL_MS: i64 = 5_000;
 const RECENT: usize = 80;
-const MARKOUTS_MS: [i64; 2] = [5_000, 30_000];
+/// Markout horizons after a fill; the last three stop at the window's close,
+/// and one more is taken at the close itself (Kalshi's mid 1 s before it).
+const MARKOUTS_MS: [i64; 4] = [5_000, 30_000, 120_000, 300_000];
+const MARKOUT_NAMES: [&str; 5] = ["markout5", "markout30", "markout120", "markout300", "markout_close"];
 
 #[derive(Clone, Debug)]
 pub struct PmCfg {
@@ -66,6 +69,8 @@ pub struct PmCfg {
     pub max_orders_per_s: f64,
     pub daily_loss_usd: f64,
     pub max_open_cost_usd: f64,
+    /// Least profit per share a completed Up + Down pair must lock.
+    pub pair_margin: f64,
 }
 
 /// What the executor must do.
@@ -91,6 +96,17 @@ pub fn desired_px(cfg: &PmCfg, q: f64, net: f64, up_ask: Option<f64>, down_ask: 
     let up = clamp(floor_tick(q - cfg.half_spread - skew), up_ask);
     let down = clamp(floor_tick(1.0 - (q + cfg.half_spread - skew)), down_ask);
     (up, down)
+}
+
+/// The pair guard: with shares held on the other side at average cost `c`, a
+/// bid here pays at most `1 − c − pair_margin`, so every pair it completes
+/// locks at least `pair_margin` a share.
+pub fn pair_cap(cfg: &PmCfg, px: Option<f64>, opposite_avg: Option<f64>) -> Option<f64> {
+    let px = px?;
+    let Some(c) = opposite_avg else { return Some(px) };
+    let cap = floor_tick(1.0 - c - cfg.pair_margin);
+    let px = px.min(cap);
+    (px >= cfg.min_px - 1e-9).then_some(px)
 }
 
 /// Shares a new bid on this side may rest for: None if under the venue minimum.
@@ -247,8 +263,8 @@ struct Stat {
     fills: u64,
     shares: f64,
     capture: Sample,
-    markout5: Sample,
-    markout30: Sample,
+    /// 5 s, 30 s, 2 min, 5 min, close: see [`MARKOUT_NAMES`].
+    markouts: [Sample; 5],
     pnl: f64,
     windows: u64,
 }
@@ -260,8 +276,11 @@ impl Stat {
             "fills": self.fills,
             "shares": round_dp(self.shares, 2),
             "capture": c(&self.capture),
-            "markout5": c(&self.markout5),
-            "markout30": c(&self.markout30),
+            "markout5": c(&self.markouts[0]),
+            "markout30": c(&self.markouts[1]),
+            "markout120": c(&self.markouts[2]),
+            "markout300": c(&self.markouts[3]),
+            "markout_close": c(&self.markouts[4]),
             "pnl": round_dp(self.pnl, 4),
             "windows": self.windows,
             "pnl_per_share_c": (self.shares > 0.0).then(|| round_dp(self.pnl / self.shares * 100.0, 2)),
@@ -602,6 +621,11 @@ impl Engine {
         let open_cost = self.open_cost();
         let key = self.coins[i].key();
         let net = key.as_deref().map(|k| self.net_of(k)).unwrap_or(0.0);
+        // Average cost of what this window already holds on each side (pair guard).
+        let held_avg = key.as_deref().and_then(|k| self.inv.get(k)).map(|v| {
+            let avg = |n: f64, c: f64| (n > 1e-9).then(|| c / n);
+            [avg(v.up, v.up_cost), avg(v.down, v.down_cost)]
+        });
         let c = &self.coins[i];
         let gate: &'static str;
         let mut want: [Option<(f64, f64)>; 2] = [None, None];
@@ -630,7 +654,8 @@ impl Engine {
                         let (u, d) = desired_px(&cfg, q, net, ua, da);
                         for (n, px) in [u, d].into_iter().enumerate() {
                             let up = n == 0;
-                            let Some(px) = px else { continue };
+                            let opposite = held_avg.and_then(|h| h[1 - n]);
+                            let Some(px) = pair_cap(&cfg, px, opposite) else { continue };
                             let Some(size) = room(&cfg, net, up) else { continue };
                             // The resting order's own notional is already in open cost.
                             let mine = c.slots[n].order.as_ref().map(|_| c.slots[n].px * c.slots[n].remaining).unwrap_or(0.0);
@@ -886,9 +911,12 @@ impl Engine {
                 st.capture.push(cp);
             }
         }
+        let close_ms = (open_unix + WINDOW_S) * 1000 - 1000;
         for (h, dt) in MARKOUTS_MS.iter().enumerate() {
-            self.dues.push(Due { t_ms: now_ms + dt, horizon: h, asset: o.asset.clone(), open_unix, up: o.up, px: o.px, shares });
+            let t_ms = if h >= 2 { (now_ms + dt).min(close_ms) } else { now_ms + dt };
+            self.dues.push(Due { t_ms, horizon: h, asset: o.asset.clone(), open_unix, up: o.up, px: o.px, shares });
         }
+        self.dues.push(Due { t_ms: close_ms.max(now_ms), horizon: 4, asset: o.asset.clone(), open_unix, up: o.up, px: o.px, shares });
         self.record(
             t_ns,
             "pm_fill",
@@ -914,10 +942,11 @@ impl Engine {
             let Some(q) = c.kbook.quote(None).mid() else { continue };
             let m = (if d.up { q } else { 1.0 - q }) - d.px;
             for st in [&mut self.totals, self.per.entry(d.asset.clone()).or_default()] {
-                if d.horizon == 0 { &mut st.markout5 } else { &mut st.markout30 }.push(m);
+                st.markouts[d.horizon].push(m);
             }
-            if d.horizon == 1 {
-                self.record(t_ns, "pm_markout", json!({"asset": d.asset, "up": d.up, "px": d.px, "shares": d.shares, "q": round_dp(q, 4), "m30": round_dp(m, 4)}));
+            if d.horizon >= 1 {
+                let k = ["m5", "m30", "m120", "m300", "m_close"][d.horizon];
+                self.record(t_ns, "pm_markout", json!({"asset": d.asset, "open_unix": d.open_unix, "up": d.up, "px": d.px, "shares": d.shares, "q": round_dp(q, 4), "h": MARKOUT_NAMES[d.horizon], k: round_dp(m, 4)}));
             }
         }
     }
@@ -1154,6 +1183,7 @@ mod tests {
             max_orders_per_s: 8.0,
             daily_loss_usd: 15.0,
             max_open_cost_usd: 60.0,
+            pair_margin: 0.02,
         }
     }
 
@@ -1194,6 +1224,54 @@ mod tests {
                    "asks": [{"price": format!("{a:.2}"), "size": "50"}]})
         };
         e.on_poly(&json!([book("BTC-up", up), book("BTC-down", down)]).to_string(), t);
+    }
+
+    #[test]
+    fn pair_guard_caps_the_other_side() {
+        let c = cfg();
+        // Holding Up at 0.60 on average: a Down bid pays at most 0.38.
+        assert_eq!(pair_cap(&c, Some(0.45), Some(0.60)), Some(0.38));
+        assert_eq!(pair_cap(&c, Some(0.30), Some(0.60)), Some(0.30));
+        // Nothing held on the other side: unchanged.
+        assert_eq!(pair_cap(&c, Some(0.45), None), Some(0.45));
+        // Holding Up at 0.94: the Down cap 0.04 is under min_px, so no bid.
+        assert_eq!(pair_cap(&c, Some(0.20), Some(0.94)), None);
+    }
+
+    #[test]
+    fn fill_then_pair_guarded_requote_and_close_markout() {
+        let dir = tmp("pairguard");
+        let mut e = engine(&dir);
+        let t0 = (OPEN + 100) * NS;
+        books(&mut e, 0.54, 0.56, (0.53, 0.57), (0.43, 0.47), t0);
+        e.tick(t0, &Gates { kill: false, feeds_ok: true });
+        e.take_actions();
+        e.on_posted("BTC", true, 0.53, 5.0, Ok("o1".into()), t0);
+        e.on_posted("BTC", false, 0.43, 5.0, Ok("o2".into()), t0);
+        e.on_order("o1", 5.0, true, t0 + NS);
+        e.on_order("o2", 0.0, true, t0 + NS);
+        // Kalshi falls 3¢ over 2 s (no single-second jump): the Down target is
+        // 1 − 0.53 = 0.47 → 0.45, but the pair guard caps it at 1 − 0.53 − 0.02 = 0.45.
+        books(&mut e, 0.52, 0.54, (0.51, 0.55), (0.45, 0.49), t0 + 2 * NS);
+        books(&mut e, 0.51, 0.53, (0.50, 0.54), (0.46, 0.50), t0 + 4 * NS);
+        e.tick(t0 + 4 * NS, &Gates { kill: false, feeds_ok: true });
+        let a = e.take_actions();
+        let down = a.iter().find_map(|x| match x { Action::Post { up: false, px, .. } => Some(*px), _ => None });
+        assert_eq!(down, Some(0.45), "{a:?}");
+        // Markouts: 5 s, 30 s, and the close one.
+        e.tick(t0 + 6 * NS + 1, &Gates { kill: false, feeds_ok: true });
+        e.tick(t0 + 31 * NS + 1, &Gates { kill: false, feeds_ok: true });
+        assert_eq!(e.totals.markouts[0].n(), 1);
+        assert_eq!(e.totals.markouts[1].n(), 1);
+        assert_eq!(e.totals.markouts[4].n(), 0);
+        let close = (OPEN + WINDOW_S) * NS - NS;
+        books(&mut e, 0.60, 0.62, (0.59, 0.63), (0.37, 0.41), close - 100_000_000);
+        e.tick(close, &Gates { kill: false, feeds_ok: true });
+        assert_eq!(e.totals.markouts[4].n(), 1);
+        assert!((e.totals.markouts[4].mean().unwrap() - (0.61 - 0.53)).abs() < 1e-9);
+        assert_eq!(e.totals.markouts[2].n(), 1, "2 min");
+        assert_eq!(e.totals.markouts[3].n(), 1, "5 min");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

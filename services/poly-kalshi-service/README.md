@@ -1,5 +1,10 @@
 # poly-kalshi-service
 
+The isolated Predict.fun and Hyperliquid HIP-4 adapters live in `crates/pk-predict`,
+`crates/pk-hip4`, and `crates/pk-venue-core`. They do not sit on the existing
+trader hot path. Deployment, promotion gates, kill behavior, and Tokyo host
+setup are documented in [`docs/TOKYO_VENUE_ADAPTERS.md`](docs/TOKYO_VENUE_ADAPTERS.md).
+
 The kpc convergence trade, rebuilt to measure its one untested repair. On 15-minute
 crypto up/down binaries, when Kalshi's YES mid and Polymarket's differ by at least
 0.20, buy the cheap Polymarket leg as a taker, at or below 0.60, and sell it once
@@ -327,6 +332,12 @@ per share filled at h = 0.02; at h = 0.05 it lost.
   (`PK_PM_ADVERSE_MS`). One below its target is raised after 300 ms, once the
   gap is ≥ 1¢. Jumps of 2¢ pull at once (the pause). Posts are capped at 8 per
   second.
+- **Pair guard.** With shares held on one side at average cost c, the other
+  side bids at most `1 − c − PK_PM_PAIR_MARGIN` (0.02), so every completed
+  Up + Down pair locks at least 2¢ a share.
+- **Markouts** against Kalshi's mid: 5 s, 30 s, 2 min and 5 min after each fill
+  (the last two stop at the close), and at the close itself. They separate
+  adverse selection from what settlement adds.
 - **Fills** come from the venue: every second, `size_matched` of each order
   (`/data/orders`, then `/data/order/{id}` once it is gone). Makers pay no fee.
   - Every 30 s, each held token's wallet balance is checked against the booked

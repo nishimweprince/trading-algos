@@ -121,6 +121,7 @@ impl PmSettings {
             max_orders_per_s: e.num("PK_PM_MAX_ORDERS_PER_S", 8.0)?,
             daily_loss_usd: e.num("PK_PM_DAILY_LOSS_USD", 15.0)?,
             max_open_cost_usd: e.num("PK_PM_MAX_OPEN_COST_USD", 60.0)?,
+            pair_margin: e.num("PK_PM_PAIR_MARGIN", 0.02)?,
         };
         let pm = Self {
             mode,
@@ -169,6 +170,7 @@ impl PmSettings {
             "adverse_ms": c.adverse_ms,
             "daily_loss_usd": c.daily_loss_usd,
             "max_open_cost_usd": c.max_open_cost_usd,
+            "pair_margin": c.pair_margin,
         })
     }
 }
