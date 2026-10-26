@@ -17,8 +17,11 @@
 //!   open cost past `max_open_cost_usd`; the window's first `entry_early_s`
 //!   and last `stop_s`; a pause (Kalshi mid moved `pause_jump` within 1 s:
 //!   `pause_ms`); stale or reconnected books; halt, kill or stale feeds.
-//! - **Requotes:** a bid now above its target is cancelled at once; one below
-//!   it is raised after `min_requote_ms` once the gap is `requote_cents`.
+//! - **Requotes:** a target must hold before the bid moves (Kalshi's mid
+//!   flickers across a cent): a bid above its target is cancelled once that
+//!   has lasted `adverse_ms`, one below it is raised once a gap of
+//!   `requote_cents` has lasted `min_requote_ms`. Jumps of `pause_jump` pull
+//!   at once (the pause), as do the gates above.
 //! - **Fills** come from the venue's own order state (`size_matched`), polled
 //!   by the executor; makers pay no fee. Up + Down pairs pay $1 whatever the
 //!   outcome; the net settles on Polymarket's resolution.
@@ -58,6 +61,7 @@ pub struct PmCfg {
     pub stop_s: i64,
     pub requote_cents: f64,
     pub min_requote_ms: i64,
+    pub adverse_ms: i64,
     pub reject_cooldown_ms: i64,
     pub max_orders_per_s: f64,
     pub daily_loss_usd: f64,
@@ -182,6 +186,8 @@ struct Slot {
     inflight: bool,
     last_change_ms: i64,
     cooldown_until_ms: i64,
+    /// Since when the target has been above (+1) or below (−1) the resting bid.
+    off: Option<(i8, i64)>,
 }
 
 struct Coin {
@@ -665,18 +671,33 @@ impl Engine {
         }
         if let Some(id) = s.order.clone() {
             let stale_window = order_key.as_deref().is_some_and(|k| Some(k) != key);
+            let (adverse_ms, raise_ms, step) = (cfg.adverse_ms, cfg.min_requote_ms, cfg.requote_cents * TICK);
+            let s = &mut self.coins[i].slots[n];
             let cancel = match want {
                 None => true,
                 _ if stale_window => true,
                 Some((px, size)) => {
-                    let too_high = s.px > px + 1e-9;
-                    let too_big = s.remaining > size + 1e-9;
-                    let raise = px - s.px >= cfg.requote_cents * TICK - 1e-9 && now_ms - s.last_change_ms >= cfg.min_requote_ms;
-                    too_high || too_big || raise
+                    let dir: i8 = if s.px > px + 1e-9 {
+                        1
+                    } else if px - s.px >= step - 1e-9 {
+                        -1
+                    } else {
+                        0
+                    };
+                    let since = match (dir, s.off) {
+                        (0, _) => None,
+                        (d, Some((od, t))) if od == d => Some(t),
+                        _ => Some(now_ms),
+                    };
+                    s.off = since.map(|t| (dir, t));
+                    let held = since.map(|t| now_ms - t).unwrap_or(0);
+                    let too_high = dir == 1 && held >= adverse_ms;
+                    let raise = dir == -1 && held >= raise_ms && now_ms - s.last_change_ms >= raise_ms;
+                    s.remaining > size + 1e-9 || too_high || raise
                 }
             };
             if cancel && now_ms >= s.cooldown_until_ms {
-                let s = &mut self.coins[i].slots[n];
+                s.off = None;
                 s.inflight = true;
                 self.actions.push(Action::Cancel { asset, up, order_id: id });
                 self.count("cancels");
@@ -1109,6 +1130,7 @@ mod tests {
             stop_s: 60,
             requote_cents: 1.0,
             min_requote_ms: 300,
+            adverse_ms: 200,
             reject_cooldown_ms: 500,
             max_orders_per_s: 8.0,
             daily_loss_usd: 15.0,
@@ -1203,22 +1225,36 @@ mod tests {
         e.tick(t0 + 50_000_000, &Gates { kill: false, feeds_ok: true });
         assert!(e.take_actions().is_empty(), "nothing moved");
 
-        // Kalshi up a cent (no pause): the Up bid may rise only after min_requote_ms;
-        // the Down bid is now too high and goes at once.
+        // Kalshi up a cent (no pause): nothing moves on the first sight of it (the
+        // mid flickers); the Down bid, now too high, goes once that has held
+        // adverse_ms, and the Up bid rises once its gap has held min_requote_ms.
         let t1 = t0 + 100_000_000;
         books(&mut e, 0.55, 0.57, (0.53, 0.57), (0.43, 0.47), t1);
         e.tick(t1, &Gates { kill: false, feeds_ok: true });
+        assert!(e.take_actions().is_empty());
+        e.tick(t0 + 320_000_000, &Gates { kill: false, feeds_ok: true });
         let a = e.take_actions();
         assert_eq!(a, vec![Action::Cancel { asset: "BTC".into(), up: false, order_id: "o2".into() }]);
-        e.tick(t0 + 400_000_000, &Gates { kill: false, feeds_ok: true });
+        e.tick(t0 + 410_000_000, &Gates { kill: false, feeds_ok: true });
         let a = e.take_actions();
         assert_eq!(a, vec![Action::Cancel { asset: "BTC".into(), up: true, order_id: "o1".into() }]);
 
-        // Kill pulls everything.
+        // A flicker back within adverse_ms leaves the bid alone.
         e.on_cancelled("BTC", true, "o1", true, None, t0 + 450_000_000);
         e.on_cancelled("BTC", false, "o2", true, None, t0 + 450_000_000);
-        e.tick(t0 + 500_000_000, &Gates { kill: true, feeds_ok: true });
-        assert!(e.take_actions().is_empty());
+        e.tick(t0 + 460_000_000, &Gates { kill: false, feeds_ok: true });
+        assert_eq!(e.take_actions().len(), 2, "reposted at the new prices");
+        e.on_posted("BTC", true, 0.53, 5.0, Ok("o3".into()), t0 + 470_000_000);
+        e.on_posted("BTC", false, 0.42, 5.0, Ok("o4".into()), t0 + 470_000_000);
+        books(&mut e, 0.54, 0.555, (0.53, 0.57), (0.43, 0.47), t0 + 500_000_000);
+        e.tick(t0 + 500_000_000, &Gates { kill: false, feeds_ok: true });
+        books(&mut e, 0.55, 0.57, (0.53, 0.57), (0.43, 0.47), t0 + 600_000_000);
+        e.tick(t0 + 650_000_000, &Gates { kill: false, feeds_ok: true });
+        assert!(e.take_actions().is_empty(), "the flicker passed");
+
+        // Kill pulls everything at once.
+        e.tick(t0 + 700_000_000, &Gates { kill: true, feeds_ok: true });
+        assert_eq!(e.take_actions().len(), 2);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

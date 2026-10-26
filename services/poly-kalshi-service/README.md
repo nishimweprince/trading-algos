@@ -322,8 +322,10 @@ per share filled at h = 0.02; at h = 0.05 it lost.
   - a feed silent for 5 s or reconnected;
   - the `KILL` file, which also sends a cancel-all;
   - a side whose fill would take |net| past 20, or open cost past $60.
-- **Requotes.** A bid now above its target is cancelled at once. One below its
-  target rises after 300 ms, once the gap is ≥ 1¢. Posts are capped at 8 per
+- **Requotes.** Kalshi's mid flickers across a cent, so a new target must
+  hold before a bid moves. A bid above its target is cancelled after 200 ms
+  (`PK_PM_ADVERSE_MS`). One below its target is raised after 300 ms, once the
+  gap is ≥ 1¢. Jumps of 2¢ pull at once (the pause). Posts are capped at 8 per
   second.
 - **Fills** come from the venue: every second, `size_matched` of each order
   (`/data/orders`, then `/data/order/{id}` once it is gone). Makers pay no fee.

@@ -116,6 +116,7 @@ impl PmSettings {
             stop_s: e.num("PK_PM_STOP_S", 60)?,
             requote_cents: e.num("PK_PM_REQUOTE_CENTS", 1.0)?,
             min_requote_ms: e.num("PK_PM_MIN_REQUOTE_MS", 300)?,
+            adverse_ms: e.num("PK_PM_ADVERSE_MS", 200)?,
             reject_cooldown_ms: e.num("PK_PM_REJECT_COOLDOWN_MS", 500)?,
             max_orders_per_s: e.num("PK_PM_MAX_ORDERS_PER_S", 8.0)?,
             daily_loss_usd: e.num("PK_PM_DAILY_LOSS_USD", 15.0)?,
@@ -165,6 +166,7 @@ impl PmSettings {
             "stop_s": c.stop_s,
             "requote_cents": c.requote_cents,
             "min_requote_ms": c.min_requote_ms,
+            "adverse_ms": c.adverse_ms,
             "daily_loss_usd": c.daily_loss_usd,
             "max_open_cost_usd": c.max_open_cost_usd,
         })
