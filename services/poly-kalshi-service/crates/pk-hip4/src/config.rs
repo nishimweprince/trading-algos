@@ -34,6 +34,8 @@ pub struct Config {
     pub kill_file: PathBuf,
     /// Record every raw Kalshi/HIP-4 frame (`PK_HIP4_RAW`).
     pub raw: bool,
+    /// The bankroll the P&L view starts from in shadow (`PK_HIP4_SIM_CAPITAL`).
+    pub sim_capital: f64,
     pub fingerprint: String,
 }
 
@@ -160,6 +162,7 @@ impl Config {
             state_dir: p("PK_HIP4_STATE_DIR", "data/state-hip4"),
             kill_file: p("PK_HIP4_KILL_FILE", "data/KILL.hip4"),
             raw: flag("PK_HIP4_RAW", false)?,
+            sim_capital: num("PK_HIP4_SIM_CAPITAL", 100.0)?,
             fingerprint: format!("{:x}", Sha256::digest(public.as_bytes())),
         })
     }

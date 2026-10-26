@@ -85,7 +85,6 @@ impl App {
     fn mark_open_cancelled(&self) -> usize {
         let mut state = self.state.lock();
         let mut count = 0;
-        let mut released = 0.0;
         for order in state
             .orders
             .iter_mut()
@@ -94,12 +93,8 @@ impl App {
             order.status = "cancelled".into();
             order.updated_ms = now_ms();
             count += 1;
-            released += order.price * order.quantity;
         }
-        state.risk.state.open_orders = state.risk.state.open_orders.saturating_sub(count);
-        state.risk.state.open_usd = (state.risk.state.open_usd - released).max(0.0);
-        state.risk.state.active_markets =
-            state.inventory.values().filter(|quantity| quantity.abs() > 1e-9).count();
+        state.recount();
         state.risk.save();
         count
     }
@@ -161,15 +156,33 @@ impl App {
         }
         let lane = if ioc { "taker" } else { "maker" };
         let mut accepted = vec![];
-        let mut provisional = self.state.lock().risk.clone();
-        let mut active: std::collections::HashSet<String> = self
-            .state
-            .lock()
-            .orders
-            .iter()
-            .filter(|order| order.status == "submitted" || order.status == "shadow_open")
-            .map(|order| order.market.clone())
-            .collect();
+        // Counters from the orders and positions themselves (an incremental
+        // count drifted to 528 of 4 and blocked every other market).
+        let (mut provisional, mut active) = {
+            let mut s = self.state.lock();
+            s.recount();
+            let mut active: std::collections::HashSet<String> = s
+                .orders
+                .iter()
+                .filter(|order| order.status == "submitted" || order.status == "shadow_open")
+                .map(|order| order.market.clone())
+                .collect();
+            active.extend(s.positions.iter().filter(|(_, p)| !p.is_flat()).map(|(k, _)| k.clone()));
+            (s.risk.clone(), active)
+        };
+        // A requote replaces this batch's markets' resting quotes, so their
+        // notional and order slots are free for the new batch.
+        if !ioc {
+            let s = self.state.lock();
+            let replaced: Vec<&OrderRecord> = s
+                .orders
+                .iter()
+                .filter(|o| o.lane == "maker" && (o.status == "submitted" || o.status == "shadow_open"))
+                .collect();
+            provisional.state.open_orders = provisional.state.open_orders.saturating_sub(replaced.len());
+            provisional.state.open_usd =
+                (provisional.state.open_usd - replaced.iter().map(|o| o.price * o.quantity).sum::<f64>()).max(0.0);
+        }
         for item in items {
             let cost = item.1.price.parse::<f64>().unwrap_or(0.0) * item.1.size.parse::<f64>().unwrap_or(0.0);
             let market_id = item.0.outcome.outcome.to_string();
@@ -210,20 +223,15 @@ impl App {
                 }
             }
             let mut s = self.state.lock();
-            let mut released = 0.0;
-            let mut removed = 0;
             for o in s
                 .orders
                 .iter_mut()
                 .filter(|o| o.lane == "maker" && (o.status == "submitted" || o.status == "shadow_open"))
             {
-                released += o.price * o.quantity;
-                removed += 1;
                 o.status = "cancelled".into();
                 o.updated_ms = now_ms();
             }
-            s.risk.state.open_orders = s.risk.state.open_orders.saturating_sub(removed);
-            s.risk.state.open_usd = (s.risk.state.open_usd - released).max(0.0);
+            s.recount();
             s.risk.save();
         }
         if self.cfg.mode == VenueMode::Shadow {
@@ -243,17 +251,9 @@ impl App {
                     simulated: true,
                 };
                 let mut state = self.state.lock();
-                let new_market = !state.orders.iter().any(|existing| {
-                    existing.market == rec.market
-                        && (existing.status == "submitted" || existing.status == "shadow_open")
-                });
-                state.risk.state.open_orders += 1;
-                state.risk.state.open_usd += rec.price * rec.quantity;
-                if new_market {
-                    state.risk.state.active_markets += 1;
-                }
-                state.risk.save();
                 state.push_order(rec.clone());
+                state.recount();
+                state.risk.save();
                 drop(state);
                 self.record("shadow_order", serde_json::to_value(rec).unwrap_or_default())
             }
@@ -279,17 +279,9 @@ impl App {
                         simulated: false,
                     };
                     let mut state = self.state.lock();
-                    let new_market = !state.orders.iter().any(|existing| {
-                        existing.market == rec.market
-                            && (existing.status == "submitted" || existing.status == "shadow_open")
-                    });
-                    state.risk.state.open_orders += 1;
-                    state.risk.state.open_usd += rec.price * rec.quantity;
-                    if new_market {
-                        state.risk.state.active_markets += 1;
-                    }
-                    state.risk.save();
-                    state.push_order(rec)
+                    state.push_order(rec);
+                    state.recount();
+                    state.risk.save()
                 }
                 self.record("order_ack", json!({"lane":lane,"reply":reply}));
             }
@@ -347,9 +339,10 @@ impl App {
                 });
             }
             for fill in &fills {
+                if let Some(m) = matched.iter().find(|m| m.outcome.outcome.to_string() == fill.market) {
+                    state.position_meta.entry(fill.market.clone()).or_insert_with(|| position_meta(m, now));
+                }
                 state.book_fill(fill);
-                state.risk.state.open_orders = state.risk.state.open_orders.saturating_sub(1);
-                state.risk.state.open_usd = (state.risk.state.open_usd - fill.price * fill.quantity).max(0.0);
             }
             state.risk.save();
         }
@@ -445,7 +438,11 @@ async fn run(cfg: Config, client: Arc<Client>) -> anyhow::Result<()> {
     let risk = RiskGuard::open(cfg.risk, cfg.state_dir.join("risk.json"))?;
     let gateway = Gateway::spawn(client.clone());
     let app = Arc::new(App {
-        state: Mutex::new(AdapterState::new("hip4", cfg.mode, cfg.fingerprint.clone(), risk)),
+        state: Mutex::new({
+            let mut s = AdapterState::new("hip4", cfg.mode, cfg.fingerprint.clone(), risk);
+            s.pnl = pk_venue_core::service::PnlBook::open(cfg.state_dir.join("pnl.json"), cfg.sim_capital);
+            s
+        }),
         journal: Mutex::new(Journal::open(cfg.state_dir.join("journal"))?),
         raw: Mutex::new(if cfg.raw { Some(Journal::open(cfg.state_dir.join("raw"))?) } else { None }),
         engine: Mutex::new(Engine::new()),
@@ -503,6 +500,7 @@ async fn run(cfg: Config, client: Arc<Client>) -> anyhow::Result<()> {
     tokio::spawn(clock_loop(app.clone()));
     tokio::spawn(discovery_loop(app.clone()));
     tokio::spawn(settlement_loop(app.clone()));
+    tokio::spawn(shadow_settlement_loop(app.clone()));
     app.state.lock().ready = true;
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", app.cfg.port)).await?;
     tracing::info!(port = app.cfg.port, mode = app.cfg.mode.as_str(), "pk-hip4 ready");
@@ -900,9 +898,11 @@ fn handle_fills(app: &Arc<App>, value: &Value) {
             order.status = "filled".into();
             order.updated_ms = record.time_ms;
         }
+        let meta = app.engine.lock().matched.iter().find(|m| m.outcome.outcome.to_string() == record.market).cloned();
+        if let Some(m) = meta {
+            state.position_meta.entry(record.market.clone()).or_insert_with(|| position_meta(&m, record.time_ms));
+        }
         state.book_fill(&record);
-        state.risk.state.open_orders = state.risk.state.open_orders.saturating_sub(1);
-        state.risk.state.open_usd = (state.risk.state.open_usd - record.price * record.quantity).max(0.0);
         state.risk.save();
         drop(state);
         app.markouts.lock().watch(&record.market, &record.side, record.price, record.time_ms);
@@ -1044,6 +1044,54 @@ async fn clock_loop(app: Arc<App>) {
         }
     }
 }
+fn position_meta(m: &Matched, now: i64) -> pk_venue_core::service::PositionMeta {
+    pk_venue_core::service::PositionMeta {
+        close_ms: m.outcome.normalized(&m.ticker).and_then(|n| n.decision_ms),
+        kalshi_ticker: Some(m.ticker.clone()),
+        label: format!("{} {}", m.decision.venue_market_id, m.ticker),
+        opened_ms: now,
+    }
+}
+
+/// Settle simulated positions at the decision: the allowlist only admits a
+/// HIP-4 contract whose Kalshi twin has the same underlying, strike and
+/// decision time, so Kalshi's `result` decides it (the settlement indexes
+/// differ, which is the entry's stated basis).
+async fn shadow_settlement_loop(app: Arc<App>) {
+    if app.cfg.mode != VenueMode::Shadow {
+        return;
+    }
+    let mut interval = tokio::time::interval(Duration::from_secs(30));
+    loop {
+        interval.tick().await;
+        let due = app.state.lock().due_settlement(now_ms(), 60_000);
+        for (market, meta) in due {
+            let Some(ticker) = meta.kalshi_ticker.as_deref() else { continue };
+            let Some(yes_won) = kalshi_result(&app, ticker).await else { continue };
+            let settled = app.state.lock().settle_position(&market, yes_won, "kalshi (same strike and time)");
+            if let Some(record) = settled {
+                app.record("shadow_settlement", record);
+            }
+        }
+    }
+}
+
+async fn kalshi_result(app: &Arc<App>, ticker: &str) -> Option<bool> {
+    let path = format!("/trade-api/v2/markets/{ticker}");
+    let pem = std::fs::read_to_string(&app.cfg.kalshi_private_key_path).ok()?;
+    let signer = KalshiSigner::from_pem(&app.cfg.kalshi_api_key_id, &pem).ok()?;
+    let mut req = app.client.http.get(format!("{}/markets/{ticker}", app.cfg.kalshi_rest_url.trim_end_matches('/')));
+    for (k, v) in signer.headers("GET", &path, None) {
+        req = req.header(k, v)
+    }
+    let value = req.send().await.ok()?.error_for_status().ok()?.json::<Value>().await.ok()?;
+    match value.pointer("/market/result").and_then(Value::as_str) {
+        Some("yes") => Some(true),
+        Some("no") => Some(false),
+        _ => None,
+    }
+}
+
 async fn settlement_loop(app: Arc<App>) {
     if app.client.account.is_empty() {
         return;

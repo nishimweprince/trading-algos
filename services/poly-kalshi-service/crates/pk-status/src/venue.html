@@ -47,9 +47,23 @@ svg.mkt .k { stroke:var(--kalshi); } svg.mkt .l { stroke:var(--lim); } svg.mkt .
 <div><h1 id="title">Kalshi → venue</h1><div class="sub"><span id="sub">connecting…</span> · <span id="age" class="muted"></span></div></div>
 <div class="alerts" id="alerts" role="status">checking…</div>
 
+<h3 class="section">Account <span class="muted" id="acctmode"></span></h3>
+<div class="grid">
+  <div class="card"><h2>P&amp;L</h2><div id="pnl"></div></div>
+  <div class="card"><h2>Record</h2><div id="record"></div></div>
+  <div class="card"><h2>P&amp;L by day</h2><table id="byday"></table></div>
+</div>
+<div class="card"><h2>Equity</h2><div id="equity" class="muted">no history yet</div></div>
+
+<h3 class="section">Open positions</h3>
+<div class="card"><table id="openpos"></table><div class="note">Marked at the venue's Yes mid (No at 1 − mid); a closed market keeps its last mark until it settles.</div></div>
+
+<h3 class="section">Settled positions</h3>
+<div class="card"><table id="settled"></table><div class="note">Settled at the venue's own resolution (Predict: the outcome marked WON). HIP-4: Kalshi's result for the contract with the same strike and decision time.</div></div>
+
 <h3 class="section">Performance</h3>
 <div class="grid">
-  <div class="card"><h2>Simulated P&amp;L and risk</h2><div id="risk"></div></div>
+  <div class="card"><h2>Risk</h2><div id="risk"></div></div>
   <div class="card"><h2>Activity</h2><div id="activity"></div></div>
   <div class="card"><h2>Feeds &amp; clock</h2><div id="feeds"></div></div>
 </div>
@@ -123,6 +137,41 @@ async function tick() {
   };
   const m5 = meanMark(5), m30 = meanMark(30), m60 = meanMark(60);
   const cents = (v) => v == null ? "–" : `${(v * 100).toFixed(2)}¢`;
+  const pnl = s.pnl || {};
+  put("acctmode", live ? "· live wallet" : "· simulated bankroll (shadow fills)");
+  put("pnl", kv([
+    ["Bankroll", money(pnl.capital)],
+    ["Equity", money(pnl.equity), sgn((pnl.equity ?? 0) - (pnl.capital ?? 0))],
+    ["Return", pnl.return_pct == null ? "–" : `${f(pnl.return_pct, 2)}%`, sgn(pnl.return_pct)],
+    ["Realised today", money(pnl.realised_today), sgn(pnl.realised_today)],
+    ["Realised total", money(pnl.realised_total), sgn(pnl.realised_total)],
+    ["Unrealised", money(pnl.unrealised), sgn(pnl.unrealised)],
+    ["Fees paid", money(pnl.fees_total)],
+  ]));
+  put("record", kv([
+    ["Positions settled", pnl.settled ?? 0],
+    ["Won / lost", `${pnl.wins ?? 0} / ${pnl.losses ?? 0}`],
+    ["Win rate", pnl.win_rate == null ? "–" : `${f(pnl.win_rate * 100, 0)}%`],
+    ["Average per settled", money(pnl.avg_per_settled), sgn(pnl.avg_per_settled)],
+    ["Open positions", (s.open_positions || []).length],
+    ["Daily loss cap", `$${f(lim.daily_loss_usd, 0)}`],
+  ]));
+  const days = Object.entries(pnl.by_day || {}).sort().reverse();
+  put("byday", days.length ? `<tr><th>Day (UTC)</th><th>Realised</th></tr>` + days.slice(0, 14).map(([d, v]) => `<tr><td>${esc(d)}</td><td class="${sgn(v)}">${money(v)}</td></tr>`).join("") : '<tr><td class="muted">nothing settled yet</td></tr>');
+  const pts = (pnl.series || []).map(([t, rr, m]) => [t, (pnl.capital || 0) + rr + m]);
+  if (pts.length >= 2) {
+    const W = 900, H = 200, P = 40, ys = pts.map((p) => p[1]), lo = Math.min(...ys, pnl.capital || 0), hi = Math.max(...ys, pnl.capital || 0), span = (hi - lo) || 1;
+    const t0 = pts[0][0], t1 = pts[pts.length - 1][0], tspan = (t1 - t0) || 1;
+    const x = (t) => P + (W - 2 * P) * (t - t0) / tspan, y = (v) => H - P / 2 - (H - P) * (v - lo) / span;
+    const line = pts.map((p) => `${x(p[0]).toFixed(1)},${y(p[1]).toFixed(1)}`).join(" ");
+    put("equity", `<svg class="mkt" viewBox="0 0 ${W} ${H}" role="img" aria-label="equity"><line class="grid" x1="${P}" x2="${W - P}" y1="${y(pnl.capital || 0)}" y2="${y(pnl.capital || 0)}"/><text x="2" y="${y(hi) + 4}">${money(hi)}</text><text x="2" y="${y(lo) + 4}">${money(lo)}</text><text x="${P}" y="${H - 2}">${hhmm(t0)}</text><text x="${W - P - 60}" y="${H - 2}">${hhmm(t1)}</text><polyline class="l" points="${line}"/></svg><div class="note">Equity = bankroll + realised + unrealised, one point a minute; the flat line is the starting bankroll.</div>`);
+  }
+  const avg = (q, a) => q > 1e-9 && a != null ? `${f(q, 0)} @ ${f(a, 3)}` : "–";
+  const op = (s.open_positions || []).slice().sort((a, b) => (a.close_ms || 0) - (b.close_ms || 0));
+  put("openpos", op.length ? `<tr><th>Market</th><th>Kalshi</th><th>Yes</th><th>No</th><th>Cost</th><th>Mark (Yes)</th><th>Unrealised</th><th>Decides</th></tr>` + op.map((p) => `<tr><td>${esc(p.label || p.market)}</td><td>${esc(p.kalshi_ticker)}</td><td>${avg(p.yes_qty, p.yes_avg)}</td><td>${avg(p.no_qty, p.no_avg)}</td><td>${money(p.cost)}</td><td>${f(p.mark, 3)}</td><td class="${sgn(p.unrealised)}">${money(p.unrealised)}</td><td>${p.close_ms ? (p.close_ms > Date.now() ? "in " + Math.round((p.close_ms - Date.now()) / 60000) + " min" : "closed, settling") : "–"}</td></tr>`).join("") : '<tr><td class="muted">flat</td></tr>');
+  const st = (s.settlements || []).filter((x) => x.realised !== undefined).slice(-30).reverse();
+  put("settled", st.length ? `<tr><th>Settled</th><th>Market</th><th>Outcome</th><th>Yes</th><th>No</th><th>Cost</th><th>Payout</th><th>P&amp;L</th><th>Source</th></tr>` + st.map((x) => `<tr><td>${hhmm(x.settled_ms)}</td><td>${esc(x.label || x.market)}</td><td>${esc(x.outcome)}</td><td>${f(x.yes_qty, 0)}</td><td>${f(x.no_qty, 0)}</td><td>${money(x.cost)}</td><td>${money(x.payout)}</td><td class="${sgn(x.realised)}">${money(x.realised)}</td><td class="muted">${esc(x.source)}</td></tr>`).join("") : '<tr><td class="muted">none yet</td></tr>');
+
   put("risk", kv([
     ["Realised P&L", money(r.realised_pnl), sgn(r.realised_pnl)],
     ["Marked P&L", money(r.marked_pnl), sgn(r.marked_pnl)],

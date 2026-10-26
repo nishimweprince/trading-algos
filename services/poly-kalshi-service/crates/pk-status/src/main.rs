@@ -351,6 +351,8 @@ pub fn pick_adapter(status: &Value) -> Option<Value> {
         "recent_fills",
         "settlements",
         "markouts",
+        "pnl",
+        "open_positions",
     ] {
         out.insert(key.into(), status.get(key).cloned().unwrap_or(Value::Null));
     }

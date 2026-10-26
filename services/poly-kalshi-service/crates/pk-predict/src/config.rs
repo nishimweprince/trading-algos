@@ -42,6 +42,8 @@ pub struct Config {
     pub kill_file: PathBuf,
     /// Record every raw Kalshi/Predict frame (`PK_PRED_RAW`): ~2 GB an hour.
     pub raw: bool,
+    /// The bankroll the P&L view starts from in shadow (`PK_PRED_SIM_CAPITAL`).
+    pub sim_capital: f64,
     pub fingerprint: String,
 }
 
@@ -205,6 +207,7 @@ impl Config {
             state_dir,
             kill_file,
             raw: flag("PK_PRED_RAW", false)?,
+            sim_capital: number("PK_PRED_SIM_CAPITAL", 100.0)?,
             fingerprint,
         })
     }

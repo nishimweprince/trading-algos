@@ -102,6 +102,77 @@ impl Position {
     }
 }
 
+/// What a held position needs to be settled and shown: when its market
+/// decides, the Kalshi contract it mirrors, and a readable label.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct PositionMeta {
+    pub close_ms: Option<i64>,
+    pub kalshi_ticker: Option<String>,
+    pub label: String,
+    pub opened_ms: i64,
+}
+
+/// The account's P&L over time, persisted beside the risk state: the classic
+/// view a live account has (bankroll, realised by day, fees, settled count,
+/// win rate, an equity curve). Shadow mode starts from a simulated bankroll.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct PnlBook {
+    pub capital: f64,
+    pub realised_total: f64,
+    pub realised_by_day: std::collections::BTreeMap<String, f64>,
+    pub fees_total: f64,
+    pub settled: u64,
+    pub wins: u64,
+    pub losses: u64,
+    /// `[t_ms, realised_total, marked]`, one point a minute.
+    pub series: VecDeque<(i64, f64, f64)>,
+    #[serde(skip)]
+    path: Option<PathBuf>,
+}
+
+impl PnlBook {
+    /// Load `path` (or start at `capital`); a changed bankroll setting is kept.
+    pub fn open(path: PathBuf, capital: f64) -> Self {
+        let mut book: Self =
+            std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        book.capital = capital;
+        book.path = Some(path);
+        book
+    }
+
+    pub fn save(&self) {
+        let Some(path) = &self.path else { return };
+        if let Ok(bytes) = serde_json::to_vec(self) {
+            let tmp = path.with_extension("json.tmp");
+            if std::fs::write(&tmp, bytes).is_ok() {
+                let _ = std::fs::rename(&tmp, path);
+            }
+        }
+    }
+
+    fn realise(&mut self, amount: f64, now: i64) {
+        self.realised_total += amount;
+        let day = chrono::DateTime::<Utc>::from_timestamp_millis(now).unwrap_or_default().format("%Y-%m-%d").to_string();
+        *self.realised_by_day.entry(day).or_default() += amount;
+        self.settled += 1;
+        if amount > 1e-9 {
+            self.wins += 1;
+        } else if amount < -1e-9 {
+            self.losses += 1;
+        }
+        self.save();
+    }
+
+    /// Append an equity point at most once a minute (keeps three days).
+    pub fn sample(&mut self, now: i64, marked: f64) {
+        if self.series.back().is_some_and(|(t, _, _)| now - t < 60_000) {
+            return;
+        }
+        bounded_push(&mut self.series, (now, self.realised_total, marked), 3 * 1440);
+        self.save();
+    }
+}
+
 /// YES / buy-side fills (Predict `YES`/`yes`, HIP-4 `YES`/`b`/`buy`).
 pub fn is_yes_side(side: &str) -> bool {
     matches!(
@@ -141,6 +212,11 @@ pub struct AdapterState {
     pub inventory: HashMap<String, f64>,
     /// Cost-basis positions used for marked / realised P&L.
     pub positions: HashMap<String, Position>,
+    pub position_meta: HashMap<String, PositionMeta>,
+    /// Last YES mid each held market was marked at (a closed market's book
+    /// goes one-sided; its position keeps the last mark until settled).
+    pub marks: HashMap<String, f64>,
+    pub pnl: PnlBook,
     pub settlements: VecDeque<Value>,
     pub markouts: VecDeque<Value>,
     pub actions: VecDeque<Value>,
@@ -172,6 +248,9 @@ impl AdapterState {
             fills: VecDeque::new(),
             inventory: HashMap::new(),
             positions: HashMap::new(),
+            position_meta: HashMap::new(),
+            marks: HashMap::new(),
+            pnl: PnlBook::default(),
             settlements: VecDeque::new(),
             markouts: VecDeque::new(),
             actions: VecDeque::new(),
@@ -200,24 +279,97 @@ impl AdapterState {
         if self.positions.get(&fill.market).is_some_and(Position::is_flat) {
             self.positions.remove(&fill.market);
         }
-        self.risk.state.active_markets =
-            self.positions.values().filter(|p| !p.is_flat()).count();
+        self.pnl.fees_total += fill.fee;
         self.push_fill(fill.clone());
+        self.recount();
+    }
+
+    /// Work the risk counters out from the orders and positions themselves,
+    /// as the venue would see them: resting orders, their notional plus the
+    /// cost of shares held (live, both are capital at risk), and markets with
+    /// either. Incremental counters drifted (528 "active markets" of 4).
+    pub fn recount(&mut self) {
+        let open = |o: &&OrderRecord| o.status == "submitted" || o.status == "shadow_open";
+        let resting: Vec<&OrderRecord> = self.orders.iter().filter(open).collect();
+        let held: f64 = self.positions.values().filter(|p| !p.is_flat()).map(|p| p.yes_cost + p.no_cost).sum();
+        let mut markets: std::collections::HashSet<&str> = resting.iter().map(|o| o.market.as_str()).collect();
+        markets.extend(self.positions.iter().filter(|(_, p)| !p.is_flat()).map(|(k, _)| k.as_str()));
+        self.risk.state.open_orders = resting.len();
+        self.risk.state.open_usd = resting.iter().map(|o| o.price * o.quantity).sum::<f64>() + held;
+        self.risk.state.active_markets = markets.len();
+    }
+
+    /// Positions whose market decided at least `grace_ms` ago: (market, meta).
+    pub fn due_settlement(&self, now: i64, grace_ms: i64) -> Vec<(String, PositionMeta)> {
+        self.positions
+            .iter()
+            .filter(|(_, p)| !p.is_flat())
+            .filter_map(|(k, _)| {
+                let meta = self.position_meta.get(k)?;
+                meta.close_ms.is_some_and(|c| now - c >= grace_ms).then(|| (k.clone(), meta.clone()))
+            })
+            .collect()
+    }
+
+    /// Settle a held market at its outcome: realised P&L, the P&L book, and a
+    /// settlement record (what was held, what it paid, where the result came from).
+    pub fn settle_position(&mut self, market: &str, yes_won: bool, source: &str) -> Option<Value> {
+        let pos = self.positions.get(market).cloned()?;
+        let meta = self.position_meta.get(market).cloned().unwrap_or_default();
+        let now = now_ms();
+        let realised = self.realise_resolution(market, f64::from(u8::from(yes_won)), f64::from(u8::from(!yes_won)));
+        self.pnl.realise(realised, now);
+        self.position_meta.remove(market);
+        self.marks.remove(market);
+        let payout = if yes_won { pos.yes_qty } else { pos.no_qty };
+        let record = json!({
+            "market": market, "label": meta.label, "kalshi_ticker": meta.kalshi_ticker,
+            "outcome": if yes_won { "YES" } else { "NO" }, "source": source,
+            "yes_qty": pos.yes_qty, "yes_cost": pos.yes_cost, "no_qty": pos.no_qty, "no_cost": pos.no_cost,
+            "cost": pos.yes_cost + pos.no_cost, "payout": payout, "realised": realised,
+            "opened_ms": meta.opened_ms, "settled_ms": now,
+        });
+        bounded_push(&mut self.settlements, record.clone(), 500);
+        self.recount();
+        Some(record)
+    }
+
+    /// Open positions with their marks, for the P&L view.
+    pub fn open_positions(&self) -> Vec<Value> {
+        self.positions
+            .iter()
+            .filter(|(_, p)| !p.is_flat())
+            .map(|(k, p)| {
+                let meta = self.position_meta.get(k).cloned().unwrap_or_default();
+                let mark = self.marks.get(k).copied();
+                json!({
+                    "market": k, "label": meta.label, "kalshi_ticker": meta.kalshi_ticker, "close_ms": meta.close_ms,
+                    "yes_qty": p.yes_qty, "yes_avg": (p.yes_qty > 1e-9).then(|| p.yes_cost / p.yes_qty),
+                    "no_qty": p.no_qty, "no_avg": (p.no_qty > 1e-9).then(|| p.no_cost / p.no_qty),
+                    "cost": p.yes_cost + p.no_cost, "mark": mark, "unrealised": mark.map(|m| p.marked(m)),
+                })
+            })
+            .collect()
     }
 
     /// Refresh marked P&L from YES mids (`market → yes mid`). May latch daily loss.
     pub fn mark_to_market(&mut self, yes_mids: &HashMap<String, f64>) {
+        for (market, mid) in yes_mids {
+            if mid.is_finite() && self.positions.contains_key(market) {
+                self.marks.insert(market.clone(), *mid);
+            }
+        }
         let mut marked = 0.0;
         for (market, pos) in &self.positions {
             if pos.is_flat() {
                 continue;
             }
-            let Some(&mid) = yes_mids.get(market) else { continue };
-            if mid.is_finite() {
+            if let Some(&mid) = self.marks.get(market) {
                 marked += pos.marked(mid);
             }
         }
         self.risk.state.marked_pnl = marked;
+        self.pnl.sample(now_ms(), marked);
         let _ = self.risk.check_latches();
     }
 
@@ -241,6 +393,7 @@ impl AdapterState {
     pub fn realise_merge(&mut self, market: &str, amount: f64) -> f64 {
         let Some(pos) = self.positions.get_mut(market) else { return 0.0 };
         let realised = pos.realise_merge(amount);
+        self.pnl.realise(realised, now_ms());
         *self.inventory.entry(market.into()).or_default() = pos.net();
         if pos.is_flat() {
             self.positions.remove(market);
@@ -287,6 +440,31 @@ impl AdapterState {
         bounded_push(&mut self.markouts, value, 500);
     }
 
+    /// The account view: bankroll, equity, realised (today, total, by day),
+    /// unrealised, fees, settled positions and win rate, the equity curve.
+    pub fn pnl_status(&self) -> Value {
+        let p = &self.pnl;
+        let marked = self.risk.state.marked_pnl;
+        let today = Utc::now().format("%Y-%m-%d").to_string();
+        let decided = p.wins + p.losses;
+        json!({
+            "capital": p.capital,
+            "equity": p.capital + p.realised_total + marked,
+            "realised_total": p.realised_total,
+            "realised_today": p.realised_by_day.get(&today).copied().unwrap_or(0.0),
+            "unrealised": marked,
+            "fees_total": p.fees_total,
+            "return_pct": if p.capital > 0.0 { Some((p.realised_total + marked) / p.capital * 100.0) } else { None },
+            "settled": p.settled,
+            "wins": p.wins,
+            "losses": p.losses,
+            "win_rate": (decided > 0).then(|| p.wins as f64 / decided as f64),
+            "avg_per_settled": (p.settled > 0).then(|| p.realised_total / p.settled as f64),
+            "by_day": p.realised_by_day,
+            "series": p.series.iter().map(|(t, r, m)| json!([t, r, m])).collect::<Vec<_>>(),
+        })
+    }
+
     pub fn status(&self) -> Value {
         let now = now_ms();
         json!({
@@ -304,6 +482,8 @@ impl AdapterState {
             "matches": self.matches,
             "inventory": self.inventory,
             "positions": self.positions,
+            "open_positions": self.open_positions(),
+            "pnl": self.pnl_status(),
             "risk": self.risk.status(),
             "latched": self.latched,
             "degraded": self.degraded,
@@ -603,6 +783,42 @@ mod tests {
         assert!((r - (5.0 - 1.6)).abs() < 1e-9);
         assert!(p.is_flat());
         assert!(is_yes_side("BUY") && is_yes_side("b") && !is_yes_side("NO"));
+    }
+
+    #[test]
+    fn recount_settle_and_pnl_book_are_consistent() {
+        let dir = std::env::temp_dir().join(format!("pk-venue-book-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let limits = crate::RiskLimits { order_usd: 10.0, max_open_usd: 50.0, daily_loss_usd: 25.0, max_markets: 4, max_orders: 16, max_rejections: 5 };
+        let risk = RiskGuard::open(limits, dir.join("risk.json")).unwrap();
+        let mut state = AdapterState::new("predict", VenueMode::Shadow, "cfg".into(), risk);
+        state.pnl = PnlBook::open(dir.join("pnl.json"), 100.0);
+        // Requotes never inflate the counts: two resting orders on one market.
+        for i in 0..50 {
+            state.push_order(OrderRecord { id: format!("o{i}"), client_id: String::new(), market: "7".into(), lane: "maker".into(), side: "YES".into(), price: 0.4, quantity: 1.0, status: if i >= 48 { "shadow_open".into() } else { "removed_off_book".into() }, created_ms: 0, updated_ms: 0, simulated: true });
+            state.recount();
+        }
+        assert_eq!((state.risk.state.open_orders, state.risk.state.active_markets), (2, 1));
+        // A held position counts toward exposure and markets.
+        state.position_meta.insert("9".into(), PositionMeta { close_ms: Some(1_000), kalshi_ticker: Some("KX".into()), label: "btc".into(), opened_ms: 0 });
+        state.book_fill(&FillRecord { id: "f".into(), order_id: "x".into(), market: "9".into(), side: "YES".into(), price: 0.30, quantity: 10.0, fee: 0.05, time_ms: 0, simulated: true });
+        assert_eq!(state.risk.state.active_markets, 2);
+        assert!((state.risk.state.open_usd - (0.8 + 3.05)).abs() < 1e-9);
+        // A closed market keeps its last mark.
+        state.mark_to_market(&HashMap::from([("9".into(), 0.60)]));
+        state.mark_to_market(&HashMap::new());
+        assert!((state.risk.state.marked_pnl - (6.0 - 3.05)).abs() < 1e-9);
+        assert_eq!(state.due_settlement(70_000, 60_000).len(), 1);
+        let rec = state.settle_position("9", true, "predict").unwrap();
+        assert!((rec["realised"].as_f64().unwrap() - (10.0 - 3.05)).abs() < 1e-9);
+        assert_eq!((state.pnl.settled, state.pnl.wins), (1, 1));
+        assert!((state.pnl.fees_total - 0.05).abs() < 1e-9);
+        assert_eq!(state.risk.state.active_markets, 1);
+        // The book persists.
+        let again = PnlBook::open(dir.join("pnl.json"), 100.0);
+        assert!((again.realised_total - 6.95).abs() < 1e-9);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

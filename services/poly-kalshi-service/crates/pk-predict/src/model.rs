@@ -199,6 +199,24 @@ impl PredictMarket {
 
 /// Round a price onto the market's decimal grid. Predict matches backend
 /// rounding, so every outgoing price must pass through here.
+/// Whether a resolved Predict market's Up/Yes outcome won: None until
+/// `status` is `RESOLVED` (the venue's own settlement, as live pays it).
+pub fn resolved_yes(value: &Value) -> Option<bool> {
+    let m = value.get("data").unwrap_or(value);
+    if m.get("status").and_then(Value::as_str) != Some("RESOLVED") {
+        return None;
+    }
+    let outcomes = m.get("outcomes")?.as_array()?;
+    let yes = outcomes.iter().find(|o| {
+        o.get("name").and_then(Value::as_str).is_some_and(|n| n.eq_ignore_ascii_case("up") || n.eq_ignore_ascii_case("yes"))
+    })?;
+    match yes.get("status").and_then(Value::as_str) {
+        Some("WON") => Some(true),
+        Some("LOST") => Some(false),
+        _ => None,
+    }
+}
+
 pub fn quantize_price(price: f64, precision: u32) -> f64 {
     let factor = 10_f64.powi(precision.min(9) as i32);
     (price * factor).round() / factor
@@ -568,5 +586,15 @@ mod tests {
         assert_eq!(complement_price(0.5, 2) + 0.5, 1.0);
         assert_eq!(quantize_price(0.55555, 2), 0.56);
         assert_eq!(quantize_price(0.123456, 6), 0.123456);
+    }
+
+    #[test]
+    fn resolved_yes_reads_the_venue_outcome() {
+        let won = serde_json::json!({"data": {"status": "RESOLVED", "outcomes": [{"name": "Up", "status": "WON"}, {"name": "Down", "status": "LOST"}]}});
+        let lost = serde_json::json!({"status": "RESOLVED", "outcomes": [{"name": "Up", "status": "LOST"}, {"name": "Down", "status": "WON"}]});
+        let open = serde_json::json!({"status": "OPEN", "outcomes": [{"name": "Up", "status": null}]});
+        assert_eq!(resolved_yes(&won), Some(true));
+        assert_eq!(resolved_yes(&lost), Some(false));
+        assert_eq!(resolved_yes(&open), None);
     }
 }

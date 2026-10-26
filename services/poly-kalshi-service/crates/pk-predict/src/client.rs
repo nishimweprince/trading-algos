@@ -138,6 +138,11 @@ impl Client {
         Ok(all)
     }
 
+    /// One market by id (also after it closes: `status`, outcome `WON`/`LOST`).
+    pub async fn market(&self, market_id: &str) -> anyhow::Result<Value> {
+        self.request(Method::GET, &format!("/v1/markets/{market_id}"), None, false).await
+    }
+
     pub async fn orderbook(&self, market_id: u64) -> anyhow::Result<Value> {
         self.request(Method::GET, &format!("/v1/markets/{market_id}/orderbook"), None, false).await
     }
