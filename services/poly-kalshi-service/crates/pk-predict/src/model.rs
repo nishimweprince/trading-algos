@@ -32,6 +32,10 @@ pub struct PredictMarket {
     pub outcomes: Vec<Outcome>,
     #[serde(rename = "kalshiMarketTicker")]
     pub kalshi_ticker: Option<String>,
+    #[serde(rename = "seriesSlug", default)]
+    pub series_slug: Option<String>,
+    #[serde(rename = "categorySlug", default)]
+    pub category_slug: Option<String>,
     #[serde(rename = "decimalPrecision")]
     pub decimal_precision: u32,
     #[serde(rename = "marketVariant")]
@@ -45,11 +49,42 @@ pub struct PredictMarket {
 }
 
 impl PredictMarket {
+    pub fn price_feed_provider(&self) -> Option<&str> {
+        self.variant_data.get("priceFeedProvider").and_then(Value::as_str)
+    }
+
+    /// Asset from the live series slug (`btc-updown-15m` -> `BTC`).
+    pub fn series_asset(&self) -> Option<String> {
+        let slug = self.series_slug.as_deref()?;
+        let asset = slug.split('-').next()?.to_ascii_uppercase();
+        ["BTC", "ETH"].contains(&asset.as_str()).then_some(asset)
+    }
+
+    pub fn is_15m_series(&self) -> bool {
+        self.series_slug.as_deref().is_some_and(|s| s.ends_with("-updown-15m"))
+    }
+
+    /// Window open (unix seconds) from `categorySlug`
+    /// (`btc-updown-15m-1793017800`). 15m windows are 900s-aligned.
+    pub fn window_open_s(&self) -> Option<i64> {
+        if !self.is_15m_series() {
+            return None;
+        }
+        let category = self.category_slug.as_deref()?;
+        let series = self.series_slug.as_deref()?;
+        let open: i64 = category.strip_prefix(&format!("{series}-"))?.parse().ok()?;
+        (open > 0 && open % 900 == 0).then_some(open)
+    }
+
     pub fn supported(&self, assets: &[String]) -> bool {
+        let linked = self.kalshi_ticker.as_deref().is_some_and(|t| assets.iter().any(|a| t.contains(a)));
+        let derived = self.is_15m_series()
+            && self.series_asset().is_some_and(|a| assets.iter().any(|x| x == &a))
+            && self.window_open_s().is_some();
         self.trading_status == "OPEN"
             && self.market_variant == "CRYPTO_UP_DOWN"
-            && self.kalshi_ticker.as_deref().is_some_and(|t| assets.iter().any(|a| t.contains(a)))
-            && self.variant_data.get("priceFeedProvider").and_then(Value::as_str) == Some("PYTH")
+            && (linked || derived)
+            && matches!(self.price_feed_provider(), Some("PYTH" | "CHAINLINK"))
             && self.outcomes.len() == 2
             && (1..=6).contains(&self.decimal_precision)
             && self.outcome_mapping_valid()
@@ -66,12 +101,14 @@ impl PredictMarket {
         ["endsAt", "endDate", "closeTime", "closeTimeMs"]
             .into_iter()
             .find_map(|key| self.extra.get(key).or_else(|| self.category.get(key)).and_then(parse_time))
+            .or_else(|| self.window_open_s().map(|open| (open + 900) * 1000))
     }
 
     pub fn open_ms(&self) -> Option<i64> {
         ["startsAt", "startDate", "openTime", "openTimeMs"]
             .into_iter()
             .find_map(|key| self.extra.get(key).or_else(|| self.category.get(key)).and_then(parse_time))
+            .or_else(|| self.window_open_s().map(|open| open * 1000))
     }
 
     fn outcome_mapping_valid(&self) -> bool {
@@ -82,32 +119,42 @@ impl PredictMarket {
 
     pub fn normalized(&self) -> NormalizedContract {
         let ticker = self.kalshi_ticker.clone().unwrap_or_default();
-        let underlying = ["BTC", "ETH"].into_iter().find(|a| ticker.contains(a)).unwrap_or("");
+        let underlying = ["BTC", "ETH"]
+            .into_iter()
+            .find(|a| ticker.contains(a))
+            .map(str::to_owned)
+            .or_else(|| self.series_asset())
+            .unwrap_or_default();
         NormalizedContract {
             venue: "predict".into(),
             venue_market_id: self.id.to_string(),
             kalshi_ticker: ticker,
             event_class: "crypto_up_down_15m".into(),
-            underlying: underlying.into(),
+            underlying,
             outcome: "up".into(),
             operator: ">=".into(),
             threshold: self.variant_data.get("startPrice").map(Value::to_string),
             open_ms: self.open_ms(),
             close_ms: self.close_ms(),
             decision_ms: self.close_ms(),
-            resolution_source: "PYTH".into(),
+            resolution_source: self.price_feed_provider().unwrap_or_default().into(),
             averaging_window_s: Some(0),
             tie_rule: "up_on_equal".into(),
             correction_rule: "predict_final_resolution".into(),
         }
     }
 
-    /// Predict's explicit Kalshi ticker is the identity link. The Pyth oracle
-    /// differs from Kalshi, so these direct mirrors are E1 and basis-buffered.
+    /// Identity link: Predict's explicit Kalshi ticker when present, else
+    /// the Kalshi 15m market resolved by series + window timing in
+    /// discovery. The venue oracle (live: CHAINLINK) differs from Kalshi's
+    /// settlement index, so these mirrors are E1 and basis-buffered.
     pub fn match_decision(&self, basis: f64, kalshi: &NormalizedContract) -> MatchDecision {
         let venue = self.normalized();
         let mut rejected = Vec::new();
-        if venue.kalshi_ticker.is_empty() || venue.kalshi_ticker != kalshi.kalshi_ticker {
+        if !venue.kalshi_ticker.is_empty() && venue.kalshi_ticker != kalshi.kalshi_ticker {
+            rejected.push("Kalshi ticker link changed or did not resolve".into());
+        }
+        if venue.kalshi_ticker.is_empty() && kalshi.kalshi_ticker.is_empty() {
             rejected.push("Kalshi ticker link changed or did not resolve".into());
         }
         if venue.underlying.is_empty() || venue.underlying != kalshi.underlying {
@@ -120,12 +167,12 @@ impl PredictMarket {
             (Some(a), Some(b)) if (a - b).abs() <= 2_000 => {}
             _ => rejected.push("market close/decision timestamps differ or are missing".into()),
         }
-        if self.variant_data.get("priceFeedProvider").and_then(Value::as_str) != Some("PYTH") {
-            rejected.push("Predict price feed is no longer PYTH".into());
+        if !matches!(self.price_feed_provider(), Some("PYTH" | "CHAINLINK")) {
+            rejected.push("Predict price feed is not CHAINLINK or PYTH".into());
         }
         MatchDecision {
             grade: if rejected.is_empty() { MatchGrade::E1 } else { MatchGrade::E2 },
-            kalshi_ticker: venue.kalshi_ticker.clone(),
+            kalshi_ticker: kalshi.kalshi_ticker.clone(),
             venue_market_id: venue.venue_market_id.clone(),
             kalshi_fingerprint: kalshi.fingerprint(),
             venue_fingerprint: venue.fingerprint(),
@@ -133,7 +180,10 @@ impl PredictMarket {
                 kalshi_yes_is_venue_side: 0,
                 venue_side_names: ["Yes".into(), "No".into()],
             },
-            basis_reason: Some("Predict PYTH versus Kalshi settlement index".into()),
+            basis_reason: Some(format!(
+                "Predict {} versus Kalshi settlement index",
+                self.price_feed_provider().unwrap_or_default()
+            )),
             max_basis: basis,
             maker: rejected.is_empty(),
             taker: rejected.is_empty(),
@@ -374,8 +424,12 @@ mod tests {
         assert!(d.rejected.iter().any(|r| r.contains("ticker")));
 
         let changed_feed =
-            PredictMarket { variant_data: json!({"priceFeedProvider":"CHAINLINK"}), ..market.clone() };
+            PredictMarket { variant_data: json!({"priceFeedProvider":"BINANCE"}), ..market.clone() };
         assert_eq!(changed_feed.match_decision(0.02, &kalshi).grade, MatchGrade::E2);
+        // Live 15m markets resolve via CHAINLINK; that feed is accepted.
+        let chainlink_feed =
+            PredictMarket { variant_data: json!({"priceFeedProvider":"CHAINLINK"}), ..market.clone() };
+        assert_eq!(chainlink_feed.match_decision(0.02, &kalshi).grade, MatchGrade::E1);
 
         let drifted = PredictMarket {
             extra: serde_json::from_value(json!({"endsAt": "2026-10-26T10:30:00Z"})).unwrap(),
@@ -389,6 +443,65 @@ mod tests {
 
         let wrong_asset = NormalizedContract { underlying: "ETH".into(), ..kalshi.clone() };
         assert_eq!(market.match_decision(0.02, &wrong_asset).grade, MatchGrade::E2);
+    }
+
+    fn live_market() -> PredictMarket {
+        // Shape observed live 2026-10-26: no kalshiMarketTicker, CHAINLINK
+        // feed, window carried only by series/category slugs.
+        serde_json::from_value(json!({
+            "id": 3810024, "title":"Bitcoin Up or Down - October 26, 8:30AM-8:45AM ET",
+            "question":"up?", "tradingStatus":"OPEN", "isNegRisk":false,
+            "isYieldBearing":false, "feeRateBps":200,
+            "outcomes":[{"name":"Up","indexSet":1,"onChainId":"9"},{"name":"Down","indexSet":2,"onChainId":"10"}],
+            "kalshiMarketTicker":null, "decimalPrecision":2, "marketVariant":"CRYPTO_UP_DOWN",
+            "seriesSlug":"btc-updown-15m", "categorySlug":"btc-updown-15m-1793017800",
+            "variantData":{"priceFeedProvider":"CHAINLINK","priceFeedSymbol":"BTCUSDT","startPrice":80517.895}
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn live_series_market_derives_window_and_matches_by_timing() {
+        let m = live_market();
+        assert!(m.supported(&["BTC".into(), "ETH".into()]));
+        assert_eq!(m.window_open_s(), Some(1793017800));
+        assert_eq!(m.open_ms(), Some(1793017800000));
+        assert_eq!(m.close_ms(), Some(1793018700000));
+        let n = m.normalized();
+        assert_eq!(n.underlying, "BTC");
+        assert_eq!(n.resolution_source, "CHAINLINK");
+        let kalshi = NormalizedContract {
+            venue: "kalshi".into(),
+            venue_market_id: "KXBTC15M-26OCT260830-30".into(),
+            kalshi_ticker: "KXBTC15M-26OCT260830-30".into(),
+            event_class: "crypto_up_down_15m".into(),
+            underlying: "BTC".into(),
+            open_ms: m.open_ms(),
+            close_ms: m.close_ms(),
+            resolution_source: "KALSHI_INDEX".into(),
+            ..Default::default()
+        };
+        let d = m.match_decision(0.02, &kalshi);
+        assert_eq!(d.grade, MatchGrade::E1, "{:?}", d.rejected);
+        assert_eq!(d.kalshi_ticker, "KXBTC15M-26OCT260830-30");
+        // Timing mismatch and non-15m series fail closed to E2.
+        let drifted = NormalizedContract { close_ms: Some(1793019600000), ..kalshi.clone() };
+        assert_eq!(m.match_decision(0.02, &drifted).grade, MatchGrade::E2);
+        let hourly = PredictMarket {
+            series_slug: Some("btc-updown-1h".into()),
+            category_slug: Some("btc-updown-1h-1793014800".into()),
+            ..m.clone()
+        };
+        assert!(!hourly.supported(&["BTC".into()]));
+        let five_min = PredictMarket {
+            series_slug: Some("btc-updown-5m".into()),
+            category_slug: Some("btc-updown-5m-1793017800".into()),
+            ..m.clone()
+        };
+        assert!(!five_min.supported(&["BTC".into()]));
+        let no_window = PredictMarket { category_slug: None, ..m.clone() };
+        assert!(!no_window.supported(&["BTC".into()]));
+        assert!(!m.supported(&["ETH".into()]));
     }
 
     #[test]
