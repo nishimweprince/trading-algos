@@ -346,8 +346,12 @@ async fn run(settings: Settings, pm: PmSettings) -> anyhow::Result<()> {
                         continue;
                     }
                     match x.final_state(&id).await {
-                        Ok((m, live)) => a.engine.lock().on_order(&id, m, !live, now_ns()),
-                        Err(e) => a.note_error(format!("order {id}: {e}")),
+                        Ok(Some((m, live))) => a.engine.lock().on_order(&id, m, !live, now_ns()),
+                        Ok(None) => a.engine.lock().on_unknown(&id, now_ns()),
+                        Err(e) => {
+                            a.note_error(format!("order {id}: {e}"));
+                            a.engine.lock().record(now_ns(), "pm_state_error", json!({"id": id, "error": e.to_string()}));
+                        }
                     }
                 }
             }
@@ -446,7 +450,7 @@ async fn run(settings: Settings, pm: PmSettings) -> anyhow::Result<()> {
         // The final states of what was resting, so late fills are booked.
         let tracked = app.engine.lock().tracked();
         for id in tracked {
-            if let Ok((m, live)) = exec.final_state(&id).await {
+            if let Ok(Some((m, live))) = exec.final_state(&id).await {
                 app.engine.lock().on_order(&id, m, !live, now_ns());
             }
         }

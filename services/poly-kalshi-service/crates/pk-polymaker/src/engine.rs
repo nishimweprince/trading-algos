@@ -322,7 +322,8 @@ impl Engine {
             coins: assets.iter().map(|a| Coin::new(a)).collect(),
             owner: HashMap::new(),
             inv: p.inventories,
-            orders: if shadow { BTreeMap::new() } else { p.orders },
+            // A shadow run's orders never existed on the venue.
+            orders: if shadow { BTreeMap::new() } else { p.orders.into_iter().filter(|(k, _)| !k.starts_with("shadow-")).collect() },
             realised_by_day: p.realised_by_day,
             halt: p.halt,
             ack: p.ack,
@@ -350,7 +351,7 @@ impl Engine {
         let p = Persist {
             inventories: self.inv.clone(),
             realised_by_day: self.realised_by_day.clone(),
-            orders: self.orders.clone(),
+            orders: if self.shadow { BTreeMap::new() } else { self.orders.clone() },
             halt: self.halt.clone(),
             ack: self.ack.clone(),
         };
@@ -833,6 +834,20 @@ impl Engine {
         }
         if delta > 1e-6 || done {
             self.save();
+        }
+    }
+
+    /// The venue answers `null` for this order, and it is not among the open
+    /// ones. A fresh post may not be indexed yet; past 10 s it no longer rests
+    /// and is closed at the shares already booked (the wallet check records a
+    /// missed fill as drift).
+    pub fn on_unknown(&mut self, id: &str, t_ns: i64) {
+        let Some(o) = self.orders.get(id) else { return };
+        if t_ns - o.posted_ns > 10 * NS {
+            let (matched, o) = (o.matched, o.clone());
+            self.count("orders_unknown");
+            self.record(t_ns, "pm_order", json!({"event": "unknown", "asset": o.asset, "up": o.up, "id": id, "matched": matched}));
+            self.on_order(id, matched, true, t_ns);
         }
     }
 

@@ -366,6 +366,16 @@ impl<S: OrderSigner> ClobExec<S> {
         Ok(self.authed_get(&path, "").await?.json().await?)
     }
 
+    /// One order as the venue returns it (`null` once it no longer knows it).
+    pub async fn order_value(&self, order_id: &str) -> anyhow::Result<serde_json::Value> {
+        let path = format!("/data/order/{order_id}");
+        let body = self.authed_get(&path, "").await?.text().await?;
+        if body.trim().is_empty() {
+            return Ok(serde_json::Value::Null);
+        }
+        serde_json::from_str(&body).map_err(|e| anyhow::anyhow!("{e}: {}", &body[..body.len().min(200)]))
+    }
+
     /// The touch of one token from the REST book (off the hot path).
     pub async fn top(&self, token: &str) -> anyhow::Result<Top> {
         let resp = self

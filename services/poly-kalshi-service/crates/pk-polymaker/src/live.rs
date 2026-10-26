@@ -123,11 +123,18 @@ impl Exec {
             .collect())
     }
 
-    /// One order's final state: (matched shares, still resting).
-    pub async fn final_state(&self, order_id: &str) -> anyhow::Result<(f64, bool)> {
-        let s = self.clob.order_state(order_id).await?;
-        let live = s.status.eq_ignore_ascii_case("live");
-        Ok((s.size_matched.to_f64().unwrap_or(0.0), live))
+    /// One order's state: (matched shares, still resting), or None while the
+    /// venue answers `null` (not indexed yet, or long gone).
+    pub async fn final_state(&self, order_id: &str) -> anyhow::Result<Option<(f64, bool)>> {
+        let v = self.clob.order_value(order_id).await?;
+        if v.is_null() {
+            return Ok(None);
+        }
+        let o = v.get("order").unwrap_or(&v);
+        let status = o.get("status").and_then(Value::as_str).unwrap_or_default();
+        anyhow::ensure!(!status.is_empty(), "no status in {}", &v.to_string()[..v.to_string().len().min(200)]);
+        let matched = o.get("size_matched").and_then(num).unwrap_or(0.0);
+        Ok(Some((matched, status.eq_ignore_ascii_case("live"))))
     }
 
     pub async fn token_balance(&self, token: &str) -> anyhow::Result<f64> {
