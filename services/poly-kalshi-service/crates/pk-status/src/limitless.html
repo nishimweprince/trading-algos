@@ -39,17 +39,20 @@ svg.mkt .k { stroke:var(--kalshi); } svg.mkt .l { stroke:var(--lim); } svg.mkt .
 .legend { display:flex; gap:14px; color:var(--muted); font-size:12px; margin:4px 0 10px; flex-wrap:wrap; }
 .sw { display:inline-block; width:14px; height:3px; vertical-align:middle; margin-right:5px; border-radius:2px; }
 .note { color:var(--muted); font-size:12px; margin-top:6px; }
+.sim { border:2px solid var(--warn); border-radius:8px; padding:10px 12px; margin:8px 0; background:var(--panel); color:var(--warn); }
+.sim b { letter-spacing:.06em; }
 </style>
 </head>
 <body>
 <main>
 <nav class="tabs" aria-label="Venues"><a class="tab" href="./">Polymarket</a><a class="tab on" href="limitless" aria-current="page">Limitless</a><a class="tab" href="https://crossex.nishimweprince.dev/" target="_blank" rel="noopener" title="Kalshi → OKX on the Tokyo host; opens in a new tab">OKX ↗</a></nav>
 <div><h1>Kalshi → Limitless</h1><div class="sub"><span id="sub">connecting…</span> · <span id="age" class="muted"></span></div></div>
+<div class="sim" id="sim" role="note" hidden></div>
 <div class="alerts" id="alerts" role="status">checking…</div>
 
 <h3 class="section">Performance</h3>
 <div class="grid">
-  <div class="card"><h2>Capital</h2><div id="capital"></div></div>
+  <div class="card"><h2 id="capital-h">Capital</h2><div id="capital"></div></div>
   <div class="card"><h2>Gates</h2><div id="gates"></div></div>
   <div class="card"><h2>Funnel</h2><div id="funnel"></div></div>
 </div>
@@ -117,7 +120,13 @@ async function tick() {
   if (!body.enabled) { put("sub", '<span class="warn">pk-limitless is not enabled on this host (PK_LIM_ENABLED)</span>'); put("alerts", "disabled"); return; }
   if (!s) { put("sub", '<span class="bad">pk-limitless unreachable</span>'); $("alerts").className = "alerts bad"; put("alerts", "<ul><li>pk-limitless API down</li></ul>"); return; }
   const p = s.params || {}, st = s.stamp || {};
-  put("sub", `${s.mode === "live" ? '<b class="bad">LIVE</b>' : "<b>paper</b>"} · ${esc(s.host)} · gap ≥ ${f(p.gap_threshold)} · cap ${f(p.max_entry_px)} · ${esc(s.shares)} shares · limit +${f(s.limit_offset)} · <span class="muted">epoch ${esc(st.epoch)} · ${esc((st.build || "").slice(0, 8))} · config ${esc(st.config)} · up ${f((s.uptime_s || 0) / 3600, 1)} h</span>`);
+  // Anything but live is a simulation: say so above every number.
+  const sim = s.mode !== "live";
+  $("sim").hidden = !sim;
+  if (sim) put("sim", `<b>SIMULATION</b> · ${esc(s.mode)} mode: no orders reach Limitless. Entries fill against the live book after the measured round trip plus the market's taker delay, so every cash, P&amp;L and fill figure on this page is hypothetical.`);
+  document.title = `${sim ? "SIMULATION · " : ""}Limitless status`;
+  put("capital-h", sim ? "Capital · simulated" : "Capital");
+  put("sub", `${s.mode === "live" ? '<b class="bad">LIVE</b>' : `<b class="warn">SIMULATION</b> (${esc(s.mode)})`} · ${esc(s.host)} · gap ≥ ${f(p.gap_threshold)} · cap ${f(p.max_entry_px)} · ${esc(s.shares)} shares · limit +${f(s.limit_offset)} · <span class="muted">epoch ${esc(st.epoch)} · ${esc((st.build || "").slice(0, 8))} · config ${esc(st.config)} · up ${f((s.uptime_s || 0) / 3600, 1)} h</span>`);
 
   // Alerts.
   const al = [], feeds = s.feeds || {}, assets = s.assets || {};

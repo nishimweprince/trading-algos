@@ -39,21 +39,24 @@ svg.mkt .k { stroke:var(--kalshi); } svg.mkt .l { stroke:var(--lim); } svg.mkt .
 .legend { display:flex; gap:14px; color:var(--muted); font-size:12px; margin:4px 0 10px; flex-wrap:wrap; }
 .sw { display:inline-block; width:14px; height:3px; vertical-align:middle; margin-right:5px; border-radius:2px; }
 .note { color:var(--muted); font-size:12px; margin-top:6px; }
+.sim { border:2px solid var(--warn); border-radius:8px; padding:10px 12px; margin:8px 0; background:var(--panel); color:var(--warn); }
+.sim b { letter-spacing:.06em; }
 </style>
 </head>
 <body>
 <main>
 <nav class="tabs" aria-label="Venues"><a class="tab on" href="polymaker" aria-current="page">Polymarket maker</a><a class="tab" href="limitless">Limitless</a><a class="tab" href="https://crossex.nishimweprince.dev/" target="_blank" rel="noopener" title="Kalshi → OKX on the Tokyo host; opens in a new tab">OKX ↗</a></nav>
 <div><h1>Kalshi-priced maker on Polymarket</h1><div class="sub"><span id="sub">connecting…</span> · <span id="age" class="muted"></span></div></div>
+<div class="sim" id="sim" role="note" hidden></div>
 <div class="alerts" id="alerts" role="status">checking…</div>
 
 <h3 class="section">Performance</h3>
 <div class="grid">
-  <div class="card"><h2>P&amp;L</h2><div id="pnl"></div></div>
-  <div class="card"><h2>Fills</h2><div id="fills"></div></div>
+  <div class="card"><h2 id="pnl-h">P&amp;L</h2><div id="pnl"></div></div>
+  <div class="card"><h2 id="fills-h">Fills</h2><div id="fills"></div></div>
   <div class="card"><h2>Order path</h2><div id="path"></div></div>
 </div>
-<div class="card"><h2>Realised P&amp;L by settled window</h2><div id="chart" class="muted">no settled windows yet</div></div>
+<div class="card"><h2 id="chart-h">Realised P&amp;L by settled window</h2><div id="chart" class="muted">no settled windows yet</div></div>
 
 <h3 class="section">Quotes</h3>
 <div class="card"><table id="coins"></table><div class="note">Fair = Kalshi YES mid. Our bids: Up at fair − h − skew, Down at 1 − (fair + h − skew), post-only, 1¢ ticks. Capture = fair at fill − price; markouts = Kalshi's mid 5 s / 30 s later − price (negative = adverse selection); 2 min and 5 min stop at the close, and "at close" is Kalshi's mid 1 s before it. Pair guard: with shares held on one side, the other side bids at most 1 − their average cost − 2¢, so every completed pair locks ≥ 2¢. Uptime = share of the window with a bid resting.</div></div>
@@ -89,7 +92,15 @@ async function tick() {
   if (!body.enabled) { put("sub", '<span class="warn">pk-polymaker is not enabled on this host (PK_PM_ENABLED)</span>'); put("alerts", "disabled"); return; }
   if (!s) { put("sub", '<span class="bad">pk-polymaker unreachable</span>'); $("alerts").className = "alerts bad"; put("alerts", "<ul><li>pk-polymaker API down</li></ul>"); return; }
   const cfg = s.cfg || {}, op = s.order_path || {}, t = s.totals || {};
-  put("sub", `${s.mode === "live" ? '<b class="bad">LIVE</b>' : "<b>shadow</b>"} · ${esc(s.host)} · h ${f(cfg.half_spread)} · ${esc(cfg.shares)} shares · net cap ${esc(cfg.max_net)} · pause ${f(cfg.pause_jump)} · <span class="muted">up ${f((s.uptime_s || 0) / 3600, 1)} h</span>`);
+  // Anything but live is a simulation: say so above every number.
+  const sim = s.mode !== "live";
+  $("sim").hidden = !sim;
+  if (sim) put("sim", `<b>SIMULATION</b> · ${esc(s.mode)} mode: no orders reach Polymarket. Fills are simulated against the live book, so every P&amp;L, fill and cash figure on this page is hypothetical.`);
+  document.title = `${sim ? "SIMULATION · " : ""}Polymarket maker`;
+  put("pnl-h", sim ? "P&amp;L · simulated" : "P&amp;L");
+  put("fills-h", sim ? "Fills · simulated" : "Fills");
+  put("chart-h", sim ? "Simulated P&amp;L by settled window" : "Realised P&amp;L by settled window");
+  put("sub", `${s.mode === "live" ? '<b class="bad">LIVE</b>' : `<b class="warn">SIMULATION</b> (${esc(s.mode)})`} · ${esc(s.host)} · h ${f(cfg.half_spread)} · ${esc(cfg.shares)} shares · net cap ${esc(cfg.max_net)} · pause ${f(cfg.pause_jump)} · <span class="muted">up ${f((s.uptime_s || 0) / 3600, 1)} h</span>`);
   const al = [];
   if (s.halted) al.push(`halted: ${esc(s.halt && s.halt.reason)}`);
   if (s.kill) al.push("KILL file present: no quotes");
@@ -103,7 +114,7 @@ async function tick() {
     ["Realised total", money(s.realised_total), sgn(s.realised_total)],
     ["Per share filled", t.pnl_per_share_c == null ? "–" : `${f(t.pnl_per_share_c)}¢`, sgn(t.pnl_per_share_c)],
     ["Open cost", `${money(s.open_cost)} of $${f(s.max_open_cost_usd, 0)}`],
-    ["Wallet cash", op.cash == null ? "–" : money(op.cash)],
+    sim ? ["Wallet cash", "not used: no orders sent"] : ["Wallet cash", op.cash == null ? "–" : money(op.cash)],
   ]));
   put("fills", kv([
     ["Fills / shares", `${t.fills || 0} / ${f(t.shares, 0)}`],
