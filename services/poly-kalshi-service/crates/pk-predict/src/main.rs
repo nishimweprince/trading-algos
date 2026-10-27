@@ -450,7 +450,8 @@ impl App {
                 self.record("order_submitted", json!({"order":record,"edge":edge}));
             }
             Err(error) => {
-                let reason = public_error(&error);
+                // With its causes ("{:#}"): "error sending request" alone hides why.
+                let reason = public_error(&format!("{error:#}"));
                 let mut state = self.state.lock();
                 // Not enough free USDT for the bids resting plus this one is the
                 // venue's own cap, not a broken order path: pause first legs and
@@ -1719,8 +1720,57 @@ fn handle_wallet_event(app: &Arc<App>, value: &Value) {
                 state.risk.save();
             }
         }
-        _ => {}
+        // Placement and other updates: an order of ours this process never
+        // recorded is adopted (fills are not: a fill on an order never seen
+        // still latches as unknown).
+        _ => adopt_order(app, &order_id, data),
     }
+}
+
+/// The record for an order our wallet reports that this process has none
+/// for: a submit whose answer was lost in transit though the venue accepted
+/// it (10-27 14:16Z: "error sending request", accepted 80 ms later, filled
+/// 13 s on and latched as unknown). Adopted, the next requote removes it by id
+/// like any of ours, and its fill is known.
+fn adopted_record(order_id: &str, data: &Value) -> Option<OrderRecord> {
+    if order_id.is_empty() {
+        return None;
+    }
+    let d = data.get("details").unwrap_or(data);
+    let market = d.get("marketId").map(|v| v.as_str().map(str::to_owned).unwrap_or_else(|| v.to_string()))?;
+    let number = |key: &str| {
+        d.get(key).and_then(|v| v.as_str().and_then(|s| s.parse::<f64>().ok()).or_else(|| v.as_f64())).unwrap_or(0.0)
+    };
+    let now = now_ms();
+    Some(OrderRecord {
+        id: order_id.into(),
+        client_id: "adopted".into(),
+        market,
+        lane: "maker".into(),
+        side: d.get("outcome").and_then(Value::as_str).unwrap_or_default().into(),
+        price: number("price"),
+        quantity: number("quantity"),
+        status: "submitted".into(),
+        created_ms: now,
+        updated_ms: now,
+        simulated: false,
+    })
+}
+
+fn adopt_order(app: &Arc<App>, order_id: &str, data: &Value) {
+    if app.cfg.mode != VenueMode::Live {
+        return;
+    }
+    let mut state = app.state.lock();
+    if order_id.is_empty() || state.orders.iter().any(|o| o.id == order_id) {
+        return;
+    }
+    let Some(record) = adopted_record(order_id, data) else { return };
+    state.push_order(record.clone());
+    state.recount();
+    state.risk.save();
+    drop(state);
+    app.record("order_adopted", json!({"order": record}));
 }
 
 const COLLATERAL_PAUSE_MS: i64 = 30_000;
@@ -1872,6 +1922,19 @@ fn order_rows(value: &Value) -> &[Value] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_order_our_wallet_reports_is_adopted_with_its_terms() {
+        // The 10-27 14:16Z event: accepted though the submit errored in transit.
+        let event = json!({"details": {"categorySlug": "bnb-updown-15m-1793110500", "marketId": 3872843,
+            "outcome": "YES", "price": "0.400", "quantity": "3.000", "quantityFilled": "0.000"},
+            "orderId": "6427353463"});
+        let r = adopted_record("6427353463", &event).unwrap();
+        assert_eq!((r.market.as_str(), r.side.as_str(), r.status.as_str()), ("3872843", "YES", "submitted"));
+        assert!((r.price - 0.40).abs() < 1e-9 && (r.quantity - 3.0).abs() < 1e-9);
+        assert!(adopted_record("", &event).is_none(), "no id");
+        assert!(adopted_record("1", &json!({"details": {}})).is_none(), "no market");
+    }
 
     #[test]
     fn post_only_refusals_do_not_count_as_rejections() {

@@ -39,9 +39,15 @@ pub struct Submitted {
 impl Client {
     pub fn new(base: &str, api_key: &str, signer: Option<Arc<PredictSigner>>) -> anyhow::Result<Self> {
         Ok(Self {
+            // Idle pooled connections are dropped (and probed) before the far
+            // end closes them: a request on a connection the server already
+            // closed fails as "error sending request" though the server may
+            // have taken it.
             http: reqwest::Client::builder()
                 .connect_timeout(std::time::Duration::from_secs(3))
                 .timeout(std::time::Duration::from_secs(8))
+                .pool_idle_timeout(std::time::Duration::from_secs(20))
+                .tcp_keepalive(std::time::Duration::from_secs(15))
                 .build()?,
             base: base.trim_end_matches('/').into(),
             api_key: api_key.into(),
