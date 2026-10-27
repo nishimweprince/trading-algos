@@ -41,7 +41,7 @@ struct Config {
   bool live_confirm = false;
   int hot_core = -1;
   int signer_core = -1;
-  int order_channels = 4;
+  int order_channels = 8;
   std::int64_t feed_stale_ms = 5'000;
   std::int64_t poly_silence_ms = 30'000;
   std::int64_t fills_poll_ms = 2'000;

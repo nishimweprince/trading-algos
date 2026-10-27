@@ -13,6 +13,9 @@ namespace {
 
 constexpr std::int64_t kNs = 1'000'000'000LL;
 constexpr std::int64_t kCashHoldMs = 3'000;
+constexpr std::int64_t kCrossHoldMs = 2'000;
+constexpr std::int64_t kStrayRetryMs = 1'000;
+constexpr std::int64_t kDriftGraceNs = 30 * kNs;
 
 double round_dp2(double x) noexcept { return std::nearbyint(x * 100.0) / 100.0; }
 
@@ -179,6 +182,27 @@ void Engine::on_poly_update(int coin, std::int64_t t_ns) { tick_coin(static_cast
 
 void Engine::tick(std::int64_t t_ns) {
   for (std::size_t i = 0; i < coins_.size(); ++i) tick_coin(i, t_ns);
+  sweep_strays(t_ns / 1'000'000);
+}
+
+// An order resting with no slot holding it is quoted by nobody and never
+// requoted: cancel it (a post answered after its slot moved on, or an order
+// carried over in the state file).
+void Engine::sweep_strays(std::int64_t now_ms) {
+  for (auto& [id, o] : orders_) {
+    if (o.closing || now_ms - o.stray_cancel_ms < kStrayRetryMs) continue;
+    const Slot* s = slot(o.coin, o.up);
+    if (s == nullptr || s->order == id) continue;
+    o.stray_cancel_ms = now_ms;
+    Action a;
+    a.kind = ActionKind::cancel;
+    a.coin = o.coin;
+    a.up = o.up;
+    a.order_id.assign(id);
+    actions_.push_back(std::move(a));
+    ++counters_.stray_cancels;
+    ++counters_.cancels;
+  }
 }
 
 bool Engine::take_token(std::int64_t now_ms) noexcept {
@@ -195,6 +219,13 @@ bool Engine::take_token(std::int64_t now_ms) noexcept {
 double Engine::net_of(std::string_view key) const noexcept {
   const auto it = inv_.find(key);
   return it == inv_.end() ? 0.0 : it->second.net();
+}
+
+double Engine::live_besides(std::string_view key, bool up, std::string_view except) const noexcept {
+  double out = 0;
+  for (const auto& [id, o] : orders_)
+    if (o.up == up && o.key == key && id != except) out += std::max(0.0, o.size - o.matched);
+  return out;
 }
 
 double Engine::open_cost() const {
@@ -250,9 +281,16 @@ void Engine::tick_coin(std::size_t i, std::int64_t t_ns) {
         for (std::size_t n = 0; n < 2; ++n) {
           const bool up = n == 0;
           if (opens(net, up) && !first_leg_ok(cfg_, s, *q)) continue;
-          const auto px = pair_cap(cfg_, pxs[n], held_avg[1 - n]);
+          auto px = pair_cap(cfg_, pxs[n], held_avg[1 - n]);
+          if (px && now_ms < c.slots[n].cross_cap_until_ms) {
+            px = std::min(*px, c.slots[n].cross_cap);
+            if (*px < cfg_.min_px - 1e-9) px.reset();
+          }
           if (!px) continue;
-          const auto size = room(cfg_, net, up);
+          // Room counts every other order that can still fill on this side,
+          // so a replaced bid that fills late cannot carry net past the cap.
+          const double other = live_besides(c.key, up, c.slots[n].order);
+          const auto size = room(cfg_, up ? net + other : net - other, up);
           if (!size) continue;
           // The resting order's own notional is already in open cost.
           const double mine = c.slots[n].order.empty() ? 0.0 : c.slots[n].px * c.slots[n].remaining;
@@ -282,11 +320,13 @@ void Engine::tick_coin(std::size_t i, std::int64_t t_ns) {
     c.slots[n].want = want[n];
     // The signer prepares for what the slot will want once a pause or the window start ends.
     c.slots[n].hint = want[n] ? want[n] : hint[n];
-    step_slot(i, n, want[n], now_ms);
+    const std::optional<double> fair_side = q ? std::optional<double>(n == 0 ? *q : 1.0 - *q) : std::nullopt;
+    step_slot(i, n, want[n], fair_side, now_ms);
   }
 }
 
-void Engine::step_slot(std::size_t i, std::size_t n, std::optional<std::pair<double, double>> want, std::int64_t now_ms) {
+void Engine::step_slot(std::size_t i, std::size_t n, std::optional<std::pair<double, double>> want,
+                       std::optional<double> fair_side, std::int64_t now_ms) {
   auto& c = coins_[i];
   auto& s = c.slots[n];
   const bool up = n == 0;
@@ -311,7 +351,9 @@ void Engine::step_slot(std::size_t i, std::size_t n, std::optional<std::pair<dou
         s.off_since_ms = now_ms;
       }
       const std::int64_t held = s.has_off ? now_ms - s.off_since_ms : 0;
-      const bool too_high = dir == 1 && held >= cfg_.adverse_ms;
+      // A bid at or over fair has no edge left: no flicker hold.
+      const bool underwater = dir == 1 && fair_side && s.px >= *fair_side - 1e-9;
+      const bool too_high = dir == 1 && (held >= cfg_.adverse_ms || underwater);
       const bool raise = dir == -1 && held >= cfg_.min_requote_ms && now_ms - s.last_change_ms >= cfg_.min_requote_ms;
       cancel = s.remaining > size + 1e-9 || too_high || raise;
     }
@@ -369,10 +411,8 @@ void Engine::on_posted(int coin, bool up, double px, double size, bool ok, std::
   s->inflight = false;
   const auto& c = coins_[static_cast<std::size_t>(coin)];
   if (ok) {
-    s->order = std::string(id_or_error);
-    s->last_change_ms = now_ms;
     OrderRec rec;
-    rec.id = s->order;
+    rec.id = std::string(id_or_error);
     // The window it was sent for, even if the coin rolled while it was in flight.
     rec.key = !s->post_key.empty() ? s->post_key : c.window ? c.key : std::string();
     rec.coin = coin;
@@ -382,13 +422,22 @@ void Engine::on_posted(int coin, bool up, double px, double size, bool ok, std::
     rec.posted_ns = t_ns;
     orders_[rec.id] = rec;
     dirty = true;
+    // Never drop a resting order from its slot: a second one is left to the stray sweep.
+    if (!s->order.empty() && s->order != rec.id) {
+      note("stray " + c.name + (up ? " up " : " down ") + fixed(px, 2) + " " + rec.id + ": the slot already holds " + s->order);
+      return;
+    }
+    s->order = rec.id;
+    s->last_change_ms = now_ms;
     return;
   }
-  s->order.clear();
   s->cooldown_until_ms = now_ms + cfg_.reject_cooldown_ms;
   double free = 0;
-  if (id_or_error.find("cross") != std::string_view::npos) {
+  // "crosses book", or the $1 floor the venue applies to marketable orders: our ask is stale.
+  if (id_or_error.find("cross") != std::string_view::npos || id_or_error.find("marketable") != std::string_view::npos) {
     ++counters_.post_only_rejects;
+    s->cross_cap = round_dp2(px - kTick);
+    s->cross_cap_until_ms = now_ms + kCrossHoldMs;
   } else if (clob::free_balance(id_or_error, free)) {
     cash_hint_ = std::pair<double, std::int64_t>{free, now_ms + kCashHoldMs};
     ++counters_.balance_rejects;
@@ -402,17 +451,22 @@ void Engine::on_cancelled(int coin, bool up, std::string_view order_id, bool ok,
   const std::int64_t now_ms = t_ns / 1'000'000;
   Slot* s = slot(coin, up);
   if (s == nullptr) return;
+  if (ok) {
+    if (const auto it = orders_.find(order_id); it != orders_.end()) it->second.closing = true;
+  } else {
+    ++counters_.cancel_errors;
+  }
+  // The answer is the slot's only if the slot still holds that order: once the
+  // order's final state came first, the slot may have a post in flight that
+  // this answer must not release.
+  if (s->order != order_id) return;
   s->inflight = false;
   if (ok) {
-    if (s->order == order_id) {
-      s->order.clear();
-      s->last_change_ms = now_ms;
-    }
-    if (const auto it = orders_.find(order_id); it != orders_.end()) it->second.closing = true;
+    s->order.clear();
+    s->last_change_ms = now_ms;
     return;
   }
   s->cooldown_until_ms = now_ms + cfg_.reject_cooldown_ms;
-  ++counters_.cancel_errors;
 }
 
 std::vector<std::string> Engine::tracked() const {
@@ -477,6 +531,7 @@ void Engine::book_fill(const OrderRec& o, double shares, std::int64_t t_ns) {
     inv.down_cost += shares * o.px;
   }
   ++inv.fills;
+  inv.last_fill_ns = t_ns;
   ++counters_.fills;
   const auto q = fair(c, t_ns / 1'000'000);
   std::string line = "fill " + o.key + (o.up ? " up " : " down ") + fixed(shares, 2) + " @ " + fixed(o.px, 2) +
@@ -548,6 +603,9 @@ void Engine::on_balance(std::string_view token, double wallet, std::int64_t t_ns
     if (const auto it = drift_.find(token); it != drift_.end()) drift_.erase(it);
     return;
   }
+  // The balance lags a fill until it settles on chain: no verdict on a token just filled.
+  for (const auto& [k, v] : inv_)
+    if ((v.up_token == token || v.down_token == token) && t_ns - v.last_fill_ns < kDriftGraceNs) return;
   const double ours = h->second;
   const double d = wallet - ours;
   auto& e = drift_[std::string(token)];

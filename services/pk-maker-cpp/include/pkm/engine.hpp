@@ -122,6 +122,7 @@ struct Inventory {
   double pnl = 0;
   std::string redeemed;  // tx hash once redeemed
   std::uint32_t redeem_tries = 0;
+  std::int64_t last_fill_ns = 0;  // not persisted: the wallet lags a fresh fill
   [[nodiscard]] double net() const noexcept { return up - down; }
   [[nodiscard]] double cost() const noexcept { return up_cost + down_cost; }
   [[nodiscard]] double settle_pnl(std::string_view outcome) const noexcept {
@@ -140,6 +141,7 @@ struct OrderRec {
   double matched = 0;
   std::int64_t posted_ns = 0;
   bool closing = false;  // cancelled: no fills after the final state
+  std::int64_t stray_cancel_ms = 0;  // not persisted: last cancel sent for an order no slot holds
 };
 
 struct Halt {
@@ -156,7 +158,7 @@ struct Gates {
 struct Counters {
   std::uint64_t posts = 0, cancels = 0, post_only_rejects = 0, balance_rejects = 0, post_errors = 0,
                 cancel_errors = 0, rate_limited = 0, cash_waits = 0, pauses = 0, fills = 0, orders_unknown = 0,
-                windows = 0, drift_checks = 0;
+                windows = 0, drift_checks = 0, stray_cancels = 0;
 };
 
 // The highest and lowest value seen in the last `span_ms`, in O(1) amortized
@@ -310,6 +312,9 @@ class Engine final {
     bool has_off = false;
     std::optional<std::pair<double, double>> want;
     std::optional<std::pair<double, double>> hint;
+    // After a post-only refusal: the ask is at or under that price, whatever our book says.
+    double cross_cap = 0;
+    std::int64_t cross_cap_until_ms = 0;
   };
   struct Coin {
     std::string name;
@@ -326,9 +331,13 @@ class Engine final {
 
   [[nodiscard]] std::optional<double> fair(const Coin& c, std::int64_t now_ms) const noexcept;
   void tick_coin(std::size_t i, std::int64_t t_ns);
-  void step_slot(std::size_t i, std::size_t n, std::optional<std::pair<double, double>> want, std::int64_t now_ms);
+  void step_slot(std::size_t i, std::size_t n, std::optional<std::pair<double, double>> want,
+                 std::optional<double> fair_side, std::int64_t now_ms);
+  void sweep_strays(std::int64_t now_ms);
   bool take_token(std::int64_t now_ms) noexcept;
   [[nodiscard]] double net_of(std::string_view key) const noexcept;
+  // Unmatched shares of every live order on a window's side but `except` (closing ones included: they can still fill).
+  [[nodiscard]] double live_besides(std::string_view key, bool up, std::string_view except) const noexcept;
   Slot* slot(int coin, bool up) noexcept;
   void book_fill(const OrderRec& o, double shares, std::int64_t t_ns);
   void note(std::string line);

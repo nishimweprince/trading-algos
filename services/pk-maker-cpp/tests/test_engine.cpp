@@ -408,3 +408,120 @@ PKM_TEST(engine_post_in_flight_across_a_roll_keeps_its_window) {
   require(e.inventories().contains(window_key("BTC", OPEN)) && !e.inventories().contains(window_key("BTC", OPEN + 900)),
           "its fill lands in the old window's inventory");
 }
+
+PKM_TEST(engine_late_cancel_answer_leaves_the_new_post_in_flight) {
+  auto e = make();
+  const std::int64_t t0 = (OPEN + 100) * NS;
+  books(e, 0.54, 0.56, {0.53, 0.57}, {0.43, 0.47}, t0);
+  take(e);
+  e.on_posted(0, true, 0.53, 5, true, "u1", t0);
+  e.on_posted(0, false, 0.43, 5, true, "d1", t0);
+  books(e, 0.57, 0.59, {0.53, 0.57}, {0.43, 0.47}, t0 + 300'000'000);
+  require(take(e).size() == 2, "both cancelled on the jump");
+  // The user channel reports the final states before the cancel answers arrive.
+  e.on_order("u1", 0, true, t0 + 350'000'000);
+  e.on_order("d1", 0, true, t0 + 350'000'000);
+  books(e, 0.57, 0.59, {0.56, 0.60}, {0.40, 0.44}, t0 + 1'900'000'000);
+  auto a = take(e);
+  require(a.size() == 2 && a[0].kind == ActionKind::post && a[1].kind == ActionKind::post, "reposted after the pause");
+  e.on_cancelled(0, true, "u1", true, t0 + 1'950'000'000);
+  e.on_cancelled(0, false, "d1", true, t0 + 1'950'000'000);
+  e.tick(t0 + 2 * NS);
+  require(take(e).empty(), "the late answers do not release the posts in flight");
+}
+
+PKM_TEST(engine_room_counts_orders_still_closing) {
+  Config c;
+  c.max_net = 10;
+  auto e = make(c);
+  Inventory v;
+  v.asset = "BTC";
+  v.open_unix = OPEN;
+  v.down = 5;
+  v.down_cost = 2.15;
+  e.put_inventory(window_key("BTC", OPEN), v);
+  const std::int64_t t0 = (OPEN + 100) * NS;
+  books(e, 0.54, 0.56, {0.53, 0.57}, {0.43, 0.47}, t0);
+  require(take(e).size() == 2, "both sides quoted at net -5");
+  e.on_posted(0, true, 0.53, 5, true, "u1", t0);
+  e.on_posted(0, false, 0.43, 5, true, "d1", t0);
+  e.set_gates({true, true});
+  e.tick(t0 + 10'000'000);
+  require(take(e).size() == 2, "kill pulls both");
+  e.on_cancelled(0, true, "u1", true, t0 + 20'000'000);
+  e.on_cancelled(0, false, "d1", true, t0 + 20'000'000);
+  e.set_gates({false, true});
+  e.tick(t0 + 30'000'000);
+  auto a = take(e);
+  require(a.size() == 1 && a[0].kind == ActionKind::post && a[0].up, "no Down while d1 could still fill to net -10");
+  e.on_order("d1", 0, true, t0 + 40'000'000);
+  e.tick(t0 + 50'000'000);
+  a = take(e);
+  require(a.size() == 1 && a[0].kind == ActionKind::post && !a[0].up, "Down once d1's final state is known");
+}
+
+PKM_TEST(engine_sweeps_orders_no_slot_holds) {
+  auto e = make();
+  const std::int64_t t0 = (OPEN + 100) * NS;
+  books(e, 0.54, 0.56, {0.53, 0.57}, {0.43, 0.47}, t0);
+  take(e);
+  e.on_posted(0, true, 0.53, 5, true, "u1", t0);
+  e.on_posted(0, false, 0.43, 5, true, "d1", t0);
+  e.on_posted(0, true, 0.53, 5, true, "u2", t0);
+  require(e.resting(0, true)->first == "u1", "the slot keeps the order it holds");
+  e.tick(t0 + 10'000'000);
+  auto a = take(e);
+  require(a.size() == 1 && a[0].kind == ActionKind::cancel && a[0].order_id == "u2", "the stray is cancelled");
+  e.tick(t0 + 500'000'000);
+  require(take(e).empty(), "not resent within a second");
+  e.on_cancelled(0, true, "u2", true, t0 + 600'000'000);
+  require(e.resting(0, true)->first == "u1", "its answer leaves the slot alone");
+  require(e.counters().stray_cancels == 1, "counted");
+}
+
+PKM_TEST(engine_bid_at_fair_is_pulled_without_the_hold) {
+  Config c;
+  c.pause_jump = 0.10;
+  auto e = make(c);
+  const std::int64_t t0 = (OPEN + 100) * NS;
+  books(e, 0.54, 0.56, {0.53, 0.57}, {0.43, 0.47}, t0);
+  take(e);
+  e.on_posted(0, true, 0.53, 5, true, "u1", t0);
+  e.on_posted(0, false, 0.43, 5, true, "d1", t0);
+  books(e, 0.53, 0.55, {0.53, 0.57}, {0.43, 0.47}, t0 + 50'000'000);
+  require(take(e).empty(), "fair 0.54 over the 0.53 bid: the flicker hold applies");
+  books(e, 0.52, 0.54, {0.53, 0.57}, {0.43, 0.47}, t0 + 60'000'000);
+  auto a = take(e);
+  require(a.size() == 1 && a[0].kind == ActionKind::cancel && a[0].order_id == "u1", "fair 0.53 at the bid: pulled at once");
+}
+
+PKM_TEST(engine_cross_refusal_caps_the_next_bid) {
+  auto e = make();
+  const std::int64_t t0 = (OPEN + 100) * NS;
+  books(e, 0.54, 0.56, {0.53, 0.57}, {0.43, 0.47}, t0);
+  take(e);
+  e.on_posted(0, true, 0.53, 5, false, "invalid post-only order: order crosses book", t0);
+  e.on_posted(0, false, 0.43, 5, false, "invalid amount for a marketable BUY order ($2.15), min size: $1", t0);
+  require(e.counters().post_only_rejects == 2, "both read as a cross");
+  e.tick(t0 + 600'000'000);
+  auto a = take(e);
+  require(a.size() == 2 && near(a[0].px, 0.52) && near(a[1].px, 0.42), "a tick under the refused prices");
+  e.on_posted(0, true, 0.52, 5, false, "invalid post-only order: order crosses book", t0 + 650'000'000);
+  e.on_posted(0, false, 0.42, 5, true, "d1", t0 + 650'000'000);
+  e.tick(t0 + 3 * NS);
+  a = take(e);
+  require(a.size() == 1 && a[0].up && near(a[0].px, 0.53), "the cap lapses after two seconds");
+}
+
+PKM_TEST(engine_drift_waits_for_a_fresh_fill_to_settle) {
+  auto e = make();
+  const std::int64_t t0 = (OPEN + 100) * NS;
+  books(e, 0.54, 0.56, {0.53, 0.57}, {0.43, 0.47}, t0);
+  take(e);
+  e.on_posted(0, true, 0.53, 5, true, "u1", t0);
+  e.on_order("u1", 5, true, t0);
+  for (int i = 0; i < 3; ++i) e.on_balance("BTC-up", 0.0, t0 + NS);
+  require(!e.halted(t0 + NS) && e.counters().drift_checks == 0, "a just-filled token is not checked");
+  for (int i = 0; i < 3; ++i) e.on_balance("BTC-up", 0.0, t0 + 31 * NS);
+  require(e.halted(t0 + 31 * NS), "checked again after the grace");
+}

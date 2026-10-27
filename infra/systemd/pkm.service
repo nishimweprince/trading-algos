@@ -5,9 +5,11 @@
 # another (PKM_SIGNER_CORE); keep both inside CPUAffinity. No ports: it serves
 # nothing. Stopping it pulls every quote and cancels every order on the account.
 # Secrets live in /etc/pkm.env (chmod 600).
+# Failure alerts: scripts/pkm-alert.sh runs after every stop and sends Telegram
+# for unclean ones (PK_TELEGRAM_BOT_TOKEN, PK_TELEGRAM_ADMIN_USER_IDS in the env
+# file). Not OnFailure=: with Restart=always the unit never enters "failed".
 [Unit]
 Description=pkm (Kalshi-priced Polymarket maker, C++)
-OnFailure=pk-unit-alert@%n.service
 Wants=network-online.target
 After=network-online.target time-sync.target
 
@@ -18,6 +20,8 @@ Group=pk
 WorkingDirectory=/home/pk/trading-algos/services/pk-maker-cpp
 EnvironmentFile=/etc/pkm.env
 ExecStart=/home/pk/trading-algos/services/pk-maker-cpp/build/release/pkm run
+ExecStopPost=-/home/pk/trading-algos/services/pk-maker-cpp/scripts/pkm-alert.sh
+SupplementaryGroups=systemd-journal
 Restart=always
 RestartSec=5
 # Room for the shutdown cancel-all and the final order states.

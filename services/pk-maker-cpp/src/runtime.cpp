@@ -28,6 +28,7 @@ namespace {
 
 constexpr std::int64_t kMs = 1'000'000;
 constexpr std::int64_t kSec = 1'000'000'000;
+constexpr std::int64_t kUserResyncDelay = 1500 * kMs;
 
 enum class FeedKind : std::uint8_t { kalshi, poly, user };
 struct FeedId {
@@ -664,7 +665,9 @@ class Hot final {
           request_feed(user_);
           sync_feed(kalshi_);
           sync_feed(poly_[static_cast<std::size_t>(coin)]);
-          sync_feed(user_);
+          // The coins roll within a second of each other and a new market set
+          // means a fresh user connection: resubscribe once, after the last.
+          user_resync_at_ = mono + kUserResyncDelay;
           break;
         }
         case ToHot::Kind::feed: attach_feed(m.feed, std::move(m.ws), mono); break;
@@ -712,6 +715,10 @@ class Hot final {
         if (f->id.kind == FeedKind::kalshi) f->ws->send_ping();
         else f->ws->send_text("PING");
       }
+    }
+    if (user_resync_at_ != 0 && mono >= user_resync_at_) {
+      user_resync_at_ = 0;
+      sync_feed(user_);
     }
     for (std::size_t i = 0; i < orders_.size(); ++i) {
       auto& o = orders_[i];
@@ -800,7 +807,8 @@ class Hot final {
     }
     s += " | posts " + std::to_string(c.posts) + " cancels " + std::to_string(c.cancels) + " fills " + std::to_string(c.fills) +
          " pauses " + std::to_string(c.pauses) + " rejects " +
-         std::to_string(c.post_only_rejects + c.balance_rejects + c.post_errors) + " presign " +
+         std::to_string(c.post_only_rejects + c.balance_rejects + c.post_errors) + " strays " +
+         std::to_string(c.stray_cancels) + " presign " +
          std::to_string(presign_hits_) + "/" + std::to_string(presign_hits_ + presign_misses_);
     char buf[64];
     std::snprintf(buf, sizeof(buf), " | realised today %.2f open cost %.2f", engine_.today_realised(net::now_ns()),
@@ -836,6 +844,7 @@ class Hot final {
   std::int64_t last_tick_ = 0;
   std::int64_t last_snapshot_ = 0;
   std::int64_t last_status_ = 0;
+  std::int64_t user_resync_at_ = 0;  // mono; 0 = none due
   std::uint64_t presign_hits_ = 0;
   std::uint64_t presign_misses_ = 0;
 

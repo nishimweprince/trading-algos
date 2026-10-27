@@ -113,5 +113,8 @@ Each start cancels everything on the account before it quotes.
 | `reject … not enough balance` | Cash is waiting on redemptions. Bids the free balance cannot cover are held for 3 s at a time. Check `POLY_RELAYER_API_KEY` |
 | `orphan order … cancelled` | A post whose answer was lost rested on the venue untracked. Two reconcile passes in a row (30 s apart) must see it untracked before it is cancelled |
 | Posts rejected over the order's timestamp | A pre-signed order is up to `PKM_PRESIGN_TTL_MS` (5 s) old when sent. Lower it; at 0 every post is signed inline (~35 µs) |
+| `stray … the slot already holds …`, `strays N` in `status:` | An order rested that its slot no longer tracks (a post answered after the slot moved on, or an order from `state.json`). The engine cancels it, retrying each second until its final state is known. A steady climb means a slot race: read the log around the first one |
+| `reject … crosses book` / `… marketable BUY …` | Our view of the ask was stale. The slot waits 500 ms and bids at most a tick under the refused price for 2 s |
+| `pkm-alert: … no destination` in the journal | pkm stopped uncleanly and no alert went out. Set `PK_TELEGRAM_BOT_TOKEN` and `PK_TELEGRAM_ADMIN_USER_IDS` in `/etc/pkm.env` |
 | `drift … streak 3` → halt | The wallet holds fewer shares than booked. Compare with polymarket.com, fix `state.json` by hand if a fill was booked wrongly, then `ACK` |
 | `redeem failed` 20 times | The relayer refuses. Redeem on polymarket.com; the engine stops trying after 20 attempts |
