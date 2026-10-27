@@ -199,11 +199,13 @@ impl Engine {
             // the losing first legs filled as Kalshi moved and Predict lagged.
             let venue_mid = book.bid.zip(book.ask).map(|(b, a)| (b + a) / 2.0);
             let moved = self.kalshi_trail.get(ticker).map(|t| recent_move(t, now, cfg.open_move_ms, fair)).unwrap_or(0.0);
-            let first_ok = first_leg_ok(cfg, window_s, fair) && calm_and_agreed(cfg, fair, venue_mid, moved);
+            let first_ok = first_leg_ok(cfg, window_s, fair)
+                && calm_and_agreed(cfg, fair, venue_mid, moved)
+                && (!cfg.open_only_flat || inv.abs() < 1e-9);
             let quote_yes = side_price(yes, held.no_qty, held.no_cost, cfg.pair_margin, tick, precision)
-                .filter(|_| !opens(inv, true) || first_ok);
+                .filter(|px| !opens(inv, true) || (first_ok && *px >= cfg.open_min_px - 1e-9));
             let quote_no = side_price(no, held.yes_qty, held.yes_cost, cfg.pair_margin, tick, precision)
-                .filter(|_| !opens(inv, false) || first_ok);
+                .filter(|px| !opens(inv, false) || (first_ok && *px >= cfg.open_min_px - 1e-9));
             let yes = quote_yes.unwrap_or(-1.0);
             let no = quote_no.unwrap_or(-1.0);
             let quote = self.quotes.entry(market.id.to_string()).or_default();
@@ -211,7 +213,14 @@ impl Engine {
                 || (yes - quote.yes).abs() >= tick
                 || (no - quote.no).abs() >= tick;
             let due = now - quote.last_ms >= cfg.refresh_ms as i64;
-            if cfg.maker && (changed || due) && now - quote.last_ms >= cfg.min_requote_ms as i64 {
+            // A resting first leg whose side's fair has come within
+            // open_min_edge of it is requoted now, not after min_requote_ms.
+            let no_fair = crate::model::complement_price(fair, precision);
+            let thin = |resting: f64, side_fair: f64, opening: bool| {
+                opening && resting > 0.0 && resting > side_fair - cfg.open_min_edge + 1e-9
+            };
+            let urgent = quote.quoted && (thin(quote.yes, fair, opens(inv, true)) || thin(quote.no, no_fair, opens(inv, false)));
+            if cfg.maker && (changed || due) && (urgent || now - quote.last_ms >= cfg.min_requote_ms as i64) {
                 if let Some(yes_token) = market.yes_outcome().map(|o| o.token_id.clone()) {
                     let no_token =
                         market.outcomes.iter().find(|o| o.token_id != yes_token).map(|o| o.token_id.clone());
@@ -500,6 +509,47 @@ mod tests {
             }
         }
         assert_eq!(seen, 2);
+    }
+
+    fn quoted_sides(e: &mut Engine, positions: &HashMap<String, Position>) -> Vec<(String, f64)> {
+        e.evaluate(&cfg(), positions)
+            .into_iter()
+            .filter_map(|a| match a {
+                Action::Maker { outcome, price, .. } => Some((outcome, price)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn quoting_at(fair_bid: &str, no_bid: &str, venue: (f64, f64)) -> Engine {
+        let mut e = Engine::new();
+        e.set_markets(vec![market()]);
+        let _ = e.kalshi_frame(&format!(
+            r#"{{"type":"orderbook_snapshot","msg":{{"market_ticker":"KXBTC15M-ABC","yes_dollars_fp":[["{fair_bid}","3"]],"no_dollars_fp":[["{no_bid}","2"]]}}}}"#
+        ));
+        e.venue_book(
+            "7".into(),
+            Book { bid: Some(venue.0), bid_size: 5.0, ask: Some(venue.1), ask_size: 5.0, update_ms: now_ms() },
+        );
+        e
+    }
+
+    #[test]
+    fn first_legs_skip_longshot_sides() {
+        // Fair 0.80: YES bids 0.75, NO would bid 0.15, under the 0.35 floor.
+        let mut e = quoting_at("0.79", "0.19", (0.78, 0.82));
+        let sides = quoted_sides(&mut e, &HashMap::new());
+        assert_eq!(sides.len(), 1, "{sides:?}");
+        assert_eq!(sides[0].0, "YES");
+    }
+
+    #[test]
+    fn a_one_sided_market_only_pairs() {
+        let mut e = quoting_at("0.45", "0.50", (0.40, 0.50));
+        let held = Position { yes_qty: 4.0, yes_cost: 1.6, ..Default::default() };
+        let sides = quoted_sides(&mut e, &HashMap::from([("7".to_string(), held)]));
+        assert_eq!(sides.len(), 1, "no adding to the YES leg: {sides:?}");
+        assert_eq!(sides[0].0, "NO");
     }
 
     #[test]

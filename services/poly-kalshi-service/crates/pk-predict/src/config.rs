@@ -64,6 +64,16 @@ pub struct Config {
     /// (`PK_PRED_OPEN_MAX_MOVE`, `PK_PRED_OPEN_MOVE_MS`).
     pub open_max_move: f64,
     pub open_move_ms: i64,
+    /// First legs only while the market is flat (`PK_PRED_OPEN_ONLY_FLAT`):
+    /// no adding to a one-sided position. The 10-26 19:45Z window lost ~$13
+    /// adding YES fills (12 BTC, 16 ETH) as the price fell.
+    pub open_only_flat: bool,
+    /// A first leg buys only a side quoted at least this (`PK_PRED_OPEN_MIN_PX`):
+    /// pkm's longshot first legs lost 9¢/share on 141 windows.
+    pub open_min_px: f64,
+    /// A resting first-leg quote is requoted at once, past `min_requote_ms`,
+    /// once its side's fair is within this of it (`PK_PRED_OPEN_MIN_EDGE`).
+    pub open_min_edge: f64,
     pub fingerprint: String,
 }
 
@@ -218,7 +228,7 @@ impl Config {
             half_spread: number("PK_PRED_HALF_SPREAD", 0.03)?,
             requote_cents: number("PK_PRED_REQUOTE_CENTS", 0.01)?,
             min_requote_ms: integer("PK_PRED_MIN_REQUOTE_MS", 500)?,
-            refresh_ms: integer("PK_PRED_REFRESH_MS", 5_000)?,
+            refresh_ms: integer("PK_PRED_REFRESH_MS", 60_000)?,
             min_taker_edge,
             taker_slippage,
             close_buffer_s: integer("PK_PRED_CLOSE_BUFFER_S", 60)? as i64,
@@ -238,6 +248,9 @@ impl Config {
             open_max_gap: number("PK_PRED_OPEN_MAX_GAP", 0.04)?,
             open_max_move: number("PK_PRED_OPEN_MAX_MOVE", 0.02)?,
             open_move_ms: integer("PK_PRED_OPEN_MOVE_MS", 5_000)? as i64,
+            open_only_flat: flag("PK_PRED_OPEN_ONLY_FLAT", true)?,
+            open_min_px: number("PK_PRED_OPEN_MIN_PX", 0.35)?,
+            open_min_edge: number("PK_PRED_OPEN_MIN_EDGE", 0.01)?,
             fingerprint,
         })
     }
