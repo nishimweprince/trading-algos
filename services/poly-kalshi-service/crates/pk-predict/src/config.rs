@@ -3,6 +3,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use pk_venue_core::{RiskLimits, VenueMode};
+
+use crate::spot::FairSource;
 use sha2::{Digest, Sha256};
 
 /// Predict's minimum order expiry is 2 minutes from now; keep a margin.
@@ -74,6 +76,22 @@ pub struct Config {
     /// A resting first-leg quote is requoted at once, past `min_requote_ms`,
     /// once its side's fair is within this of it (`PK_PRED_OPEN_MIN_EDGE`).
     pub open_min_edge: f64,
+    /// Binance spot (`PK_PRED_BINANCE_WS_URL`, the combined-stream endpoint):
+    /// the guard and the Binance-informed fairs (see `spot`).
+    pub binance_ws_url: String,
+    /// Pull a coin's first-leg quotes on a Binance move (`PK_PRED_BINANCE_GUARD`) …
+    pub binance_guard: bool,
+    /// … of `binance_pause_bps` within 1 s (`PK_PRED_BINANCE_PAUSE_BPS`), for
+    /// `binance_pause_ms` (`PK_PRED_BINANCE_PAUSE_MS`), …
+    pub binance_pause_bps: f64,
+    pub binance_pause_ms: i64,
+    /// … or while the Binance-adjusted fair is this far from Kalshi's
+    /// (`PK_PRED_BINANCE_PAUSE_GAP`).
+    pub binance_pause_gap: f64,
+    /// The fair first legs and pairing legs are priced from
+    /// (`PK_PRED_OPEN_FAIR`, `PK_PRED_PAIR_FAIR`: kalshi, adjusted or binance).
+    pub open_fair: FairSource,
+    pub pair_fair: FairSource,
     pub fingerprint: String,
 }
 
@@ -251,6 +269,14 @@ impl Config {
             open_only_flat: flag("PK_PRED_OPEN_ONLY_FLAT", true)?,
             open_min_px: number("PK_PRED_OPEN_MIN_PX", 0.35)?,
             open_min_edge: number("PK_PRED_OPEN_MIN_EDGE", 0.01)?,
+            binance_ws_url: get("PK_PRED_BINANCE_WS_URL")
+                .unwrap_or_else(|| "wss://stream.binance.com:9443/stream".into()),
+            binance_guard: flag("PK_PRED_BINANCE_GUARD", true)?,
+            binance_pause_bps: number("PK_PRED_BINANCE_PAUSE_BPS", 5.0)?,
+            binance_pause_ms: integer("PK_PRED_BINANCE_PAUSE_MS", 2_000)? as i64,
+            binance_pause_gap: number("PK_PRED_BINANCE_PAUSE_GAP", 0.02)?,
+            open_fair: FairSource::parse(get("PK_PRED_OPEN_FAIR").as_deref().unwrap_or("kalshi"))?,
+            pair_fair: FairSource::parse(get("PK_PRED_PAIR_FAIR").as_deref().unwrap_or("kalshi"))?,
             fingerprint,
         })
     }

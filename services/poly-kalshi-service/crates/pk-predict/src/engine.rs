@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use crate::config::Config;
 use crate::model::PredictMarket;
+use crate::spot::{self, Fairs, Spot};
 
 #[derive(Clone, Debug)]
 pub enum Action {
@@ -51,6 +52,28 @@ pub struct Engine {
     venue_books: HashMap<String, Book>,
     quotes: HashMap<String, QuoteState>,
     stale_cancelled: bool,
+    /// Binance spot per asset (the guard, σ, and the Binance-informed fairs).
+    pub spot: Spot,
+    /// Per Kalshi ticker: Binance's log mid when Kalshi's fair last changed.
+    kalshi_anchor: HashMap<String, f64>,
+    /// Per market: first legs held off by the Binance guard last evaluation.
+    guarded: HashMap<String, bool>,
+    /// Per asset: how often the guard took first legs off.
+    pub guard_pauses: HashMap<String, u64>,
+}
+
+/// One live market's fairs for the status page and the scorecard.
+pub struct SignalRow {
+    pub market: String,
+    pub label: String,
+    pub asset: String,
+    pub close_ms: i64,
+    pub tau_s: f64,
+    pub strike: Option<f64>,
+    pub spot: Option<f64>,
+    pub fairs: Fairs,
+    pub predict_mid: Option<f64>,
+    pub guarded: bool,
 }
 
 impl Engine {
@@ -63,7 +86,58 @@ impl Engine {
             venue_books: HashMap::new(),
             quotes: HashMap::new(),
             stale_cancelled: false,
+            spot: Spot::default(),
+            kalshi_anchor: HashMap::new(),
+            guarded: HashMap::new(),
+            guard_pauses: HashMap::new(),
         }
+    }
+
+    /// A Binance frame; true when it updated an asset.
+    pub fn binance_frame(&mut self, cfg: &Config, text: &str) -> bool {
+        self.spot.frame(text, now_ms(), cfg.binance_pause_bps, cfg.binance_pause_ms).is_some()
+    }
+
+    /// Kalshi's fair and the two Binance-informed fairs of `market` now.
+    fn fairs(&self, market: &PredictMarket, kalshi: f64, now: i64) -> Fairs {
+        let ticker = market.kalshi_ticker.as_deref().unwrap_or_default();
+        let mut out = Fairs { kalshi, adjusted: None, spot: None };
+        let (Some(asset), Some(close)) = (spot::asset_of_ticker(ticker), market.close_ms()) else { return out };
+        let (Some(mid), Some(sigma)) = (self.spot.mid(asset, now), self.spot.sigma(asset, now)) else { return out };
+        let tau_s = (close - now) as f64 / 1_000.0;
+        let d_ln = self.kalshi_anchor.get(ticker).map_or(0.0, |anchor| mid.ln() - anchor);
+        out.adjusted = Some(spot::adjusted_fair(kalshi, d_ln, sigma, tau_s));
+        out.spot = strike(market).map(|k| spot::spot_fair(mid, k, sigma, tau_s));
+        out
+    }
+
+    /// The fairs of every market whose window is trading now.
+    pub fn signal_rows(&self, now: i64) -> Vec<SignalRow> {
+        let mut rows = Vec::new();
+        for market in self.markets.values() {
+            let live = window_open_ms(market).is_none_or(|o| o <= now) && market.close_ms().is_some_and(|c| now < c);
+            if !live {
+                continue;
+            }
+            let ticker = market.kalshi_ticker.as_deref().unwrap_or_default();
+            let Some(kalshi) = self.kalshi.get(ticker).and_then(KalshiLevels::fair) else { continue };
+            let asset = spot::asset_of_ticker(ticker).unwrap_or_default().to_owned();
+            let close_ms = market.close_ms().unwrap_or(now);
+            let book = self.venue_books.get(&market.id.to_string());
+            rows.push(SignalRow {
+                market: market.id.to_string(),
+                label: market.category_slug.clone().unwrap_or_else(|| market.title.clone()),
+                tau_s: (close_ms - now) as f64 / 1_000.0,
+                close_ms,
+                strike: strike(market),
+                spot: self.spot.mid(&asset, now),
+                fairs: self.fairs(market, kalshi, now),
+                predict_mid: book.and_then(|b| b.bid.zip(b.ask)).map(|(b, a)| (b + a) / 2.0),
+                guarded: self.guarded.get(&market.id.to_string()).copied().unwrap_or(false),
+                asset,
+            });
+        }
+        rows
     }
 
     pub fn set_markets(&mut self, markets: Vec<PredictMarket>) {
@@ -127,6 +201,10 @@ impl Engine {
         let trail = self.kalshi_trail.entry(ticker.clone()).or_default();
         if trail.back().is_none_or(|(_, f)| (f - fair).abs() > 1e-9) {
             trail.push_back((now, fair));
+            // The adjusted fair moves Kalshi's by spot's move since this change.
+            if let Some(mid) = spot::asset_of_ticker(&ticker).and_then(|a| self.spot.mid(a, now)) {
+                self.kalshi_anchor.insert(ticker.clone(), mid.ln());
+            }
         }
         while trail.front().is_some_and(|(t, _)| now - t > TRAIL_KEEP_MS) {
             trail.pop_front();
@@ -173,22 +251,41 @@ impl Engine {
                 continue;
             }
             let ticker = market.kalshi_ticker.as_deref().unwrap_or_default();
-            let Some(fair) = self.kalshi.get(ticker).and_then(KalshiLevels::fair) else { continue };
+            let Some(kalshi_fair) = self.kalshi.get(ticker).and_then(KalshiLevels::fair) else { continue };
             let Some(book) = self.venue_books.get(&market.id.to_string()).copied() else { continue };
             let precision = market.decimal_precision;
             let tick = 10_f64.powi(-(precision as i32));
             let held = positions.get(&market.id.to_string()).cloned().unwrap_or_default();
             let inv = held.net();
+            // First legs and pairing legs may price from different fairs.
+            let fairs = self.fairs(market, kalshi_fair, now);
+            let open_fair = fairs.pick(cfg.open_fair);
+            let pair_fair = fairs.pick(cfg.pair_fair);
+            let fair = open_fair;
+            // Binance guard: spot moved fast, or Kalshi is stale against it.
+            let asset = spot::asset_of_ticker(ticker).unwrap_or_default();
+            let guarded = cfg.binance_guard
+                && (self.spot.paused(asset, now)
+                    || fairs.adjusted.is_some_and(|a| (a - kalshi_fair).abs() >= cfg.binance_pause_gap - 1e-9));
+            let was = self.guarded.insert(market.id.to_string(), guarded).unwrap_or(false);
+            if guarded && !was {
+                *self.guard_pauses.entry(asset.to_owned()).or_default() += 1;
+            }
             let skew = (inv / cfg.risk.max_open_usd.max(1.0) * 0.02).clamp(-0.02, 0.02);
-            let yes = (fair - cfg.half_spread - cfg.basis_buffer - skew).clamp(tick, 1.0 - tick);
-            let no = (crate::model::complement_price(fair, precision) - cfg.half_spread - cfg.basis_buffer
-                + skew)
-                .clamp(tick, 1.0 - tick);
-            let yes = book.ask.map_or(yes, |ask| yes.min(ask - tick)).max(tick);
-            let no_touch = book.bid.map(|bid| crate::model::complement_price(bid, precision));
-            let no = no_touch.map_or(no, |ask| no.min(ask - tick)).max(tick);
-            let yes = crate::model::quantize_price(yes, precision);
-            let no = crate::model::quantize_price(no, precision);
+            let prices = |fair: f64| {
+                let yes = (fair - cfg.half_spread - cfg.basis_buffer - skew).clamp(tick, 1.0 - tick);
+                let no = (crate::model::complement_price(fair, precision) - cfg.half_spread - cfg.basis_buffer
+                    + skew)
+                    .clamp(tick, 1.0 - tick);
+                let yes = book.ask.map_or(yes, |ask| yes.min(ask - tick)).max(tick);
+                let no_touch = book.bid.map(|bid| crate::model::complement_price(bid, precision));
+                let no = no_touch.map_or(no, |ask| no.min(ask - tick)).max(tick);
+                (crate::model::quantize_price(yes, precision), crate::model::quantize_price(no, precision))
+            };
+            let (open_yes, open_no) = prices(open_fair);
+            let (pair_yes, pair_no) = prices(pair_fair);
+            let yes = if opens(inv, true) { open_yes } else { pair_yes };
+            let no = if opens(inv, false) { open_no } else { pair_no };
             // Second leg: with shares held on one side, the other side pays at
             // most 1 − their average cost − pair_margin, so a completed pair
             // locks at least pair_margin a share (and auto-merge books it).
@@ -198,10 +295,12 @@ impl Engine {
             // A first leg also needs the venues to agree and Kalshi to be calm:
             // the losing first legs filled as Kalshi moved and Predict lagged.
             let venue_mid = book.bid.zip(book.ask).map(|(b, a)| (b + a) / 2.0);
-            let moved = self.kalshi_trail.get(ticker).map(|t| recent_move(t, now, cfg.open_move_ms, fair)).unwrap_or(0.0);
+            let moved =
+                self.kalshi_trail.get(ticker).map(|t| recent_move(t, now, cfg.open_move_ms, kalshi_fair)).unwrap_or(0.0);
             let first_ok = first_leg_ok(cfg, window_s, fair)
                 && calm_and_agreed(cfg, fair, venue_mid, moved)
-                && (!cfg.open_only_flat || inv.abs() < 1e-9);
+                && (!cfg.open_only_flat || inv.abs() < 1e-9)
+                && !guarded;
             let quote_yes = side_price(yes, held.no_qty, held.no_cost, cfg.pair_margin, tick, precision)
                 .filter(|px| !opens(inv, true) || (first_ok && *px >= cfg.open_min_px - 1e-9));
             let quote_no = side_price(no, held.yes_qty, held.yes_cost, cfg.pair_margin, tick, precision)
@@ -215,11 +314,19 @@ impl Engine {
             let due = now - quote.last_ms >= cfg.refresh_ms as i64;
             // A resting first leg whose side's fair has come within
             // open_min_edge of it is requoted now, not after min_requote_ms.
-            let no_fair = crate::model::complement_price(fair, precision);
+            let yes_fair = if opens(inv, true) { open_fair } else { pair_fair };
+            let no_fair =
+                crate::model::complement_price(if opens(inv, false) { open_fair } else { pair_fair }, precision);
             let thin = |resting: f64, side_fair: f64, opening: bool| {
                 opening && resting > 0.0 && resting > side_fair - cfg.open_min_edge + 1e-9
             };
-            let urgent = quote.quoted && (thin(quote.yes, fair, opens(inv, true)) || thin(quote.no, no_fair, opens(inv, false)));
+            // A guarded first leg comes off now too.
+            let pulled = |resting: f64, opening: bool| guarded && opening && resting > 0.0;
+            let urgent = quote.quoted
+                && (thin(quote.yes, yes_fair, opens(inv, true))
+                    || thin(quote.no, no_fair, opens(inv, false))
+                    || pulled(quote.yes, opens(inv, true))
+                    || pulled(quote.no, opens(inv, false)));
             if cfg.maker && (changed || due) && (urgent || now - quote.last_ms >= cfg.min_requote_ms as i64) {
                 if let Some(yes_token) = market.yes_outcome().map(|o| o.token_id.clone()) {
                     let no_token =
@@ -251,6 +358,7 @@ impl Engine {
             }
             if cfg.taker {
                 let fee = market.fee_rate_bps as f64 / 10_000.0;
+                let fair = kalshi_fair;
                 if let Some(ask) = book.ask {
                     let edge = fair - ask - fee - cfg.basis_buffer - cfg.taker_slippage;
                     if edge >= cfg.min_taker_edge
@@ -353,6 +461,11 @@ pub fn shares_for(price: f64, min_usd: f64) -> f64 {
         return 1.0;
     }
     (min_usd / price - 1e-9).ceil().max(1.0)
+}
+
+/// The window's start price, which Predict sets (from Chainlink) when it opens.
+fn strike(m: &PredictMarket) -> Option<f64> {
+    m.variant_data.get("startPrice").and_then(Value::as_f64).filter(|k| *k > 0.0)
 }
 
 /// When the market's window starts trading: the 15-minute window's open
@@ -549,6 +662,25 @@ mod tests {
         let held = Position { yes_qty: 4.0, yes_cost: 1.6, ..Default::default() };
         let sides = quoted_sides(&mut e, &HashMap::from([("7".to_string(), held)]));
         assert_eq!(sides.len(), 1, "no adding to the YES leg: {sides:?}");
+        assert_eq!(sides[0].0, "NO");
+    }
+
+    #[test]
+    fn a_fast_binance_move_takes_first_legs_off() {
+        let mut e = quoting_at("0.45", "0.50", (0.40, 0.50));
+        assert_eq!(quoted_sides(&mut e, &HashMap::new()).len(), 2, "both first legs quoted");
+        let c = cfg();
+        let frame = |px: f64| format!(r#"{{"stream":"btcusdt@bookTicker","data":{{"s":"BTCUSDT","b":"{px}","a":"{px}"}}}}"#);
+        assert!(e.binance_frame(&c, &frame(100_000.0)));
+        assert!(e.binance_frame(&c, &frame(100_100.0)), "+10 bp at once");
+        e.quotes.clear(); // re-evaluate from scratch
+        assert!(quoted_sides(&mut e, &HashMap::new()).is_empty(), "guarded: no first legs");
+        assert_eq!(e.guard_pauses.get("BTC"), Some(&1));
+        // A pairing leg is not a first leg: still quoted under the guard.
+        let held = Position { yes_qty: 4.0, yes_cost: 1.6, ..Default::default() };
+        e.quotes.clear();
+        let sides = quoted_sides(&mut e, &HashMap::from([("7".to_string(), held)]));
+        assert_eq!(sides.len(), 1);
         assert_eq!(sides[0].0, "NO");
     }
 

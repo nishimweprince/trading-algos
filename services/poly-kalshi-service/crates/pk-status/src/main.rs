@@ -353,6 +353,8 @@ pub fn pick_adapter(status: &Value) -> Option<Value> {
         "markouts",
         "pnl",
         "open_positions",
+        // Predict's Binance guard, fairs and scorecard (absent for HIP-4).
+        "signal",
     ] {
         out.insert(key.into(), status.get(key).cloned().unwrap_or(Value::Null));
     }

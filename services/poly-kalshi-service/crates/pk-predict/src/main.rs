@@ -7,6 +7,7 @@ mod config;
 mod engine;
 mod model;
 mod sign;
+mod spot;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -66,6 +67,9 @@ struct App {
     /// Every raw frame, only with `PK_PRED_RAW=yes` (it writes ~2 GB an hour).
     raw: Mutex<Option<Journal>>,
     kalshi: Mutex<Option<FeedHandle>>,
+    binance: Mutex<Option<FeedHandle>>,
+    /// Kalshi vs the Binance-informed fairs, scored per settled window.
+    scores: Mutex<spot::FairScores>,
     kalshi_http: reqwest::Client,
     kalshi_signer: Arc<KalshiSigner>,
     markouts: Mutex<MarkoutTracker>,
@@ -392,6 +396,49 @@ impl App {
         }
     }
 
+    /// One scorecard sample per live market with all three fairs and a
+    /// Predict mid (paired, so the sources are compared on the same moments).
+    fn sample_fairs(&self, now: i64) {
+        let rows = self.engine.lock().signal_rows(now);
+        let mut scores = self.scores.lock();
+        for row in rows {
+            let (Some(adjusted), Some(spot), Some(mid)) = (row.fairs.adjusted, row.fairs.spot, row.predict_mid) else {
+                continue;
+            };
+            scores.sample(&row.market, row.close_ms, spot::Sample { ms: now, fairs: [row.fairs.kalshi, adjusted, spot, mid] });
+        }
+    }
+
+    /// The Binance signal for the status page: the guard per asset, every
+    /// live market's three fairs, and the scorecard.
+    fn signal_status(&self) -> Value {
+        let now = now_ms();
+        let engine = self.engine.lock();
+        let rows: Vec<Value> = engine
+            .signal_rows(now)
+            .into_iter()
+            .map(|r| {
+                json!({
+                    "market": r.market, "label": r.label, "asset": r.asset, "tau_s": r.tau_s,
+                    "strike": r.strike, "spot": r.spot, "kalshi": r.fairs.kalshi,
+                    "adjusted": r.fairs.adjusted, "binance": r.fairs.spot, "predict_mid": r.predict_mid,
+                    "guarded": r.guarded,
+                })
+            })
+            .collect();
+        json!({
+            "config": {
+                "guard": self.cfg.binance_guard, "pause_bps": self.cfg.binance_pause_bps,
+                "pause_ms": self.cfg.binance_pause_ms, "pause_gap": self.cfg.binance_pause_gap,
+                "open_fair": self.cfg.open_fair, "pair_fair": self.cfg.pair_fair,
+            },
+            "assets": engine.spot.status(now),
+            "guard_pauses": engine.guard_pauses,
+            "markets": rows,
+            "scores": self.scores.lock().status(),
+        })
+    }
+
     fn simulate_shadow_fills(&self) {
         if self.cfg.mode != VenueMode::Shadow {
             return;
@@ -604,6 +651,8 @@ async fn run(cfg: Config, client: Arc<Client>) -> anyhow::Result<()> {
         engine: Mutex::new(Engine::new()),
         state: Mutex::new(state),
         kalshi: Mutex::new(None),
+        binance: Mutex::new(None),
+        scores: Mutex::new(spot::FairScores::load(&cfg.state_dir.join(FAIR_SCORES_FILE))),
         kalshi_http: reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(3))
             .timeout(Duration::from_secs(8))
@@ -664,6 +713,22 @@ async fn run(cfg: Config, client: Arc<Client>) -> anyhow::Result<()> {
     kalshi.set_wanted(kalshi_wanted(&app));
     *app.kalshi.lock() = Some(kalshi);
 
+    // Binance spot: the guard and the Binance-informed fairs (see `spot`).
+    let weak = Arc::downgrade(&app);
+    let emit = Arc::new(move |_venue: char, text: String| {
+        let Some(app) = weak.upgrade() else { return };
+        let updated = app.engine.lock().binance_frame(&app.cfg, &text);
+        if updated {
+            let mut state = app.state.lock();
+            let feed = state.feeds.entry("binance".into()).or_default();
+            feed.connected = true;
+            feed.last_message_ms = now_ms();
+        }
+    });
+    let binance = spawn_feed(app.cfg.binance_ws_url.clone(), FeedKind::Binance { futures: false }, emit);
+    binance.set_wanted(app.cfg.assets.iter().map(|a| format!("{}usdt@bookTicker", a.to_lowercase())).collect());
+    *app.binance.lock() = Some(binance);
+
     tokio::spawn(predict_ws(app.clone()));
     tokio::spawn(discovery_loop(app.clone()));
     tokio::spawn(strategy_loop(app.clone()));
@@ -672,6 +737,7 @@ async fn run(cfg: Config, client: Arc<Client>) -> anyhow::Result<()> {
     tokio::spawn(settlement_loop(app.clone()));
     tokio::spawn(settlement_accounting_loop(app.clone()));
     tokio::spawn(orphan_sweep_loop(app.clone()));
+    tokio::spawn(fair_score_loop(app.clone()));
 
     app.state.lock().ready = true;
     let routes = routes(app.clone());
@@ -887,8 +953,13 @@ async fn discovery_loop(app: Arc<App>) {
 
 async fn strategy_loop(app: Arc<App>) {
     let mut interval = tokio::time::interval(Duration::from_millis(100));
+    let mut last_score_ms = 0;
     loop {
         interval.tick().await;
+        if now_ms() - last_score_ms >= SCORE_SAMPLE_MS {
+            last_score_ms = now_ms();
+            app.sample_fairs(last_score_ms);
+        }
         app.simulate_shadow_fills();
         let positions = app.state.lock().positions.clone();
         let actions = app.engine.lock().evaluate(&app.cfg, &positions);
@@ -1067,6 +1138,33 @@ async fn orphan_sweep_loop(app: Arc<App>) {
             app.record("orphans_removed", json!({"ids": orphans, "ok": result.is_ok()}));
         }
         seen = untracked;
+    }
+}
+
+/// Scores the fair samples of closed windows at Predict's resolution; a
+/// window unresolved `SCORE_GIVE_UP_MS` after its close is dropped unscored.
+async fn fair_score_loop(app: Arc<App>) {
+    let mut interval = tokio::time::interval(Duration::from_secs(60));
+    loop {
+        interval.tick().await;
+        let now = now_ms();
+        let due = app.scores.lock().due(now, 90_000);
+        if due.is_empty() {
+            continue;
+        }
+        for (market, close_ms) in due {
+            let resolved = match app.client.market(&market).await {
+                Ok(value) => model::resolved_yes(&value),
+                Err(_) => None,
+            };
+            let mut scores = app.scores.lock();
+            match resolved {
+                Some(yes_won) => scores.resolve(&market, yes_won),
+                None if now - close_ms > SCORE_GIVE_UP_MS => scores.drop_market(&market),
+                None => {}
+            }
+        }
+        app.scores.lock().save(&app.cfg.state_dir.join(FAIR_SCORES_FILE));
     }
 }
 
@@ -1460,6 +1558,11 @@ const REMOVE_RETRY_MS: u64 = 250;
 /// Seconds between orphan sweeps (an untracked order needs two in a row).
 const ORPHAN_SWEEP_S: u64 = 15;
 
+/// The fair scorecard: a sample every 5 s, kept in the state directory.
+const SCORE_SAMPLE_MS: i64 = 5_000;
+const SCORE_GIVE_UP_MS: i64 = 45 * 60_000;
+const FAIR_SCORES_FILE: &str = "fair_scores.json";
+
 /// Predict's refusal for free USDT below the total bid amount.
 fn is_collateral_refusal(reason: &str) -> bool {
     let r = reason.to_ascii_lowercase();
@@ -1492,7 +1595,9 @@ fn routes(app: Arc<App>) -> Router {
 }
 
 async fn api_status(State(app): State<Arc<App>>) -> Json<Value> {
-    Json(app.state.lock().status())
+    let mut status = app.state.lock().status();
+    status["signal"] = app.signal_status();
+    Json(status)
 }
 async fn api_markets(State(app): State<Arc<App>>) -> Json<Value> {
     Json(json!(app.engine.lock().markets()))

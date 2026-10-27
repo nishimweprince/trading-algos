@@ -71,6 +71,17 @@ svg.mkt .k { stroke:var(--kalshi); } svg.mkt .l { stroke:var(--lim); } svg.mkt .
 <h3 class="section">Markets</h3>
 <div class="card"><table id="markets"></table><div class="note" id="mnote">Fair = Kalshi's YES mid for the matched contract. Venue bid / ask is the venue's YES book. Markets are quoted only while their window is open and both books are fresh.</div></div>
 
+<div id="signal-sec" hidden>
+<h3 class="section">Binance signal</h3>
+<div class="grid">
+  <div class="card"><h2>Guard</h2><div id="sig-guard"></div><div class="note">The guard only takes first legs off (opening a position); pairing bids stay up.</div></div>
+  <div class="card"><h2>Pricing in use</h2><div id="sig-use"></div><div class="note">Set by PK_PRED_OPEN_FAIR and PK_PRED_PAIR_FAIR (kalshi, adjusted, binance). A fair that is not available yet falls back to Kalshi's.</div></div>
+</div>
+<div class="card"><h2>Binance per coin</h2><table id="sig-assets"></table><div class="note">Binance spot best bid/ask mid. σ: Binance's own 1 s volatility (5-minute EWMA), used once 120 s of returns are in.</div></div>
+<div class="card" style="margin-top:12px"><h2>Fairs now (P(Up))</h2><table id="sig-fairs"></table><div class="note">Kalshi = Kalshi's YES mid. Kalshi + Binance = Kalshi's fair moved by Binance's log move since Kalshi's fair last changed: Φ(Φ⁻¹(k) + Δln S ⁄ σ√τ). Binance = Φ(ln(S ⁄ start) ⁄ σ√τ) from Binance alone, start = Predict's window start price (Chainlink). τ = time to the close.</div></div>
+<div class="card" style="margin-top:12px"><h2>Scorecard</h2><div id="sig-snote" class="muted"></div><table id="sig-scores"></table><div class="note">A sample every 5 s per live market while all three fairs and Predict's mid exist. Brier = (fair − outcome)², lower is better; 5 s lead = |fair − Predict's mid 5 s later|, lower is better. Each settled window counts once (its samples share one outcome). "vs Kalshi" = Kalshi's score minus the source's: positive beats Kalshi, t over windows. Pricing first legs from Binance wants a positive Brier gain at t ≥ 2 over ≥ 100 windows.</div></div>
+</div>
+
 <h3 class="section">Contract matching</h3>
 <div class="card"><div id="grades"></div><table id="rejects"></table><div class="note">E0: identical rules. E1: allowlisted with a stated basis (different settlement index). E2: no safe mapping, never traded.</div></div>
 
@@ -230,6 +241,37 @@ async function tick() {
   put("markouts", `<tr><th>Horizon</th><th>Mean markout</th></tr>` + [5, 30, 60].map((h) => `<tr><td>${h} s</td><td>${stat(byH[h])}</td></tr>`).join("") +
     `<tr><th>Recent</th><th>Market · side · fill → markout</th></tr>` +
     (marks.slice(-15).reverse().map((m) => `<tr><td>${m.horizon_s} s</td><td>${esc(m.market)} · ${esc(m.side)} · ${f(m.fill_px, 3)} → <span class="${sgn(m.markout)}">${(m.markout * 100).toFixed(1)}¢</span></td></tr>`).join("") || '<tr><td class="muted" colspan="2">none yet</td></tr>'));
+  signal(s.signal);
+}
+
+const SOURCE = { kalshi: "Kalshi", adjusted: "Kalshi + Binance", binance: "Binance", predict_mid: "Predict mid (baseline)" };
+// The Binance signal (Predict only): guard, per-coin spot, the three fairs and their scorecard.
+function signal(sig) {
+  $("signal-sec").hidden = !sig;
+  if (!sig) return;
+  const cfg = sig.config || {}, assets = sig.assets || {}, pauses = sig.guard_pauses || {};
+  put("sig-guard", kv([
+    ["Guard", cfg.guard ? "on" : "off", cfg.guard ? "good" : "warn"],
+    ["Fast move", `≥ ${f(cfg.pause_bps, 1)} bp within 1 s → first legs off for ${f((cfg.pause_ms || 0) / 1000, 1)} s`],
+    ["Stale Kalshi", `|Kalshi + Binance − Kalshi| ≥ ${f((cfg.pause_gap || 0) * 100, 1)}¢`],
+    ["First legs taken off", Object.entries(pauses).map(([a, n]) => `${a} ${n}`).join(" · ") || "0"],
+  ]));
+  put("sig-use", kv([["First legs priced from", SOURCE[cfg.open_fair] || cfg.open_fair], ["Pairing legs priced from", SOURCE[cfg.pair_fair] || cfg.pair_fair]]));
+  const coins = Object.entries(assets).sort();
+  put("sig-assets", `<tr><th>Coin</th><th>Binance mid</th><th>Age</th><th>Move in 1 s</th><th>σ (bp/√min)</th><th>State</th><th>Fast-move pauses</th></tr>` +
+    (coins.map(([a, x]) => `<tr><td>${esc(a)}</td><td>${f(x.mid, 2)}</td><td class="${x.age_ms > 5000 ? "bad" : ""}">${f(x.age_ms / 1000, 1)} s</td><td class="${x.move_bps >= cfg.pause_bps ? "warn" : ""}">${f(x.move_bps, 1)} bp</td><td>${x.sigma_bps_per_min == null ? `warming (${x.vol_samples}/120)` : f(x.sigma_bps_per_min, 1)}</td><td class="${x.paused ? "warn" : "good"}">${x.paused ? "paused" : "clear"}</td><td>${x.pauses}</td></tr>`).join("") || '<tr><td class="muted" colspan="7">no Binance frames yet</td></tr>'));
+  const p3 = (v) => f(v, 3);
+  put("sig-fairs", `<tr><th>Market</th><th>Closes in</th><th>Binance</th><th>Start</th><th>Kalshi</th><th>Kalshi + Binance</th><th>Binance</th><th>Predict mid</th><th>Guard</th></tr>` +
+    ((sig.markets || []).sort((a, b) => String(a.label).localeCompare(String(b.label))).map((m) => {
+      const gap = m.adjusted == null ? null : m.adjusted - m.kalshi;
+      return `<tr><td>${esc(m.label)}</td><td>${f(m.tau_s / 60, 1)} min</td><td>${f(m.spot, 2)}</td><td>${f(m.strike, 2)}</td><td>${p3(m.kalshi)}</td><td class="${gap != null && Math.abs(gap) >= cfg.pause_gap ? "warn" : ""}">${p3(m.adjusted)}${gap == null ? "" : ` <span class="muted">(${gap >= 0 ? "+" : ""}${(gap * 100).toFixed(1)}¢)</span>`}</td><td>${p3(m.binance)}</td><td>${p3(m.predict_mid)}</td><td class="${m.guarded ? "warn" : "good"}">${m.guarded ? "first legs off" : "clear"}</td></tr>`;
+    }).join("") || '<tr><td class="muted" colspan="9">no live window</td></tr>'));
+  const sc = sig.scores || {};
+  put("sig-snote", `${sc.windows || 0} settled windows scored · ${sc.pending || 0} windows collecting`);
+  const st = (x, scale, d) => x && x.n ? `${f(x.mean * scale, d)} ± ${x.se == null ? "–" : f(x.se * scale, d)}` : "–";
+  const gain = (x, scale, d) => x && x.n > 1 ? `<span class="${sgn(x.mean)}">${x.mean >= 0 ? "+" : ""}${f(x.mean * scale, d)}</span> <span class="muted">(t ${f(x.t, 1)})</span>` : "–";
+  put("sig-scores", `<tr><th>Fair</th><th>Brier</th><th>vs Kalshi</th><th>5 s lead error (¢)</th><th>vs Kalshi (¢)</th><th>Windows</th></tr>` +
+    Object.keys(SOURCE).map((k) => `<tr><td>${SOURCE[k]}</td><td>${st((sc.brier || {})[k], 1, 4)}</td><td>${k === "kalshi" ? "–" : gain((sc.brier_gain_vs_kalshi || {})[k], 1, 4)}</td><td>${st((sc.lead_5s || {})[k], 100, 2)}</td><td>${k === "kalshi" ? "–" : gain((sc.lead_gain_vs_kalshi || {})[k], 100, 2)}</td><td>${((sc.brier || {})[k] || {}).n || 0}</td></tr>`).join(""));
 }
 tick(); setInterval(() => { if (!document.hidden) tick(); }, 3000);
 </script>
