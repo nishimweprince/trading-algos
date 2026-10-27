@@ -97,6 +97,10 @@ struct App {
     cancel_epoch: std::sync::atomic::AtomicU64,
     /// Live fills waiting `FILL_TAG_AFTER_MS` for the Binance move after them.
     fill_tags: Mutex<Vec<PendingTag>>,
+    /// Submits awaiting their answer, per market: an order the wallet reports
+    /// meanwhile is that submit's own (its event beats the HTTP answer by
+    /// ~300 ms), not one to adopt.
+    submitting: Mutex<std::collections::HashMap<String, u32>>,
     kalshi_http: reqwest::Client,
     kalshi_signer: Arc<KalshiSigner>,
     markouts: Mutex<MarkoutTracker>,
@@ -402,6 +406,21 @@ impl App {
             }
             return;
         }
+        // In flight until this returns, so its own wallet event is not adopted.
+        struct Submitting<'a>(&'a Mutex<std::collections::HashMap<String, u32>>, String);
+        impl Drop for Submitting<'_> {
+            fn drop(&mut self) {
+                let mut map = self.0.lock();
+                if let Some(n) = map.get_mut(&self.1) {
+                    *n = n.saturating_sub(1);
+                    if *n == 0 {
+                        map.remove(&self.1);
+                    }
+                }
+            }
+        }
+        *self.submitting.lock().entry(market_id.clone()).or_default() += 1;
+        let _submitting = Submitting(&self.submitting, market_id.clone());
         let expiration = (now_ms() / 1000 + self.cfg.quote_ttl_s as i64) as u64;
         let strategy = if lane == "maker" { "LIMIT" } else { "MARKET" };
         let result = self
@@ -441,7 +460,12 @@ impl App {
                     simulated: false,
                 };
                 let mut state = self.state.lock();
-                state.push_order(record.clone());
+                // Adopted from its wallet event already (the event can beat
+                // this answer): replace that record rather than add a second.
+                match state.orders.iter_mut().find(|o| o.id == record.id) {
+                    Some(existing) => *existing = record.clone(),
+                    None => state.push_order(record.clone()),
+                }
                 state.recount();
                 // An accepted order ends a run of rejections.
                 state.risk.state.consecutive_rejections = 0;
@@ -773,6 +797,7 @@ async fn run(cfg: Config, client: Arc<Client>) -> anyhow::Result<()> {
         reserved_usd: Mutex::new(0.0),
         cancel_epoch: std::sync::atomic::AtomicU64::new(0),
         fill_tags: Mutex::new(Vec::new()),
+        submitting: Mutex::new(Default::default()),
         kalshi_http: reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(3))
             .timeout(Duration::from_secs(8))
@@ -1761,11 +1786,15 @@ fn adopt_order(app: &Arc<App>, order_id: &str, data: &Value) {
     if app.cfg.mode != VenueMode::Live {
         return;
     }
-    let mut state = app.state.lock();
-    if order_id.is_empty() || state.orders.iter().any(|o| o.id == order_id) {
+    let Some(record) = adopted_record(order_id, data) else { return };
+    // A submit to this market awaiting its answer owns the order.
+    if app.submitting.lock().contains_key(&record.market) {
         return;
     }
-    let Some(record) = adopted_record(order_id, data) else { return };
+    let mut state = app.state.lock();
+    if state.orders.iter().any(|o| o.id == order_id) {
+        return;
+    }
     state.push_order(record.clone());
     state.recount();
     state.risk.save();
