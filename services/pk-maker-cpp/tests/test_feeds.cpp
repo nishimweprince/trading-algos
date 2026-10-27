@@ -137,3 +137,20 @@ PKM_TEST(iso_timestamps) {
   require(feeds::iso_to_unix("2026-10-26T08:00:00-04:00", t) && t == 1'793'016'000, "negative offset");
   require(!feeds::iso_to_unix("2026-10-26", t) && !feeds::iso_to_unix("garbage-and-more-text", t), "refused");
 }
+
+PKM_TEST(spot_ticker_frames_reach_their_coin) {
+  auto e = make();
+  require_eq(feeds::spot_subscribe({"BTC", "ETH"}),
+             std::string(R"({"type":"subscribe","product_ids":["BTC-USD","ETH-USD"],"channels":["ticker"]})"),
+             "Coinbase ticker subscription");
+  json::Document doc;
+  require(doc.parse(R"({"type":"ticker","product_id":"ETH-USD","price":"2315.10","best_bid":"2315.00","best_ask":"2315.20","time":"2026-10-27T13:00:00.000000Z"})"),
+          "ticker parses");
+  require(feeds::apply_spot(doc.root(), e, 1'000'000'000) == 1, "ETH is coin 1");
+  require(doc.parse(R"({"type":"ticker","product_id":"BTC-USD","price":"79900.5"})"), "price only");
+  require(feeds::apply_spot(doc.root(), e, 1'000'000'000) == 0, "the trade price stands in for a missing best bid/ask");
+  require(doc.parse(R"({"type":"subscriptions","channels":[{"name":"ticker","product_ids":["BTC-USD"]}]})"), "ack");
+  require(feeds::apply_spot(doc.root(), e, 1'000'000'000) == -1, "acks are not prices");
+  require(doc.parse(R"({"type":"ticker","product_id":"DOGE-USD","price":"0.2"})"), "other product");
+  require(feeds::apply_spot(doc.root(), e, 1'000'000'000) == -1, "not one of our coins");
+}

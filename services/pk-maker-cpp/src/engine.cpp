@@ -20,6 +20,15 @@ constexpr std::int64_t kDriftGraceNs = 30 * kNs;
 constexpr std::int64_t kTagBeforeMs = 1'000;
 constexpr std::int64_t kMarkoutMs = 5'000;
 constexpr std::int64_t kMarkoutGiveUpMs = 15'000;
+// Spot: the guard's window, the most a mid may age and still count, and β's
+// sampling (a 5 s step, an EWMA half-life of 60 samples, used after 60).
+constexpr std::int64_t kSpotWindowMs = 1'000;
+constexpr std::int64_t kSpotMaxAgeMs = 5'000;
+constexpr std::int64_t kBetaSampleMs = 5'000;
+constexpr double kBetaHalfLife = 60.0;
+constexpr std::uint32_t kBetaMinSamples = 60;
+// Probability per unit log move: near 0.5 with minutes left it is a few hundred.
+constexpr double kBetaMax = 2'000.0;
 
 double round_dp2(double x) noexcept { return std::nearbyint(x * 100.0) / 100.0; }
 
@@ -175,6 +184,12 @@ void Engine::on_kalshi_update(int coin, std::int64_t t_ns) {
     c.trail.evict_before(now_ms - 1000);
     const double moved = c.trail.empty() ? 0.0 : std::max(std::abs(m - c.trail.max()), std::abs(m - c.trail.min()));
     c.trail.push(now_ms, m);
+    // Kalshi's mid changed: spot's move from here is what it has not priced yet.
+    const bool changed = c.mids_size == 0 || std::abs(c.mids[(c.mids_head + c.mids_size - 1) % c.mids.size()].second - m) > 1e-9;
+    if (changed && spot_fresh(c, now_ms)) {
+      c.anchor_ln = std::log(c.spot_mid);
+      c.has_anchor = true;
+    }
     const std::size_t at = (c.mids_head + c.mids_size) % c.mids.size();
     c.mids[at] = {now_ms, m};
     if (c.mids_size < c.mids.size()) ++c.mids_size;
@@ -188,6 +203,78 @@ void Engine::on_kalshi_update(int coin, std::int64_t t_ns) {
 }
 
 void Engine::on_poly_update(int coin, std::int64_t t_ns) { tick_coin(static_cast<std::size_t>(coin), t_ns); }
+
+void Engine::on_spot(int coin, double mid, std::int64_t t_ns) {
+  if (coin < 0 || static_cast<std::size_t>(coin) >= coins_.size() || !(mid > 0)) return;
+  const auto i = static_cast<std::size_t>(coin);
+  auto& c = coins_[i];
+  const std::int64_t now_ms = t_ns / 1'000'000;
+  const double ln = std::log(mid);
+  c.spot_mid = mid;
+  c.spot_ms = now_ms;
+  c.spot_trail.evict_before(now_ms - kSpotWindowMs);
+  c.spot_trail.push(now_ms, ln);
+  const std::size_t at = (c.spots_head + c.spots_size) % c.spots.size();
+  c.spots[at] = {now_ms, ln};
+  if (c.spots_size < c.spots.size()) ++c.spots_size;
+  else c.spots_head = (c.spots_head + 1) % c.spots.size();
+  // A fall takes the Up first leg off, a rise the Down one.
+  const double rise = (ln - c.spot_trail.min()) * 1e4;
+  const double fall = (c.spot_trail.max() - ln) * 1e4;
+  if (cfg_.spot_pause_bps > 0 && (rise >= cfg_.spot_pause_bps || fall >= cfg_.spot_pause_bps)) {
+    if (std::max(c.up_off_until_ms, c.down_off_until_ms) < now_ms) ++counters_.spot_pauses;
+    if (fall >= cfg_.spot_pause_bps) c.up_off_until_ms = now_ms + cfg_.spot_pause_ms;
+    if (rise >= cfg_.spot_pause_bps) c.down_off_until_ms = now_ms + cfg_.spot_pause_ms;
+  }
+  tick_coin(i, t_ns);
+}
+
+bool Engine::spot_fresh(const Coin& c, std::int64_t now_ms) noexcept {
+  return c.spot_ms > 0 && now_ms - c.spot_ms <= kSpotMaxAgeMs;
+}
+
+std::optional<double> Engine::spot_move_bps(const Coin& c, std::int64_t now_ms) const noexcept {
+  if (c.spots_size == 0 || !spot_fresh(c, now_ms)) return std::nullopt;
+  const double latest = c.spots[(c.spots_head + c.spots_size - 1) % c.spots.size()].second;
+  for (std::size_t k = 0; k < c.spots_size; ++k) {
+    const auto& [ms, ln] = c.spots[(c.spots_head + k) % c.spots.size()];
+    if (ms >= now_ms - kSpotWindowMs) return (latest - ln) * 1e4;
+  }
+  return 0.0;
+}
+
+void Engine::sample_beta(Coin& c, std::int64_t now_ms, double kalshi) noexcept {
+  if (!spot_fresh(c, now_ms) || now_ms - c.beta_last_ms < kBetaSampleMs) return;
+  const double ln = std::log(c.spot_mid);
+  if (c.beta_has_last) {
+    const double dk = kalshi - c.beta_last_k;
+    const double dl = ln - c.beta_last_ln;
+    const double lambda = std::pow(0.5, 1.0 / kBetaHalfLife);
+    c.beta_cov = lambda * c.beta_cov + (1.0 - lambda) * dk * dl;
+    c.beta_var = lambda * c.beta_var + (1.0 - lambda) * dl * dl;
+    ++c.beta_n;
+  }
+  c.beta_last_ms = now_ms;
+  c.beta_last_k = kalshi;
+  c.beta_last_ln = ln;
+  c.beta_has_last = true;
+}
+
+std::optional<double> Engine::beta_of(const Coin& c) noexcept {
+  if (c.beta_n < kBetaMinSamples || !(c.beta_var > 0)) return std::nullopt;
+  return std::clamp(c.beta_cov / c.beta_var, 0.0, kBetaMax);
+}
+
+std::optional<double> Engine::beta(int coin) const noexcept {
+  if (coin < 0 || static_cast<std::size_t>(coin) >= coins_.size()) return std::nullopt;
+  return beta_of(coins_[static_cast<std::size_t>(coin)]);
+}
+
+std::optional<double> Engine::spot_corrected(const Coin& c, double kalshi, std::int64_t now_ms) const noexcept {
+  const auto b = beta_of(c);
+  if (!b || !c.has_anchor || !spot_fresh(c, now_ms)) return std::nullopt;
+  return std::clamp(kalshi + *b * (std::log(c.spot_mid) - c.anchor_ln), 0.01, 0.99);
+}
 
 void Engine::tick(std::int64_t t_ns) {
   for (std::size_t i = 0; i < coins_.size(); ++i) tick_coin(i, t_ns);
@@ -215,7 +302,8 @@ void Engine::flush_markouts(std::int64_t now_ms) {
       const double side = it->up ? *q : 1.0 - *q;
       note("markout5 " + it->key + (it->up ? " up " : " down ") + fixed(it->shares, 2) + " @ " + fixed(it->px, 2) +
            " fair_fill " + fixed(it->fair_side, 4) + " fair_now " + fixed(side, 4) + " m5_c " +
-           fixed((side - it->px) * 100.0, 2) + " kmove_c " + fixed(it->kmove_c, 2));
+           fixed((side - it->px) * 100.0, 2) + " kmove_c " + fixed(it->kmove_c, 2) +
+           (it->smove_bps ? " smove_bps " + fixed(*it->smove_bps, 1) : std::string()));
     } else if (now_ms - it->t_ms < kMarkoutGiveUpMs) {
       ++it;
       continue;
@@ -295,6 +383,14 @@ void Engine::tick_coin(std::size_t i, std::int64_t t_ns) {
   std::array<std::optional<std::pair<double, double>>, 2> want{};
   std::array<std::optional<std::pair<double, double>>, 2> hint{};
   const auto q = fair(c, now_ms);
+  if (q) sample_beta(c, now_ms, *q);
+  // Directional spot guard: a recent fall holds the Up first leg off, a rise the Down one.
+  const bool fresh = spot_fresh(c, now_ms);
+  const bool up_off = cfg_.spot_guard && fresh && now_ms < c.up_off_until_ms;
+  const bool down_off = cfg_.spot_guard && fresh && now_ms < c.down_off_until_ms;
+  // The fair the bids are priced from: Kalshi's, or through a jump in
+  // reprice mode the spot-corrected one.
+  std::optional<double> used = q;
   if (stopped_) {
     c.gate = "stopped";
   } else if (is_halted) {
@@ -307,43 +403,67 @@ void Engine::tick_coin(std::size_t i, std::int64_t t_ns) {
     c.gate = "no window";
   } else {
     const std::int64_t s = t_ns / kNs - c.window->open_unix;
-    // What the rule would bid with the books as they are, before the time gates.
-    std::array<std::optional<std::pair<double, double>>, 2> rule{};
-    bool books_ok = false;
-    if (q) {
-      const auto ua = c.upb.quote().valid ? c.upb.best_ask() : std::nullopt;
-      const auto da = c.downb.quote().valid ? c.downb.best_ask() : std::nullopt;
-      books_ok = ua && da;
-      if (books_ok) {
-        const auto [u, d] = desired_px(cfg_, *q, net, ua, da);
-        Config pairing = cfg_;
-        pairing.half_spread = cfg_.pair_half_spread;
-        const auto [pu, pd] = desired_px(pairing, *q, net, ua, da);
-        const std::array<std::optional<double>, 2> pxs{u, d};
-        const std::array<std::optional<double>, 2> pair_pxs{pu, pd};
-        for (std::size_t n = 0; n < 2; ++n) {
-          const bool up = n == 0;
-          const bool opening = opens(net, up);
-          if (opening && !first_leg_ok(cfg_, s, *q)) continue;
-          if (opening && (!pxs[n] || *pxs[n] < cfg_.open_min_px - 1e-9)) continue;
-          auto px = pair_cap(cfg_, opening ? pxs[n] : pair_pxs[n], held_avg[1 - n]);
-          if (px && now_ms < c.slots[n].cross_cap_until_ms) {
-            px = std::min(*px, c.slots[n].cross_cap);
-            if (*px < cfg_.min_px - 1e-9) px.reset();
-          }
-          if (!px) continue;
-          // Room counts every other order that can still fill on this side,
-          // so a replaced bid that fills late cannot carry net past the cap.
-          const double other = live_besides(c.key, up, c.slots[n].order);
-          const auto size = room(cfg_, up ? net + other : net - other, up);
-          if (!size) continue;
-          // The resting order's own notional is already in open cost.
-          const double mine = c.slots[n].order.empty() ? 0.0 : c.slots[n].px * c.slots[n].remaining;
-          if (cost - mine + *px * *size > cfg_.max_open_cost_usd + 1e-9) continue;
-          rule[n] = std::pair<double, double>{*px, *size};
-        }
+    const auto ua = c.upb.quote().valid ? c.upb.best_ask() : std::nullopt;
+    const auto da = c.downb.quote().valid ? c.downb.best_ask() : std::nullopt;
+    const bool books_ok = ua && da;
+    // Threatened-side widening (off unless spot_widen_per_bp > 0): a fall
+    // widens the Up bid's half-spread, a rise the Down bid's.
+    double widen_up = 0;
+    double widen_down = 0;
+    if (cfg_.spot_widen_per_bp > 0) {
+      if (const auto m = spot_move_bps(c, now_ms)) {
+        const double w = std::min(cfg_.spot_widen_max, cfg_.spot_widen_per_bp * std::abs(*m));
+        (*m < 0 ? widen_up : widen_down) = w;
       }
     }
+    // What the rule would bid from fair `fq`, half-spreads raised by `extra_h`,
+    // with the books as they are, before the time gates.
+    auto rule_for = [&](double fq, double extra_h) {
+      std::array<std::optional<std::pair<double, double>>, 2> rule{};
+      Config opening_cfg = cfg_;
+      opening_cfg.half_spread += extra_h;
+      auto [u, d] = desired_px(opening_cfg, fq, net, ua, da);
+      if (widen_up > 0) {
+        Config wide = opening_cfg;
+        wide.half_spread += widen_up;
+        u = desired_px(wide, fq, net, ua, da).first;
+      }
+      if (widen_down > 0) {
+        Config wide = opening_cfg;
+        wide.half_spread += widen_down;
+        d = desired_px(wide, fq, net, ua, da).second;
+      }
+      Config pairing = cfg_;
+      pairing.half_spread = cfg_.pair_half_spread + extra_h;
+      const auto [pu, pd] = desired_px(pairing, fq, net, ua, da);
+      const std::array<std::optional<double>, 2> pxs{u, d};
+      const std::array<std::optional<double>, 2> pair_pxs{pu, pd};
+      for (std::size_t n = 0; n < 2; ++n) {
+        const bool up = n == 0;
+        const bool opening = opens(net, up);
+        if (opening && !first_leg_ok(cfg_, s, fq)) continue;
+        if (opening && (up ? up_off : down_off)) continue;
+        if (opening && (!pxs[n] || *pxs[n] < cfg_.open_min_px - 1e-9)) continue;
+        auto px = pair_cap(cfg_, opening ? pxs[n] : pair_pxs[n], held_avg[1 - n]);
+        if (px && now_ms < c.slots[n].cross_cap_until_ms) {
+          px = std::min(*px, c.slots[n].cross_cap);
+          if (*px < cfg_.min_px - 1e-9) px.reset();
+        }
+        if (!px) continue;
+        // Room counts every other order that can still fill on this side,
+        // so a replaced bid that fills late cannot carry net past the cap.
+        const double other = live_besides(c.key, up, c.slots[n].order);
+        const auto size = room(cfg_, up ? net + other : net - other, up);
+        if (!size) continue;
+        // The resting order's own notional is already in open cost.
+        const double mine = c.slots[n].order.empty() ? 0.0 : c.slots[n].px * c.slots[n].remaining;
+        if (cost - mine + *px * *size > cfg_.max_open_cost_usd + 1e-9) continue;
+        rule[n] = std::pair<double, double>{*px, *size};
+      }
+      return rule;
+    };
+    std::array<std::optional<std::pair<double, double>>, 2> rule{};
+    if (q && books_ok) rule = rule_for(*q, 0.0);
     hint = rule;
     if (s < cfg_.entry_early_s) {
       c.gate = "window start";
@@ -351,13 +471,25 @@ void Engine::tick_coin(std::size_t i, std::int64_t t_ns) {
       c.gate = "window end";
       hint = {};
     } else if (now_ms < c.pause_until_ms) {
-      c.gate = "pause";
+      // Reprice mode: keep quoting through the jump from the spot-corrected
+      // fair, wider; without β or a fresh spot it pauses as before.
+      const auto adj = cfg_.jump_reprice && q && books_ok ? spot_corrected(c, *q, now_ms) : std::nullopt;
+      if (adj) {
+        c.gate = "repricing";
+        used = adj;
+        want = rule_for(*adj, cfg_.jump_extra_h);
+      } else {
+        c.gate = "pause";
+      }
     } else if (!q) {
       c.gate = "no fair";
     } else if (!books_ok) {
       c.gate = "no poly book";
     } else {
-      c.gate = "quoting";
+      c.gate = up_off && down_off ? "quoting:spot-both-off"
+               : up_off           ? "quoting:spot-up-off"
+               : down_off         ? "quoting:spot-down-off"
+                                  : "quoting";
       want = rule;
     }
   }
@@ -365,7 +497,7 @@ void Engine::tick_coin(std::size_t i, std::int64_t t_ns) {
     c.slots[n].want = want[n];
     // The signer prepares for what the slot will want once a pause or the window start ends.
     c.slots[n].hint = want[n] ? want[n] : hint[n];
-    const std::optional<double> fair_side = q ? std::optional<double>(n == 0 ? *q : 1.0 - *q) : std::nullopt;
+    const std::optional<double> fair_side = used ? std::optional<double>(n == 0 ? *used : 1.0 - *used) : std::nullopt;
     step_slot(i, n, want[n], fair_side, c.window && opens(net, n == 0), now_ms);
   }
 }
@@ -591,8 +723,12 @@ void Engine::book_fill(const OrderRec& o, double shares, std::int64_t t_ns) {
   const auto km = kalshi_move(c, now_ms);
   const double kmove_c = km ? (o.up ? *km : -*km) * 100.0 : 0.0;
   if (km) line += " kmove_c " + fixed(kmove_c, 2);
+  // Spot's move likewise (bp): the signal the guard pulls on.
+  std::optional<double> smove_bps;
+  if (const auto sm = spot_move_bps(c, now_ms)) smove_bps = o.up ? *sm : -*sm;
+  if (smove_bps) line += " smove_bps " + fixed(*smove_bps, 1);
   note(std::move(line));
-  if (q) markouts_.push_back({o.coin, o.key, o.up, o.px, shares, o.up ? *q : 1.0 - *q, kmove_c, now_ms});
+  if (q) markouts_.push_back({o.coin, o.key, o.up, o.px, shares, o.up ? *q : 1.0 - *q, kmove_c, smove_bps, now_ms});
 }
 
 std::vector<Inventory> Engine::unsettled(std::int64_t t_ns) const {

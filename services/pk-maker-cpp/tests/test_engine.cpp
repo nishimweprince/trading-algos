@@ -603,3 +603,134 @@ PKM_TEST(engine_tags_fills_with_the_kalshi_move_and_a_5s_markout) {
   for (const auto& line : e.log()) marked = marked || (line.rfind("markout5 ", 0) == 0 && line.find("m5_c 0.00") != std::string::npos);
   require(marked, "a 5 s markout against Kalshi's fair (0.53 at 0.53)");
 }
+
+namespace {
+
+// 64 five-second samples of Kalshi moving 200 × spot's log move: β ≈ 200.
+std::int64_t warm_beta(Engine& e, std::int64_t t0) {
+  std::int64_t t = t0;
+  for (int j = 0; j <= 64; ++j) {
+    t = t0 + j * 5 * NS;
+    const double x = 0.0005 * std::sin(static_cast<double>(j));
+    // Spot first, so the 5 s sample (taken at the Kalshi update) pairs this
+    // step's spot with this step's Kalshi.
+    e.on_spot(0, 100'000.0 * std::exp(x), t - 1'000'000);
+    const double k = 0.5 + 200.0 * x;
+    books(e, k - 0.005, k + 0.005, {0.30, 0.95}, {0.30, 0.95}, t);
+    take(e);
+  }
+  return t;
+}
+
+bool any_line(Engine& e, std::string_view prefix, std::string_view part) {
+  for (const auto& line : e.log())
+    if (line.rfind(prefix, 0) == 0 && line.find(part) != std::string::npos) return true;
+  return false;
+}
+
+}  // namespace
+
+PKM_TEST(engine_a_spot_fall_pulls_the_up_first_leg_only) {
+  auto e = make();
+  const std::int64_t t0 = (OPEN + 100) * NS;
+  books(e, 0.54, 0.56, {0.53, 0.57}, {0.43, 0.47}, t0);
+  take(e);
+  e.on_posted(0, true, 0.53, 5, true, "u1", t0);
+  e.on_posted(0, false, 0.43, 5, true, "d1", t0);
+  e.on_spot(0, 100'000.0, t0 + 10'000'000);
+  require(take(e).empty(), "a first print moves nothing");
+  e.on_spot(0, 99'940.0, t0 + 300'000'000);  // −6 bp within the second
+  auto a = take(e);
+  require(a.size() == 1 && a[0].kind == ActionKind::cancel && a[0].order_id == "u1", "the Up bid comes off on that print");
+  require(std::string(e.gate(0)) == "quoting:spot-up-off" && e.counters().spot_pauses == 1, "gate and count");
+  e.on_cancelled(0, true, "u1", true, t0 + 400'000'000);
+  e.on_spot(0, 99'940.0, t0 + 2'500'000'000);  // calm, past spot_pause_ms
+  a = take(e);
+  require(a.size() == 1 && a[0].kind == ActionKind::post && a[0].up, "the Up first leg returns");
+
+  // A pairing Up bid (Down held) is not a first leg: the guard leaves it.
+  auto p = make();
+  Inventory v;
+  v.asset = "BTC";
+  v.open_unix = OPEN;
+  v.down = 5;
+  v.down_cost = 2.15;
+  p.put_inventory(window_key("BTC", OPEN), v);
+  books(p, 0.54, 0.56, {0.53, 0.57}, {0.43, 0.47}, t0);
+  take(p);
+  p.on_posted(0, true, 0.54, 5, true, "pu", t0);
+  p.on_posted(0, false, 0.43, 5, true, "pd", t0);
+  p.on_spot(0, 100'000.0, t0 + 10'000'000);
+  p.on_spot(0, 99'940.0, t0 + 300'000'000);
+  require(take(p).empty(), "a fall threatens no pairing Up bid, nor the Down bid");
+}
+
+PKM_TEST(engine_fill_tags_carry_the_spot_move) {
+  Config c;
+  c.pause_jump = 0.10;
+  auto e = make(c);
+  const std::int64_t t0 = (OPEN + 100) * NS;
+  books(e, 0.54, 0.56, {0.53, 0.57}, {0.43, 0.47}, t0);
+  take(e);
+  e.on_posted(0, true, 0.53, 5, true, "u1", t0);
+  e.on_spot(0, 100'000.0, t0 + 10'000'000);
+  e.on_spot(0, 99'940.0, t0 + 300'000'000);
+  e.log().clear();
+  e.on_order("u1", 5, true, t0 + 350'000'000);  // filled before the pull landed
+  require(any_line(e, "fill ", "smove_bps -6.0"), "the fill says spot fell 6 bp against it");
+  e.tick(t0 + 5'500'000'000);
+  require(any_line(e, "markout5 ", "smove_bps -6.0"), "and its 5 s markout repeats it");
+}
+
+PKM_TEST(engine_learns_kalshis_sensitivity_to_spot) {
+  auto e = make();
+  const std::int64_t t0 = (OPEN + 20) * NS;
+  require(!e.beta(0), "nothing learned yet");
+  warm_beta(e, t0);
+  const auto b = e.beta(0);
+  require(b && std::abs(*b - 200.0) < 20.0, "β within 10% of 200: " + std::to_string(b.value_or(-1)));
+}
+
+PKM_TEST(engine_widens_only_the_threatened_side_when_asked) {
+  Config c;
+  c.spot_guard = false;  // see the widening, not the pull
+  c.spot_widen_per_bp = 0.005;
+  c.spot_widen_max = 0.02;
+  auto e = make(c);
+  const std::int64_t t0 = (OPEN + 100) * NS;
+  books(e, 0.54, 0.56, {0.53, 0.57}, {0.43, 0.47}, t0);
+  take(e);
+  require(near(e.target(0, true)->first, 0.53) && near(e.target(0, false)->first, 0.43), "no spot: as before");
+  e.on_spot(0, 100'000.0, t0 + 10'000'000);
+  e.on_spot(0, 99'960.0, t0 + 300'000'000);  // −4 bp: Up widened by 2¢
+  require(near(e.target(0, true)->first, 0.51), "the threatened Up bid widens");
+  require(near(e.target(0, false)->first, 0.43), "the Down bid does not");
+
+  auto off = make();  // defaults: widening off
+  books(off, 0.54, 0.56, {0.53, 0.57}, {0.43, 0.47}, t0);
+  off.on_spot(0, 100'000.0, t0 + 10'000'000);
+  off.on_spot(0, 99'960.0, t0 + 300'000'000);
+  require(near(off.target(0, true)->first, 0.53), "off by default: quotes unchanged");
+}
+
+PKM_TEST(engine_reprices_through_a_kalshi_jump_only_in_reprice_mode) {
+  for (const bool reprice : {false, true}) {
+    Config c;
+    c.jump_reprice = reprice;
+    c.open_leg_s = 900;  // the warm-up runs past the default first-leg minutes
+    auto e = make(c);
+    const std::int64_t t = warm_beta(e, (OPEN + 20) * NS) + NS;
+    // Kalshi jumps 4¢ within the second: a pause, or a reprice from the corrected fair.
+    books(e, 0.495, 0.505, {0.30, 0.95}, {0.30, 0.95}, t);
+    books(e, 0.535, 0.545, {0.30, 0.95}, {0.30, 0.95}, t + 300'000'000);
+    if (!reprice) {
+      require(std::string(e.gate(0)) == "pause", "pause mode pauses");
+      continue;
+    }
+    require(std::string(e.gate(0)) == "repricing", "reprice mode keeps quoting");
+    // Anchored at this jump, so the corrected fair is Kalshi's 0.54: Up at
+    // 0.54 − 0.02 − 0.02 extra = 0.50.
+    const auto up = e.target(0, true);
+    require(up && near(up->first, 0.50), "Up quoted 2¢ wider from the corrected fair");
+  }
+}

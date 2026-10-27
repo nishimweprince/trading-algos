@@ -35,6 +35,8 @@ struct Config {
   std::string relayer_url = "https://relayer-v2.polymarket.com";
   std::string kalshi_ws_url = "wss://api.elections.kalshi.com/trade-api/ws/v2";
   std::string kalshi_rest_url = "https://api.elections.kalshi.com/trade-api/v2";
+  // Coinbase spot (the guard and the fill tags); empty runs without it.
+  std::string spot_ws_url = "wss://ws-feed.exchange.coinbase.com";
 
   std::string state_dir = "data/state";
   std::string kill_file = "data/KILL";

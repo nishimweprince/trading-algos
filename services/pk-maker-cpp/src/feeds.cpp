@@ -254,6 +254,34 @@ std::string poly_unsubscribe(const std::vector<std::string>& tokens) {
   return out;
 }
 
+std::string spot_subscribe(const std::vector<std::string>& assets) {
+  std::vector<std::string> products;
+  products.reserve(assets.size());
+  for (const auto& a : assets) products.push_back(a + "-USD");
+  std::string out = "{\"type\":\"subscribe\",\"product_ids\":";
+  append_list(out, products);
+  out += ",\"channels\":[\"ticker\"]}";
+  return out;
+}
+
+int apply_spot(const json::Value& root, engine::Engine& engine, std::int64_t recv_ns) {
+  if (root["type"].raw() != "ticker") return -1;
+  const auto product = root["product_id"].raw();
+  if (!product.ends_with("-USD")) return -1;
+  const int coin = engine.coin_of(product.substr(0, product.size() - 4));
+  if (coin < 0) return -1;
+  double bid = 0;
+  double ask = 0;
+  double mid = 0;
+  if (root["best_bid"].number(bid) && root["best_ask"].number(ask) && bid > 0 && ask >= bid) {
+    mid = (bid + ask) / 2.0;
+  } else if (!root["price"].number(mid) || !(mid > 0)) {
+    return -1;
+  }
+  engine.on_spot(coin, mid, recv_ns);
+  return coin;
+}
+
 std::string user_subscribe(std::string_view api_key, std::string_view secret_b64, std::string_view passphrase,
                            const std::vector<std::string>& condition_ids) {
   std::string out = "{\"auth\":{\"apiKey\":";

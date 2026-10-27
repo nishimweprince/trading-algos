@@ -59,6 +59,21 @@ struct Config {
   // Half-spread of a pairing bid: closer to fair than `half_spread`, so pairs
   // complete more often; the pair guard still caps the pair under $1.
   double pair_half_spread = 0.01;
+  // Spot (Coinbase) guard, directional: a fall of `spot_pause_bps` within 1 s
+  // takes the Up first leg off for `spot_pause_ms`, a rise the Down one.
+  // Falling spot is what sellers dump into an Up bid; it favours the Down bid.
+  bool spot_guard = true;
+  double spot_pause_bps = 5;
+  std::int64_t spot_pause_ms = 2'000;
+  // Off by default, to be judged on the fill tags first. Widen the threatened
+  // side's half-spread by this per bp of 1 s spot move, up to `spot_widen_max` …
+  double spot_widen_per_bp = 0;
+  double spot_widen_max = 0.03;
+  // … and through a Kalshi jump pause, quote from the spot-corrected fair
+  // (Kalshi's moved by β × spot's move since it last changed) with
+  // `jump_extra_h` more half-spread, instead of pausing.
+  bool jump_reprice = false;
+  double jump_extra_h = 0.02;
 };
 
 struct Window {
@@ -167,7 +182,7 @@ struct Gates {
 struct Counters {
   std::uint64_t posts = 0, cancels = 0, post_only_rejects = 0, balance_rejects = 0, post_errors = 0,
                 cancel_errors = 0, rate_limited = 0, cash_waits = 0, pauses = 0, fills = 0, orders_unknown = 0,
-                windows = 0, drift_checks = 0, stray_cancels = 0;
+                windows = 0, drift_checks = 0, stray_cancels = 0, spot_pauses = 0;
 };
 
 // The highest and lowest value seen in the last `span_ms`, in O(1) amortized
@@ -252,6 +267,10 @@ class Engine final {
   void on_kalshi_update(int coin, std::int64_t t_ns);
   // After a coin's Polymarket book changed.
   void on_poly_update(int coin, std::int64_t t_ns);
+  // A spot (Coinbase) mid for the coin: the directional guard and its state, then quotes.
+  void on_spot(int coin, double mid, std::int64_t t_ns);
+  // Kalshi's sensitivity to spot (probability per unit log move), once learned.
+  [[nodiscard]] std::optional<double> beta(int coin) const noexcept;
   void set_gates(const Gates& gates) noexcept { gates_ = gates; }
   void tick(std::int64_t t_ns);
   void stop() noexcept { stopped_ = true; }
@@ -339,6 +358,27 @@ class Engine final {
     std::size_t mids_head = 0;
     std::size_t mids_size = 0;
     std::int64_t pause_until_ms = 0;
+    // Spot (Coinbase): the last mid, its 1 s window of log mids (the guard)
+    // and a ring of `(ms, ln mid)` (signed moves, fill tags).
+    double spot_mid = 0;
+    std::int64_t spot_ms = 0;
+    MinMaxWindow spot_trail;
+    std::array<std::pair<std::int64_t, double>, 256> spots{};
+    std::size_t spots_head = 0;
+    std::size_t spots_size = 0;
+    std::int64_t up_off_until_ms = 0;    // set by a fall
+    std::int64_t down_off_until_ms = 0;  // set by a rise
+    // β = cov(Δk, Δln S) / var(Δln S) over 5 s samples (EWMA), and spot's
+    // log mid when Kalshi's mid last changed (the spot-corrected fair's anchor).
+    double beta_cov = 0;
+    double beta_var = 0;
+    std::uint32_t beta_n = 0;
+    std::int64_t beta_last_ms = 0;
+    double beta_last_k = 0;
+    double beta_last_ln = 0;
+    bool beta_has_last = false;
+    double anchor_ln = 0;
+    bool has_anchor = false;
     std::array<Slot, 2> slots;
     const char* gate = "no window";
   };
@@ -357,6 +397,13 @@ class Engine final {
   void note(std::string line);
   // Kalshi's signed mid move over the last second (none without history).
   [[nodiscard]] std::optional<double> kalshi_move(const Coin& c, std::int64_t now_ms) const noexcept;
+  // Spot's signed log move over the last second, in bp (none when stale or empty).
+  [[nodiscard]] std::optional<double> spot_move_bps(const Coin& c, std::int64_t now_ms) const noexcept;
+  [[nodiscard]] static bool spot_fresh(const Coin& c, std::int64_t now_ms) noexcept;
+  [[nodiscard]] static std::optional<double> beta_of(const Coin& c) noexcept;
+  // Kalshi's fair moved by β × spot's log move since Kalshi last changed.
+  [[nodiscard]] std::optional<double> spot_corrected(const Coin& c, double kalshi, std::int64_t now_ms) const noexcept;
+  static void sample_beta(Coin& c, std::int64_t now_ms, double kalshi) noexcept;
   // Logs each fill's 5 s markout against Kalshi's fair (`markout5`).
   void flush_markouts(std::int64_t now_ms);
 
@@ -368,6 +415,7 @@ class Engine final {
     double shares = 0;
     double fair_side = 0;  // the side's fair at the fill
     double kmove_c = 0;    // Kalshi's move before it, signed in the fill's favour, in cents
+    std::optional<double> smove_bps;  // spot's move before it, signed likewise, in bp
     std::int64_t t_ms = 0;
   };
   std::vector<PendingMarkout> markouts_;

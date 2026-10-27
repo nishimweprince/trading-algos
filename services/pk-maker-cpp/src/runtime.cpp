@@ -30,7 +30,7 @@ constexpr std::int64_t kMs = 1'000'000;
 constexpr std::int64_t kSec = 1'000'000'000;
 constexpr std::int64_t kUserResyncDelay = 1500 * kMs;
 
-enum class FeedKind : std::uint8_t { kalshi, poly, user };
+enum class FeedKind : std::uint8_t { kalshi, poly, user, spot };
 struct FeedId {
   FeedKind kind = FeedKind::kalshi;
   int coin = -1;
@@ -41,6 +41,7 @@ std::string feed_name(const FeedId& id, const engine::Engine& e) {
     case FeedKind::kalshi: return "kalshi";
     case FeedKind::user: return "poly user";
     case FeedKind::poly: return "poly " + e.asset(id.coin);
+    case FeedKind::spot: return "spot";
   }
   return "?";
 }
@@ -141,6 +142,8 @@ class Connector final {
           continue;
         }
         headers = kalshi_.headers(net::now_ns() / kMs, "GET", url.path) + "\r\n";
+      } else if (r.feed.kind == FeedKind::spot) {
+        net::parse_url(config_.spot_ws_url, url);
       } else {
         net::parse_url(r.feed.kind == FeedKind::user ? config_.poly_user_ws_url : config_.poly_ws_url, url);
       }
@@ -188,6 +191,7 @@ class Hot final {
     for (std::size_t i = 0; i < n; ++i) poly_[i].id = {FeedKind::poly, static_cast<int>(i)};
     kalshi_.id = {FeedKind::kalshi, -1};
     user_.id = {FeedKind::user, -1};
+    spot_.id = {FeedKind::spot, -1};
     orders_.resize(static_cast<std::size_t>(config_.order_channels));
     touched_.assign(n, 0);
     body_.reserve(presign::kBodyMax);
@@ -264,10 +268,10 @@ class Hot final {
   };
 
   // epoll tags: kind << 32 | index
-  static constexpr std::uint64_t kTagKalshi = 1, kTagPoly = 2, kTagUser = 3, kTagOrder = 4;
+  static constexpr std::uint64_t kTagKalshi = 1, kTagPoly = 2, kTagUser = 3, kTagOrder = 4, kTagSpot = 5;
 
   std::vector<Feed*> all_feeds() {
-    std::vector<Feed*> out{&kalshi_, &user_};
+    std::vector<Feed*> out{&kalshi_, &user_, &spot_};
     for (auto& p : poly_) out.push_back(&p);
     return out;
   }
@@ -306,6 +310,11 @@ class Hot final {
           if (engine_.window(static_cast<int>(i)) != nullptr) return true;
         return false;
       case FeedKind::poly: return engine_.window(f.id.coin) != nullptr;
+      case FeedKind::spot:
+        if (config_.spot_ws_url.empty()) return false;
+        for (std::size_t i = 0; i < engine_.coins(); ++i)
+          if (engine_.window(static_cast<int>(i)) != nullptr) return true;
+        return false;
     }
     return false;
   }
@@ -334,7 +343,10 @@ class Hot final {
   }
 
   void attach_feed(FeedId id, std::unique_ptr<ws::Client> ws, std::int64_t mono) {
-    Feed& f = id.kind == FeedKind::kalshi ? kalshi_ : id.kind == FeedKind::user ? user_ : poly_[static_cast<std::size_t>(id.coin)];
+    Feed& f = id.kind == FeedKind::kalshi ? kalshi_
+              : id.kind == FeedKind::user ? user_
+              : id.kind == FeedKind::spot ? spot_
+                                          : poly_[static_cast<std::size_t>(id.coin)];
     f.requested = false;
     if (f.ws || !wanted(f)) {
       ws->close();
@@ -343,7 +355,10 @@ class Hot final {
     f.ws = std::move(ws);
     f.last_rx = mono;
     f.last_ping = mono;
-    const std::uint64_t tag = id.kind == FeedKind::kalshi ? kTagKalshi : id.kind == FeedKind::user ? kTagUser : kTagPoly;
+    const std::uint64_t tag = id.kind == FeedKind::kalshi ? kTagKalshi
+                              : id.kind == FeedKind::user ? kTagUser
+                              : id.kind == FeedKind::spot ? kTagSpot
+                                                          : kTagPoly;
     add_fd(f.ws->fd(), (tag << 32) | static_cast<std::uint32_t>(id.coin < 0 ? 0 : id.coin));
     log(feed_name(id, engine_) + " connected");
     sync_feed(f);
@@ -357,6 +372,15 @@ class Hot final {
       for (std::size_t i = 0; i < engine_.coins(); ++i)
         if (const auto* w = engine_.window(static_cast<int>(i))) tickers.insert(w->kalshi_ticker);
       for (const auto& m : session_.sync(tickers)) f.ws->send_text(m);
+      return;
+    }
+    if (f.id.kind == FeedKind::spot) {
+      // The asset set is fixed: subscribe once per connection.
+      if (f.initial_sent) return;
+      std::vector<std::string> assets;
+      for (std::size_t i = 0; i < engine_.coins(); ++i) assets.push_back(engine_.asset(static_cast<int>(i)));
+      f.ws->send_text(feeds::spot_subscribe(assets));
+      f.initial_sent = true;
       return;
     }
     if (f.id.kind == FeedKind::user) {
@@ -422,6 +446,13 @@ class Hot final {
     execute(mono);
   }
 
+  // A Coinbase ticker: the coin's spot mid, its guard and quotes, sent on this frame.
+  void on_spot(std::string_view text, std::int64_t mono) {
+    spot_.last_rx = mono;
+    if (!doc_.parse(text)) return;
+    if (feeds::apply_spot(doc_.root(), engine_, net::now_ns()) >= 0) execute(mono);
+  }
+
   void on_user(std::string_view text, std::int64_t mono) {
     user_.last_rx = mono;
     if (text == "PONG" || !doc_.parse(text)) return;
@@ -448,6 +479,7 @@ class Hot final {
       case FeedKind::kalshi: alive = f.ws->poll([&](std::string_view m) { if (!kalshi_dead_) on_kalshi(m, mono); }); break;
       case FeedKind::poly: alive = f.ws->poll([&](std::string_view m) { on_poly(f.id.coin, m, mono); }); break;
       case FeedKind::user: alive = f.ws->poll([&](std::string_view m) { on_user(m, mono); }); break;
+      case FeedKind::spot: alive = f.ws->poll([&](std::string_view m) { on_spot(m, mono); }); break;
     }
     if (f.id.kind == FeedKind::kalshi && kalshi_dead_) {
       kalshi_dead_ = false;
@@ -467,6 +499,7 @@ class Hot final {
       const auto index = static_cast<std::size_t>(events[i].data.u64 & 0xFFFFFFFFULL);
       if (tag == kTagKalshi) poll_feed(kalshi_, mono);
       else if (tag == kTagUser) poll_feed(user_, mono);
+      else if (tag == kTagSpot) poll_feed(spot_, mono);
       else if (tag == kTagPoly && index < poly_.size()) poll_feed(poly_[index], mono);
       else if (tag == kTagOrder && index < orders_.size()) poll_order(orders_[index], mono);
     }
@@ -475,6 +508,7 @@ class Hot final {
     for (auto& p : poly_)
       if (p.ws && p.ws->pending()) poll_feed(p, mono);
     if (user_.ws && user_.ws->pending()) poll_feed(user_, mono);
+    if (spot_.ws && spot_.ws->pending()) poll_feed(spot_, mono);
   }
 
   // --- orders ---
@@ -663,6 +697,7 @@ class Hot final {
           request_feed(kalshi_);
           request_feed(poly_[static_cast<std::size_t>(coin)]);
           request_feed(user_);
+          request_feed(spot_);
           sync_feed(kalshi_);
           sync_feed(poly_[static_cast<std::size_t>(coin)]);
           // The coins roll within a second of each other and a new market set
@@ -712,7 +747,8 @@ class Hot final {
       const std::int64_t every = f->id.kind == FeedKind::kalshi ? 20 * kSec : 10 * kSec;
       if (mono - f->last_ping > every) {
         f->last_ping = mono;
-        if (f->id.kind == FeedKind::kalshi) f->ws->send_ping();
+        // Kalshi and Coinbase take WebSocket pings; Polymarket a text PING.
+        if (f->id.kind == FeedKind::kalshi || f->id.kind == FeedKind::spot) f->ws->send_ping();
         else f->ws->send_text("PING");
       }
     }
@@ -804,11 +840,13 @@ class Hot final {
           std::snprintf(buf, sizeof(buf), "%s%.2f", up ? "^" : "v", r->second);
           s += buf;
         }
+      // Kalshi's learned sensitivity to spot (for the off-by-default reprice).
+      if (const auto b = engine_.beta(static_cast<int>(i))) s += "(b" + std::to_string(static_cast<int>(*b)) + ")";
     }
     s += " | posts " + std::to_string(c.posts) + " cancels " + std::to_string(c.cancels) + " fills " + std::to_string(c.fills) +
          " pauses " + std::to_string(c.pauses) + " rejects " +
          std::to_string(c.post_only_rejects + c.balance_rejects + c.post_errors) + " strays " +
-         std::to_string(c.stray_cancels) + " presign " +
+         std::to_string(c.stray_cancels) + " spot_pauses " + std::to_string(c.spot_pauses) + " presign " +
          std::to_string(presign_hits_) + "/" + std::to_string(presign_hits_ + presign_misses_);
     char buf[64];
     std::snprintf(buf, sizeof(buf), " | realised today %.2f open cost %.2f", engine_.today_realised(net::now_ns()),
@@ -832,6 +870,7 @@ class Hot final {
   int epoll_ = -1;
   Feed kalshi_;
   Feed user_;
+  Feed spot_;
   std::vector<Feed> poly_;
   std::vector<Order> orders_;
   std::vector<Queued> queued_;

@@ -117,6 +117,14 @@ bool load_config(const std::map<std::string, std::string>& vars, Config& c, std:
   s.open_min_px = r.number("PK_PM_OPEN_MIN_PX", s.open_min_px);
   s.open_min_edge = r.number("PK_PM_OPEN_MIN_EDGE", s.open_min_edge);
   s.pair_half_spread = r.number("PK_PM_PAIR_HALF_SPREAD", s.pair_half_spread);
+  s.spot_guard = r.text("PK_PM_SPOT_GUARD", "yes") == "yes";
+  s.spot_pause_bps = r.number("PK_PM_SPOT_PAUSE_BPS", s.spot_pause_bps);
+  s.spot_pause_ms = r.number("PK_PM_SPOT_PAUSE_MS", s.spot_pause_ms);
+  s.spot_widen_per_bp = r.number("PK_PM_SPOT_WIDEN_PER_BP", s.spot_widen_per_bp);
+  s.spot_widen_max = r.number("PK_PM_SPOT_WIDEN_MAX", s.spot_widen_max);
+  const std::string jump_mode = r.text("PK_PM_JUMP_MODE", "pause");
+  s.jump_reprice = jump_mode == "reprice";
+  s.jump_extra_h = r.number("PK_PM_JUMP_EXTRA_H", s.jump_extra_h);
 
   c.assets.clear();
   std::stringstream assets(r.text("PK_PM_ASSETS", "BTC,ETH,SOL,XRP,BNB,HYPE,ZEC"));
@@ -150,6 +158,9 @@ bool load_config(const std::map<std::string, std::string>& vars, Config& c, std:
   c.relayer_url = r.text("POLY_RELAYER_URL", c.relayer_url);
   c.kalshi_ws_url = r.text("KALSHI_WS_URL", c.kalshi_ws_url);
   c.kalshi_rest_url = r.text("KALSHI_REST_URL", c.kalshi_rest_url);
+  // Coinbase spot for the guard and the fill tags; "off" runs without it.
+  c.spot_ws_url = r.text("PKM_SPOT_WS_URL", c.spot_ws_url);
+  if (c.spot_ws_url == "off") c.spot_ws_url.clear();
 
   c.state_dir = expand_home(r.text("PKM_STATE_DIR", c.state_dir));
   c.kill_file = expand_home(r.text("PKM_KILL_FILE", c.kill_file));
@@ -181,6 +192,11 @@ bool load_config(const std::map<std::string, std::string>& vars, Config& c, std:
   if (s.open_min_px < 0 || s.open_min_px > 0.95) return fail("PK_PM_OPEN_MIN_PX must be within 0..=0.95");
   if (s.open_min_edge < 0 || s.open_min_edge > 0.2) return fail("PK_PM_OPEN_MIN_EDGE must be within 0..=0.2");
   if (s.pair_half_spread < 0 || s.pair_half_spread > 0.2) return fail("PK_PM_PAIR_HALF_SPREAD must be within 0..=0.2");
+  if (s.spot_pause_bps < 0 || s.spot_pause_ms < 0) return fail("PK_PM_SPOT_PAUSE_BPS and PK_PM_SPOT_PAUSE_MS must not be negative");
+  if (s.spot_widen_per_bp < 0 || s.spot_widen_max < 0 || s.spot_widen_max > 0.2)
+    return fail("PK_PM_SPOT_WIDEN_PER_BP must not be negative and PK_PM_SPOT_WIDEN_MAX within 0..=0.2");
+  if (jump_mode != "pause" && jump_mode != "reprice") return fail("PK_PM_JUMP_MODE must be pause or reprice");
+  if (s.jump_extra_h < 0 || s.jump_extra_h > 0.2) return fail("PK_PM_JUMP_EXTRA_H must be within 0..=0.2");
   if (s.max_orders_per_s < 1) return fail("PK_PM_MAX_ORDERS_PER_S must be at least 1");
   if (c.order_channels < 2 || c.order_channels > 16) return fail("PKM_ORDER_CHANNELS must be 2..16");
   if (c.signature_type != 3) return fail("pkm trades a deposit wallet only: POLY_SIGNATURE_TYPE must be 3");
@@ -196,7 +212,9 @@ std::string describe(const Config& c) {
     << " pause=" << s.pause_jump << "/" << s.pause_ms << "ms adverse=" << s.adverse_ms << "ms raise=" << s.min_requote_ms
     << "ms open_leg_s=" << s.open_leg_s << " fair_band=" << s.open_min_fair << ".." << s.open_max_fair
     << " pair_margin=" << s.pair_margin << " open_min_px=" << s.open_min_px << " open_min_edge=" << s.open_min_edge
-    << " pair_h=" << s.pair_half_spread << " max_open_cost=$" << s.max_open_cost_usd << " daily_loss=$"
+    << " pair_h=" << s.pair_half_spread << " spot_guard=" << (s.spot_guard ? "on" : "off") << " spot_pause="
+    << s.spot_pause_bps << "bp/" << s.spot_pause_ms << "ms widen=" << s.spot_widen_per_bp << "/bp jump="
+    << (s.jump_reprice ? "reprice" : "pause") << " max_open_cost=$" << s.max_open_cost_usd << " daily_loss=$"
     << s.daily_loss_usd << " orders/s=" << s.max_orders_per_s;
   return o.str();
 }

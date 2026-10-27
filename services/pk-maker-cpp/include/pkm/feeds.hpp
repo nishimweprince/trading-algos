@@ -77,6 +77,15 @@ struct OrderUpdate {
 };
 void parse_user(const json::Value& root, std::vector<OrderUpdate>& out);
 
+// --- Spot (Coinbase) -------------------------------------------------------------
+
+// {"type":"subscribe","product_ids":["BTC-USD",…],"channels":["ticker"]} for the assets.
+std::string spot_subscribe(const std::vector<std::string>& assets);
+
+// A Coinbase `ticker` frame (best bid/ask on each trade) into the coin's spot
+// mid (`price` when either side is missing). The coin updated, or -1.
+int apply_spot(const json::Value& root, engine::Engine& engine, std::int64_t recv_ns);
+
 // RFC 3339 → unix seconds ("2026-10-26T12:00:00Z", fractional seconds and
 // offsets allowed; a space may stand for the T).
 bool iso_to_unix(std::string_view text, std::int64_t& out) noexcept;

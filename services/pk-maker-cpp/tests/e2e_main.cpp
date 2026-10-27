@@ -530,6 +530,8 @@ int main() {
       {"POLY_GAMMA_URL", base + "/gamma"},
       {"KALSHI_WS_URL", "ws://127.0.0.1:" + std::to_string(mock.port()) + "/trade-api/ws/v2"},
       {"KALSHI_REST_URL", base + "/trade-api/v2"},
+      // Hermetic: no Coinbase spot feed (the default would dial the real one).
+      {"PKM_SPOT_WS_URL", "off"},
       {"PK_PM_ASSETS", "BTC"},
       {"PK_PM_ENTRY_EARLY_S", "0"},
       {"PK_PM_STOP_S", "0"},
