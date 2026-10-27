@@ -58,6 +58,14 @@ enum Command {
     },
 }
 
+/// A fill and what Binance and the fairs showed when it came in.
+struct PendingTag {
+    fill: FillRecord,
+    ln_mid: f64,
+    move_1s_bps: f64,
+    fairs: spot::Fairs,
+}
+
 /// A market's execution lane.
 #[derive(Default)]
 struct Lane {
@@ -87,6 +95,8 @@ struct App {
     reserved_usd: Mutex<f64>,
     /// Bumped by every cancel-all: a lane that submitted across one removes its bids.
     cancel_epoch: std::sync::atomic::AtomicU64,
+    /// Live fills waiting `FILL_TAG_AFTER_MS` for the Binance move after them.
+    fill_tags: Mutex<Vec<PendingTag>>,
     kalshi_http: reqwest::Client,
     kalshi_signer: Arc<KalshiSigner>,
     markouts: Mutex<MarkoutTracker>,
@@ -458,6 +468,40 @@ impl App {
         }
     }
 
+    /// Keeps a fill with Binance's move before it, to journal with the move after.
+    fn tag_fill(&self, fill: FillRecord) {
+        let Some(ctx) = self.engine.lock().fill_context(&fill.market, fill.time_ms) else { return };
+        self.fill_tags.lock().push(PendingTag { fill, ln_mid: ctx.ln_mid, move_1s_bps: ctx.move_1s_bps, fairs: ctx.fairs });
+    }
+
+    /// Journals each fill `FILL_TAG_AFTER_MS` on as `fill_tag`: Binance's
+    /// move in the second before and the 5 s after, both signed so that
+    /// positive is in the fill's favour (rising for YES), and the fairs.
+    /// Fills against a falling (YES) or rising (NO) spot are the adverse ones.
+    fn resolve_fill_tags(&self, now: i64) {
+        let due: Vec<PendingTag> = {
+            let mut tags = self.fill_tags.lock();
+            let (due, keep): (Vec<_>, Vec<_>) = tags.drain(..).partition(|t| now - t.fill.time_ms >= FILL_TAG_AFTER_MS);
+            *tags = keep;
+            due
+        };
+        for tag in due {
+            let after = self.engine.lock().spot_ln(&tag.fill.market, now).map(|ln| (ln - tag.ln_mid) * 1e4);
+            let sign = if tag.fill.side.eq_ignore_ascii_case("YES") { 1.0 } else { -1.0 };
+            self.record(
+                "fill_tag",
+                json!({
+                    "order_id": tag.fill.order_id, "fill_id": tag.fill.id, "market": tag.fill.market,
+                    "side": tag.fill.side, "price": tag.fill.price, "quantity": tag.fill.quantity,
+                    "fill_ms": tag.fill.time_ms,
+                    "spot_before_bps": sign * tag.move_1s_bps,
+                    "spot_after_5s_bps": after.map(|a| sign * a),
+                    "kalshi": tag.fairs.kalshi, "adjusted": tag.fairs.adjusted, "binance": tag.fairs.spot,
+                }),
+            );
+        }
+    }
+
     /// One scorecard sample per live market with all three fairs and a
     /// Predict mid (paired, so the sources are compared on the same moments).
     fn sample_fairs(&self, now: i64) {
@@ -484,7 +528,7 @@ impl App {
                     "market": r.market, "label": r.label, "asset": r.asset, "tau_s": r.tau_s,
                     "strike": r.strike, "spot": r.spot, "kalshi": r.fairs.kalshi,
                     "adjusted": r.fairs.adjusted, "binance": r.fairs.spot, "predict_mid": r.predict_mid,
-                    "guarded": r.guarded,
+                    "up_off": r.guarded.0, "down_off": r.guarded.1,
                 })
             })
             .collect();
@@ -727,6 +771,7 @@ async fn run(cfg: Config, client: Arc<Client>) -> anyhow::Result<()> {
         lanes: Mutex::new(Default::default()),
         reserved_usd: Mutex::new(0.0),
         cancel_epoch: std::sync::atomic::AtomicU64::new(0),
+        fill_tags: Mutex::new(Vec::new()),
         kalshi_http: reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(3))
             .timeout(Duration::from_secs(8))
@@ -1110,6 +1155,7 @@ async fn housekeeping_loop(app: Arc<App>) {
         }
         app.simulate_shadow_fills();
         let now = now_ms();
+        app.resolve_fill_tags(now);
         {
             let markets = app.engine.lock().markets();
             let state = app.state.lock();
@@ -1642,6 +1688,7 @@ fn handle_wallet_event(app: &Arc<App>, value: &Value) {
             state.risk.save();
             drop(state);
             app.markouts.lock().watch(&record.market, &record.side, record.price, record.time_ms);
+            app.tag_fill(record);
         }
         "orderNotAccepted" => {
             let reason = data.get("reason").and_then(Value::as_str).unwrap_or("not_accepted").to_owned();
@@ -1691,6 +1738,8 @@ const FAIR_SCORES_FILE: &str = "fair_scores.json";
 /// The learned Kalshi-implied σ per asset, kept across restarts.
 const IMPLIED_SIGMA_FILE: &str = "implied_sigma.json";
 const IMPLIED_SAVE_MS: i64 = 30_000;
+/// A fill's tag records Binance's move over this long after it.
+const FILL_TAG_AFTER_MS: i64 = 5_000;
 
 fn load_implied(path: &std::path::Path) -> std::collections::HashMap<String, (f64, i64)> {
     std::fs::read(path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()

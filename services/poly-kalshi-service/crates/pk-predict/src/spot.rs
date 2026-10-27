@@ -4,9 +4,11 @@
 //! Kalshi reaches Tokyo ~90 ms later than Binance does, so Predict's fills were
 //! picked off within 5 s (−2.1¢ ± 0.5 markout, 10-27). Three uses:
 //!
-//! 1. **Guard**: a coin's first-leg quotes come off when its Binance mid moves
-//!    `pause_bps` within `GUARD_WINDOW_MS`, or when the Kalshi fair corrected
-//!    by Binance strays `pause_gap` from Kalshi's own.
+//! 1. **Guard**, directional: a Binance *fall* of `pause_bps` within
+//!    `GUARD_WINDOW_MS` takes a coin's Up (YES) first leg off, a *rise* its
+//!    Down (NO) one: falling spot is what sellers dump into an Up bid, while
+//!    the Down bid is the side it favours. Likewise while the Kalshi fair
+//!    corrected by Binance strays `pause_gap` below or above Kalshi's own.
 //! 2. **Adjusted fair**: Kalshi's fair moved by the Binance log move since
 //!    Kalshi's fair last changed, `Φ(Φ⁻¹(k) + Δ ln S / (σ √τ))`.
 //! 3. **Spot fair**: `Φ(ln(S / K) / (σ √τ))` from Binance alone, K being
@@ -80,7 +82,11 @@ struct AssetSpot {
     /// `(ms, ln mid)` over the guard window.
     trail: VecDeque<(i64, f64)>,
     move_bps: f64,
-    pause_until: i64,
+    /// Signed log move over the guard window, in bp (positive: rising).
+    signed_bps: f64,
+    /// Until when the Up bid (a fall) or the Down bid (a rise) is held off.
+    fall_until: i64,
+    rise_until: i64,
     pauses: u64,
     last_sample: Option<(i64, f64)>,
     var_per_s: f64,
@@ -118,12 +124,21 @@ impl Spot {
         while s.trail.front().is_some_and(|(t, _)| now - t > GUARD_WINDOW_MS) {
             s.trail.pop_front();
         }
-        s.move_bps = s.trail.iter().map(|(_, x)| (ln - x).abs()).fold(0.0, f64::max) * 1e4;
-        if pause_bps > 0.0 && s.move_bps >= pause_bps {
-            if s.pause_until < now {
+        let low = s.trail.iter().map(|(_, x)| *x).fold(f64::INFINITY, f64::min);
+        let high = s.trail.iter().map(|(_, x)| *x).fold(f64::NEG_INFINITY, f64::max);
+        let (rise, fall) = ((ln - low) * 1e4, (high - ln) * 1e4);
+        s.move_bps = rise.max(fall);
+        s.signed_bps = s.trail.front().map_or(0.0, |(_, x)| (ln - x) * 1e4);
+        if pause_bps > 0.0 && (rise >= pause_bps || fall >= pause_bps) {
+            if s.fall_until.max(s.rise_until) < now {
                 s.pauses += 1;
             }
-            s.pause_until = now + pause_ms;
+            if rise >= pause_bps {
+                s.rise_until = now + pause_ms;
+            }
+            if fall >= pause_bps {
+                s.fall_until = now + pause_ms;
+            }
         }
         match s.last_sample {
             None => s.last_sample = Some((now, ln)),
@@ -158,9 +173,20 @@ impl Spot {
         self.fresh(asset, now).filter(|s| s.samples >= MIN_VOL_SAMPLES && s.var_per_s > 0.0).map(|s| s.var_per_s.sqrt())
     }
 
-    /// The asset moved `pause_bps` within the guard window, lately.
+    /// Which first legs a recent fast move holds off: `(up, down)`. A fall
+    /// threatens the Up bid, a rise the Down bid.
+    pub fn guard(&self, asset: &str, now: i64) -> (bool, bool) {
+        self.fresh(asset, now).map_or((false, false), |s| (now < s.fall_until, now < s.rise_until))
+    }
+
     pub fn paused(&self, asset: &str, now: i64) -> bool {
-        self.fresh(asset, now).is_some_and(|s| now < s.pause_until)
+        let (up, down) = self.guard(asset, now);
+        up || down
+    }
+
+    /// The fresh log mid, and its signed move over the guard window (bp).
+    pub fn ln_and_move(&self, asset: &str, now: i64) -> Option<(f64, f64)> {
+        self.fresh(asset, now).map(|s| (s.mid.ln(), s.signed_bps))
     }
 
     pub fn status(&self, now: i64) -> Value {
@@ -174,7 +200,10 @@ impl Spot {
                     "move_bps": s.move_bps,
                     "sigma_bps_per_min": (s.samples >= MIN_VOL_SAMPLES).then(|| s.var_per_s.sqrt() * 1e4 * 60_f64.sqrt()),
                     "vol_samples": s.samples,
-                    "paused": now < s.pause_until,
+                    "paused": now < s.fall_until.max(s.rise_until),
+                    "up_off": now < s.fall_until,
+                    "down_off": now < s.rise_until,
+                    "move_signed_bps": s.signed_bps,
                     "pauses": s.pauses,
                 }),
             );
@@ -444,7 +473,9 @@ mod tests {
         assert_eq!(s.frame(&frame(100_000.0), 0, 5.0, 2_000).as_deref(), Some("BTC"));
         assert!(!s.paused("BTC", 100));
         s.frame(&frame(100_060.0), 500, 5.0, 2_000); // +6 bp in 0.5 s
+        assert_eq!(s.guard("BTC", 600), (false, true), "a rise holds the Down bid off, not the Up bid");
         assert!(s.paused("BTC", 600) && !s.paused("BTC", 2_600));
+        assert!(s.ln_and_move("BTC", 600).unwrap().1 > 5.0);
         assert!(s.sigma("BTC", 600).is_none(), "not warmed up");
         for i in 1..=MIN_VOL_SAMPLES as i64 {
             s.frame(&frame(100_060.0 + (i % 2) as f64 * 10.0), 500 + i * 1_000, 5.0, 2_000);

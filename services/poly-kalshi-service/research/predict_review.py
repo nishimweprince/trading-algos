@@ -22,7 +22,7 @@ import os
 import re
 import statistics
 
-KEEP = ('"type":"position_settled"', '"type":"redeemed"', '"type":"markout"', '"type":"wallet_event"')
+KEEP = ('"type":"position_settled"', '"type":"redeemed"', '"type":"markout"', '"type":"wallet_event"', '"type":"fill_tag"')
 WINDOW = re.compile(r"-(\d{10})$")
 
 
@@ -61,13 +61,15 @@ def main():
     args = ap.parse_args()
     since = unix_ms(args.since) if args.since else 0
 
-    settled, fills, markouts = {}, [], collections.defaultdict(list)
+    settled, fills, markouts, tags = {}, [], collections.defaultdict(list), []
     for x in rows(args.journal):
         kind = x["type"]
         if kind == "position_settled":
             settled[x["market"]] = x
         elif kind == "redeemed" and isinstance(x.get("settled"), dict):
             settled.setdefault(x["settled"]["market"], x["settled"])
+        elif kind == "fill_tag" and x.get("fill_ms", 0) >= since:
+            tags.append(x)
         elif kind == "markout" and x["t_ms"] >= since:
             markouts[x["horizon_s"]].append(x["markout"])
         elif kind == "wallet_event" and "fill" in x:
@@ -109,6 +111,7 @@ def main():
             continue
         opens = before >= -1e-9 if f["yes"] else before <= 1e-9
         scored.append(dict(f, opens=opens, r=(1.0 if outcome[f["market"]] == f["yes"] else 0.0) - f["px"]))
+    report_tags(tags, outcome)
     if not scored:
         return
     buckets = [
@@ -125,6 +128,31 @@ def main():
             if xs:
                 c, se, usd = clustered(xs)
                 print(f"  {name:16s} fills {len(xs):4d}  {c:+6.2f}¢/share ± {se:5.2f}  ${usd:+7.2f}")
+
+
+def report_tags(tags, outcome):
+    """Fills split by Binance's move in the second before them, signed so that
+    negative was against the fill (falling spot for YES, rising for NO)."""
+    rows = []
+    for t in tags:
+        if t["market"] not in outcome:
+            continue
+        yes = t["side"].upper() == "YES"
+        rows.append(dict(market=t["market"], q=t["quantity"], before=t["spot_before_bps"],
+                         after=t.get("spot_after_5s_bps"),
+                         r=(1.0 if outcome[t["market"]] == yes else 0.0) - t["price"]))
+    if not rows:
+        return
+    print("fills by Binance's move in the second before (fill_tag; − = against the fill)")
+    for name, sel in (("against (≤ −1 bp)", lambda r: r["before"] <= -1),
+                      ("flat", lambda r: -1 < r["before"] < 1),
+                      ("with (≥ +1 bp)", lambda r: r["before"] >= 1)):
+        xs = [r for r in rows if sel(r)]
+        if xs:
+            c, se, usd = clustered(xs)
+            after = [r["after"] for r in xs if r["after"] is not None]
+            print(f"  {name:18s} fills {len(xs):4d}  {c:+6.2f}¢/share ± {se:5.2f}  ${usd:+7.2f}"
+                  f"  spot 5 s after {statistics.mean(after) if after else float('nan'):+.1f} bp")
 
 
 if __name__ == "__main__":
