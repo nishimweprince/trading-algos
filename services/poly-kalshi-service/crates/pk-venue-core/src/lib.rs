@@ -348,6 +348,8 @@ impl RiskGuard {
         Ok(Self { limits, state, state_path })
     }
 
+    /// Starts a new UTC day's loss count. A halt stays latched until
+    /// acknowledged; only the P&L and rejection counters roll.
     pub fn reset_day(&mut self, now: DateTime<Utc>) {
         let day = now.format("%Y-%m-%d").to_string();
         if self.state.utc_day != day {
@@ -355,6 +357,7 @@ impl RiskGuard {
             self.state.realised_pnl = 0.0;
             self.state.marked_pnl = 0.0;
             self.state.consecutive_rejections = 0;
+            self.save();
         }
     }
 
@@ -391,6 +394,10 @@ impl RiskGuard {
     }
 
     pub fn check_latches(&mut self) -> Result<(), String> {
+        // Every order check and mark update passes here, so the day rolls on
+        // time; nothing else called reset_day, and yesterday's loss carried
+        // into every later day.
+        self.reset_day(Utc::now());
         if self.state.realised_pnl + self.state.marked_pnl <= -self.limits.daily_loss_usd {
             self.halt("daily loss limit reached");
         }
@@ -583,6 +590,27 @@ mod tests {
         second.state.realised_pnl = 0.0;
         second.state.marked_pnl = 0.0;
         assert!(second.check_latches().is_ok());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn latch_checks_roll_the_day() {
+        let dir = std::env::temp_dir().join(format!("pk-venue-risk-roll-{}", std::process::id()));
+        let path = dir.join("roll.json");
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut r = RiskGuard::open(test_limits(), path.clone()).unwrap();
+        r.state.utc_day = "2000-01-01".into();
+        r.state.realised_pnl = -3.0;
+        r.state.marked_pnl = -2.5;
+        r.state.halted = true;
+        r.state.halt_reason = Some("daily loss limit reached".into());
+        assert!(r.check_latches().is_err(), "a latched halt survives the roll");
+        assert_eq!(r.state.realised_pnl, 0.0, "but yesterday's loss no longer counts");
+        r.acknowledge();
+        r.state.marked_pnl = -2.5;
+        assert!(r.check_latches().is_ok(), "today's count starts from zero");
+        let reopened = RiskGuard::open(test_limits(), path).unwrap();
+        assert_eq!(reopened.state.utc_day, Utc::now().format("%Y-%m-%d").to_string(), "the roll is saved");
         let _ = std::fs::remove_dir_all(dir);
     }
 
