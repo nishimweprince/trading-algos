@@ -428,6 +428,8 @@ impl App {
             .collect();
         json!({
             "config": {
+                // The lanes this process sends (a contract's grade only allows them).
+                "maker": self.cfg.maker, "taker": self.cfg.taker,
                 "guard": self.cfg.binance_guard, "pause_bps": self.cfg.binance_pause_bps,
                 "pause_ms": self.cfg.binance_pause_ms, "pause_gap": self.cfg.binance_pause_gap,
                 "open_fair": self.cfg.open_fair, "pair_fair": self.cfg.pair_fair,

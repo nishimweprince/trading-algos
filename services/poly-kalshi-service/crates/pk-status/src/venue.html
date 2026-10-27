@@ -218,8 +218,14 @@ async function tick() {
     const fresh = b.update_ms && Date.now() - b.update_ms < 10000;
     return { id, m, b, fair, mid, gap, fresh, q: inv[id] };
   }).sort((a, c) => (c.fresh - a.fresh) || (c.fair != null) - (a.fair != null) || String(a.m.kalshi_ticker).localeCompare(String(c.m.kalshi_ticker)));
-  const lanes = (m) => [m.maker ? "maker" : "", m.taker ? "taker" : ""].filter(Boolean).join("+") || "–";
-  put("markets", `<tr><th>Market</th><th>Kalshi contract</th><th>Grade</th><th>Lanes</th><th>Kalshi fair</th><th>Venue bid / ask</th><th>Gap (fair − mid)</th><th>Book</th><th>Position</th></tr>` +
+  // Lanes in use: what the contract allows and the adapter sends (Predict
+  // reports its enabled lanes in signal.config; HIP-4 shows the contract's).
+  const on = (s.signal || {}).config;
+  const lanes = (m) => {
+    const used = [m.maker && (!on || on.maker) ? "maker" : "", m.taker && (!on || on.taker) ? "taker" : ""].filter(Boolean).join("+") || "none";
+    return on && m.taker && !on.taker ? `${used} <span class="muted">(taker off)</span>` : used;
+  };
+  put("markets", `<tr><th>Market</th><th>Kalshi contract</th><th>Grade</th><th>Lanes in use</th><th>Kalshi fair</th><th>Venue bid / ask</th><th>Gap (fair − mid)</th><th>Book</th><th>Position</th></tr>` +
     (rows.length ? rows.slice(0, 40).map((x) => `<tr><td>${esc(x.id)}</td><td>${esc(x.m.kalshi_ticker)}</td><td>${esc(x.m.grade)}</td><td>${lanes(x.m)}</td><td>${f(x.fair, 3)}</td><td>${f(x.b.bid)} / ${f(x.b.ask)}</td><td class="${x.gap == null ? "" : Math.abs(x.gap) >= 0.05 ? "warn" : ""}">${x.gap == null ? "–" : (x.gap * 100).toFixed(1) + "¢"}</td><td class="${x.fresh ? "good" : "muted"}">${x.b.update_ms ? ago(x.b.update_ms) : "none"}</td><td>${x.q == null ? "–" : f(x.q, 0)}</td></tr>`).join("")
      : `<tr><td class="muted" colspan="9">no executable (E0/E1) contracts</td></tr>`));
   put("mnote", `${rows.length} executable of ${matches.length} discovered; showing up to 40, freshest first. Fair = Kalshi's YES mid; venue bid / ask is the venue's YES book.`);
