@@ -179,11 +179,6 @@ impl Spot {
         self.fresh(asset, now).map_or((false, false), |s| (now < s.fall_until, now < s.rise_until))
     }
 
-    pub fn paused(&self, asset: &str, now: i64) -> bool {
-        let (up, down) = self.guard(asset, now);
-        up || down
-    }
-
     /// The fresh log mid, and its signed move over the guard window (bp).
     pub fn ln_and_move(&self, asset: &str, now: i64) -> Option<(f64, f64)> {
         self.fresh(asset, now).map(|s| (s.mid.ln(), s.signed_bps))
@@ -471,10 +466,10 @@ mod tests {
         let mut s = Spot::default();
         let frame = |px: f64| format!(r#"{{"stream":"btcusdt@bookTicker","data":{{"s":"BTCUSDT","b":"{px}","a":"{}"}}}}"#, px + 0.1);
         assert_eq!(s.frame(&frame(100_000.0), 0, 5.0, 2_000).as_deref(), Some("BTC"));
-        assert!(!s.paused("BTC", 100));
+        assert_eq!(s.guard("BTC", 100), (false, false));
         s.frame(&frame(100_060.0), 500, 5.0, 2_000); // +6 bp in 0.5 s
         assert_eq!(s.guard("BTC", 600), (false, true), "a rise holds the Down bid off, not the Up bid");
-        assert!(s.paused("BTC", 600) && !s.paused("BTC", 2_600));
+        assert_eq!(s.guard("BTC", 2_600), (false, false), "over after pause_ms");
         assert!(s.ln_and_move("BTC", 600).unwrap().1 > 5.0);
         assert!(s.sigma("BTC", 600).is_none(), "not warmed up");
         for i in 1..=MIN_VOL_SAMPLES as i64 {
