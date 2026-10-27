@@ -184,13 +184,24 @@ impl App {
         Ok(receipts)
     }
 
-    /// Removes resting quotes off book: those of `only`'s markets, or every
-    /// quote on the account. The removal lists then removes, so it is retried
-    /// on a transport error; only `REMOVE_ATTEMPTS` failures in a row latch
-    /// (one dropped request latched the live adapter for six hours on 10-27).
+    /// Removes resting quotes off book: those of `only`'s markets, by the order
+    /// ids we tracked (one request, no listing), or every quote on the account
+    /// (lists, then removes). Removal is idempotent, so it is retried on a
+    /// transport error; only `REMOVE_ATTEMPTS` failures in a row latch (one
+    /// dropped request latched the live adapter for six hours on 10-27).
+    /// Orders we never learned an id for are left to `orphan_sweep_loop`.
     async fn fast_remove_quotes(&self, reason: &str, only: Option<&[model::PredictMarket]>) {
-        let tokens: Option<std::collections::HashSet<String>> =
-            only.map(|markets| markets.iter().flat_map(|m| m.outcomes.iter().map(|o| o.token_id.clone())).collect());
+        let markets: Option<std::collections::HashSet<String>> =
+            only.map(|markets| markets.iter().map(|m| m.id.to_string()).collect());
+        let ids: Option<Vec<String>> = markets.as_ref().map(|markets| {
+            self.state
+                .lock()
+                .orders
+                .iter()
+                .filter(|o| o.status == "submitted" && !o.simulated && markets.contains(&o.market))
+                .map(|o| o.id.clone())
+                .collect()
+        });
         let mut attempts = 0;
         if self.cfg.mode == VenueMode::Live {
             let mut failure = None;
@@ -199,8 +210,9 @@ impl App {
                     tokio::time::sleep(Duration::from_millis(REMOVE_RETRY_MS * attempt as u64)).await;
                 }
                 attempts = attempt + 1;
-                let removed = match &tokens {
-                    Some(tokens) => self.client.cancel_tokens_off_book(tokens).await,
+                let removed = match &ids {
+                    Some(ids) if ids.is_empty() => Ok(json!({"removed": 0})),
+                    Some(ids) => self.client.remove(ids).await,
                     None => self.client.cancel_all_off_book().await,
                 };
                 match removed {
@@ -215,8 +227,6 @@ impl App {
                 self.state.lock().latch(format!("fast quote removal failed: {}", public_error(&error)));
             }
         }
-        let markets: Option<std::collections::HashSet<String>> =
-            only.map(|markets| markets.iter().map(|m| m.id.to_string()).collect());
         let now = now_ms();
         let mut state = self.state.lock();
         for order in state.orders.iter_mut().filter(|o| {
@@ -661,6 +671,7 @@ async fn run(cfg: Config, client: Arc<Client>) -> anyhow::Result<()> {
     tokio::spawn(clock_loop(app.clone()));
     tokio::spawn(settlement_loop(app.clone()));
     tokio::spawn(settlement_accounting_loop(app.clone()));
+    tokio::spawn(orphan_sweep_loop(app.clone()));
 
     app.state.lock().ready = true;
     let routes = routes(app.clone());
@@ -894,9 +905,15 @@ async fn strategy_loop(app: Arc<App>) {
         if !requoted.is_empty() {
             app.fast_remove_quotes("requote", Some(&requoted)).await;
         }
-        for action in actions {
+        // The new bids go out together once the old ones are off: one round
+        // trip for the lot rather than one per side. Each passes its own risk
+        // check, so a pair of them can overshoot the open cap by one order.
+        let (makers, others): (Vec<Action>, Vec<Action>) =
+            actions.into_iter().partition(|a| matches!(a, Action::Maker { .. }));
+        for action in others {
             app.execute(action).await;
         }
+        futures_util::future::join_all(makers.into_iter().map(|action| app.execute(action))).await;
         let now = now_ms();
         {
             let markets = app.engine.lock().markets();
@@ -1021,6 +1038,38 @@ async fn settlement_accounting_loop(app: Arc<App>) {
 }
 
 /// Kalshi's `result` for a settled contract: Some(true) for "yes".
+/// Requotes remove only the order ids they tracked. An order the venue holds
+/// but we have no id for (a submit whose answer was lost) is removed once two
+/// sweeps in a row, `ORPHAN_SWEEP_S` apart, saw it untracked, so a submit
+/// still awaiting its answer is safe.
+async fn orphan_sweep_loop(app: Arc<App>) {
+    if app.cfg.mode != VenueMode::Live {
+        return;
+    }
+    let mut interval = tokio::time::interval(Duration::from_secs(ORPHAN_SWEEP_S));
+    let mut seen: std::collections::HashSet<String> = Default::default();
+    loop {
+        interval.tick().await;
+        let Ok(open) = app.client.open_order_ids().await else { continue };
+        let tracked: std::collections::HashSet<String> = app
+            .state
+            .lock()
+            .orders
+            .iter()
+            .filter(|o| o.status == "submitted")
+            .map(|o| o.id.clone())
+            .collect();
+        let untracked: std::collections::HashSet<String> =
+            open.into_iter().filter(|id| !tracked.contains(id)).collect();
+        let orphans: Vec<String> = untracked.intersection(&seen).cloned().collect();
+        if !orphans.is_empty() {
+            let result = app.client.remove(&orphans).await.map_err(|e| public_error(&e));
+            app.record("orphans_removed", json!({"ids": orphans, "ok": result.is_ok()}));
+        }
+        seen = untracked;
+    }
+}
+
 async fn kalshi_result(app: &Arc<App>, ticker: &str) -> Option<bool> {
     let path = format!("/trade-api/v2/markets/{ticker}");
     let mut request =
@@ -1408,6 +1457,8 @@ const COLLATERAL_PAUSE_MS: i64 = 30_000;
 /// Off-book quote removal: tries in all, and the backoff step between them.
 const REMOVE_ATTEMPTS: u32 = 3;
 const REMOVE_RETRY_MS: u64 = 250;
+/// Seconds between orphan sweeps (an untracked order needs two in a row).
+const ORPHAN_SWEEP_S: u64 = 15;
 
 /// Predict's refusal for free USDT below the total bid amount.
 fn is_collateral_refusal(reason: &str) -> bool {

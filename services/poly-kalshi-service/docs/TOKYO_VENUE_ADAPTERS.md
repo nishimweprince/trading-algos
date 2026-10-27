@@ -104,6 +104,7 @@ Maker live requires seven continuous mainnet-shadow days, 300 actionable matches
 
 - Predict kill file: `data/KILL.predict`; HIP-4 kill file: `data/KILL.hip4`.
 - Stop or SIGTERM initiates cancel-all. Predict first removes orders off-book, then batches each exact order struct to the appropriate standard/yield/negative-risk exchange's on-chain `cancelOrders`; 20-second signed expirations remain a second replay bound. HIP-4 uses cancel-by-cloid and arms `scheduleCancel` when the account is eligible.
+- Predict requotes one market at a time: they remove that market's old bids off-book by the order ids we tracked (one request, retried up to 3 times before latching), then submit the new bids together. An open order we hold no id for (a submit whose answer was lost) is removed once two orphan sweeps 15 s apart saw it untracked (`orphans_removed` in the journal).
 - `POST /v1/<venue>/kill` latches and cancels; acknowledgement is separate at `/kill/ack`.
 - `flatten` refuses to cross beyond the configured slippage cap and reports remaining inventory.
 - Journals and raw tapes are separate under `data/state-predict` and `data/state-hip4`.

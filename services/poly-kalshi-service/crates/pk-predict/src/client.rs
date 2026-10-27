@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -203,29 +202,21 @@ impl Client {
         if ids.is_empty() { Ok(json!({"removed": 0})) } else { self.remove(&ids).await }
     }
 
-    /// `cancel_all_off_book` for the open orders on these outcome tokens
-    /// only, so requoting one market leaves the others' quotes resting.
-    pub async fn cancel_tokens_off_book(&self, tokens: &HashSet<String>) -> anyhow::Result<Value> {
+    /// The ids of the account's open orders, for the orphan sweep (requotes
+    /// remove by the ids they tracked, without listing).
+    pub async fn open_order_ids(&self) -> anyhow::Result<Vec<String>> {
         let orders = self.orders().await?;
-        let ids: Vec<String> = find_array(&orders)
+        Ok(find_array(&orders)
             .iter()
-            .filter(|o| order_token(o).is_some_and(|token| tokens.contains(&token)))
             .filter_map(|o| {
                 o.get("id").map(|id| id.as_str().map(str::to_owned).unwrap_or_else(|| id.to_string()))
             })
-            .collect();
-        if ids.is_empty() { Ok(json!({"removed": 0})) } else { self.remove(&ids).await }
+            .collect())
     }
 
     pub fn next_request_id(&self) -> u64 {
         self.request_id.fetch_add(1, Ordering::Relaxed)
     }
-}
-
-/// An open order row's outcome token (the signed order nests it under `order`).
-fn order_token(row: &Value) -> Option<String> {
-    let raw = row.get("order").unwrap_or(row);
-    raw.get("tokenId").map(|value| value.as_str().map(str::to_owned).unwrap_or_else(|| value.to_string()))
 }
 
 fn find_array(value: &Value) -> &[Value] {
@@ -264,13 +255,6 @@ mod tests {
     use axum::extract::State;
     use axum::routing::{get, post};
     use serde_json::json;
-
-    #[test]
-    fn open_order_rows_name_their_token_nested_or_flat() {
-        assert_eq!(order_token(&json!({"id":"1","order":{"tokenId":"42"}})).as_deref(), Some("42"));
-        assert_eq!(order_token(&json!({"id":"1","tokenId":7})).as_deref(), Some("7"));
-        assert_eq!(order_token(&json!({"id":"1"})), None);
-    }
 
     const KEY: &str = "0x4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318";
     const ACCOUNT: &str = "0x1111111111111111111111111111111111111111";
