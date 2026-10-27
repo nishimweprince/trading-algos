@@ -184,16 +184,45 @@ impl App {
         Ok(receipts)
     }
 
-    async fn fast_remove_quotes(&self, reason: &str) {
+    /// Removes resting quotes off book: those of `only`'s markets, or every
+    /// quote on the account. The removal lists then removes, so it is retried
+    /// on a transport error; only `REMOVE_ATTEMPTS` failures in a row latch
+    /// (one dropped request latched the live adapter for six hours on 10-27).
+    async fn fast_remove_quotes(&self, reason: &str, only: Option<&[model::PredictMarket]>) {
+        let tokens: Option<std::collections::HashSet<String>> =
+            only.map(|markets| markets.iter().flat_map(|m| m.outcomes.iter().map(|o| o.token_id.clone())).collect());
+        let mut attempts = 0;
         if self.cfg.mode == VenueMode::Live {
-            if let Err(error) = self.client.cancel_all_off_book().await {
+            let mut failure = None;
+            for attempt in 0..REMOVE_ATTEMPTS {
+                if attempt > 0 {
+                    tokio::time::sleep(Duration::from_millis(REMOVE_RETRY_MS * attempt as u64)).await;
+                }
+                attempts = attempt + 1;
+                let removed = match &tokens {
+                    Some(tokens) => self.client.cancel_tokens_off_book(tokens).await,
+                    None => self.client.cancel_all_off_book().await,
+                };
+                match removed {
+                    Ok(_) => {
+                        failure = None;
+                        break;
+                    }
+                    Err(error) => failure = Some(error),
+                }
+            }
+            if let Some(error) = failure {
                 self.state.lock().latch(format!("fast quote removal failed: {}", public_error(&error)));
             }
         }
+        let markets: Option<std::collections::HashSet<String>> =
+            only.map(|markets| markets.iter().map(|m| m.id.to_string()).collect());
         let now = now_ms();
         let mut state = self.state.lock();
-        for order in state.orders.iter_mut().filter(|o| o.status == "submitted" || o.status == "shadow_open")
-        {
+        for order in state.orders.iter_mut().filter(|o| {
+            (o.status == "submitted" || o.status == "shadow_open")
+                && markets.as_ref().is_none_or(|markets| markets.contains(&o.market))
+        }) {
             order.status = "removed_off_book".into();
             order.updated_ms = now;
         }
@@ -201,7 +230,7 @@ impl App {
         state.recount();
         state.risk.save();
         drop(state);
-        self.record("fast_remove", json!({"reason":reason}));
+        self.record("fast_remove", json!({"reason":reason,"markets":markets,"attempts":attempts}));
     }
 
     async fn execute(&self, action: Action) {
@@ -212,9 +241,12 @@ impl App {
             Action::Maker { market, token, outcome, price, quantity } => {
                 self.place(&market, &token, &outcome, price, quantity, "maker", 0.0).await;
             }
+            Action::Withdraw { market } => {
+                self.fast_remove_quotes("withdraw", Some(std::slice::from_ref(&market))).await;
+            }
             Action::Taker { market, token, outcome, price, quantity, edge } => {
                 // Remove maker quotes before a marketable order to avoid self-trading.
-                self.fast_remove_quotes("suspend maker before taker").await;
+                self.fast_remove_quotes("suspend maker before taker", None).await;
                 self.place(&market, &token, &outcome, price, quantity, "taker", edge).await;
             }
         }
@@ -849,8 +881,18 @@ async fn strategy_loop(app: Arc<App>) {
         app.simulate_shadow_fills();
         let positions = app.state.lock().positions.clone();
         let actions = app.engine.lock().evaluate(&app.cfg, &positions);
-        if actions.iter().any(|a| matches!(a, Action::Maker { .. })) {
-            app.fast_remove_quotes("requote").await;
+        // Requote only the markets being requoted: an account-wide removal
+        // here pulled every other market's quotes until their own refresh.
+        let mut requoted: Vec<model::PredictMarket> = Vec::new();
+        for action in &actions {
+            if let Action::Maker { market, .. } = action
+                && !requoted.iter().any(|m| m.id == market.id)
+            {
+                requoted.push(market.clone());
+            }
+        }
+        if !requoted.is_empty() {
+            app.fast_remove_quotes("requote", Some(&requoted)).await;
         }
         for action in actions {
             app.execute(action).await;
@@ -1362,6 +1404,10 @@ fn handle_wallet_event(app: &Arc<App>, value: &Value) {
 }
 
 const COLLATERAL_PAUSE_MS: i64 = 30_000;
+
+/// Off-book quote removal: tries in all, and the backoff step between them.
+const REMOVE_ATTEMPTS: u32 = 3;
+const REMOVE_RETRY_MS: u64 = 250;
 
 /// Predict's refusal for free USDT below the total bid amount.
 fn is_collateral_refusal(reason: &str) -> bool {

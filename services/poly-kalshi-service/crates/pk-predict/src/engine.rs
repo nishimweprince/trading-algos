@@ -12,6 +12,10 @@ pub enum Action {
     CancelAll { reason: String },
     Maker { market: PredictMarket, token: String, outcome: String, price: f64, quantity: f64 },
     Taker { market: PredictMarket, token: String, outcome: String, price: f64, quantity: f64, edge: f64 },
+    /// Pull this market's resting quotes without replacing them (neither side
+    /// is quotable now, or the window is inside its close buffer). Requotes
+    /// cancel per market, so nothing else removes them.
+    Withdraw { market: PredictMarket },
 }
 
 #[derive(Default)]
@@ -34,6 +38,8 @@ struct QuoteState {
     fair: f64,
     yes: f64,
     no: f64,
+    /// The last update placed at least one side.
+    quoted: bool,
 }
 
 pub struct Engine {
@@ -158,6 +164,12 @@ impl Engine {
         self.stale_cancelled = false;
         for market in self.markets.values().filter(|m| live(m)) {
             if market.close_ms().is_some_and(|close| close - now <= cfg.close_buffer_s * 1000) {
+                if let Some(quote) = self.quotes.get_mut(&market.id.to_string())
+                    && quote.quoted
+                {
+                    quote.quoted = false;
+                    actions.push(Action::Withdraw { market: market.clone() });
+                }
                 continue;
             }
             let ticker = market.kalshi_ticker.as_deref().unwrap_or_default();
@@ -221,7 +233,11 @@ impl Engine {
                             quantity: shares_for(no, cfg.min_order_usd),
                         });
                     }
-                    *quote = QuoteState { last_ms: now, fair, yes, no };
+                    let quoted = quote_yes.is_some() || quote_no.is_some();
+                    if !quoted && quote.quoted {
+                        actions.push(Action::Withdraw { market: market.clone() });
+                    }
+                    *quote = QuoteState { last_ms: now, fair, yes, no, quoted };
                 }
             }
             if cfg.taker {
@@ -484,5 +500,25 @@ mod tests {
             }
         }
         assert_eq!(seen, 2);
+    }
+
+    #[test]
+    fn quotes_are_withdrawn_once_inside_the_close_buffer() {
+        let mut e = Engine::new();
+        e.set_markets(vec![market()]);
+        let _ = e.kalshi_frame(r#"{"type":"orderbook_snapshot","msg":{"market_ticker":"KXBTC15M-ABC","yes_dollars_fp":[["0.45","3"]],"no_dollars_fp":[["0.50","2"]]}}"#);
+        e.venue_book(
+            "7".into(),
+            Book { bid: Some(0.40), bid_size: 5.0, ask: Some(0.50), ask_size: 5.0, update_ms: now_ms() },
+        );
+        let cfg = cfg();
+        assert!(e.evaluate(&cfg, &HashMap::new()).iter().any(|a| matches!(a, Action::Maker { .. })));
+        // The same market, now 30 s from its close (inside the 60 s buffer).
+        let mut closing = serde_json::to_value(market()).unwrap();
+        closing["endsAt"] = json!((chrono::Utc::now() + chrono::Duration::seconds(30)).to_rfc3339());
+        e.set_markets(vec![serde_json::from_value(closing).unwrap()]);
+        let actions = e.evaluate(&cfg, &HashMap::new());
+        assert!(matches!(actions.as_slice(), [Action::Withdraw { .. }]), "{actions:?}");
+        assert!(e.evaluate(&cfg, &HashMap::new()).is_empty(), "withdrawn once");
     }
 }
