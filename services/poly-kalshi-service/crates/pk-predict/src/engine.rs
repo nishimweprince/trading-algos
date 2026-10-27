@@ -161,15 +161,15 @@ impl Engine {
     /// Per asset: Kalshi-implied σ and the σ in use, in bp per √minute.
     pub fn sigma_status(&self, now: i64) -> Value {
         let per_min = |s: f64| s * 1e4 * 60_f64.sqrt();
-        let assets: std::collections::BTreeSet<&String> = self.implied.keys().collect();
+        let assets: std::collections::BTreeSet<&String> = self.implied.keys().chain(self.spot.assets()).collect();
         serde_json::Value::Object(
             assets
                 .into_iter()
                 .map(|a| {
-                    let (implied, ms) = self.implied[a];
+                    let implied = self.implied.get(a);
                     (a.clone(), serde_json::json!({
-                        "implied_bps_per_min": per_min(implied),
-                        "implied_age_s": (now - ms) / 1_000,
+                        "implied_bps_per_min": implied.map(|(s, _)| per_min(*s)),
+                        "implied_age_s": implied.map(|(_, ms)| (now - ms) / 1_000),
                         "used_bps_per_min": self.sigma(a, now).map(per_min),
                     }))
                 })

@@ -143,6 +143,11 @@ impl Spot {
         self.assets.get(asset).filter(|s| now - s.ms <= SPOT_MAX_AGE_MS)
     }
 
+    /// The assets seen on Binance.
+    pub fn assets(&self) -> impl Iterator<Item = &String> {
+        self.assets.keys()
+    }
+
     /// The fresh Binance mid.
     pub fn mid(&self, asset: &str, now: i64) -> Option<f64> {
         self.fresh(asset, now).map(|s| s.mid)
