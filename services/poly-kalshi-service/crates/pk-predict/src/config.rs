@@ -274,7 +274,7 @@ impl Config {
             binance_guard: flag("PK_PRED_BINANCE_GUARD", true)?,
             binance_pause_bps: number("PK_PRED_BINANCE_PAUSE_BPS", 5.0)?,
             binance_pause_ms: integer("PK_PRED_BINANCE_PAUSE_MS", 2_000)? as i64,
-            binance_pause_gap: number("PK_PRED_BINANCE_PAUSE_GAP", 0.02)?,
+            binance_pause_gap: number("PK_PRED_BINANCE_PAUSE_GAP", 0.03)?,
             open_fair: FairSource::parse(get("PK_PRED_OPEN_FAIR").as_deref().unwrap_or("kalshi"))?,
             pair_fair: FairSource::parse(get("PK_PRED_PAIR_FAIR").as_deref().unwrap_or("kalshi"))?,
             fingerprint,

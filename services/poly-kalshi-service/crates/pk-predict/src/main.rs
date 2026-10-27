@@ -433,6 +433,7 @@ impl App {
                 "open_fair": self.cfg.open_fair, "pair_fair": self.cfg.pair_fair,
             },
             "assets": engine.spot.status(now),
+            "sigma": engine.sigma_status(now),
             "guard_pauses": engine.guard_pauses,
             "markets": rows,
             "scores": self.scores.lock().status(),

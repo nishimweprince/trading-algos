@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use crate::config::Config;
 use crate::model::PredictMarket;
-use crate::spot::{self, Fairs, Spot};
+use crate::spot::{self, FairSource, Fairs, Spot};
 
 #[derive(Clone, Debug)]
 pub enum Action {
@@ -60,6 +60,8 @@ pub struct Engine {
     guarded: HashMap<String, bool>,
     /// Per asset: how often the guard took first legs off.
     pub guard_pauses: HashMap<String, u64>,
+    /// Per asset: the σ Kalshi's prices imply, smoothed `(σ per √s, ms)`.
+    implied: HashMap<String, (f64, i64)>,
 }
 
 /// One live market's fairs for the status page and the scorecard.
@@ -90,7 +92,56 @@ impl Engine {
             kalshi_anchor: HashMap::new(),
             guarded: HashMap::new(),
             guard_pauses: HashMap::new(),
+            implied: HashMap::new(),
         }
+    }
+
+    /// Folds the σ Kalshi's fair implies for `market` into its asset's average
+    /// (over the two fields, so the market loop can call it).
+    fn learn_sigma(
+        implied: &mut HashMap<String, (f64, i64)>,
+        prices: &Spot,
+        market: &PredictMarket,
+        kalshi: f64,
+        now: i64,
+    ) {
+        let ticker = market.kalshi_ticker.as_deref().unwrap_or_default();
+        let (Some(asset), Some(k), Some(close)) = (spot::asset_of_ticker(ticker), strike(market), market.close_ms())
+        else {
+            return;
+        };
+        let Some(mid) = prices.mid(asset, now) else { return };
+        let Some(sigma) = spot::implied_sigma(kalshi, mid, k, (close - now) as f64 / 1_000.0) else { return };
+        let entry = implied.entry(asset.to_owned()).or_insert((sigma, now));
+        let dt = (now - entry.1).max(0) as f64 / 1_000.0;
+        let weight = 1.0 - 0.5_f64.powf(dt / spot::IMPLIED_HALF_LIFE_S);
+        *entry = (entry.0 + weight * (sigma - entry.0), now);
+    }
+
+    /// The σ the Binance-informed fairs use: the larger of Binance's realised
+    /// and Kalshi's implied; none until Kalshi has implied one.
+    pub fn sigma(&self, asset: &str, now: i64) -> Option<f64> {
+        let implied = self.implied.get(asset).filter(|(_, ms)| now - ms <= spot::IMPLIED_MAX_AGE_MS)?.0;
+        Some(self.spot.sigma(asset, now).map_or(implied, |realised| realised.max(implied)))
+    }
+
+    /// Per asset: Kalshi-implied σ and the σ in use, in bp per √minute.
+    pub fn sigma_status(&self, now: i64) -> Value {
+        let per_min = |s: f64| s * 1e4 * 60_f64.sqrt();
+        let assets: std::collections::BTreeSet<&String> = self.implied.keys().collect();
+        serde_json::Value::Object(
+            assets
+                .into_iter()
+                .map(|a| {
+                    let (implied, ms) = self.implied[a];
+                    (a.clone(), serde_json::json!({
+                        "implied_bps_per_min": per_min(implied),
+                        "implied_age_s": (now - ms) / 1_000,
+                        "used_bps_per_min": self.sigma(a, now).map(per_min),
+                    }))
+                })
+                .collect(),
+        )
     }
 
     /// A Binance frame; true when it updated an asset.
@@ -103,7 +154,7 @@ impl Engine {
         let ticker = market.kalshi_ticker.as_deref().unwrap_or_default();
         let mut out = Fairs { kalshi, adjusted: None, spot: None };
         let (Some(asset), Some(close)) = (spot::asset_of_ticker(ticker), market.close_ms()) else { return out };
-        let (Some(mid), Some(sigma)) = (self.spot.mid(asset, now), self.spot.sigma(asset, now)) else { return out };
+        let (Some(mid), Some(sigma)) = (self.spot.mid(asset, now), self.sigma(asset, now)) else { return out };
         let tau_s = (close - now) as f64 / 1_000.0;
         let d_ln = self.kalshi_anchor.get(ticker).map_or(0.0, |anchor| mid.ln() - anchor);
         out.adjusted = Some(spot::adjusted_fair(kalshi, d_ln, sigma, tau_s));
@@ -258,15 +309,22 @@ impl Engine {
             let held = positions.get(&market.id.to_string()).cloned().unwrap_or_default();
             let inv = held.net();
             // First legs and pairing legs may price from different fairs.
+            Self::learn_sigma(&mut self.implied, &self.spot, market, kalshi_fair, now);
+            // Spot's move counts from Kalshi's last change, or from first sight.
+            if let Some(mid) = spot::asset_of_ticker(ticker).and_then(|a| self.spot.mid(a, now)) {
+                self.kalshi_anchor.entry(ticker.to_owned()).or_insert(mid.ln());
+            }
             let fairs = self.fairs(market, kalshi_fair, now);
             let open_fair = fairs.pick(cfg.open_fair);
             let pair_fair = fairs.pick(cfg.pair_fair);
             let fair = open_fair;
-            // Binance guard: spot moved fast, or Kalshi is stale against it.
+            // Binance guard: spot moved fast, or (only while first legs price
+            // from Kalshi) Kalshi is stale against Binance. Pricing first legs
+            // from the adjusted fair already follows that move.
             let asset = spot::asset_of_ticker(ticker).unwrap_or_default();
-            let guarded = cfg.binance_guard
-                && (self.spot.paused(asset, now)
-                    || fairs.adjusted.is_some_and(|a| (a - kalshi_fair).abs() >= cfg.binance_pause_gap - 1e-9));
+            let stale_kalshi = cfg.open_fair == FairSource::Kalshi
+                && fairs.adjusted.is_some_and(|a| (a - kalshi_fair).abs() >= cfg.binance_pause_gap - 1e-9);
+            let guarded = cfg.binance_guard && (self.spot.paused(asset, now) || stale_kalshi);
             let was = self.guarded.insert(market.id.to_string(), guarded).unwrap_or(false);
             if guarded && !was {
                 *self.guard_pauses.entry(asset.to_owned()).or_default() += 1;
@@ -682,6 +740,40 @@ mod tests {
         let sides = quoted_sides(&mut e, &HashMap::from([("7".to_string(), held)]));
         assert_eq!(sides.len(), 1);
         assert_eq!(sides[0].0, "NO");
+    }
+
+    #[test]
+    fn first_legs_follow_binance_when_priced_from_the_adjusted_fair() {
+        let mut c = cfg();
+        c.open_fair = FairSource::Adjusted;
+        c.binance_guard = false;
+        let mut m = serde_json::to_value(market()).unwrap();
+        m["variantData"]["startPrice"] = json!(100_000.0);
+        m["endsAt"] = json!((chrono::Utc::now() + chrono::Duration::minutes(10)).to_rfc3339());
+        let mut e = Engine::new();
+        e.set_markets(vec![serde_json::from_value(m).unwrap()]);
+        let frame = |px: f64| format!(r#"{{"stream":"btcusdt@bookTicker","data":{{"s":"BTCUSDT","b":"{px}","a":"{px}"}}}}"#);
+        let yes_bid = |e: &mut Engine| {
+            e.quotes.clear();
+            e.evaluate(&c, &HashMap::new())
+                .into_iter()
+                .find_map(|a| match a {
+                    Action::Maker { outcome, price, .. } if outcome == "YES" => Some(price),
+                    _ => None,
+                })
+        };
+        // Spot 30 bp over the start; Kalshi 0.70 implies σ; Predict agrees.
+        assert!(e.binance_frame(&c, &frame(100_300.0)));
+        let _ = e.kalshi_frame(r#"{"type":"orderbook_snapshot","msg":{"market_ticker":"KXBTC15M-ABC","yes_dollars_fp":[["0.69","3"]],"no_dollars_fp":[["0.29","2"]]}}"#);
+        e.venue_book("7".into(), Book { bid: Some(0.64), bid_size: 5.0, ask: Some(0.76), ask_size: 5.0, update_ms: now_ms() });
+        let before = yes_bid(&mut e).expect("YES first leg at Kalshi's level");
+        assert!((before - 0.65).abs() < 1e-9, "{before}");
+        assert!(e.sigma("BTC", now_ms()).is_some(), "Kalshi implied a σ");
+        // Spot +20 bp, Kalshi silent: the adjusted fair (~0.81) moves the bid now.
+        assert!(e.binance_frame(&c, &frame(100_500.0)));
+        e.venue_book("7".into(), Book { bid: Some(0.76), bid_size: 5.0, ask: Some(0.86), ask_size: 5.0, update_ms: now_ms() });
+        let after = yes_bid(&mut e).expect("YES first leg");
+        assert!(after > before + 0.05, "{before} -> {after}");
     }
 
     #[test]

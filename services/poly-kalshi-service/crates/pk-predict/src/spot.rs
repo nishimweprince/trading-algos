@@ -12,9 +12,13 @@
 //! 3. **Spot fair**: `Φ(ln(S / K) / (σ √τ))` from Binance alone, K being
 //!    Predict's own start price for the window.
 //!
-//! σ is Binance's own: an EWMA of squared 1 s log returns. Which fair prices
-//! first legs and pairing legs is configuration; `FairScores` keeps the
-//! evidence for choosing.
+//! σ is the larger of Binance's realised volatility (an EWMA of squared 1 s
+//! log returns) and the volatility Kalshi's own price implies (`implied_sigma`,
+//! smoothed per asset). Realised alone ran ~2.4× under Kalshi's in a calm
+//! warm-up (10-27 12:17Z), which made every spot move look 2.4× too big. With
+//! no Kalshi-implied value yet there is no Binance-informed fair at all.
+//! Which fair prices first legs and pairing legs is configuration;
+//! `FairScores` keeps the evidence for choosing.
 
 use std::collections::{HashMap, VecDeque};
 
@@ -172,6 +176,31 @@ impl Spot {
         }
         Value::Object(out)
     }
+}
+
+/// Spot must be this far from the strike (log) for Kalshi's price to imply a
+/// stable σ: Binance and the Chainlink start price differ by a few bp.
+const IMPLIED_MIN_LN: f64 = 8e-4;
+/// … and Kalshi this far from 0.5 (z), where σ = ln(S/K) / (z √τ) blows up.
+const IMPLIED_MIN_Z: f64 = 0.25;
+/// Half-life of the per-asset implied σ, in seconds.
+pub const IMPLIED_HALF_LIFE_S: f64 = 300.0;
+/// An implied σ older than this is not used.
+pub const IMPLIED_MAX_AGE_MS: i64 = 10 * 60_000;
+
+/// The σ (per √s) that makes `spot_fair(spot, strike, σ, τ)` equal Kalshi's
+/// fair, where that is well determined.
+pub fn implied_sigma(kalshi: f64, spot: f64, strike: f64, tau_s: f64) -> Option<f64> {
+    if tau_s < 60.0 || !(spot > 0.0 && strike > 0.0) {
+        return None;
+    }
+    let z = norm_inv(kalshi.clamp(0.02, 0.98));
+    let x = (spot / strike).ln();
+    if z.abs() < IMPLIED_MIN_Z || x.abs() < IMPLIED_MIN_LN || z.signum() != x.signum() {
+        return None;
+    }
+    let sigma = x / (z * tau_s.sqrt());
+    (sigma.is_finite() && sigma > 0.0).then_some(sigma)
 }
 
 /// Kalshi's fair moved by `d_ln` of spot since it last changed.
@@ -382,6 +411,19 @@ mod tests {
         let up = adjusted_fair(0.50, 5e-4, sigma, 600.0);
         assert!(up > 0.54 && up < 0.56, "{up}");
         assert!(adjusted_fair(0.50, -5e-4, sigma, 600.0) < 0.47);
+    }
+
+    #[test]
+    fn implied_sigma_inverts_spot_fair_where_stable() {
+        let (k, tau) = (100.0, 600.0);
+        let sigma = 2.0e-4;
+        let s = k * (1.0 + 30e-4); // 30 bp over the strike
+        let fair = spot_fair(s, k, sigma, tau);
+        let back = implied_sigma(fair, s, k, tau).unwrap();
+        assert!((back / sigma - 1.0).abs() < 1e-3, "{back}");
+        assert!(implied_sigma(0.52, k * 1.0001, k, tau).is_none(), "at the money: unstable");
+        assert!(implied_sigma(0.30, s, k, tau).is_none(), "Kalshi below 0.5 with spot above: basis noise");
+        assert!(implied_sigma(fair, s, k, 30.0).is_none(), "under a minute left");
     }
 
     #[test]
