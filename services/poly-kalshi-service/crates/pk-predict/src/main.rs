@@ -58,6 +58,13 @@ enum Command {
     },
 }
 
+/// A market's execution lane.
+#[derive(Default)]
+struct Lane {
+    busy: bool,
+    queued: Option<Vec<Action>>,
+}
+
 struct App {
     cfg: Config,
     client: Arc<Client>,
@@ -70,6 +77,16 @@ struct App {
     binance: Mutex<Option<FeedHandle>>,
     /// Kalshi vs the Binance-informed fairs, scored per settled window.
     scores: Mutex<spot::FairScores>,
+    /// Woken by every Binance, Kalshi and Predict message: the strategy
+    /// evaluates on data, not on a timer.
+    wake: tokio::sync::Notify,
+    /// Per market: one requote in flight, the newest target queued behind it.
+    lanes: Mutex<std::collections::HashMap<String, Lane>>,
+    /// Cost of orders passed by the risk check but not yet recorded, so lanes
+    /// submitting at once cannot together pass the open cap.
+    reserved_usd: Mutex<f64>,
+    /// Bumped by every cancel-all: a lane that submitted across one removes its bids.
+    cancel_epoch: std::sync::atomic::AtomicU64,
     kalshi_http: reqwest::Client,
     kalshi_signer: Arc<KalshiSigner>,
     markouts: Mutex<MarkoutTracker>,
@@ -114,6 +131,9 @@ impl App {
 
     async fn cancel_all(&self, reason: &str) -> Value {
         self.state.lock().ready = false;
+        self.cancel_epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        // Quote from scratch afterwards, not at the next refresh.
+        self.engine.lock().forget_quotes();
         let result = if self.cfg.mode == VenueMode::Live {
             let orders = self.client.orders().await;
             match (orders, self.client.cancel_all_off_book().await) {
@@ -247,6 +267,29 @@ impl App {
         self.record("fast_remove", json!({"reason":reason,"markets":markets,"attempts":attempts}));
     }
 
+    /// One market's actions: a requote removes its bids, then submits the new
+    /// ones together; a withdrawal only removes.
+    async fn run_batch(&self, batch: Vec<Action>) {
+        let epoch = self.cancel_epoch.load(std::sync::atomic::Ordering::SeqCst);
+        let requoted: Option<model::PredictMarket> = batch.iter().find_map(|a| match a {
+            Action::Maker { market, .. } => Some(market.clone()),
+            _ => None,
+        });
+        let Some(requoted) = requoted else {
+            for action in batch {
+                self.execute(action).await;
+            }
+            return;
+        };
+        self.fast_remove_quotes("requote", Some(std::slice::from_ref(&requoted))).await;
+        let makers = batch.into_iter().filter(|a| matches!(a, Action::Maker { .. }));
+        futures_util::future::join_all(makers.map(|action| self.execute(action))).await;
+        // A cancel-all ran meanwhile: what this lane just placed goes too.
+        if self.cancel_epoch.load(std::sync::atomic::Ordering::SeqCst) != epoch {
+            self.fast_remove_quotes("cancel-all crossed a requote", Some(std::slice::from_ref(&requoted))).await;
+        }
+    }
+
     async fn execute(&self, action: Action) {
         match action {
             Action::CancelAll { reason } => {
@@ -295,14 +338,33 @@ impl App {
             self.record("risk_reject", json!({"market":market.id,"lane":lane,"reason":"collateral pause"}));
             return;
         }
+        // The check counts orders other lanes have passed but not recorded,
+        // and reserves this one, in one step.
         let checked = {
             let mut state = self.state.lock();
-            if pairing { state.risk.check_pairing_order(cost) } else { state.risk.check_order(cost, new_market) }
+            let mut reserved = self.reserved_usd.lock();
+            state.risk.state.open_usd += *reserved;
+            let checked =
+                if pairing { state.risk.check_pairing_order(cost) } else { state.risk.check_order(cost, new_market) };
+            state.risk.state.open_usd -= *reserved;
+            if checked.is_ok() {
+                *reserved += cost;
+            }
+            checked
         };
         if let Err(reason) = checked {
             self.record("risk_reject", json!({"market":market.id,"lane":lane,"reason":reason}));
             return;
         }
+        // Released however the submit ends (recorded orders count via recount).
+        struct Release<'a>(&'a Mutex<f64>, f64);
+        impl Drop for Release<'_> {
+            fn drop(&mut self) {
+                let mut reserved = self.0.lock();
+                *reserved = (*reserved - self.1).max(0.0);
+            }
+        }
+        let _release = Release(&self.reserved_usd, cost);
         let client_id = format!("pred-{}-{}", market.id, now_ms());
         if self.cfg.mode == VenueMode::Shadow {
             let record = OrderRecord {
@@ -651,11 +713,20 @@ async fn run(cfg: Config, client: Arc<Client>) -> anyhow::Result<()> {
     let app = Arc::new(App {
         journal: Mutex::new(Journal::open(cfg.state_dir.join("journal"))?),
         raw: Mutex::new(if cfg.raw { Some(Journal::open(cfg.state_dir.join("raw"))?) } else { None }),
-        engine: Mutex::new(Engine::new()),
+        engine: Mutex::new({
+            let mut engine = Engine::new();
+            engine.sigma_floor = cfg.sigma_floor;
+            engine.restore_implied(load_implied(&cfg.state_dir.join(IMPLIED_SIGMA_FILE)));
+            engine
+        }),
         state: Mutex::new(state),
         kalshi: Mutex::new(None),
         binance: Mutex::new(None),
         scores: Mutex::new(spot::FairScores::load(&cfg.state_dir.join(FAIR_SCORES_FILE))),
+        wake: tokio::sync::Notify::new(),
+        lanes: Mutex::new(Default::default()),
+        reserved_usd: Mutex::new(0.0),
+        cancel_epoch: std::sync::atomic::AtomicU64::new(0),
         kalshi_http: reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(3))
             .timeout(Duration::from_secs(8))
@@ -700,11 +771,14 @@ async fn run(cfg: Config, client: Arc<Client>) -> anyhow::Result<()> {
                 state.feeds.entry("kalshi".into()).or_default().sequence_gaps +=
                     text.contains("resync") as u64;
             } else if let Some((ticker, fair)) = app.engine.lock().kalshi_frame(&text) {
-                let mut state = app.state.lock();
-                state.kalshi_fairs.insert(ticker, fair);
-                let feed = state.feeds.entry("kalshi".into()).or_default();
-                feed.connected = true;
-                feed.last_message_ms = now;
+                {
+                    let mut state = app.state.lock();
+                    state.kalshi_fairs.insert(ticker, fair);
+                    let feed = state.feeds.entry("kalshi".into()).or_default();
+                    feed.connected = true;
+                    feed.last_message_ms = now;
+                }
+                app.wake.notify_one();
             }
         }
     });
@@ -722,10 +796,13 @@ async fn run(cfg: Config, client: Arc<Client>) -> anyhow::Result<()> {
         let Some(app) = weak.upgrade() else { return };
         let updated = app.engine.lock().binance_frame(&app.cfg, &text);
         if updated {
-            let mut state = app.state.lock();
-            let feed = state.feeds.entry("binance".into()).or_default();
-            feed.connected = true;
-            feed.last_message_ms = now_ms();
+            {
+                let mut state = app.state.lock();
+                let feed = state.feeds.entry("binance".into()).or_default();
+                feed.connected = true;
+                feed.last_message_ms = now_ms();
+            }
+            app.wake.notify_one();
         }
     });
     let binance = spawn_feed(app.cfg.binance_ws_url.clone(), FeedKind::Binance { futures: false }, emit);
@@ -735,6 +812,7 @@ async fn run(cfg: Config, client: Arc<Client>) -> anyhow::Result<()> {
     tokio::spawn(predict_ws(app.clone()));
     tokio::spawn(discovery_loop(app.clone()));
     tokio::spawn(strategy_loop(app.clone()));
+    tokio::spawn(housekeeping_loop(app.clone()));
     tokio::spawn(kill_loop(app.clone()));
     tokio::spawn(clock_loop(app.clone()));
     tokio::spawn(settlement_loop(app.clone()));
@@ -955,39 +1033,82 @@ async fn discovery_loop(app: Arc<App>) {
 }
 
 async fn strategy_loop(app: Arc<App>) {
+    // Evaluate on every Binance, Kalshi and Predict message; the timer only
+    // covers time-driven rules (window edges, pauses ending, refreshes).
+    let mut fallback = tokio::time::interval(Duration::from_millis(100));
+    loop {
+        tokio::select! {
+            _ = app.wake.notified() => {}
+            _ = fallback.tick() => {}
+        }
+        let positions = app.state.lock().positions.clone();
+        let actions = app.engine.lock().evaluate(&app.cfg, &positions);
+        dispatch(&app, actions);
+    }
+}
+
+/// Hands each market's actions to its lane; cancel-all and taker actions run
+/// on their own. A busy lane keeps only the newest target queued.
+fn dispatch(app: &Arc<App>, actions: Vec<Action>) {
+    let mut batches: Vec<(String, Vec<Action>)> = Vec::new();
+    for action in actions {
+        let market = match &action {
+            Action::Maker { market, .. } | Action::Withdraw { market } => market.id.to_string(),
+            Action::CancelAll { .. } | Action::Taker { .. } => {
+                let app = app.clone();
+                tokio::spawn(async move { app.execute(action).await });
+                continue;
+            }
+        };
+        match batches.iter_mut().find(|(m, _)| *m == market) {
+            Some((_, batch)) => batch.push(action),
+            None => batches.push((market, vec![action])),
+        }
+    }
+    for (market, batch) in batches {
+        let mut lanes = app.lanes.lock();
+        let lane = lanes.entry(market.clone()).or_default();
+        if lane.busy {
+            lane.queued = Some(batch);
+            continue;
+        }
+        lane.busy = true;
+        drop(lanes);
+        tokio::spawn(run_lane(app.clone(), market, batch));
+    }
+}
+
+async fn run_lane(app: Arc<App>, market: String, mut batch: Vec<Action>) {
+    loop {
+        app.run_batch(batch).await;
+        let mut lanes = app.lanes.lock();
+        let lane = lanes.entry(market.clone()).or_default();
+        match lane.queued.take() {
+            Some(next) => batch = next,
+            None => {
+                lane.busy = false;
+                return;
+            }
+        }
+    }
+}
+
+/// Book-keeping off the hot path: shadow fills, markouts, marks, the series,
+/// the scorecard, readiness and the heartbeat.
+async fn housekeeping_loop(app: Arc<App>) {
     let mut interval = tokio::time::interval(Duration::from_millis(100));
-    let mut last_score_ms = 0;
+    let (mut last_score_ms, mut last_implied_ms) = (0, now_ms());
     loop {
         interval.tick().await;
         if now_ms() - last_score_ms >= SCORE_SAMPLE_MS {
             last_score_ms = now_ms();
             app.sample_fairs(last_score_ms);
         }
+        if now_ms() - last_implied_ms >= IMPLIED_SAVE_MS {
+            last_implied_ms = now_ms();
+            save_implied(&app.cfg.state_dir.join(IMPLIED_SIGMA_FILE), &app.engine.lock().implied_snapshot());
+        }
         app.simulate_shadow_fills();
-        let positions = app.state.lock().positions.clone();
-        let actions = app.engine.lock().evaluate(&app.cfg, &positions);
-        // Requote only the markets being requoted: an account-wide removal
-        // here pulled every other market's quotes until their own refresh.
-        let mut requoted: Vec<model::PredictMarket> = Vec::new();
-        for action in &actions {
-            if let Action::Maker { market, .. } = action
-                && !requoted.iter().any(|m| m.id == market.id)
-            {
-                requoted.push(market.clone());
-            }
-        }
-        if !requoted.is_empty() {
-            app.fast_remove_quotes("requote", Some(&requoted)).await;
-        }
-        // The new bids go out together once the old ones are off: one round
-        // trip for the lot rather than one per side. Each passes its own risk
-        // check, so a pair of them can overshoot the open cap by one order.
-        let (makers, others): (Vec<Action>, Vec<Action>) =
-            actions.into_iter().partition(|a| matches!(a, Action::Maker { .. }));
-        for action in others {
-            app.execute(action).await;
-        }
-        futures_util::future::join_all(makers.into_iter().map(|action| app.execute(action))).await;
         let now = now_ms();
         {
             let markets = app.engine.lock().markets();
@@ -1437,6 +1558,8 @@ async fn predict_ws_session(app: &Arc<App>) -> anyhow::Result<()> {
             }
         }
         handle_wallet_event(app, &value);
+        // A book or a fill changes what to quote.
+        app.wake.notify_one();
     }
     anyhow::bail!("Predict WebSocket closed")
 }
@@ -1565,6 +1688,19 @@ const ORPHAN_SWEEP_S: u64 = 15;
 const SCORE_SAMPLE_MS: i64 = 5_000;
 const SCORE_GIVE_UP_MS: i64 = 45 * 60_000;
 const FAIR_SCORES_FILE: &str = "fair_scores.json";
+/// The learned Kalshi-implied σ per asset, kept across restarts.
+const IMPLIED_SIGMA_FILE: &str = "implied_sigma.json";
+const IMPLIED_SAVE_MS: i64 = 30_000;
+
+fn load_implied(path: &std::path::Path) -> std::collections::HashMap<String, (f64, i64)> {
+    std::fs::read(path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+}
+
+fn save_implied(path: &std::path::Path, implied: &std::collections::HashMap<String, (f64, i64)>) {
+    if let Ok(bytes) = serde_json::to_vec(implied) {
+        let _ = std::fs::write(path, bytes);
+    }
+}
 
 /// Predict's refusal for free USDT below the total bid amount.
 fn is_collateral_refusal(reason: &str) -> bool {

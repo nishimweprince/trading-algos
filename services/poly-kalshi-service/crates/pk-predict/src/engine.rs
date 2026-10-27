@@ -62,7 +62,14 @@ pub struct Engine {
     pub guard_pauses: HashMap<String, u64>,
     /// Per asset: the σ Kalshi's prices imply, smoothed `(σ per √s, ms)`.
     implied: HashMap<String, (f64, i64)>,
+    /// The least σ (per √s) a Binance-informed fair uses without a fresh
+    /// Kalshi-implied one (`PK_PRED_SIGMA_FLOOR`).
+    pub sigma_floor: f64,
 }
+
+/// While first legs price from Binance, Kalshi is the level only: its book
+/// must be alive within this, not move every `freshness_ms`.
+const KALSHI_QUIET_MAX_MS: i64 = 30_000;
 
 /// One live market's fairs for the status page and the scorecard.
 pub struct SignalRow {
@@ -93,7 +100,23 @@ impl Engine {
             guarded: HashMap::new(),
             guard_pauses: HashMap::new(),
             implied: HashMap::new(),
+            sigma_floor: 0.0,
         }
+    }
+
+    /// After a cancel-all: every market quotes from scratch on its next
+    /// evaluation, not at its next refresh.
+    pub fn forget_quotes(&mut self) {
+        self.quotes.clear();
+    }
+
+    /// The learned Kalshi-implied σ per asset `(σ per √s, ms)`, for keeping across restarts.
+    pub fn implied_snapshot(&self) -> HashMap<String, (f64, i64)> {
+        self.implied.clone()
+    }
+
+    pub fn restore_implied(&mut self, implied: HashMap<String, (f64, i64)>) {
+        self.implied = implied;
     }
 
     /// Folds the σ Kalshi's fair implies for `market` into its asset's average
@@ -118,11 +141,21 @@ impl Engine {
         *entry = (entry.0 + weight * (sigma - entry.0), now);
     }
 
-    /// The σ the Binance-informed fairs use: the larger of Binance's realised
-    /// and Kalshi's implied; none until Kalshi has implied one.
+    /// The σ the Binance-informed fairs use. With a fresh Kalshi-implied σ, the
+    /// larger of it and Binance's realised. Without one (windows open near
+    /// 0.5, where Kalshi implies nothing), Binance's realised with the last
+    /// implied σ (kept across restarts) and `sigma_floor` under it. None
+    /// with neither a realised nor any implied σ.
     pub fn sigma(&self, asset: &str, now: i64) -> Option<f64> {
-        let implied = self.implied.get(asset).filter(|(_, ms)| now - ms <= spot::IMPLIED_MAX_AGE_MS)?.0;
-        Some(self.spot.sigma(asset, now).map_or(implied, |realised| realised.max(implied)))
+        let realised = self.spot.sigma(asset, now);
+        let implied = self.implied.get(asset).map(|(s, ms)| (*s, now - ms <= spot::IMPLIED_MAX_AGE_MS));
+        match (realised, implied) {
+            (_, Some((i, true))) => Some(realised.map_or(i, |r| r.max(i))),
+            (Some(r), Some((i, false))) => Some(r.max(i).max(self.sigma_floor)),
+            (Some(r), None) => Some(r.max(self.sigma_floor)),
+            (None, Some((i, false))) => Some(i.max(self.sigma_floor)),
+            (None, None) => None,
+        }
     }
 
     /// Per asset: Kalshi-implied σ and the σ in use, in bp per √minute.
@@ -275,7 +308,12 @@ impl Engine {
         };
         let any_stale = self.markets.values().filter(|m| live(m)).any(|m| {
             let ticker = m.kalshi_ticker.as_deref().unwrap_or_default();
-            let kalshi_stale = self.kalshi_update.get(ticker).is_none_or(|t| now - *t > cfg.freshness_ms);
+            // Pricing first legs from Binance, a quiet Kalshi book is still the
+            // level: only a dead one (or a stale Binance) stops quoting.
+            let spot_fresh = spot::asset_of_ticker(ticker).is_some_and(|a| self.spot.mid(a, now).is_some());
+            let kalshi_max =
+                if cfg.open_fair != FairSource::Kalshi && spot_fresh { KALSHI_QUIET_MAX_MS } else { cfg.freshness_ms };
+            let kalshi_stale = self.kalshi_update.get(ticker).is_none_or(|t| now - *t > kalshi_max);
             // Predict sends a book only when it changes; a quiet book is not stale.
             let venue_stale = self
                 .venue_books
@@ -353,8 +391,14 @@ impl Engine {
             // A first leg also needs the venues to agree and Kalshi to be calm:
             // the losing first legs filled as Kalshi moved and Predict lagged.
             let venue_mid = book.bid.zip(book.ask).map(|(b, a)| (b + a) / 2.0);
-            let moved =
-                self.kalshi_trail.get(ticker).map(|t| recent_move(t, now, cfg.open_move_ms, kalshi_fair)).unwrap_or(0.0);
+            // Kalshi's calm only gates first legs priced from Kalshi: it moves
+            // after Binance, so it would block just after the move we priced.
+            // The Binance guard covers fast moves otherwise.
+            let moved = if cfg.open_fair == FairSource::Kalshi {
+                self.kalshi_trail.get(ticker).map(|t| recent_move(t, now, cfg.open_move_ms, kalshi_fair)).unwrap_or(0.0)
+            } else {
+                0.0
+            };
             let first_ok = first_leg_ok(cfg, window_s, fair)
                 && calm_and_agreed(cfg, fair, venue_mid, moved)
                 && (!cfg.open_only_flat || inv.abs() < 1e-9)
@@ -774,6 +818,33 @@ mod tests {
         e.venue_book("7".into(), Book { bid: Some(0.76), bid_size: 5.0, ask: Some(0.86), ask_size: 5.0, update_ms: now_ms() });
         let after = yes_bid(&mut e).expect("YES first leg");
         assert!(after > before + 0.05, "{before} -> {after}");
+    }
+
+    #[test]
+    fn sigma_falls_back_to_a_floored_last_implied_near_the_money() {
+        let mut e = Engine::new();
+        e.sigma_floor = 3e-4 / 60_f64.sqrt();
+        assert!(e.sigma("BTC", now_ms()).is_none(), "nothing to go on");
+        // Restored from disk an hour old and under the floor: floored.
+        e.restore_implied(HashMap::from([("BTC".to_string(), (2e-5, now_ms() - 3_600_000))]));
+        assert!((e.sigma("BTC", now_ms()).unwrap() - e.sigma_floor).abs() < 1e-12);
+        // A fresh Kalshi-implied σ is taken as is.
+        e.restore_implied(HashMap::from([("BTC".to_string(), (2e-5, now_ms()))]));
+        assert!((e.sigma("BTC", now_ms()).unwrap() - 2e-5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_quiet_kalshi_book_stops_quoting_only_when_first_legs_price_from_it() {
+        let mut e = quoting_at("0.45", "0.50", (0.40, 0.50));
+        let frame = r#"{"stream":"btcusdt@bookTicker","data":{"s":"BTCUSDT","b":"100000","a":"100000"}}"#;
+        let mut c = cfg();
+        assert!(e.binance_frame(&c, frame));
+        e.kalshi_update.insert("KXBTC15M-ABC".into(), now_ms() - 5_000); // quiet 5 s
+        assert!(matches!(e.evaluate(&c, &HashMap::new()).as_slice(), [Action::CancelAll { .. }]), "Kalshi-priced: stale");
+        e.stale_cancelled = false;
+        c.open_fair = FairSource::Adjusted;
+        let actions = e.evaluate(&c, &HashMap::new());
+        assert!(actions.iter().any(|a| matches!(a, Action::Maker { .. })), "Binance-priced: Kalshi is the level only");
     }
 
     #[test]

@@ -92,6 +92,9 @@ pub struct Config {
     /// (`PK_PRED_OPEN_FAIR`, `PK_PRED_PAIR_FAIR`: kalshi, adjusted or binance).
     pub open_fair: FairSource,
     pub pair_fair: FairSource,
+    /// The least σ a Binance-informed fair uses without a fresh Kalshi-implied
+    /// one (`PK_PRED_SIGMA_FLOOR`, bp per √minute; stored per √second).
+    pub sigma_floor: f64,
     pub fingerprint: String,
 }
 
@@ -245,7 +248,9 @@ impl Config {
             quote_ttl_s: integer("PK_PRED_QUOTE_TTL_S", 180)?.max(MIN_QUOTE_TTL_S),
             half_spread: number("PK_PRED_HALF_SPREAD", 0.03)?,
             requote_cents: number("PK_PRED_REQUOTE_CENTS", 0.01)?,
-            min_requote_ms: integer("PK_PRED_MIN_REQUOTE_MS", 500)?,
+            // Each market has one requote in flight at a time and the newest
+            // target replaces a queued one, so no time throttle is needed.
+            min_requote_ms: integer("PK_PRED_MIN_REQUOTE_MS", 0)?,
             refresh_ms: integer("PK_PRED_REFRESH_MS", 60_000)?,
             min_taker_edge,
             taker_slippage,
@@ -277,6 +282,7 @@ impl Config {
             binance_pause_gap: number("PK_PRED_BINANCE_PAUSE_GAP", 0.03)?,
             open_fair: FairSource::parse(get("PK_PRED_OPEN_FAIR").as_deref().unwrap_or("kalshi"))?,
             pair_fair: FairSource::parse(get("PK_PRED_PAIR_FAIR").as_deref().unwrap_or("kalshi"))?,
+            sigma_floor: number("PK_PRED_SIGMA_FLOOR", 3.0)? * 1e-4 / 60_f64.sqrt(),
             fingerprint,
         })
     }
