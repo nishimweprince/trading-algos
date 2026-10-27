@@ -578,3 +578,28 @@ PKM_TEST(engine_first_leg_needs_its_edge_but_pairing_bids_sit_closer) {
     if (x.kind == ActionKind::post && !x.up) down = x.px;
   require(down && near(*down, 0.44), "pairing Down at floor(1 - (0.55 + 0.01 - 0.0025))");
 }
+
+PKM_TEST(engine_tags_fills_with_the_kalshi_move_and_a_5s_markout) {
+  Config c;
+  c.pause_jump = 0.10;
+  auto e = make(c);
+  const std::int64_t t0 = (OPEN + 100) * NS;
+  books(e, 0.54, 0.56, {0.53, 0.57}, {0.43, 0.47}, t0);
+  take(e);
+  e.on_posted(0, true, 0.53, 5, true, "u1", t0);
+  e.on_posted(0, false, 0.43, 5, true, "d1", t0);
+  books(e, 0.52, 0.54, {0.53, 0.57}, {0.43, 0.47}, t0 + 500'000'000);  // Kalshi −2¢ in 0.5 s
+  e.log().clear();
+  e.on_order("u1", 5, true, t0 + 600'000'000);  // the Up bid is hit as it falls
+  bool tagged = false;
+  for (const auto& line : e.log()) tagged = tagged || (line.rfind("fill ", 0) == 0 && line.find("kmove_c -2.00") != std::string::npos);
+  require(tagged, "the fill carries Kalshi's move against it");
+  e.tick(t0 + 3 * NS);
+  bool early = false;
+  for (const auto& line : e.log()) early = early || line.rfind("markout5", 0) == 0;
+  require(!early, "no markout before 5 s");
+  e.tick(t0 + 6 * NS);
+  bool marked = false;
+  for (const auto& line : e.log()) marked = marked || (line.rfind("markout5 ", 0) == 0 && line.find("m5_c 0.00") != std::string::npos);
+  require(marked, "a 5 s markout against Kalshi's fair (0.53 at 0.53)");
+}

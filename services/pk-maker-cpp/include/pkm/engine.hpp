@@ -333,6 +333,11 @@ class Engine final {
     Book upb;
     Book downb;
     MinMaxWindow trail;  // Kalshi mids of the last second
+    // Recent Kalshi mids `(ms, mid)`, oldest first: a fill's tag reads the
+    // signed move of the second before it.
+    std::array<std::pair<std::int64_t, double>, 256> mids{};
+    std::size_t mids_head = 0;
+    std::size_t mids_size = 0;
     std::int64_t pause_until_ms = 0;
     std::array<Slot, 2> slots;
     const char* gate = "no window";
@@ -350,6 +355,22 @@ class Engine final {
   Slot* slot(int coin, bool up) noexcept;
   void book_fill(const OrderRec& o, double shares, std::int64_t t_ns);
   void note(std::string line);
+  // Kalshi's signed mid move over the last second (none without history).
+  [[nodiscard]] std::optional<double> kalshi_move(const Coin& c, std::int64_t now_ms) const noexcept;
+  // Logs each fill's 5 s markout against Kalshi's fair (`markout5`).
+  void flush_markouts(std::int64_t now_ms);
+
+  struct PendingMarkout {
+    int coin = -1;
+    std::string key;
+    bool up = true;
+    double px = 0;
+    double shares = 0;
+    double fair_side = 0;  // the side's fair at the fill
+    double kmove_c = 0;    // Kalshi's move before it, signed in the fill's favour, in cents
+    std::int64_t t_ms = 0;
+  };
+  std::vector<PendingMarkout> markouts_;
 
   Config cfg_;
   std::vector<Coin> coins_;

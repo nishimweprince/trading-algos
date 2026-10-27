@@ -20,6 +20,12 @@ import sys
 
 TARGET_WINDOWS = 350
 FILL = re.compile(r"\[pkm (\S+)Z\] fill (\S+) (up|down) ([\d.]+) @ ([\d.]+) net (\S+) age_ms (\d+)")
+# Kalshi's move in the second before a fill, signed in its favour (cents); and
+# the 5 s markout line the engine writes after each fill.
+KMOVE = re.compile(r" kmove_c (\S+)")
+MARKOUT5 = re.compile(r"\] markout5 (\S+) (up|down) .* m5_c (\S+) kmove_c (\S+)")
+MOVE_BUCKETS = (("Kalshi against (≤ −0.5¢)", lambda c: c <= -0.5), ("Kalshi flat", lambda c: -0.5 < c < 0.5),
+                ("Kalshi with (≥ +0.5¢)", lambda c: c >= 0.5))
 
 
 def unix(iso):
@@ -62,16 +68,22 @@ def main():
     if heavy:
         print(f"heavier side won {sum(heavy)} of {len(heavy)} ({100 * sum(heavy) / len(heavy):.0f}%)")
 
-    rows = []
+    rows, marks = [], []
     for line in sys.stdin if not sys.stdin.isatty() else []:
+        mo = MARKOUT5.search(line)
+        if mo and mo.group(1) in settled:
+            marks.append((float(mo.group(4)), float(mo.group(3))))
+            continue
         m = FILL.search(line)
         if not m or m.group(2) not in settled:
             continue
         v = settled[m.group(2)]
         up, q, px, net = m.group(3) == "up", float(m.group(4)), float(m.group(5)), float(m.group(6))
         before = net - (q if up else -q)
+        km = KMOVE.search(line)
         rows.append(dict(k=m.group(2), asset=v["asset"], s=unix(m.group(1)) - v["open_unix"], q=q, px=px,
                          age=int(m.group(7)), opens=(before >= -1e-9) if up else (before <= 1e-9),
+                         kmove=float(km.group(1)) if km else None,
                          r=(1.0 if (v["settled"] == "yes") == up else 0.0) - px))
     if not rows:
         print("(no fills on stdin: pipe `journalctl -u pkm -o cat` for the per-fill breakdown)")
@@ -87,6 +99,7 @@ def main():
         ("quote age >= 5 s", lambda r: r["age"] >= 5000),
         ("second < 120", lambda r: r["s"] < 120),
         ("second >= 120", lambda r: r["s"] >= 120),
+        *[(name, lambda r, sel=sel: r["kmove"] is not None and sel(r["kmove"])) for name, sel in MOVE_BUCKETS],
     ]
     for leg, pick in (("first legs", lambda r: r["opens"]), ("pairing legs", lambda r: not r["opens"])):
         print(leg)
@@ -94,7 +107,14 @@ def main():
             xs = [r for r in rows if pick(r) and sel(r)]
             if xs:
                 c, se, usd = clustered(xs)
-                print(f"  {name:18s} fills {len(xs):4d}  {c:+6.2f}¢/share ± {se:5.2f}  ${usd:+8.2f}")
+                print(f"  {name:24s} fills {len(xs):4d}  {c:+6.2f}¢/share ± {se:5.2f}  ${usd:+8.2f}")
+    if marks:
+        print("5 s markout vs Kalshi's fair, by Kalshi's move before the fill")
+        for name, sel in MOVE_BUCKETS:
+            xs = [m5 for km, m5 in marks if sel(km)]
+            if len(xs) > 1:
+                se = statistics.pstdev(xs) / math.sqrt(len(xs))
+                print(f"  {name:24s} fills {len(xs):4d}  {statistics.mean(xs):+6.2f}¢ ± {se:5.2f}")
 
 
 if __name__ == "__main__":

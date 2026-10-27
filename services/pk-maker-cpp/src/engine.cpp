@@ -16,6 +16,10 @@ constexpr std::int64_t kCashHoldMs = 3'000;
 constexpr std::int64_t kCrossHoldMs = 2'000;
 constexpr std::int64_t kStrayRetryMs = 1'000;
 constexpr std::int64_t kDriftGraceNs = 30 * kNs;
+// A fill's tag: the Kalshi move over this span before it, and its markout this long after.
+constexpr std::int64_t kTagBeforeMs = 1'000;
+constexpr std::int64_t kMarkoutMs = 5'000;
+constexpr std::int64_t kMarkoutGiveUpMs = 15'000;
 
 double round_dp2(double x) noexcept { return std::nearbyint(x * 100.0) / 100.0; }
 
@@ -90,6 +94,7 @@ Engine::Engine(Config cfg, std::vector<std::string> assets) : cfg_(cfg), bucket_
   coins_.resize(assets.size());
   for (std::size_t i = 0; i < assets.size(); ++i) coins_[i].name = assets[i];
   actions_.reserve(64);
+  markouts_.reserve(32);
 }
 
 int Engine::coin_of(std::string_view asset) const noexcept {
@@ -170,6 +175,10 @@ void Engine::on_kalshi_update(int coin, std::int64_t t_ns) {
     c.trail.evict_before(now_ms - 1000);
     const double moved = c.trail.empty() ? 0.0 : std::max(std::abs(m - c.trail.max()), std::abs(m - c.trail.min()));
     c.trail.push(now_ms, m);
+    const std::size_t at = (c.mids_head + c.mids_size) % c.mids.size();
+    c.mids[at] = {now_ms, m};
+    if (c.mids_size < c.mids.size()) ++c.mids_size;
+    else c.mids_head = (c.mids_head + 1) % c.mids.size();
     if (moved >= cfg_.pause_jump - 1e-9) {
       if (c.pause_until_ms < now_ms) ++counters_.pauses;
       c.pause_until_ms = now_ms + cfg_.pause_ms;
@@ -183,6 +192,36 @@ void Engine::on_poly_update(int coin, std::int64_t t_ns) { tick_coin(static_cast
 void Engine::tick(std::int64_t t_ns) {
   for (std::size_t i = 0; i < coins_.size(); ++i) tick_coin(i, t_ns);
   sweep_strays(t_ns / 1'000'000);
+  flush_markouts(t_ns / 1'000'000);
+}
+
+std::optional<double> Engine::kalshi_move(const Coin& c, std::int64_t now_ms) const noexcept {
+  if (c.mids_size == 0) return std::nullopt;
+  const double latest = c.mids[(c.mids_head + c.mids_size - 1) % c.mids.size()].second;
+  for (std::size_t k = 0; k < c.mids_size; ++k) {
+    const auto& [ms, mid] = c.mids[(c.mids_head + k) % c.mids.size()];
+    if (ms >= now_ms - kTagBeforeMs) return latest - mid;
+  }
+  return 0.0;
+}
+
+void Engine::flush_markouts(std::int64_t now_ms) {
+  for (auto it = markouts_.begin(); it != markouts_.end();) {
+    if (now_ms - it->t_ms < kMarkoutMs) {
+      ++it;
+      continue;
+    }
+    if (const auto q = fair(coins_[static_cast<std::size_t>(it->coin)], now_ms)) {
+      const double side = it->up ? *q : 1.0 - *q;
+      note("markout5 " + it->key + (it->up ? " up " : " down ") + fixed(it->shares, 2) + " @ " + fixed(it->px, 2) +
+           " fair_fill " + fixed(it->fair_side, 4) + " fair_now " + fixed(side, 4) + " m5_c " +
+           fixed((side - it->px) * 100.0, 2) + " kmove_c " + fixed(it->kmove_c, 2));
+    } else if (now_ms - it->t_ms < kMarkoutGiveUpMs) {
+      ++it;
+      continue;
+    }
+    it = markouts_.erase(it);
+  }
 }
 
 // An order resting with no slot holding it is quoted by nobody and never
@@ -542,11 +581,18 @@ void Engine::book_fill(const OrderRec& o, double shares, std::int64_t t_ns) {
   ++inv.fills;
   inv.last_fill_ns = t_ns;
   ++counters_.fills;
-  const auto q = fair(c, t_ns / 1'000'000);
+  const std::int64_t now_ms = t_ns / 1'000'000;
+  const auto q = fair(c, now_ms);
   std::string line = "fill " + o.key + (o.up ? " up " : " down ") + fixed(shares, 2) + " @ " + fixed(o.px, 2) +
                      " net " + fixed(inv.net(), 2) + " age_ms " + std::to_string((t_ns - o.posted_ns) / 1'000'000);
   if (q) line += " fair " + fixed(*q, 4);
+  // Kalshi's move in the second before, signed in the fill's favour: a
+  // negative one is a bid hit as the market moved against it.
+  const auto km = kalshi_move(c, now_ms);
+  const double kmove_c = km ? (o.up ? *km : -*km) * 100.0 : 0.0;
+  if (km) line += " kmove_c " + fixed(kmove_c, 2);
   note(std::move(line));
+  if (q) markouts_.push_back({o.coin, o.key, o.up, o.px, shares, o.up ? *q : 1.0 - *q, kmove_c, now_ms});
 }
 
 std::vector<Inventory> Engine::unsettled(std::int64_t t_ns) const {
