@@ -379,8 +379,13 @@ bool Discovery::get_json(http::Client& client, const std::string& path, std::str
   }
 }
 
-bool Discovery::poly_market(const std::string& asset, std::int64_t open_unix, std::string& body, std::string& error) {
-  return get_json(gamma_, "/events?slug=" + poly_slug(asset, open_unix), body, error);
+bool Discovery::poly_market(const std::string& asset, std::int64_t open_unix, std::string& body, std::string& error,
+                            bool fresh) {
+  std::string path = "/events?slug=" + poly_slug(asset, open_unix);
+  // Gamma sits behind CloudFront with max-age=300: a cached answer kept a
+  // resolved window "open" for up to 5 minutes. A unique query is a cache miss.
+  if (fresh) path += "&_=" + std::to_string(net::now_ns() / 1'000'000);
+  return get_json(gamma_, path, body, error);
 }
 
 bool Discovery::discover(const std::string& asset, std::int64_t open_unix, std::optional<engine::Window>& out, std::string& error) {
@@ -461,7 +466,7 @@ bool Discovery::discover(const std::string& asset, std::int64_t open_unix, std::
 bool Discovery::outcome(const std::string& asset, std::int64_t open_unix, std::string& out, std::string& error) {
   out.clear();
   std::string body;
-  if (!poly_market(asset, open_unix, body, error)) return false;
+  if (!poly_market(asset, open_unix, body, error, true)) return false;
   json::Document doc;
   if (!doc.parse(body)) {
     error = "Gamma answer is not JSON";

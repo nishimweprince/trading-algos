@@ -117,7 +117,8 @@ class Discovery final {
 
  private:
   bool get_json(http::Client& client, const std::string& path, std::string& body, std::string& error);
-  bool poly_market(const std::string& asset, std::int64_t open_unix, std::string& body, std::string& error);
+  bool poly_market(const std::string& asset, std::int64_t open_unix, std::string& body, std::string& error,
+                   bool fresh = false);
 
   http::Client gamma_;
   http::Client kalshi_;

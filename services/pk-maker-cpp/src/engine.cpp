@@ -581,9 +581,9 @@ void Engine::on_redeemed(std::string_view key, bool ok, std::string_view tx_or_e
   ++it->second.redeem_tries;
   if (ok) it->second.redeemed = std::string(tx_or_error);
   note(std::string(ok ? "redeemed " : "redeem failed ") + std::string(key) + ": " + std::string(tx_or_error) + " (try " +
-       std::to_string(it->second.redeem_tries) + ")");
+       std::to_string(it->second.redeem_tries) + ", " + std::to_string((t_ns - it->second.close_ns()) / kNs) +
+       " s after the close)");
   dirty = true;
-  (void)t_ns;
 }
 
 std::map<std::string, double> Engine::held_tokens(std::int64_t t_ns) const {
