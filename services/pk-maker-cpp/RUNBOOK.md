@@ -102,6 +102,21 @@ Each start cancels everything on the account before it quotes.
 - One line per event: each fill, settlement, redemption, reject, drift, halt
   and reconnect.
 
+## Reviewing performance
+
+```sh
+journalctl -u pkm -o cat | python3 scripts/pkm_review.py data/state/state.json --since <deploy time, ISO UTC>
+```
+
+It scores settled windows (P&L per window with its t) and fills split into
+first and pairing legs by asset, price, quote age and time in the window, with
+window-clustered standard errors. Judge a config only after about 350 windows of
+it (`--since` its deploy), and only on t near 2: at 125 windows the 10-27
+review's −$24.56 was t −0.93, noise. A taker second leg to "lock" a pair was
+tested and rejected that day: after an adverse first fill, buying the other side
+at market fixes the loss in place and pays the spread and the taker fee
+(0.07·p·(1−p) per share).
+
 ## Failure modes
 
 | Symptom | Cause / action |

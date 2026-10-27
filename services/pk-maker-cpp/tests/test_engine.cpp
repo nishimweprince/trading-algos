@@ -99,7 +99,11 @@ PKM_TEST(engine_pure_rules) {
 }
 
 PKM_TEST(engine_posts_both_sides_then_requotes_and_pulls) {
-  auto e = make();
+  // The flicker hold under test: first legs' open_min_edge pull is off here
+  // (engine_first_leg_needs_its_edge_but_pairing_bids_sit_closer covers it).
+  Config c;
+  c.open_min_edge = 0;
+  auto e = make(c);
   const std::int64_t t0 = (OPEN + 100) * NS;
   books(e, 0.54, 0.56, {0.53, 0.57}, {0.43, 0.47}, t0);
   e.tick(t0);
@@ -524,4 +528,53 @@ PKM_TEST(engine_drift_waits_for_a_fresh_fill_to_settle) {
   require(!e.halted(t0 + NS) && e.counters().drift_checks == 0, "a just-filled token is not checked");
   for (int i = 0; i < 3; ++i) e.on_balance("BTC-up", 0.0, t0 + 31 * NS);
   require(e.halted(t0 + 31 * NS), "checked again after the grace");
+}
+
+PKM_TEST(engine_first_legs_skip_longshots) {
+  auto e = make();
+  const std::int64_t t0 = (OPEN + 100) * NS;
+  // q = 0.70: Up bids 0.68, Down would bid 0.28, under the 0.35 floor.
+  books(e, 0.69, 0.71, {0.68, 0.72}, {0.28, 0.32}, t0);
+  auto a = take(e);
+  require(a.size() == 1 && a[0].up && near(a[0].px, 0.68), "only the favourite opens");
+  Inventory v;
+  v.asset = "BTC";
+  v.open_unix = OPEN;
+  v.up = 5;
+  v.up_cost = 2.5;
+  e.put_inventory(window_key("BTC", OPEN), v);
+  e.on_posted(0, true, 0.68, 5, true, "u1", t0);
+  e.tick(t0 + 10'000'000);
+  bool down = false;
+  for (const auto& x : take(e)) down = down || (x.kind == ActionKind::post && !x.up);
+  require(down, "a pairing Down bid is not a first leg: the floor does not apply");
+}
+
+PKM_TEST(engine_first_leg_needs_its_edge_but_pairing_bids_sit_closer) {
+  Config c;
+  c.pause_jump = 0.10;
+  auto e = make(c);
+  const std::int64_t t0 = (OPEN + 100) * NS;
+  books(e, 0.54, 0.56, {0.53, 0.57}, {0.43, 0.47}, t0);
+  take(e);
+  e.on_posted(0, true, 0.53, 5, true, "u1", t0);
+  e.on_posted(0, false, 0.43, 5, true, "d1", t0);
+  // Fair 0.535: the 0.53 first leg keeps half a cent, under open_min_edge.
+  books(e, 0.53, 0.54, {0.53, 0.57}, {0.43, 0.47}, t0 + 50'000'000);
+  auto a = take(e);
+  require(a.size() == 1 && a[0].kind == ActionKind::cancel && a[0].order_id == "u1", "first leg pulled at once");
+
+  // Holding Up 5 @ 0.50: the Down bid pairs at fair - 0.01 (+ skew), not fair - 0.02.
+  auto p = make(c);
+  Inventory v;
+  v.asset = "BTC";
+  v.open_unix = OPEN;
+  v.up = 5;
+  v.up_cost = 2.5;
+  p.put_inventory(window_key("BTC", OPEN), v);
+  books(p, 0.54, 0.56, {0.53, 0.57}, {0.43, 0.47}, t0);
+  std::optional<double> down;
+  for (const auto& x : take(p))
+    if (x.kind == ActionKind::post && !x.up) down = x.px;
+  require(down && near(*down, 0.44), "pairing Down at floor(1 - (0.55 + 0.01 - 0.0025))");
 }

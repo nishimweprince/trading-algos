@@ -50,6 +50,15 @@ struct Config {
   std::int64_t open_leg_s = 300;
   double open_min_fair = 0.15;
   double open_max_fair = 0.85;
+  // A first leg buys only a side priced at least this: longshot first legs lost
+  // 8.9¢/share live (10-27 review), favourites made money.
+  double open_min_px = 0.35;
+  // A resting first-leg bid is pulled at once (no adverse_ms hold) when the
+  // fair of its side falls to within this of it.
+  double open_min_edge = 0.01;
+  // Half-spread of a pairing bid: closer to fair than `half_spread`, so pairs
+  // complete more often; the pair guard still caps the pair under $1.
+  double pair_half_spread = 0.01;
 };
 
 struct Window {
@@ -332,7 +341,7 @@ class Engine final {
   [[nodiscard]] std::optional<double> fair(const Coin& c, std::int64_t now_ms) const noexcept;
   void tick_coin(std::size_t i, std::int64_t t_ns);
   void step_slot(std::size_t i, std::size_t n, std::optional<std::pair<double, double>> want,
-                 std::optional<double> fair_side, std::int64_t now_ms);
+                 std::optional<double> fair_side, bool opening, std::int64_t now_ms);
   void sweep_strays(std::int64_t now_ms);
   bool take_token(std::int64_t now_ms) noexcept;
   [[nodiscard]] double net_of(std::string_view key) const noexcept;

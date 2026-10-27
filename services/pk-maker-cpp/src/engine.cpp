@@ -277,11 +277,17 @@ void Engine::tick_coin(std::size_t i, std::int64_t t_ns) {
       books_ok = ua && da;
       if (books_ok) {
         const auto [u, d] = desired_px(cfg_, *q, net, ua, da);
+        Config pairing = cfg_;
+        pairing.half_spread = cfg_.pair_half_spread;
+        const auto [pu, pd] = desired_px(pairing, *q, net, ua, da);
         const std::array<std::optional<double>, 2> pxs{u, d};
+        const std::array<std::optional<double>, 2> pair_pxs{pu, pd};
         for (std::size_t n = 0; n < 2; ++n) {
           const bool up = n == 0;
-          if (opens(net, up) && !first_leg_ok(cfg_, s, *q)) continue;
-          auto px = pair_cap(cfg_, pxs[n], held_avg[1 - n]);
+          const bool opening = opens(net, up);
+          if (opening && !first_leg_ok(cfg_, s, *q)) continue;
+          if (opening && (!pxs[n] || *pxs[n] < cfg_.open_min_px - 1e-9)) continue;
+          auto px = pair_cap(cfg_, opening ? pxs[n] : pair_pxs[n], held_avg[1 - n]);
           if (px && now_ms < c.slots[n].cross_cap_until_ms) {
             px = std::min(*px, c.slots[n].cross_cap);
             if (*px < cfg_.min_px - 1e-9) px.reset();
@@ -321,12 +327,12 @@ void Engine::tick_coin(std::size_t i, std::int64_t t_ns) {
     // The signer prepares for what the slot will want once a pause or the window start ends.
     c.slots[n].hint = want[n] ? want[n] : hint[n];
     const std::optional<double> fair_side = q ? std::optional<double>(n == 0 ? *q : 1.0 - *q) : std::nullopt;
-    step_slot(i, n, want[n], fair_side, now_ms);
+    step_slot(i, n, want[n], fair_side, c.window && opens(net, n == 0), now_ms);
   }
 }
 
 void Engine::step_slot(std::size_t i, std::size_t n, std::optional<std::pair<double, double>> want,
-                       std::optional<double> fair_side, std::int64_t now_ms) {
+                       std::optional<double> fair_side, bool opening, std::int64_t now_ms) {
   auto& c = coins_[i];
   auto& s = c.slots[n];
   const bool up = n == 0;
@@ -351,8 +357,11 @@ void Engine::step_slot(std::size_t i, std::size_t n, std::optional<std::pair<dou
         s.off_since_ms = now_ms;
       }
       const std::int64_t held = s.has_off ? now_ms - s.off_since_ms : 0;
-      // A bid at or over fair has no edge left: no flicker hold.
-      const bool underwater = dir == 1 && fair_side && s.px >= *fair_side - 1e-9;
+      // A bid at or over fair has no edge left, nor a first leg within
+      // open_min_edge of it (first legs filled on 1-5 s old quotes lost
+      // 6¢/share): no flicker hold.
+      const bool underwater = dir == 1 && fair_side &&
+                              (opening ? s.px > *fair_side - cfg_.open_min_edge + 1e-9 : s.px >= *fair_side - 1e-9);
       const bool too_high = dir == 1 && (held >= cfg_.adverse_ms || underwater);
       const bool raise = dir == -1 && held >= cfg_.min_requote_ms && now_ms - s.last_change_ms >= cfg_.min_requote_ms;
       cancel = s.remaining > size + 1e-9 || too_high || raise;

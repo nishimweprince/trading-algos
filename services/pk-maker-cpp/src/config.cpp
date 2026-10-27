@@ -114,6 +114,9 @@ bool load_config(const std::map<std::string, std::string>& vars, Config& c, std:
   s.open_leg_s = r.number("PK_PM_OPEN_LEG_S", s.open_leg_s);
   s.open_min_fair = r.number("PK_PM_OPEN_MIN_FAIR", s.open_min_fair);
   s.open_max_fair = r.number("PK_PM_OPEN_MAX_FAIR", s.open_max_fair);
+  s.open_min_px = r.number("PK_PM_OPEN_MIN_PX", s.open_min_px);
+  s.open_min_edge = r.number("PK_PM_OPEN_MIN_EDGE", s.open_min_edge);
+  s.pair_half_spread = r.number("PK_PM_PAIR_HALF_SPREAD", s.pair_half_spread);
 
   c.assets.clear();
   std::stringstream assets(r.text("PK_PM_ASSETS", "BTC,ETH,SOL,XRP,BNB,HYPE,ZEC"));
@@ -175,6 +178,9 @@ bool load_config(const std::map<std::string, std::string>& vars, Config& c, std:
   if (s.shares != static_cast<double>(static_cast<long>(s.shares))) return fail("PK_PM_SHARES must be whole shares");
   if (s.half_spread < 0.005 || s.half_spread > 0.2) return fail("PK_PM_HALF_SPREAD must be within 0.005..=0.2");
   if (s.daily_loss_usd <= 0 || s.max_open_cost_usd <= 0) return fail("PK_PM risk caps must be positive");
+  if (s.open_min_px < 0 || s.open_min_px > 0.95) return fail("PK_PM_OPEN_MIN_PX must be within 0..=0.95");
+  if (s.open_min_edge < 0 || s.open_min_edge > 0.2) return fail("PK_PM_OPEN_MIN_EDGE must be within 0..=0.2");
+  if (s.pair_half_spread < 0 || s.pair_half_spread > 0.2) return fail("PK_PM_PAIR_HALF_SPREAD must be within 0..=0.2");
   if (s.max_orders_per_s < 1) return fail("PK_PM_MAX_ORDERS_PER_S must be at least 1");
   if (c.order_channels < 2 || c.order_channels > 16) return fail("PKM_ORDER_CHANNELS must be 2..16");
   if (c.signature_type != 3) return fail("pkm trades a deposit wallet only: POLY_SIGNATURE_TYPE must be 3");
@@ -189,7 +195,8 @@ std::string describe(const Config& c) {
   o << " h=" << s.half_spread << " shares=" << s.shares << " max_net=" << s.max_net << " skew_k=" << s.skew_k
     << " pause=" << s.pause_jump << "/" << s.pause_ms << "ms adverse=" << s.adverse_ms << "ms raise=" << s.min_requote_ms
     << "ms open_leg_s=" << s.open_leg_s << " fair_band=" << s.open_min_fair << ".." << s.open_max_fair
-    << " pair_margin=" << s.pair_margin << " max_open_cost=$" << s.max_open_cost_usd << " daily_loss=$"
+    << " pair_margin=" << s.pair_margin << " open_min_px=" << s.open_min_px << " open_min_edge=" << s.open_min_edge
+    << " pair_h=" << s.pair_half_spread << " max_open_cost=$" << s.max_open_cost_usd << " daily_loss=$"
     << s.daily_loss_usd << " orders/s=" << s.max_orders_per_s;
   return o.str();
 }
