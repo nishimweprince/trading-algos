@@ -613,6 +613,10 @@ struct MarkoutPending {
     side: String,
     fill_px: f64,
     fill_ms: i64,
+    /// The venue mid in the fill's side terms when it filled, when the
+    /// caller knows it: the 5 s record then also carries the market's own
+    /// 5 s move in cents (`pmove_c_5s`, + = moved the fill's way).
+    mid_at_fill: Option<f64>,
     done: [bool; 3],
 }
 
@@ -621,7 +625,7 @@ impl MarkoutTracker {
         Self { pending: VecDeque::new() }
     }
 
-    pub fn watch(&mut self, market: &str, side: &str, fill_px: f64, fill_ms: i64) {
+    pub fn watch(&mut self, market: &str, side: &str, fill_px: f64, fill_ms: i64, mid_at_fill: Option<f64>) {
         if self.pending.len() >= 200 {
             self.pending.pop_front();
         }
@@ -630,6 +634,7 @@ impl MarkoutTracker {
             side: side.into(),
             fill_px,
             fill_ms,
+            mid_at_fill,
             done: [false; 3],
         });
     }
@@ -647,13 +652,20 @@ impl MarkoutTracker {
             for (i, horizon) in HORIZONS.iter().enumerate() {
                 if !pending.done[i] && now_ms - pending.fill_ms >= *horizon {
                     pending.done[i] = true;
-                    out.push(json!({
+                    let mut record = json!({
                         "market": pending.market,
                         "side": pending.side,
                         "fill_px": pending.fill_px,
+                        "fill_ms": pending.fill_ms,
                         "horizon_s": horizon / 1000,
                         "markout": mid - pending.fill_px,
-                    }));
+                    });
+                    if *horizon == 5_000
+                        && let Some(at_fill) = pending.mid_at_fill
+                    {
+                        record["pmove_c_5s"] = ((mid - at_fill) * 100.0).into();
+                    }
+                    out.push(record);
                 }
             }
         }
@@ -778,16 +790,29 @@ mod tests {
     #[test]
     fn markouts_fire_at_each_horizon_then_release() {
         let mut tracker = MarkoutTracker::new();
-        tracker.watch("7", "YES", 0.40, 1_000_000);
+        tracker.watch("7", "YES", 0.40, 1_000_000, None);
         let mids = HashMap::from([(("7".into(), "YES".into()), 0.45)]);
         assert!(tracker.poll(1_000_000 + 4_999, &mids).is_empty());
         let five = tracker.poll(1_000_000 + 5_000, &mids);
         assert_eq!(five.len(), 1);
         assert_eq!(five[0]["horizon_s"], 5);
         assert!((five[0]["markout"].as_f64().unwrap() - 0.05).abs() < 1e-9);
+        assert!(five[0].get("pmove_c_5s").is_none(), "no mid at fill, no pmove");
         assert_eq!(tracker.poll(1_000_000 + 30_000, &mids).len(), 1);
         assert_eq!(tracker.poll(1_000_000 + 60_000, &mids).len(), 1);
         assert!(tracker.poll(1_000_000 + 61_000, &mids).is_empty());
+    }
+
+    #[test]
+    fn the_5s_markout_carries_the_markets_own_5s_move() {
+        let mut tracker = MarkoutTracker::new();
+        tracker.watch("7", "YES", 0.40, 1_000_000, Some(0.42));
+        let mids = HashMap::from([(("7".into(), "YES".into()), 0.45)]);
+        let five = tracker.poll(1_000_000 + 5_000, &mids);
+        assert_eq!(five[0]["fill_ms"], 1_000_000);
+        assert!((five[0]["pmove_c_5s"].as_f64().unwrap() - 3.0).abs() < 1e-9);
+        let thirty = tracker.poll(1_000_000 + 30_000, &mids);
+        assert!(thirty[0].get("pmove_c_5s").is_none(), "only the 5 s record");
     }
 
     #[test]

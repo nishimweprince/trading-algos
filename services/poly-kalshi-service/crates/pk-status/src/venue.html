@@ -52,6 +52,7 @@ svg.mkt .k { stroke:var(--kalshi); } svg.mkt .l { stroke:var(--lim); } svg.mkt .
   <div class="card"><h2>P&amp;L</h2><div id="pnl"></div></div>
   <div class="card"><h2>Record</h2><div id="record"></div></div>
   <div class="card"><h2>P&amp;L by day</h2><table id="byday"></table></div>
+  <div class="card"><h2>Regime</h2><div id="regime"></div></div>
 </div>
 <div class="card"><h2>Equity</h2><div id="equity" class="muted">no history yet</div></div>
 
@@ -78,8 +79,9 @@ svg.mkt .k { stroke:var(--kalshi); } svg.mkt .l { stroke:var(--lim); } svg.mkt .
   <div class="card"><h2>Pricing in use</h2><div id="sig-use"></div><div class="note">Set by PK_PRED_OPEN_FAIR and PK_PRED_PAIR_FAIR (kalshi, adjusted, binance). A fair that is not available yet falls back to Kalshi's.</div></div>
 </div>
 <div class="card"><h2>Binance per coin</h2><table id="sig-assets"></table><div class="note">Binance best bid/ask mid. Driver "spot" (the default): Binance spot alone. "perp" (only with PK_PRED_BINANCE_PERP_WS_URL set; off since spot led it in the 10-28 race): the USDⓈ-M perpetual's mid brought to spot's level by the perp–spot basis (a 60 s EWMA of ln perp − ln spot, sampled on each spot update); spot drives while the perp is stale (> 1 s) or its basis not yet sampled. σ realised: Binance's own 1 s volatility (5-minute EWMA, after 120 s of returns). σ Kalshi-implied: the σ that makes the Binance fair match Kalshi's, taken where spot is ≥ 8 bp from the start price and Kalshi ≥ 0.25 z from 0.5, smoothed over 5 minutes. σ used = the larger of the two while the Kalshi-implied σ is fresh (≤ 10 min); otherwise Binance's realised with the last Kalshi-implied σ (kept across restarts) and PK_PRED_SIGMA_FLOOR under it. With neither a realised nor any implied σ, pricing stays on Kalshi.</div></div>
-<div class="card" style="margin-top:12px"><h2>Fairs now (P(Up))</h2><table id="sig-fairs"></table><div class="note">Kalshi = Kalshi's YES mid. Kalshi + Binance = Kalshi's fair moved by Binance's log move since Kalshi's fair last changed: Φ(Φ⁻¹(k) + Δln S ⁄ σ√τ). Binance = Φ(ln(S ⁄ start) ⁄ σ√τ) from Binance alone, start = Predict's window start price (Chainlink). τ = time to the close.</div></div>
-<div class="card" style="margin-top:12px"><h2>Scorecard</h2><div id="sig-snote" class="muted"></div><table id="sig-scores"></table><div class="note">A sample every 5 s per live market while all three fairs and Predict's mid exist. Brier = (fair − outcome)², lower is better; 5 s lead = |fair − Predict's mid 5 s later|, lower is better. Each settled window counts once (its samples share one outcome). "vs Kalshi" = Kalshi's score minus the source's: positive beats Kalshi, t over windows. Pricing first legs from Binance wants a positive Brier gain at t ≥ 2 over ≥ 100 windows.</div></div>
+<div class="card" style="margin-top:12px"><h2>Fairs now (P(Up))</h2><table id="sig-fairs"></table><div class="note">Kalshi = Kalshi's YES mid. Kalshi + Binance = Kalshi's fair moved by Binance's log move since Kalshi's fair last changed: Φ(Φ⁻¹(k) + Δln S ⁄ σ√τ). Binance = Φ(ln(S ⁄ start) ⁄ σ√τ) from Binance alone, start = Predict's window start price (Chainlink). Blend = the logit-space blend of Binance with Predict's own mid. Anchored = Φ((ln(S ⁄ S<sub>open</sub>) + c) ⁄ σ√τ) from Binance's own move since the window opened. Predict mid* excludes our resting orders. τ = time to the close.</div></div>
+<div class="card" style="margin-top:12px"><h2>Scorecard</h2><div id="sig-snote" class="muted"></div><table id="sig-scores"></table><div class="note">A sample every 5 s per live market while the established fairs and Predict's mid exist. Brier = (fair − outcome)², lower is better; 5 s lead = |fair − Predict's mid 5 s later|, lower is better. Each settled window counts once (its samples share one outcome). "vs Kalshi" = Kalshi's score minus the source's: positive beats Kalshi, t over windows. Pricing first legs from Binance wants a positive Brier gain at t ≥ 2 over ≥ 100 windows. * Predict's mid excludes our own resting orders.</div></div>
+<div class="card" style="margin-top:12px"><h2>Scorecard by time in window</h2><div id="sig-bsnote" class="muted"></div><table id="sig-buckets"></table><div class="note">First 5 min = when opening bids are placed; rest = the remainder. Same metrics as above, per bucket. A blend or anchored value missing at a sample (no mid, or the open missed) leaves that source unscored there.</div></div>
 </div>
 
 <h3 class="section">Contract matching</h3>
@@ -169,6 +171,26 @@ async function tick() {
   ]));
   const days = Object.entries(pnl.by_day || {}).sort().reverse();
   put("byday", days.length ? `<tr><th>Day (UTC)</th><th>Realised</th></tr>` + days.slice(0, 14).map(([d, v]) => `<tr><td>${esc(d)}</td><td class="${sgn(v)}">${money(v)}</td></tr>`).join("") : '<tr><td class="muted">nothing settled yet</td></tr>');
+  const rs = ((s.signal || {}).config || {}).regime_start;
+  if (venue === "predict" && rs) {
+    const t0 = Date.parse(rs);
+    const rw = (s.settlements || []).filter((x) => x.realised !== undefined && (x.settled_ms || 0) >= t0 && Number.isFinite(t0));
+    if (rw.length) {
+      const vs = rw.map((x) => x.realised), mu = vs.reduce((a, b) => a + b, 0) / vs.length;
+      const sd = vs.length > 1 ? Math.sqrt(vs.reduce((a, b) => a + (b - mu) ** 2, 0) / (vs.length - 1)) : 0;
+      const se = vs.length > 1 ? sd / Math.sqrt(vs.length) : null;
+      put("regime", kv([
+        ["Since (UTC)", new Date(t0).toISOString().slice(0, 16).replace("T", " ") + "Z"],
+        ["Windows settled", rw.length],
+        ["Per-window mean", `${money(mu)} ± ${se == null ? "–" : "$" + f(se, 3)}`, sgn(mu)],
+        ["t", se ? f(mu / se, 2) : "–"],
+      ]) + `<div class="note">Windows settling since the regime start (a window straddling the start counts where it settles).</div>`);
+    } else {
+      put("regime", `<span class="muted">since ${esc(rs)} · no windows settled yet</span>`);
+    }
+  } else {
+    put("regime", '<span class="muted">no regime set (PK_PRED_REGIME_START)</span>');
+  }
   const pts = (pnl.series || []).map(([t, rr, m]) => [t, (pnl.capital || 0) + rr + m]);
   if (pts.length >= 2) {
     const W = 900, H = 200, P = 40, ys = pts.map((p) => p[1]), lo = Math.min(...ys, pnl.capital || 0), hi = Math.max(...ys, pnl.capital || 0), span = (hi - lo) || 1;
@@ -225,10 +247,13 @@ async function tick() {
     const used = [m.maker && (!on || on.maker) ? "maker" : "", m.taker && (!on || on.taker) ? "taker" : ""].filter(Boolean).join("+") || "none";
     return on && m.taker && !on.taker ? `${used} <span class="muted">(taker off)</span>` : used;
   };
-  put("markets", `<tr><th>Market</th><th>Kalshi contract</th><th>Grade</th><th>Lanes in use</th><th>Kalshi fair</th><th>Venue bid / ask</th><th>Gap (fair − mid)</th><th>Book</th><th>Position</th></tr>` +
-    (rows.length ? rows.slice(0, 40).map((x) => `<tr><td>${esc(x.id)}</td><td>${esc(x.m.kalshi_ticker)}</td><td>${esc(x.m.grade)}</td><td>${lanes(x.m)}</td><td>${f(x.fair, 3)}</td><td>${f(x.b.bid)} / ${f(x.b.ask)}</td><td class="${x.gap == null ? "" : Math.abs(x.gap) >= 0.05 ? "warn" : ""}">${x.gap == null ? "–" : (x.gap * 100).toFixed(1) + "¢"}</td><td class="${x.fresh ? "good" : "muted"}">${x.b.update_ms ? ago(x.b.update_ms) : "none"}</td><td>${x.q == null ? "–" : f(x.q, 0)}</td></tr>`).join("")
-     : `<tr><td class="muted" colspan="9">no executable (E0/E1) contracts</td></tr>`));
-  put("mnote", `${rows.length} executable of ${matches.length} discovered; showing up to 40, freshest first. Fair = Kalshi's YES mid; venue bid / ask is the venue's YES book.`);
+  const sigmap = {};
+  ((s.signal || {}).markets || []).forEach((m) => { sigmap[m.market] = m; });
+  const bookState = (m) => !m ? "–" : m.book_up_off && m.book_down_off ? "Up+Down off" : m.book_up_off ? "Up off" : m.book_down_off ? "Down off" : "clear";
+  put("markets", `<tr><th>Market</th><th>Kalshi contract</th><th>Grade</th><th>Lanes in use</th><th>Kalshi fair</th><th>Venue bid / ask</th><th>Gap (fair − mid)</th><th>Predict mid*</th><th>1s Δ</th><th>Book guard</th><th>Book</th><th>Position</th></tr>` +
+    (rows.length ? rows.slice(0, 40).map((x) => { const g = sigmap[x.id]; return `<tr><td>${esc(x.id)}</td><td>${esc(x.m.kalshi_ticker)}</td><td>${esc(x.m.grade)}</td><td>${lanes(x.m)}</td><td>${f(x.fair, 3)}</td><td>${f(x.b.bid)} / ${f(x.b.ask)}</td><td class="${x.gap == null ? "" : Math.abs(x.gap) >= 0.05 ? "warn" : ""}">${x.gap == null ? "–" : (x.gap * 100).toFixed(1) + "¢"}</td><td>${g ? f(g.predict_mid, 3) : "–"}</td><td class="${g && g.pmove_1s_c != null && Math.abs(g.pmove_1s_c) >= 2 ? "warn" : ""}">${g && g.pmove_1s_c != null ? (g.pmove_1s_c >= 0 ? "+" : "") + f(g.pmove_1s_c, 1) + "¢" : "–"}</td><td class="${g && (g.book_up_off || g.book_down_off) ? "warn" : "good"}">${bookState(g)}</td><td class="${x.fresh ? "good" : "muted"}">${x.b.update_ms ? ago(x.b.update_ms) : "none"}</td><td>${x.q == null ? "–" : f(x.q, 0)}</td></tr>`; }).join("")
+     : `<tr><td class="muted" colspan="12">no executable (E0/E1) contracts</td></tr>`));
+  put("mnote", `${rows.length} executable of ${matches.length} discovered; showing up to 40, freshest first. Fair = Kalshi's YES mid; venue bid / ask is the venue's YES book. Predict mid* excludes our resting orders; 1s Δ is its move over the last second; the book guard (Predict only) holds an opening bid off after a fast move against it.`);
 
   const grades = {};
   matches.forEach(([, m]) => { grades[m.grade] = (grades[m.grade] || 0) + 1; });
@@ -250,35 +275,42 @@ async function tick() {
   signal(s.signal);
 }
 
-const SOURCE = { kalshi: "Kalshi", adjusted: "Kalshi + Binance", binance: "Binance", predict_mid: "Predict mid (baseline)" };
-// The Binance signal (Predict only): guard, per-coin spot, the three fairs and their scorecard.
+const SOURCE = { kalshi: "Kalshi", adjusted: "Kalshi + Binance", binance: "Binance", blend: "Blend (Binance × Predict)", binance_anchored: "Binance anchored", predict_mid: "Predict mid* (baseline)" };
+// The Binance signal (Predict only): guard, per-coin spot, the fairs and their scorecard.
 function signal(sig) {
   $("signal-sec").hidden = !sig;
   if (!sig) return;
-  const cfg = sig.config || {}, assets = sig.assets || {}, pauses = sig.guard_pauses || {};
+  const cfg = sig.config || {}, assets = sig.assets || {}, pauses = sig.guard_pauses || {}, bpauses = sig.book_pauses || {};
   put("sig-guard", kv([
     ["Guard", cfg.guard ? "on" : "off", cfg.guard ? "good" : "warn"],
     ["Fast move", `≥ ${f(cfg.pause_bps, 1)} bp within 1 s → for ${f((cfg.pause_ms || 0) / 1000, 1)} s a fall takes the Up first leg off, a rise the Down one`],
     ["Stale Kalshi", cfg.open_fair === "kalshi" ? `|Kalshi + Binance − Kalshi| ≥ ${f((cfg.pause_gap || 0) * 100, 1)}¢` : "off: first legs already price from Binance"],
     ["First legs taken off", Object.entries(pauses).map(([a, n]) => `${a} ${n}`).join(" · ") || "0"],
+    ["Book guard", cfg.book_guard ? "on" : "off (tags only)", cfg.book_guard ? "good" : "warn"],
+    ["Book fast move", `Predict mid* ≥ ${f((cfg.book_pause_c || 0) * 100, 2)}¢ within ${f((cfg.book_pause_window_ms || 0) / 1000, 1)} s → opening bid off for ${f((cfg.book_pause_ms || 0) / 1000, 1)} s (first 10 s of a window ignored)`],
+    ["Book legs taken off", Object.entries(bpauses).map(([a, n]) => `${a} ${n}`).join(" · ") || "0"],
   ]));
   put("sig-use", kv([["First legs priced from", SOURCE[cfg.open_fair] || cfg.open_fair], ["Pairing legs priced from", SOURCE[cfg.pair_fair] || cfg.pair_fair]]));
   const coins = Object.entries(assets).sort();
   const sigma = sig.sigma || {};
-  put("sig-assets", `<tr><th>Coin</th><th>Binance mid</th><th>Driver</th><th>Perp − spot</th><th>Age</th><th>Move in 1 s</th><th>σ realised</th><th>σ Kalshi-implied</th><th>σ used (bp/√min)</th><th>State</th><th>Fast-move pauses</th></tr>` +
-    (coins.map(([a, x]) => { const sg = sigma[a] || {}; return `<tr><td>${esc(a)}</td><td>${f(x.mid, 2)}</td><td>${esc(x.driver || "spot")}</td><td>${x.basis_bps == null ? '<span class="muted">—</span>' : `${f(x.basis_bps, 1)} bp`}</td><td class="${x.age_ms > 5000 ? "bad" : ""}">${f(x.age_ms / 1000, 1)} s</td><td class="${x.move_bps >= cfg.pause_bps ? "warn" : ""}">${f(x.move_bps, 1)} bp</td><td>${x.sigma_bps_per_min == null ? `warming (${x.vol_samples}/120)` : f(x.sigma_bps_per_min, 1)}</td><td>${sg.implied_bps_per_min == null ? "none yet" : `${f(sg.implied_bps_per_min, 1)} <span class="muted">(${sg.implied_age_s} s ago)</span>`}</td><td>${sg.used_bps_per_min == null ? '<span class="muted">Kalshi only</span>' : f(sg.used_bps_per_min, 1)}</td><td class="${x.paused ? "warn" : "good"}">${x.up_off && x.down_off ? "both off" : x.up_off ? "falling: Up off" : x.down_off ? "rising: Down off" : "clear"}</td><td>${x.pauses}</td></tr>`; }).join("") || '<tr><td class="muted" colspan="11">no Binance frames yet</td></tr>'));
+  put("sig-assets", `<tr><th>Coin</th><th>Binance mid</th><th>Driver</th><th>Perp − spot</th><th>Age</th><th>Move in 1 s</th><th>σ realised</th><th>σ Kalshi-implied</th><th>σ used (bp/√min)</th><th>State</th><th>Fast-move pauses</th><th>Book pauses</th></tr>` +
+    (coins.map(([a, x]) => { const sg = sigma[a] || {}; return `<tr><td>${esc(a)}</td><td>${f(x.mid, 2)}</td><td>${esc(x.driver || "spot")}</td><td>${x.basis_bps == null ? '<span class="muted">—</span>' : `${f(x.basis_bps, 1)} bp`}</td><td class="${x.age_ms > 5000 ? "bad" : ""}">${f(x.age_ms / 1000, 1)} s</td><td class="${x.move_bps >= cfg.pause_bps ? "warn" : ""}">${f(x.move_bps, 1)} bp</td><td>${x.sigma_bps_per_min == null ? `warming (${x.vol_samples}/120)` : f(x.sigma_bps_per_min, 1)}</td><td>${sg.implied_bps_per_min == null ? "none yet" : `${f(sg.implied_bps_per_min, 1)} <span class="muted">(${sg.implied_age_s} s ago)</span>`}</td><td>${sg.used_bps_per_min == null ? '<span class="muted">Kalshi only</span>' : f(sg.used_bps_per_min, 1)}</td><td class="${x.paused ? "warn" : "good"}">${x.up_off && x.down_off ? "both off" : x.up_off ? "falling: Up off" : x.down_off ? "rising: Down off" : "clear"}</td><td>${x.pauses}</td><td>${bpauses[a] || 0}</td></tr>`; }).join("") || '<tr><td class="muted" colspan="12">no Binance frames yet</td></tr>'));
   const p3 = (v) => f(v, 3);
-  put("sig-fairs", `<tr><th>Market</th><th>Closes in</th><th>Binance</th><th>Start</th><th>Kalshi</th><th>Kalshi + Binance</th><th>Binance</th><th>Predict mid</th><th>Guard</th></tr>` +
+  put("sig-fairs", `<tr><th>Market</th><th>Closes in</th><th>Binance</th><th>Start</th><th>Kalshi</th><th>Kalshi + Binance</th><th>Binance</th><th>Blend</th><th>Anchored</th><th>Predict mid*</th><th>Guard</th></tr>` +
     ((sig.markets || []).sort((a, b) => String(a.label).localeCompare(String(b.label))).map((m) => {
       const gap = m.adjusted == null ? null : m.adjusted - m.kalshi;
-      return `<tr><td>${esc(m.label)}</td><td>${f(m.tau_s / 60, 1)} min</td><td>${f(m.spot, 2)}</td><td>${f(m.strike, 2)}</td><td>${p3(m.kalshi)}</td><td class="${gap != null && Math.abs(gap) >= cfg.pause_gap ? "warn" : ""}">${p3(m.adjusted)}${gap == null ? "" : ` <span class="muted">(${gap >= 0 ? "+" : ""}${(gap * 100).toFixed(1)}¢)</span>`}</td><td>${p3(m.binance)}</td><td>${p3(m.predict_mid)}</td><td class="${m.up_off || m.down_off ? "warn" : "good"}">${m.up_off && m.down_off ? "Up and Down first legs off" : m.up_off ? "Up first leg off" : m.down_off ? "Down first leg off" : "clear"}</td></tr>`;
-    }).join("") || '<tr><td class="muted" colspan="9">no live window</td></tr>'));
+      return `<tr><td>${esc(m.label)}</td><td>${f(m.tau_s / 60, 1)} min</td><td>${f(m.spot, 2)}</td><td>${f(m.strike, 2)}</td><td>${p3(m.kalshi)}</td><td class="${gap != null && Math.abs(gap) >= cfg.pause_gap ? "warn" : ""}">${p3(m.adjusted)}${gap == null ? "" : ` <span class="muted">(${gap >= 0 ? "+" : ""}${(gap * 100).toFixed(1)}¢)</span>`}</td><td>${p3(m.binance)}</td><td>${p3(m.blend)}</td><td>${p3(m.anchored)}</td><td>${p3(m.predict_mid)}</td><td class="${m.up_off || m.down_off ? "warn" : "good"}">${m.up_off && m.down_off ? "Up and Down first legs off" : m.up_off ? "Up first leg off" : m.down_off ? "Down first leg off" : "clear"}</td></tr>`;
+    }).join("") || '<tr><td class="muted" colspan="11">no live window</td></tr>'));
   const sc = sig.scores || {};
   put("sig-snote", `${sc.windows || 0} settled windows scored · ${sc.pending || 0} windows collecting`);
   const st = (x, scale, d) => x && x.n ? `${f(x.mean * scale, d)} ± ${x.se == null ? "–" : f(x.se * scale, d)}` : "–";
   const gain = (x, scale, d) => x && x.n > 1 ? `<span class="${sgn(x.mean)}">${x.mean >= 0 ? "+" : ""}${f(x.mean * scale, d)}</span> <span class="muted">(t ${f(x.t, 1)})</span>` : "–";
   put("sig-scores", `<tr><th>Fair</th><th>Brier</th><th>vs Kalshi</th><th>5 s lead error (¢)</th><th>vs Kalshi (¢)</th><th>Windows</th></tr>` +
     Object.keys(SOURCE).map((k) => `<tr><td>${SOURCE[k]}</td><td>${st((sc.brier || {})[k], 1, 4)}</td><td>${k === "kalshi" ? "–" : gain((sc.brier_gain_vs_kalshi || {})[k], 1, 4)}</td><td>${st((sc.lead_5s || {})[k], 100, 2)}</td><td>${k === "kalshi" ? "–" : gain((sc.lead_gain_vs_kalshi || {})[k], 100, 2)}</td><td>${((sc.brier || {})[k] || {}).n || 0}</td></tr>`).join(""));
+  const eb = sc.early || {}, lb = sc.late || {};
+  put("sig-bsnote", `first 5 min: ${eb.windows || 0} windows · rest: ${lb.windows || 0} windows`);
+  put("sig-buckets", `<tr><th>Fair</th><th>Early Brier</th><th>Late Brier</th><th>Early 5 s lead (¢)</th><th>Late 5 s lead (¢)</th><th>Early n</th><th>Late n</th></tr>` +
+    Object.keys(SOURCE).map((k) => `<tr><td>${SOURCE[k]}</td><td>${st((eb.brier || {})[k], 1, 4)}</td><td>${st((lb.brier || {})[k], 1, 4)}</td><td>${st((eb.lead_5s || {})[k], 100, 2)}</td><td>${st((lb.lead_5s || {})[k], 100, 2)}</td><td>${((eb.brier || {})[k] || {}).n || 0}</td><td>${((lb.brier || {})[k] || {}).n || 0}</td></tr>`).join(""));
 }
 tick(); setInterval(() => { if (!document.hidden) tick(); }, 3000);
 </script>

@@ -1,11 +1,11 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use pk_venue_core::Book;
-use pk_venue_core::service::{Position, now_ms};
+use pk_venue_core::service::{OrderRecord, Position, is_yes_side, now_ms};
 use serde_json::Value;
 
 use crate::config::Config;
-use crate::model::PredictMarket;
+use crate::model::{DepthBook, PredictMarket};
 use crate::spot::{self, FairSource, Fairs, Spot};
 
 #[derive(Clone, Debug)]
@@ -43,6 +43,14 @@ struct QuoteState {
     quoted: bool,
 }
 
+/// Binance's mid at a window's open for the anchored fair: the first spot
+/// print at or after the open, or missed when the bot started mid-window.
+#[derive(Clone, Copy, Debug)]
+enum AnchorOpen {
+    Recorded(f64),
+    Missed,
+}
+
 pub struct Engine {
     markets: HashMap<String, PredictMarket>,
     kalshi: HashMap<String, KalshiLevels>,
@@ -50,6 +58,11 @@ pub struct Engine {
     /// Recent Kalshi fairs per ticker `(ms, fair)`, for the first-leg calm check.
     kalshi_trail: HashMap<String, VecDeque<(i64, f64)>>,
     venue_books: HashMap<String, Book>,
+    /// Predict's YES book with depth, for the mid excluding our own orders.
+    venue_depth: HashMap<String, DepthBook>,
+    /// Per market: `(ms, mid_ex_own)` over the last 2 s, for the book guard
+    /// and the fill tags.
+    mid_trail: HashMap<String, VecDeque<(i64, f64)>>,
     quotes: HashMap<String, QuoteState>,
     stale_cancelled: bool,
     /// Binance spot per asset (the guard, σ, and the Binance-informed fairs).
@@ -61,6 +74,18 @@ pub struct Engine {
     guarded: HashMap<String, (bool, bool)>,
     /// Per asset: how often the guard took first legs off.
     pub guard_pauses: HashMap<String, u64>,
+    /// Per market: until when the book guard holds the Up (a fall) or Down
+    /// (a rise) opening bid off.
+    book_until: HashMap<String, (i64, i64)>,
+    /// Per market: the book guard's Up/Down state at the last evaluation.
+    book_guarded: HashMap<String, (bool, bool)>,
+    /// Per asset: how often the book guard took opening bids off.
+    pub book_pauses: HashMap<String, u64>,
+    /// Per market: Binance's mid at the window's open, for the anchored fair.
+    anchor_open: HashMap<String, AnchorOpen>,
+    /// Per asset: the steady Binance-vs-strike log gap, an EWMA over recent
+    /// windows' `ln(S_open) − ln(K)`.
+    offsets: HashMap<String, f64>,
     /// Per asset: the σ Kalshi's prices imply, smoothed `(σ per √s, ms)`.
     implied: HashMap<String, (f64, i64)>,
     /// The least σ (per √s) a Binance-informed fair uses without a fresh
@@ -82,9 +107,15 @@ pub struct SignalRow {
     pub strike: Option<f64>,
     pub spot: Option<f64>,
     pub fairs: Fairs,
+    /// Predict's YES mid excluding our own resting orders (raw mid when the
+    /// exclusion empties a side).
     pub predict_mid: Option<f64>,
+    /// The move in that mid over the last second, in cents (positive: rising).
+    pub pmove_1s_c: Option<f64>,
     /// First legs held off: `(up, down)`.
     pub guarded: (bool, bool),
+    /// Opening bids the book guard holds off: `(up, down)`.
+    pub book_guarded: (bool, bool),
 }
 
 /// What a fill saw: Binance's log mid and its signed 1 s move, and the fairs.
@@ -102,12 +133,19 @@ impl Engine {
             kalshi_update: HashMap::new(),
             kalshi_trail: HashMap::new(),
             venue_books: HashMap::new(),
+            venue_depth: HashMap::new(),
+            mid_trail: HashMap::new(),
             quotes: HashMap::new(),
             stale_cancelled: false,
             spot: Spot::default(),
             kalshi_anchor: HashMap::new(),
             guarded: HashMap::new(),
             guard_pauses: HashMap::new(),
+            book_until: HashMap::new(),
+            book_guarded: HashMap::new(),
+            book_pauses: HashMap::new(),
+            anchor_open: HashMap::new(),
+            offsets: HashMap::new(),
             implied: HashMap::new(),
             sigma_floor: 0.0,
         }
@@ -188,24 +226,81 @@ impl Engine {
 
     /// A Binance frame; true when it updated an asset.
     pub fn binance_frame(&mut self, cfg: &Config, text: &str, perp: bool) -> bool {
-        self.spot.frame(text, perp, now_ms(), cfg.binance_pause_bps, cfg.binance_pause_ms).is_some()
+        let now = now_ms();
+        let Some(asset) =
+            self.spot.frame(text, perp, now, cfg.binance_pause_bps, cfg.binance_pause_ms)
+        else {
+            return false;
+        };
+        self.note_window_open(&asset, now);
+        true
     }
 
-    /// Kalshi's fair and the two Binance-informed fairs of `market` now.
-    fn fairs(&self, market: &PredictMarket, kalshi: f64, now: i64) -> Fairs {
+    /// The first spot print at or after each open window's open is its
+    /// anchored fair's `S_open`. A window first seen over a minute after its
+    /// open missed it (the bot started mid-window, or the feed was down), so
+    /// the anchored fair falls back to the strike formula there.
+    fn note_window_open(&mut self, asset: &str, now: i64) {
+        let Some(mid) = self.spot.mid(asset, now) else { return };
+        let due: Vec<String> = self
+            .markets
+            .values()
+            .filter(|m| {
+                !self.anchor_open.contains_key(&m.id.to_string())
+                    && m.kalshi_ticker.as_deref().is_some_and(|t| spot::asset_of_ticker(t) == Some(asset))
+                    && window_open_ms(m).is_some_and(|o| o <= now)
+            })
+            .map(|m| m.id.to_string())
+            .collect();
+        for id in due {
+            let open = self.markets.get(&id).and_then(window_open_ms).unwrap_or(now);
+            if now - open <= ANCHOR_GRACE_MS {
+                self.anchor_open.insert(id.clone(), AnchorOpen::Recorded(mid));
+                // The steady Binance-vs-strike gap, for the anchored fair's level.
+                if let Some(k) = self.markets.get(&id).and_then(strike)
+                    && k > 0.0
+                {
+                    let x = (mid / k).ln();
+                    let entry = self.offsets.entry(asset.to_owned()).or_insert(x);
+                    *entry += OFFSET_ALPHA * (x - *entry);
+                }
+            } else {
+                self.anchor_open.insert(id, AnchorOpen::Missed);
+            }
+        }
+    }
+
+    /// Kalshi's fair and the Binance-informed fairs of `market` now.
+    fn fairs(
+        &self,
+        market: &PredictMarket,
+        kalshi: f64,
+        now: i64,
+        blend_w: f64,
+        resting: &[OrderRecord],
+    ) -> Fairs {
         let ticker = market.kalshi_ticker.as_deref().unwrap_or_default();
-        let mut out = Fairs { kalshi, adjusted: None, spot: None };
+        let id = market.id.to_string();
+        let mut out = Fairs { kalshi, adjusted: None, spot: None, blend: None, anchored: None };
         let (Some(asset), Some(close)) = (spot::asset_of_ticker(ticker), market.close_ms()) else { return out };
         let (Some(mid), Some(sigma)) = (self.spot.mid(asset, now), self.sigma(asset, now)) else { return out };
         let tau_s = (close - now) as f64 / 1_000.0;
         let d_ln = self.kalshi_anchor.get(ticker).map_or(0.0, |anchor| mid.ln() - anchor);
         out.adjusted = Some(spot::adjusted_fair(kalshi, d_ln, sigma, tau_s));
         out.spot = strike(market).map(|k| spot::spot_fair(mid, k, sigma, tau_s));
+        out.blend = out.spot.zip(self.mid_ex_own(&id, resting)).map(|(s, m)| spot::blend_fair(s, m, blend_w));
+        out.anchored = match self.anchor_open.get(&id) {
+            Some(AnchorOpen::Recorded(s_open)) => {
+                let offset = self.offsets.get(asset).copied().unwrap_or(0.0);
+                Some(spot::anchored_fair(mid, *s_open, offset, sigma, tau_s))
+            }
+            _ => None,
+        };
         out
     }
 
     /// The fairs of every market whose window is trading now.
-    pub fn signal_rows(&self, now: i64) -> Vec<SignalRow> {
+    pub fn signal_rows(&self, now: i64, blend_w: f64, resting: &[OrderRecord]) -> Vec<SignalRow> {
         let mut rows = Vec::new();
         for market in self.markets.values() {
             let live = window_open_ms(market).is_none_or(|o| o <= now) && market.close_ms().is_some_and(|c| now < c);
@@ -216,17 +311,24 @@ impl Engine {
             let Some(kalshi) = self.kalshi.get(ticker).and_then(KalshiLevels::fair) else { continue };
             let asset = spot::asset_of_ticker(ticker).unwrap_or_default().to_owned();
             let close_ms = market.close_ms().unwrap_or(now);
-            let book = self.venue_books.get(&market.id.to_string());
+            let id = market.id.to_string();
+            let book = self.venue_books.get(&id);
+            let bin = self.guarded.get(&id).copied().unwrap_or_default();
+            let bok = self.book_guarded.get(&id).copied().unwrap_or_default();
             rows.push(SignalRow {
-                market: market.id.to_string(),
+                market: id.clone(),
                 label: market.category_slug.clone().unwrap_or_else(|| market.title.clone()),
                 tau_s: (close_ms - now) as f64 / 1_000.0,
                 close_ms,
                 strike: strike(market),
                 spot: self.spot.mid(&asset, now),
-                fairs: self.fairs(market, kalshi, now),
-                predict_mid: book.and_then(|b| b.bid.zip(b.ask)).map(|(b, a)| (b + a) / 2.0),
-                guarded: self.guarded.get(&market.id.to_string()).copied().unwrap_or_default(),
+                fairs: self.fairs(market, kalshi, now, blend_w, resting),
+                predict_mid: self
+                    .mid_ex_own(&id, resting)
+                    .or_else(|| book.and_then(|b| b.bid.zip(b.ask)).map(|(b, a)| (b + a) / 2.0)),
+                pmove_1s_c: self.predict_move(&id, now, 1_000).map(|m| m * 100.0),
+                guarded: (bin.0 || bok.0, bin.1 || bok.1),
+                book_guarded: bok,
                 asset,
             });
         }
@@ -234,12 +336,18 @@ impl Engine {
     }
 
     /// Binance and the fairs for a fill in `market` now (None without Binance).
-    pub fn fill_context(&self, market: &str, now: i64) -> Option<FillContext> {
+    pub fn fill_context(
+        &self,
+        market: &str,
+        now: i64,
+        blend_w: f64,
+        resting: &[OrderRecord],
+    ) -> Option<FillContext> {
         let m = self.markets.get(market)?;
         let ticker = m.kalshi_ticker.as_deref().unwrap_or_default();
         let (ln_mid, move_1s_bps) = self.spot.ln_and_move(spot::asset_of_ticker(ticker)?, now)?;
         let kalshi = self.kalshi.get(ticker).and_then(KalshiLevels::fair)?;
-        Some(FillContext { ln_mid, move_1s_bps, fairs: self.fairs(m, kalshi, now) })
+        Some(FillContext { ln_mid, move_1s_bps, fairs: self.fairs(m, kalshi, now, blend_w, resting) })
     }
 
     /// Binance's fresh log mid for `market`'s asset.
@@ -270,8 +378,113 @@ impl Engine {
         self.markets.values().cloned().collect()
     }
 
-    pub fn venue_book(&mut self, market: String, book: Book) {
-        self.venue_books.insert(market, book);
+    pub fn venue_book(&mut self, market: String, depth: DepthBook, resting: &[OrderRecord]) {
+        self.venue_books.insert(market.clone(), depth.top);
+        if let Some(mid) = self.mid_ex_own_for(&market, &depth, resting) {
+            let trail = self.mid_trail.entry(market.clone()).or_default();
+            trail.push_back((depth.top.update_ms, mid));
+            while trail.front().is_some_and(|(t, _)| depth.top.update_ms - t > MID_TRAIL_KEEP_MS) {
+                trail.pop_front();
+            }
+        }
+        self.venue_depth.insert(market, depth);
+    }
+
+    /// Predict's YES mid for `market` excluding our own resting bids.
+    ///
+    /// Our YES bids sit in the bid stack; a NO bid at `p` shows as a YES ask
+    /// at `1 − p`. Each side takes the best level still above zero after
+    /// subtracting our resting size there, looking past our quotes into
+    /// depth. None when a side has no level left (or no book at all).
+    pub fn mid_ex_own(&self, market: &str, resting: &[OrderRecord]) -> Option<f64> {
+        let depth = self.venue_depth.get(market)?;
+        self.mid_ex_own_for(market, depth, resting)
+    }
+
+    fn mid_ex_own_for(&self, market: &str, depth: &DepthBook, resting: &[OrderRecord]) -> Option<f64> {
+        let precision = self.markets.get(market)?.decimal_precision;
+        let own_at = |yes_side: bool, level: f64| -> f64 {
+            let level = crate::model::quantize_price(level, precision);
+            resting
+                .iter()
+                .filter(|o| {
+                    o.market == market
+                        && (o.status == "submitted" || o.status == "shadow_open")
+                        && is_yes_side(&o.side) == yes_side
+                })
+                .filter(|o| {
+                    let ours =
+                        if yes_side { o.price } else { crate::model::complement_price(o.price, precision) };
+                    crate::model::quantize_price(ours, precision) == level
+                })
+                .map(|o| o.quantity)
+                .sum()
+        };
+        let best = |levels: &[(f64, f64)], yes_side: bool| {
+            levels.iter().find(|(p, size)| size - own_at(yes_side, *p) > 1e-9).map(|(p, _)| *p)
+        };
+        let (bid, ask) = (best(&depth.bids, true)?, best(&depth.asks, false)?);
+        (bid <= ask).then(|| (bid + ask) / 2.0)
+    }
+
+    /// The move in `mid_ex_own` over the `window_ms` ending at `now`, in
+    /// price units (positive: rising). None without two trail points.
+    pub fn predict_move(&self, market: &str, now: i64, window_ms: i64) -> Option<f64> {
+        Self::trail_move(&self.mid_trail, market, now, window_ms)
+    }
+
+    fn trail_move(
+        trails: &HashMap<String, VecDeque<(i64, f64)>>,
+        market: &str,
+        now: i64,
+        window_ms: i64,
+    ) -> Option<f64> {
+        let trail = trails.get(market)?;
+        let points: Vec<(i64, f64)> = trail.iter().copied().filter(|(t, _)| *t <= now).collect();
+        let (_, latest) = points.last()?;
+        if points.len() < 2 {
+            return None;
+        }
+        let baseline = points.iter().rev().find(|(t, _)| *t <= now - window_ms).copied().unwrap_or(points[0]);
+        Some(latest - baseline.1)
+    }
+
+    /// The book guard's Up/Down state for `market`: a fast fall in Predict's
+    /// own mid holds the Up opening bid off, a fast rise the Down one. Pairing
+    /// bids are never guarded, and the window's first seconds are ignored
+    /// while the book forms.
+    #[allow(clippy::too_many_arguments)]
+    fn book_guard(
+        trails: &HashMap<String, VecDeque<(i64, f64)>>,
+        untils: &mut HashMap<String, (i64, i64)>,
+        states: &mut HashMap<String, (bool, bool)>,
+        pauses: &mut HashMap<String, u64>,
+        market: &str,
+        asset: &str,
+        now: i64,
+        window_s: i64,
+        cfg: &Config,
+    ) -> (bool, bool) {
+        if !cfg.book_guard || window_s < BOOK_GUARD_WARMUP_S {
+            states.insert(market.to_owned(), (false, false));
+            return (false, false);
+        }
+        if let Some(moved) = Self::trail_move(trails, market, now, cfg.book_pause_window_ms) {
+            let until = untils.entry(market.to_owned()).or_default();
+            if moved <= -cfg.book_pause_c {
+                until.0 = now + cfg.book_pause_ms;
+            }
+            if moved >= cfg.book_pause_c {
+                until.1 = now + cfg.book_pause_ms;
+            }
+        }
+        let (fall_until, rise_until) = untils.get(market).copied().unwrap_or_default();
+        let state = (now < fall_until, now < rise_until);
+        let was = states.insert(market.to_owned(), state).unwrap_or_default();
+        if (state.0 || state.1) && !(was.0 || was.1) {
+            *pauses.entry(asset.to_owned()).or_default() += 1;
+        }
+        state
     }
 
     pub fn kalshi_frame(&mut self, text: &str) -> Option<(String, f64)> {
@@ -322,7 +535,13 @@ impl Engine {
 
     /// `positions`: what each market already holds (YES/NO quantity and cost),
     /// for the inventory skew, the pair guard and the first-leg rules.
-    pub fn evaluate(&mut self, cfg: &Config, positions: &HashMap<String, Position>) -> Vec<Action> {
+    /// `resting`: our open orders, so Predict's mid can exclude them.
+    pub fn evaluate(
+        &mut self,
+        cfg: &Config,
+        positions: &HashMap<String, Position>,
+        resting: &[OrderRecord],
+    ) -> Vec<Action> {
         let now = now_ms();
         let mut actions = Vec::new();
         // Only windows trading now are quoted or need fresh books; later
@@ -376,7 +595,7 @@ impl Engine {
             if let Some(mid) = spot::asset_of_ticker(ticker).and_then(|a| self.spot.mid(a, now)) {
                 self.kalshi_anchor.entry(ticker.to_owned()).or_insert(mid.ln());
             }
-            let fairs = self.fairs(market, kalshi_fair, now);
+            let fairs = self.fairs(market, kalshi_fair, now, cfg.blend_w, resting);
             let open_fair = fairs.pick(cfg.open_fair);
             let pair_fair = fairs.pick(cfg.pair_fair);
             let fair = open_fair;
@@ -388,12 +607,27 @@ impl Engine {
             // first leg, a rise (or Binance above) the Down one.
             let gap = fairs.adjusted.map(|a| a - kalshi_fair).unwrap_or(0.0);
             let stale = cfg.open_fair == FairSource::Kalshi;
+            let window_s = window_open_ms(market).map(|o| (now - o) / 1000).unwrap_or(0);
             let (fast_up, fast_down) = self.spot.guard(asset, now);
-            let guard_up = cfg.binance_guard && (fast_up || (stale && gap <= -cfg.binance_pause_gap + 1e-9));
-            let guard_down = cfg.binance_guard && (fast_down || (stale && gap >= cfg.binance_pause_gap - 1e-9));
-            let guarded = guard_up || guard_down;
-            let was = self.guarded.insert(market.id.to_string(), (guard_up, guard_down)).unwrap_or_default();
-            if guarded && !(was.0 || was.1) {
+            let (book_up, book_down) = Self::book_guard(
+                &self.mid_trail,
+                &mut self.book_until,
+                &mut self.book_guarded,
+                &mut self.book_pauses,
+                &market.id.to_string(),
+                asset,
+                now,
+                window_s,
+                cfg,
+            );
+            let bin_up = cfg.binance_guard && (fast_up || (stale && gap <= -cfg.binance_pause_gap + 1e-9));
+            let bin_down = cfg.binance_guard && (fast_down || (stale && gap >= cfg.binance_pause_gap - 1e-9));
+            let guard_up = bin_up || book_up;
+            let guard_down = bin_down || book_down;
+            // The Binance guard keeps its own count; the book guard counts in
+            // `book_pauses`, so each guard's activity stays visible.
+            let was = self.guarded.insert(market.id.to_string(), (bin_up, bin_down)).unwrap_or_default();
+            if (bin_up || bin_down) && !(was.0 || was.1) {
                 *self.guard_pauses.entry(asset.to_owned()).or_default() += 1;
             }
             let skew = (inv / cfg.risk.max_open_usd.max(1.0) * 0.02).clamp(-0.02, 0.02);
@@ -416,10 +650,12 @@ impl Engine {
             // locks at least pair_margin a share (and auto-merge books it).
             // First legs (opening or adding to a one-sided position) only early
             // in the window and away from 0/1, where pairs have time to form.
-            let window_s = window_open_ms(market).map(|o| (now - o) / 1000).unwrap_or(0);
             // A first leg also needs the venues to agree and Kalshi to be calm:
             // the losing first legs filled as Kalshi moved and Predict lagged.
-            let venue_mid = book.bid.zip(book.ask).map(|(b, a)| (b + a) / 2.0);
+            // The venue mid excludes our own resting orders.
+            let venue_mid = self.mid_ex_own(&market.id.to_string(), resting).or_else(|| {
+                book.bid.zip(book.ask).map(|(b, a)| (b + a) / 2.0)
+            });
             // Kalshi's calm only gates first legs priced from Kalshi: it moves
             // after Binance, so it would block just after the move we priced.
             // The Binance guard covers fast moves otherwise.
@@ -543,6 +779,19 @@ impl Engine {
 
 /// Oldest a Predict book may be and still count as live (it is sent on change).
 const VENUE_BOOK_MAX_AGE_MS: i64 = 15_000;
+
+/// How long a market's `mid_ex_own` trail is kept (the book guard and the
+/// fill tags look back 1 s).
+const MID_TRAIL_KEEP_MS: i64 = 2_000;
+
+/// A window's first spot print counts as its open within this of the open.
+const ANCHOR_GRACE_MS: i64 = 60_000;
+
+/// Weight of each window's Binance-vs-strike offset in the per-asset EWMA.
+const OFFSET_ALPHA: f64 = 0.2;
+
+/// The book guard ignores a window's first seconds while the book forms.
+const BOOK_GUARD_WARMUP_S: i64 = 10;
 
 /// Would a fill of this side open or add to a one-sided position? (YES when
 /// net ≥ 0, NO when net ≤ 0; flat counts as opening.)
@@ -724,9 +973,9 @@ mod tests {
         let mut e = Engine::new();
         e.set_markets(vec![market()]);
         let cfg = cfg();
-        let first = e.evaluate(&cfg, &HashMap::new());
+        let first = e.evaluate(&cfg, &HashMap::new(), &[]);
         assert!(matches!(first.as_slice(), [Action::CancelAll { .. }]));
-        assert!(e.evaluate(&cfg, &HashMap::new()).is_empty());
+        assert!(e.evaluate(&cfg, &HashMap::new(), &[]).is_empty());
     }
 
     #[test]
@@ -736,10 +985,17 @@ mod tests {
         let _ = e.kalshi_frame(r#"{"type":"orderbook_snapshot","msg":{"market_ticker":"KXBTC15M-ABC","yes_dollars_fp":[["0.45","3"]],"no_dollars_fp":[["0.50","2"]]}}"#);
         e.venue_book(
             "7".into(),
-            Book { bid: Some(0.40), bid_size: 5.0, ask: Some(0.50), ask_size: 5.0, update_ms: now_ms() },
+            DepthBook::top_only(Book {
+                bid: Some(0.40),
+                bid_size: 5.0,
+                ask: Some(0.50),
+                ask_size: 5.0,
+                update_ms: now_ms(),
+            }),
+            &[],
         );
         let cfg = cfg();
-        let actions = e.evaluate(&cfg, &HashMap::new());
+        let actions = e.evaluate(&cfg, &HashMap::new(), &[]);
         let mut seen = 0;
         for action in &actions {
             let Action::Maker { price, outcome, .. } = action else { continue };
@@ -754,8 +1010,21 @@ mod tests {
         assert_eq!(seen, 2);
     }
 
-    fn quoted_sides(e: &mut Engine, positions: &HashMap<String, Position>) -> Vec<(String, f64)> {
-        e.evaluate(&cfg(), positions)
+    fn quoted_sides(
+        e: &mut Engine,
+        positions: &HashMap<String, Position>,
+        resting: &[OrderRecord],
+    ) -> Vec<(String, f64)> {
+        quoted_sides_with(e, &cfg(), positions, resting)
+    }
+
+    fn quoted_sides_with(
+        e: &mut Engine,
+        cfg: &Config,
+        positions: &HashMap<String, Position>,
+        resting: &[OrderRecord],
+    ) -> Vec<(String, f64)> {
+        e.evaluate(cfg, positions, resting)
             .into_iter()
             .filter_map(|a| match a {
                 Action::Maker { outcome, price, .. } => Some((outcome, price)),
@@ -772,7 +1041,59 @@ mod tests {
         ));
         e.venue_book(
             "7".into(),
-            Book { bid: Some(venue.0), bid_size: 5.0, ask: Some(venue.1), ask_size: 5.0, update_ms: now_ms() },
+            DepthBook::top_only(Book {
+                bid: Some(venue.0),
+                bid_size: 5.0,
+                ask: Some(venue.1),
+                ask_size: 5.0,
+                update_ms: now_ms(),
+            }),
+            &[],
+        );
+        e
+    }
+
+    /// Like `market()`, but with its window open `open_age_ms` ago and
+    /// closing in 10 minutes (the book guard needs a window age).
+    fn window_market(open_age_ms: i64) -> PredictMarket {
+        let mut m = serde_json::to_value(market()).unwrap();
+        m["openTimeMs"] = json!(now_ms() - open_age_ms);
+        m["endsAt"] = json!((chrono::Utc::now() + chrono::Duration::minutes(10)).to_rfc3339());
+        serde_json::from_value(m).unwrap()
+    }
+
+    fn resting(side: &str, price: f64, quantity: f64) -> OrderRecord {
+        OrderRecord {
+            id: format!("test-{side}-{price}"),
+            client_id: "test".into(),
+            market: "7".into(),
+            lane: "maker".into(),
+            side: side.into(),
+            price,
+            quantity,
+            status: "submitted".into(),
+            created_ms: now_ms(),
+            updated_ms: now_ms(),
+            simulated: false,
+        }
+    }
+
+    fn quoting_window_at(fair_bid: &str, no_bid: &str, venue: (f64, f64), open_age_ms: i64) -> Engine {
+        let mut e = Engine::new();
+        e.set_markets(vec![window_market(open_age_ms)]);
+        let _ = e.kalshi_frame(&format!(
+            r#"{{"type":"orderbook_snapshot","msg":{{"market_ticker":"KXBTC15M-ABC","yes_dollars_fp":[["{fair_bid}","3"]],"no_dollars_fp":[["{no_bid}","2"]]}}}}"#
+        ));
+        e.venue_book(
+            "7".into(),
+            DepthBook::top_only(Book {
+                bid: Some(venue.0),
+                bid_size: 5.0,
+                ask: Some(venue.1),
+                ask_size: 5.0,
+                update_ms: now_ms(),
+            }),
+            &[],
         );
         e
     }
@@ -781,7 +1102,7 @@ mod tests {
     fn first_legs_skip_longshot_sides() {
         // Fair 0.80: YES bids 0.75, NO would bid 0.15, under the 0.35 floor.
         let mut e = quoting_at("0.79", "0.19", (0.78, 0.82));
-        let sides = quoted_sides(&mut e, &HashMap::new());
+        let sides = quoted_sides(&mut e, &HashMap::new(), &[]);
         assert_eq!(sides.len(), 1, "{sides:?}");
         assert_eq!(sides[0].0, "YES");
     }
@@ -790,7 +1111,7 @@ mod tests {
     fn a_one_sided_market_only_pairs() {
         let mut e = quoting_at("0.45", "0.50", (0.40, 0.50));
         let held = Position { yes_qty: 4.0, yes_cost: 1.6, ..Default::default() };
-        let sides = quoted_sides(&mut e, &HashMap::from([("7".to_string(), held)]));
+        let sides = quoted_sides(&mut e, &HashMap::from([("7".to_string(), held)]), &[]);
         assert_eq!(sides.len(), 1, "no adding to the YES leg: {sides:?}");
         assert_eq!(sides[0].0, "NO");
     }
@@ -798,20 +1119,20 @@ mod tests {
     #[test]
     fn a_fast_binance_move_takes_first_legs_off() {
         let mut e = quoting_at("0.45", "0.50", (0.40, 0.50));
-        assert_eq!(quoted_sides(&mut e, &HashMap::new()).len(), 2, "both first legs quoted");
+        assert_eq!(quoted_sides(&mut e, &HashMap::new(), &[]).len(), 2, "both first legs quoted");
         let c = cfg();
         let frame = |px: f64| format!(r#"{{"stream":"btcusdt@bookTicker","data":{{"s":"BTCUSDT","b":"{px}","a":"{px}"}}}}"#);
         assert!(e.binance_frame(&c, &frame(100_000.0), false));
         assert!(e.binance_frame(&c, &frame(100_100.0), false), "+10 bp at once");
         e.quotes.clear(); // re-evaluate from scratch
-        let sides = quoted_sides(&mut e, &HashMap::new());
+        let sides = quoted_sides(&mut e, &HashMap::new(), &[]);
         assert_eq!(sides.len(), 1, "a rise holds only the Down first leg off: {sides:?}");
         assert_eq!(sides[0].0, "YES");
         assert_eq!(e.guard_pauses.get("BTC"), Some(&1));
         // A pairing leg is not a first leg: still quoted under the guard.
         let held = Position { yes_qty: 4.0, yes_cost: 1.6, ..Default::default() };
         e.quotes.clear();
-        let sides = quoted_sides(&mut e, &HashMap::from([("7".to_string(), held)]));
+        let sides = quoted_sides(&mut e, &HashMap::from([("7".to_string(), held)]), &[]);
         assert_eq!(sides.len(), 1);
         assert_eq!(sides[0].0, "NO");
     }
@@ -829,7 +1150,7 @@ mod tests {
         let frame = |px: f64| format!(r#"{{"stream":"btcusdt@bookTicker","data":{{"s":"BTCUSDT","b":"{px}","a":"{px}"}}}}"#);
         let yes_bid = |e: &mut Engine| {
             e.quotes.clear();
-            e.evaluate(&c, &HashMap::new())
+            e.evaluate(&c, &HashMap::new(), &[])
                 .into_iter()
                 .find_map(|a| match a {
                     Action::Maker { outcome, price, .. } if outcome == "YES" => Some(price),
@@ -839,13 +1160,13 @@ mod tests {
         // Spot 30 bp over the start; Kalshi 0.70 implies σ; Predict agrees.
         assert!(e.binance_frame(&c, &frame(100_300.0), false));
         let _ = e.kalshi_frame(r#"{"type":"orderbook_snapshot","msg":{"market_ticker":"KXBTC15M-ABC","yes_dollars_fp":[["0.69","3"]],"no_dollars_fp":[["0.29","2"]]}}"#);
-        e.venue_book("7".into(), Book { bid: Some(0.64), bid_size: 5.0, ask: Some(0.76), ask_size: 5.0, update_ms: now_ms() });
+        e.venue_book("7".into(), DepthBook::top_only(Book { bid: Some(0.64), bid_size: 5.0, ask: Some(0.76), ask_size: 5.0, update_ms: now_ms() }), &[]);
         let before = yes_bid(&mut e).expect("YES first leg at Kalshi's level");
         assert!((before - 0.65).abs() < 1e-9, "{before}");
         assert!(e.sigma("BTC", now_ms()).is_some(), "Kalshi implied a σ");
         // Spot +20 bp, Kalshi silent: the adjusted fair (~0.81) moves the bid now.
         assert!(e.binance_frame(&c, &frame(100_500.0), false));
-        e.venue_book("7".into(), Book { bid: Some(0.76), bid_size: 5.0, ask: Some(0.86), ask_size: 5.0, update_ms: now_ms() });
+        e.venue_book("7".into(), DepthBook::top_only(Book { bid: Some(0.76), bid_size: 5.0, ask: Some(0.86), ask_size: 5.0, update_ms: now_ms() }), &[]);
         let after = yes_bid(&mut e).expect("YES first leg");
         assert!(after > before + 0.05, "{before} -> {after}");
     }
@@ -870,10 +1191,10 @@ mod tests {
         let mut c = cfg();
         assert!(e.binance_frame(&c, frame, false));
         e.kalshi_update.insert("KXBTC15M-ABC".into(), now_ms() - 5_000); // quiet 5 s
-        assert!(matches!(e.evaluate(&c, &HashMap::new()).as_slice(), [Action::CancelAll { .. }]), "Kalshi-priced: stale");
+        assert!(matches!(e.evaluate(&c, &HashMap::new(), &[]).as_slice(), [Action::CancelAll { .. }]), "Kalshi-priced: stale");
         e.stale_cancelled = false;
         c.open_fair = FairSource::Adjusted;
-        let actions = e.evaluate(&c, &HashMap::new());
+        let actions = e.evaluate(&c, &HashMap::new(), &[]);
         assert!(actions.iter().any(|a| matches!(a, Action::Maker { .. })), "Binance-priced: Kalshi is the level only");
     }
 
@@ -884,16 +1205,192 @@ mod tests {
         let _ = e.kalshi_frame(r#"{"type":"orderbook_snapshot","msg":{"market_ticker":"KXBTC15M-ABC","yes_dollars_fp":[["0.45","3"]],"no_dollars_fp":[["0.50","2"]]}}"#);
         e.venue_book(
             "7".into(),
-            Book { bid: Some(0.40), bid_size: 5.0, ask: Some(0.50), ask_size: 5.0, update_ms: now_ms() },
+            DepthBook::top_only(Book {
+                bid: Some(0.40),
+                bid_size: 5.0,
+                ask: Some(0.50),
+                ask_size: 5.0,
+                update_ms: now_ms(),
+            }),
+            &[],
         );
         let cfg = cfg();
-        assert!(e.evaluate(&cfg, &HashMap::new()).iter().any(|a| matches!(a, Action::Maker { .. })));
+        assert!(e.evaluate(&cfg, &HashMap::new(), &[]).iter().any(|a| matches!(a, Action::Maker { .. })));
         // The same market, now 30 s from its close (inside the 60 s buffer).
         let mut closing = serde_json::to_value(market()).unwrap();
         closing["endsAt"] = json!((chrono::Utc::now() + chrono::Duration::seconds(30)).to_rfc3339());
         e.set_markets(vec![serde_json::from_value(closing).unwrap()]);
-        let actions = e.evaluate(&cfg, &HashMap::new());
+        let actions = e.evaluate(&cfg, &HashMap::new(), &[]);
         assert!(matches!(actions.as_slice(), [Action::Withdraw { .. }]), "{actions:?}");
-        assert!(e.evaluate(&cfg, &HashMap::new()).is_empty(), "withdrawn once");
+        assert!(e.evaluate(&cfg, &HashMap::new(), &[]).is_empty(), "withdrawn once");
+    }
+
+    #[test]
+    fn predict_mid_excludes_our_resting_orders_and_looks_deeper() {
+        let mut e = Engine::new();
+        e.set_markets(vec![market()]);
+        let depth = DepthBook {
+            top: Book { bid: Some(0.40), bid_size: 5.0, ask: Some(0.45), ask_size: 3.0, update_ms: now_ms() },
+            bids: vec![(0.40, 5.0), (0.39, 9.0)],
+            asks: vec![(0.45, 3.0), (0.50, 4.0)],
+        };
+        e.venue_book("7".into(), depth, &[]);
+        assert!((e.mid_ex_own("7", &[]).unwrap() - 0.425).abs() < 1e-9);
+        // Part of the top bid is ours: the level still stands.
+        let mid = e.mid_ex_own("7", &[resting("YES", 0.40, 2.0)]).unwrap();
+        assert!((mid - 0.425).abs() < 1e-9, "{mid}");
+        // All of it is ours: the mid looks to the next level.
+        let mid = e.mid_ex_own("7", &[resting("YES", 0.40, 5.0)]).unwrap();
+        assert!((mid - 0.42).abs() < 1e-9, "{mid}");
+        // A NO bid at 0.55 shows as a YES ask at 0.45: excluded there too.
+        let mid = e.mid_ex_own("7", &[resting("YES", 0.40, 5.0), resting("NO", 0.55, 3.0)]).unwrap();
+        assert!((mid - 0.445).abs() < 1e-9, "{mid}");
+        // Filled orders are not resting; other markets do not count.
+        let mut filled = resting("YES", 0.40, 5.0);
+        filled.status = "filled".into();
+        let mut other = resting("YES", 0.40, 5.0);
+        other.market = "9".into();
+        let mid = e.mid_ex_own("7", &[filled, other]).unwrap();
+        assert!((mid - 0.425).abs() < 1e-9, "{mid}");
+        assert!(e.mid_ex_own("9", &[]).is_none(), "no book");
+    }
+
+    /// A 2¢+ fall in Predict's own mid within 1 s pulls the Up opening bid
+    /// and keeps the Down one (Kalshi 0.44 stays within 4¢ throughout, so the
+    /// calm check does not interfere).
+    #[test]
+    fn a_fast_predict_fall_takes_only_the_up_opening_bid_off() {
+        let mut e = quoting_window_at("0.43", "0.55", (0.40, 0.50), 60_000);
+        let mut c = cfg();
+        c.book_guard = true;
+        assert_eq!(quoted_sides_with(&mut e, &c, &HashMap::new(), &[]).len(), 2, "both first legs quoted");
+        e.venue_book(
+            "7".into(),
+            DepthBook::top_only(Book {
+                bid: Some(0.375),
+                bid_size: 5.0,
+                ask: Some(0.475),
+                ask_size: 5.0,
+                update_ms: now_ms(),
+            }),
+            &[],
+        );
+        e.quotes.clear(); // re-evaluate from scratch
+        let sides = quoted_sides_with(&mut e, &c, &HashMap::new(), &[]);
+        assert_eq!(sides.len(), 1, "a fall holds only the Up opening bid off: {sides:?}");
+        assert_eq!(sides[0].0, "NO");
+        assert_eq!(e.book_guarded.get("7"), Some(&(true, false)));
+        assert_eq!(e.book_pauses.get("BTC"), Some(&1));
+        assert!(!e.guard_pauses.contains_key("BTC"), "counted separately from the Binance guard");
+    }
+
+    #[test]
+    fn our_own_quotes_churning_does_not_trip_the_book_guard() {
+        let mut e = quoting_window_at("0.43", "0.55", (0.40, 0.50), 60_000);
+        let mut c = cfg();
+        c.book_guard = true;
+        let depth = DepthBook {
+            top: Book { bid: Some(0.40), bid_size: 5.0, ask: Some(0.50), ask_size: 3.0, update_ms: now_ms() },
+            bids: vec![(0.40, 5.0), (0.39, 9.0)],
+            asks: vec![(0.50, 3.0), (0.51, 4.0)],
+        };
+        // Our YES bid takes the whole top bid, then leaves: the mid excluding
+        // us steps half a cent twice, never 2¢.
+        e.venue_book("7".into(), depth.clone(), &[resting("YES", 0.40, 5.0)]);
+        let sides = quoted_sides_with(&mut e, &c, &HashMap::new(), &[resting("YES", 0.40, 5.0)]);
+        assert_eq!(sides.len(), 2, "appearing at the best: {sides:?}");
+        e.venue_book("7".into(), depth, &[]);
+        e.quotes.clear();
+        let sides = quoted_sides_with(&mut e, &c, &HashMap::new(), &[]);
+        assert_eq!(sides.len(), 2, "disappearing from the best: {sides:?}");
+        assert!(!e.book_pauses.contains_key("BTC"));
+    }
+
+    #[test]
+    fn a_pairing_bid_is_untouched_by_the_book_guard() {
+        let mut e = quoting_window_at("0.43", "0.55", (0.40, 0.50), 60_000);
+        let mut c = cfg();
+        c.book_guard = true;
+        e.venue_book(
+            "7".into(),
+            DepthBook::top_only(Book {
+                bid: Some(0.375),
+                bid_size: 5.0,
+                ask: Some(0.475),
+                ask_size: 5.0,
+                update_ms: now_ms(),
+            }),
+            &[],
+        );
+        let held = Position { yes_qty: 4.0, yes_cost: 1.6, ..Default::default() };
+        let sides = quoted_sides_with(&mut e, &c, &HashMap::from([("7".to_string(), held)]), &[]);
+        assert_eq!(sides.len(), 1);
+        assert_eq!(sides[0].0, "NO");
+    }
+
+    #[test]
+    fn opening_bids_repost_once_the_book_pause_expires() {
+        let mut e = quoting_window_at("0.43", "0.55", (0.40, 0.50), 60_000);
+        let mut c = cfg();
+        c.book_guard = true;
+        e.venue_book(
+            "7".into(),
+            DepthBook::top_only(Book {
+                bid: Some(0.375),
+                bid_size: 5.0,
+                ask: Some(0.475),
+                ask_size: 5.0,
+                update_ms: now_ms(),
+            }),
+            &[],
+        );
+        assert_eq!(quoted_sides_with(&mut e, &c, &HashMap::new(), &[]).len(), 1);
+        let (fall_until, _) = e.book_until.get("7").copied().unwrap();
+        assert!(fall_until - now_ms() > 1_000 && fall_until - now_ms() <= 2_000, "held off 2 s");
+        // The fall scrolled out of the trail and the pause elapsed: both repost.
+        e.mid_trail.clear();
+        e.book_until.insert("7".into(), (now_ms() - 1, 0));
+        e.quotes.clear();
+        assert_eq!(quoted_sides_with(&mut e, &c, &HashMap::new(), &[]).len(), 2);
+    }
+
+    #[test]
+    fn anchored_fair_records_the_open_and_falls_back_when_missed() {
+        let frame = |px: f64| {
+            format!(r#"{{"stream":"btcusdt@bookTicker","data":{{"s":"BTCUSDT","b":"{px}","a":"{px}"}}}}"#)
+        };
+        let struck = |open_age_ms: i64| -> PredictMarket {
+            let mut m = serde_json::to_value(window_market(open_age_ms)).unwrap();
+            m["variantData"]["startPrice"] = json!(100_000.0);
+            serde_json::from_value(m).unwrap()
+        };
+        let anchored = |open_age_ms: i64| {
+            let mut e = Engine::new();
+            e.set_markets(vec![struck(open_age_ms)]);
+            let c = cfg();
+            assert!(e.binance_frame(&c, &frame(100_300.0), false));
+            let _ = e.kalshi_frame(r#"{"type":"orderbook_snapshot","msg":{"market_ticker":"KXBTC15M-ABC","yes_dollars_fp":[["0.69","3"]],"no_dollars_fp":[["0.29","2"]]}}"#);
+            e.venue_book(
+                "7".into(),
+                DepthBook::top_only(Book {
+                    bid: Some(0.64),
+                    bid_size: 5.0,
+                    ask: Some(0.76),
+                    ask_size: 5.0,
+                    update_ms: now_ms(),
+                }),
+                &[],
+            );
+            e.evaluate(&c, &HashMap::new(), &[]);
+            e.signal_rows(now_ms(), 0.5, &[]).pop().map(|r| r.fairs)
+        };
+        // Opened 5 s ago: the anchored fair prices from the open print, and
+        // the learned offset puts it at the strike formula's level.
+        let fairs = anchored(5_000).unwrap();
+        assert!(fairs.spot.is_some() && fairs.anchored.is_some());
+        assert!((fairs.anchored.unwrap() - fairs.spot.unwrap()).abs() < 1e-6);
+        // Opened 10 minutes ago: the open was missed, so no anchored fair.
+        let fairs = anchored(600_000).unwrap();
+        assert!(fairs.spot.is_some() && fairs.anchored.is_none());
     }
 }

@@ -58,12 +58,15 @@ enum Command {
     },
 }
 
-/// A fill and what Binance and the fairs showed when it came in.
+/// A fill and what Binance, the fairs, and Predict's own mid showed when it came in.
 struct PendingTag {
     fill: FillRecord,
     ln_mid: f64,
     move_1s_bps: f64,
     fairs: spot::Fairs,
+    /// Predict's mid move over the second before the fill, in cents, signed
+    /// in the fill's favour (+ = the market moved our way).
+    pmove_c: Option<f64>,
 }
 
 /// A market's execution lane.
@@ -513,16 +516,59 @@ impl App {
         }
     }
 
-    /// Keeps a fill with Binance's move before it, to journal with the move after.
+    /// Keeps a fill with Binance's move and Predict's mid move before it, to
+    /// journal with the move after. The mid move is captured now: 5 s on, the
+    /// trail no longer reaches back to the second before the fill.
     fn tag_fill(&self, fill: FillRecord) {
-        let Some(ctx) = self.engine.lock().fill_context(&fill.market, fill.time_ms) else { return };
-        self.fill_tags.lock().push(PendingTag { fill, ln_mid: ctx.ln_mid, move_1s_bps: ctx.move_1s_bps, fairs: ctx.fairs });
+        let mut resting = self.state.lock().orders.clone();
+        let (ctx, pmove_c) = {
+            let engine = self.engine.lock();
+            let Some(ctx) =
+                engine.fill_context(&fill.market, fill.time_ms, self.cfg.blend_w, resting.make_contiguous())
+            else {
+                return;
+            };
+            let sign = if fill.side.eq_ignore_ascii_case("YES") { 1.0 } else { -1.0 };
+            let pmove_c = engine.predict_move(&fill.market, fill.time_ms, 1_000).map(|m| sign * m * 100.0);
+            (ctx, pmove_c)
+        };
+        self.fill_tags.lock().push(PendingTag {
+            fill,
+            ln_mid: ctx.ln_mid,
+            move_1s_bps: ctx.move_1s_bps,
+            fairs: ctx.fairs,
+            pmove_c,
+        });
+    }
+
+    /// Predict's YES mid excluding our resting orders, in the fill's side
+    /// terms (raw mid when the exclusion empties a side).
+    fn fill_side_mid(&self, market: &str, side: &str) -> Option<f64> {
+        let mut resting = self.state.lock().orders.clone();
+        let (ex_own, precision) = {
+            let engine = self.engine.lock();
+            let precision = engine
+                .markets()
+                .iter()
+                .find(|m| m.id.to_string() == market)
+                .map(|m| m.decimal_precision);
+            (engine.mid_ex_own(market, resting.make_contiguous()), precision)
+        };
+        let mid = ex_own.or_else(|| {
+            self.state.lock().books.get(market).copied().and_then(pk_venue_core::Book::mid)
+        })?;
+        if side.eq_ignore_ascii_case("YES") {
+            Some(mid)
+        } else {
+            precision.map(|dp| model::complement_price(mid, dp))
+        }
     }
 
     /// Journals each fill `FILL_TAG_AFTER_MS` on as `fill_tag`: Binance's
-    /// move in the second before and the 5 s after, both signed so that
-    /// positive is in the fill's favour (rising for YES), and the fairs.
-    /// Fills against a falling (YES) or rising (NO) spot are the adverse ones.
+    /// move in the second before and the 5 s after, Predict's own mid move in
+    /// the second before, all signed so that positive is in the fill's favour
+    /// (rising for YES), and the fairs. Fills against a falling (YES) or
+    /// rising (NO) spot are the adverse ones.
     fn resolve_fill_tags(&self, now: i64) {
         let due: Vec<PendingTag> = {
             let mut tags = self.fill_tags.lock();
@@ -541,39 +587,57 @@ impl App {
                     "fill_ms": tag.fill.time_ms,
                     "spot_before_bps": sign * tag.move_1s_bps,
                     "spot_after_5s_bps": after.map(|a| sign * a),
+                    "pmove_c": tag.pmove_c,
                     "kalshi": tag.fairs.kalshi, "adjusted": tag.fairs.adjusted, "binance": tag.fairs.spot,
+                    "blend": tag.fairs.blend, "anchored": tag.fairs.anchored,
                 }),
             );
         }
     }
 
-    /// One scorecard sample per live market with all three fairs and a
-    /// Predict mid (paired, so the sources are compared on the same moments).
+    /// One scorecard sample per live market with the established fairs and
+    /// a Predict mid (paired, so the sources are compared on the same
+    /// moments). The blend and anchored candidates score when available.
     fn sample_fairs(&self, now: i64) {
-        let rows = self.engine.lock().signal_rows(now);
+        let mut resting = self.state.lock().orders.clone();
+        let rows = self.engine.lock().signal_rows(now, self.cfg.blend_w, resting.make_contiguous());
         let mut scores = self.scores.lock();
         for row in rows {
             let (Some(adjusted), Some(spot), Some(mid)) = (row.fairs.adjusted, row.fairs.spot, row.predict_mid) else {
                 continue;
             };
-            scores.sample(&row.market, row.close_ms, spot::Sample { ms: now, fairs: [row.fairs.kalshi, adjusted, spot, mid] });
+            scores.sample(&row.market, row.close_ms, spot::Sample {
+                ms: now,
+                fairs: [
+                    row.fairs.kalshi,
+                    adjusted,
+                    spot,
+                    row.fairs.blend.unwrap_or(f64::NAN),
+                    row.fairs.anchored.unwrap_or(f64::NAN),
+                    mid,
+                ],
+            });
         }
     }
 
     /// The Binance signal for the status page: the guard per asset, every
-    /// live market's three fairs, and the scorecard.
+    /// live market's fairs, and the scorecard.
     fn signal_status(&self) -> Value {
         let now = now_ms();
+        let mut resting = self.state.lock().orders.clone();
         let engine = self.engine.lock();
         let rows: Vec<Value> = engine
-            .signal_rows(now)
+            .signal_rows(now, self.cfg.blend_w, resting.make_contiguous())
             .into_iter()
             .map(|r| {
                 json!({
                     "market": r.market, "label": r.label, "asset": r.asset, "tau_s": r.tau_s,
                     "strike": r.strike, "spot": r.spot, "kalshi": r.fairs.kalshi,
-                    "adjusted": r.fairs.adjusted, "binance": r.fairs.spot, "predict_mid": r.predict_mid,
+                    "adjusted": r.fairs.adjusted, "binance": r.fairs.spot,
+                    "blend": r.fairs.blend, "anchored": r.fairs.anchored,
+                    "predict_mid": r.predict_mid, "pmove_1s_c": r.pmove_1s_c,
                     "up_off": r.guarded.0, "down_off": r.guarded.1,
+                    "book_up_off": r.book_guarded.0, "book_down_off": r.book_guarded.1,
                 })
             })
             .collect();
@@ -583,11 +647,16 @@ impl App {
                 "maker": self.cfg.maker, "taker": self.cfg.taker,
                 "guard": self.cfg.binance_guard, "pause_bps": self.cfg.binance_pause_bps,
                 "pause_ms": self.cfg.binance_pause_ms, "pause_gap": self.cfg.binance_pause_gap,
+                "book_guard": self.cfg.book_guard, "book_pause_c": self.cfg.book_pause_c,
+                "book_pause_window_ms": self.cfg.book_pause_window_ms,
+                "book_pause_ms": self.cfg.book_pause_ms, "blend_w": self.cfg.blend_w,
+                "regime_start": self.cfg.regime_start,
                 "open_fair": self.cfg.open_fair, "pair_fair": self.cfg.pair_fair,
             },
             "assets": engine.spot.status(now),
             "sigma": engine.sigma_status(now),
             "guard_pauses": engine.guard_pauses,
+            "book_pauses": engine.book_pauses,
             "markets": rows,
             "scores": self.scores.lock().status(),
         })
@@ -647,7 +716,8 @@ impl App {
             state.risk.save();
         }
         for fill in fills {
-            self.markouts.lock().watch(&fill.market, &fill.side, fill.price, fill.time_ms);
+            let mid = self.fill_side_mid(&fill.market, &fill.side);
+            self.markouts.lock().watch(&fill.market, &fill.side, fill.price, fill.time_ms, mid);
             self.record("shadow_fill", serde_json::to_value(fill).unwrap_or_default());
         }
     }
@@ -1146,7 +1216,8 @@ async fn strategy_loop(app: Arc<App>) {
             _ = fallback.tick() => {}
         }
         let positions = app.state.lock().positions.clone();
-        let actions = app.engine.lock().evaluate(&app.cfg, &positions);
+        let mut resting = app.state.lock().orders.clone();
+        let actions = app.engine.lock().evaluate(&app.cfg, &positions, resting.make_contiguous());
         dispatch(&app, actions);
     }
 }
@@ -1216,17 +1287,24 @@ async fn housekeeping_loop(app: Arc<App>) {
         let now = now_ms();
         app.resolve_fill_tags(now);
         {
-            let markets = app.engine.lock().markets();
-            let state = app.state.lock();
+            // Markouts compare against the venue mid excluding our own resting
+            // orders (raw mid when the exclusion empties a side).
+            let mut resting = app.state.lock().orders.clone();
+            let books = app.state.lock().books.clone();
+            let engine = app.engine.lock();
+            let markets = engine.markets();
             let mut mids = std::collections::HashMap::new();
             for market in &markets {
                 let id = market.id.to_string();
-                if let Some(mid) = state.books.get(&id).copied().and_then(pk_venue_core::Book::mid) {
+                let mid = engine.mid_ex_own(&id, resting.make_contiguous()).or_else(|| {
+                    books.get(&id).copied().and_then(pk_venue_core::Book::mid)
+                });
+                if let Some(mid) = mid {
                     mids.insert((id.clone(), "YES".into()), mid);
                     mids.insert((id, "NO".into()), model::complement_price(mid, market.decimal_precision));
                 }
             }
-            drop(state);
+            drop(engine);
             for markout in app.markouts.lock().poll(now, &mids) {
                 app.record("markout", markout.clone());
                 app.state.lock().push_markout(markout);
@@ -1676,11 +1754,13 @@ async fn predict_ws_session(app: &Arc<App>) -> anyhow::Result<()> {
             continue;
         }
         app.raw("predict", || json!({"raw":value.clone()}));
-        if let Some((id, book)) = model::book_from_ws(&value) {
-            if book.valid() {
-                app.engine.lock().venue_book(id.clone(), book);
+        if let Some((id, depth)) = model::depth_from_ws(&value) {
+            if depth.top.valid() {
+                let mut resting = app.state.lock().orders.clone();
+                let top = depth.top;
+                app.engine.lock().venue_book(id.clone(), depth, resting.make_contiguous());
                 let mut state = app.state.lock();
-                state.books.insert(id, book);
+                state.books.insert(id, top);
                 let feed = state.feeds.entry("predict".into()).or_default();
                 feed.last_message_ms = now_ms();
             }
@@ -1769,7 +1849,8 @@ fn handle_wallet_event(app: &Arc<App>, value: &Value) {
             state.book_fill(&record);
             state.risk.save();
             drop(state);
-            app.markouts.lock().watch(&record.market, &record.side, record.price, record.time_ms);
+            let mid = app.fill_side_mid(&record.market, &record.side);
+            app.markouts.lock().watch(&record.market, &record.side, record.price, record.time_ms, mid);
             app.tag_fill(record);
         }
         "orderNotAccepted" => {

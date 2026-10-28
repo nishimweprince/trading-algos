@@ -347,7 +347,7 @@ impl App {
             state.risk.save();
         }
         for fill in fills {
-            self.markouts.lock().watch(&fill.market, &fill.side, fill.price, fill.time_ms);
+            self.markouts.lock().watch(&fill.market, &fill.side, fill.price, fill.time_ms, None);
             self.record("shadow_fill", serde_json::to_value(fill).unwrap_or_default());
         }
     }
@@ -914,7 +914,7 @@ fn handle_fills(app: &Arc<App>, value: &Value) {
         state.book_fill(&record);
         state.risk.save();
         drop(state);
-        app.markouts.lock().watch(&record.market, &record.side, record.price, record.time_ms);
+        app.markouts.lock().watch(&record.market, &record.side, record.price, record.time_ms, None);
         app.record("fill", serde_json::to_value(record).unwrap_or_default());
     }
 }

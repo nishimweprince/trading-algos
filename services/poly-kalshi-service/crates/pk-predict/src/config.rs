@@ -94,8 +94,26 @@ pub struct Config {
     /// … or while the Binance-adjusted fair is this far from Kalshi's
     /// (`PK_PRED_BINANCE_PAUSE_GAP`).
     pub binance_pause_gap: f64,
+    /// Pull a side's first-leg quotes when Predict's own mid moves against
+    /// them (`PK_PRED_BOOK_GUARD`, off until the fill tags prove it) …
+    pub book_guard: bool,
+    /// … by `book_pause_c` within `book_pause_window_ms`
+    /// (`PK_PRED_BOOK_PAUSE_C`, `PK_PRED_BOOK_PAUSE_WINDOW_MS`), for
+    /// `book_pause_ms` (`PK_PRED_BOOK_PAUSE_MS`). The mid excludes our own
+    /// resting orders, so the guard cannot trigger itself.
+    pub book_pause_c: f64,
+    pub book_pause_window_ms: i64,
+    pub book_pause_ms: i64,
+    /// Weight on Binance in the logit-space blend with Predict's own mid
+    /// (`PK_PRED_BLEND_W`).
+    pub blend_w: f64,
+    /// ISO UTC start of the current evaluation regime, shown on the
+    /// dashboard with its running per-window mean (`PK_PRED_REGIME_START`,
+    /// unset hides it).
+    pub regime_start: Option<String>,
     /// The fair first legs and pairing legs are priced from
-    /// (`PK_PRED_OPEN_FAIR`, `PK_PRED_PAIR_FAIR`: kalshi, adjusted or binance).
+    /// (`PK_PRED_OPEN_FAIR`, `PK_PRED_PAIR_FAIR`: kalshi, adjusted, binance,
+    /// blend or anchored).
     pub open_fair: FairSource,
     pub pair_fair: FairSource,
     /// The least σ a Binance-informed fair uses without a fresh Kalshi-implied
@@ -294,6 +312,12 @@ impl Config {
             binance_pause_bps: number("PK_PRED_BINANCE_PAUSE_BPS", 5.0)?,
             binance_pause_ms: integer("PK_PRED_BINANCE_PAUSE_MS", 2_000)? as i64,
             binance_pause_gap: number("PK_PRED_BINANCE_PAUSE_GAP", 0.03)?,
+            book_guard: flag("PK_PRED_BOOK_GUARD", false)?,
+            book_pause_c: number("PK_PRED_BOOK_PAUSE_C", 0.02)?,
+            book_pause_window_ms: integer("PK_PRED_BOOK_PAUSE_WINDOW_MS", 1_000)? as i64,
+            book_pause_ms: integer("PK_PRED_BOOK_PAUSE_MS", 2_000)? as i64,
+            blend_w: number("PK_PRED_BLEND_W", 0.5)?,
+            regime_start: get("PK_PRED_REGIME_START"),
             open_fair: FairSource::parse(get("PK_PRED_OPEN_FAIR").as_deref().unwrap_or("kalshi"))?,
             pair_fair: FairSource::parse(get("PK_PRED_PAIR_FAIR").as_deref().unwrap_or("kalshi"))?,
             sigma_floor: number("PK_PRED_SIGMA_FLOOR", 3.0)? * 1e-4 / 60_f64.sqrt(),
@@ -339,6 +363,28 @@ mod tests {
         assert!(first.maker);
         assert!(!first.taker);
         assert_eq!(first.fingerprint, second.fingerprint);
+    }
+
+    #[test]
+    fn book_guard_ships_off_with_a_blend_weight_and_no_regime() {
+        let c = Config::from_map(base(), Path::new("/tmp/predict-config")).unwrap();
+        assert!(!c.book_guard);
+        assert!((c.book_pause_c - 0.02).abs() < 1e-12);
+        assert_eq!((c.book_pause_window_ms, c.book_pause_ms), (1_000, 2_000));
+        assert!((c.blend_w - 0.5).abs() < 1e-12);
+        assert!(c.regime_start.is_none());
+        let mut on = base();
+        on.insert("PK_PRED_BOOK_GUARD".into(), "yes".into());
+        on.insert("PK_PRED_BOOK_PAUSE_C".into(), "0.015".into());
+        on.insert("PK_PRED_REGIME_START".into(), "2026-10-29T00:00:00Z".into());
+        on.insert("PK_PRED_OPEN_FAIR".into(), "blend".into());
+        on.insert("PK_PRED_PAIR_FAIR".into(), "anchored".into());
+        let on = Config::from_map(on, Path::new("/tmp/predict-config")).unwrap();
+        assert!(on.book_guard);
+        assert!((on.book_pause_c - 0.015).abs() < 1e-12);
+        assert_eq!(on.regime_start.as_deref(), Some("2026-10-29T00:00:00Z"));
+        assert_eq!(on.open_fair, FairSource::Blend);
+        assert_eq!(on.pair_fair, FairSource::Anchored);
     }
 
     #[test]

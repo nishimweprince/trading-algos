@@ -345,29 +345,64 @@ pub fn markets_from_response(value: &Value) -> Vec<PredictMarket> {
     array.into_iter().flatten().filter_map(|m| serde_json::from_value(m.clone()).ok()).collect()
 }
 
+/// How many price levels per side are kept from Predict's order-book feed:
+/// enough to see past our own resting quotes.
+pub const DEPTH_LEVELS: usize = 8;
+
+/// Predict's YES book with a few levels per side, so the mid excluding our
+/// own resting orders can look past them.
+#[derive(Clone, Debug, Default)]
+pub struct DepthBook {
+    pub top: Book,
+    pub bids: Vec<(f64, f64)>,
+    pub asks: Vec<(f64, f64)>,
+}
+
+impl DepthBook {
+    /// A book with only its top level (tests, and feeds without depth).
+    pub fn top_only(top: Book) -> Self {
+        Self {
+            bids: top.bid.map(|p| vec![(p, top.bid_size)]).unwrap_or_default(),
+            asks: top.ask.map(|p| vec![(p, top.ask_size)]).unwrap_or_default(),
+            top,
+        }
+    }
+}
+
 pub fn book_from_ws(value: &Value) -> Option<(String, Book)> {
+    depth_from_ws(value).map(|(market, depth)| (market, depth.top))
+}
+
+/// Like `book_from_ws`, but keeps the first `DEPTH_LEVELS` levels per side.
+pub fn depth_from_ws(value: &Value) -> Option<(String, DepthBook)> {
     let data = value.get("data").or_else(|| value.get("payload")).unwrap_or(value);
     let market = data.get("marketId")?.to_string().trim_matches('"').to_owned();
-    let level = |key: &str, first: bool| -> Option<(f64, f64)> {
-        let levels = data.get(key)?.as_array()?;
-        let row = if first { levels.first()? } else { levels.last()? }.as_array()?;
-        Some((number(row.first()?)?, number(row.get(1)?)?))
+    let levels = |key: &str| -> Vec<(f64, f64)> {
+        data.get(key)
+            .and_then(Value::as_array)
+            .map(|rows| {
+                rows.iter()
+                    .filter_map(|row| {
+                        let row = row.as_array()?;
+                        Some((number(row.first()?)?, number(row.get(1)?)?))
+                    })
+                    .take(DEPTH_LEVELS)
+                    .collect()
+            })
+            .unwrap_or_default()
     };
-    let bid = level("bids", true);
-    let ask = level("asks", true);
-    Some((
-        market,
-        Book {
-            bid: bid.map(|x| x.0),
-            bid_size: bid.map_or(0.0, |x| x.1),
-            ask: ask.map(|x| x.0),
-            ask_size: ask.map_or(0.0, |x| x.1),
-            update_ms: data
-                .get("updateTimestampMs")
-                .and_then(Value::as_i64)
-                .unwrap_or_else(pk_venue_core::service::now_ms),
-        },
-    ))
+    let (bids, asks) = (levels("bids"), levels("asks"));
+    let top = Book {
+        bid: bids.first().map(|x| x.0),
+        bid_size: bids.first().map_or(0.0, |x| x.1),
+        ask: asks.first().map(|x| x.0),
+        ask_size: asks.first().map_or(0.0, |x| x.1),
+        update_ms: data
+            .get("updateTimestampMs")
+            .and_then(Value::as_i64)
+            .unwrap_or_else(pk_venue_core::service::now_ms),
+    };
+    Some((market, DepthBook { top, bids, asks }))
 }
 
 fn number(value: &Value) -> Option<f64> {
@@ -586,6 +621,21 @@ mod tests {
         assert_eq!(complement_price(0.5, 2) + 0.5, 1.0);
         assert_eq!(quantize_price(0.55555, 2), 0.56);
         assert_eq!(quantize_price(0.123456, 6), 0.123456);
+    }
+
+    #[test]
+    fn depth_frames_keep_levels_past_the_touch() {
+        let (_, depth) = depth_from_ws(&json!({"data": {
+            "marketId": 7,
+            "bids": [[0.40, 5], [0.39, 9], ["0.38", "7"]],
+            "asks": [[0.50, 3], [0.51, 4]],
+            "updateTimestampMs": 9,
+        }}))
+        .unwrap();
+        assert_eq!(depth.bids, vec![(0.40, 5.0), (0.39, 9.0), (0.38, 7.0)]);
+        assert_eq!(depth.asks, vec![(0.50, 3.0), (0.51, 4.0)]);
+        assert_eq!((depth.top.bid, depth.top.ask), (Some(0.40), Some(0.50)));
+        assert_eq!(depth.top.update_ms, 9);
     }
 
     #[test]

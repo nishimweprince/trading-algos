@@ -57,6 +57,8 @@ pub enum FairSource {
     Kalshi,
     Adjusted,
     Binance,
+    Blend,
+    Anchored,
 }
 
 impl FairSource {
@@ -65,17 +67,23 @@ impl FairSource {
             "kalshi" => Ok(Self::Kalshi),
             "adjusted" | "kalshi+binance" => Ok(Self::Adjusted),
             "binance" | "spot" => Ok(Self::Binance),
-            other => anyhow::bail!("fair source must be kalshi, adjusted or binance, got {other:?}"),
+            "blend" => Ok(Self::Blend),
+            "anchored" | "binance_anchored" => Ok(Self::Anchored),
+            other => anyhow::bail!(
+                "fair source must be kalshi, adjusted, binance, blend or anchored, got {other:?}"
+            ),
         }
     }
 }
 
-/// The three fairs of one market at one moment (YES probability).
+/// The fairs of one market at one moment (YES probability).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Fairs {
     pub kalshi: f64,
     pub adjusted: Option<f64>,
     pub spot: Option<f64>,
+    pub blend: Option<f64>,
+    pub anchored: Option<f64>,
 }
 
 impl Fairs {
@@ -85,6 +93,8 @@ impl Fairs {
             FairSource::Kalshi => self.kalshi,
             FairSource::Adjusted => self.adjusted.unwrap_or(self.kalshi),
             FairSource::Binance => self.spot.unwrap_or(self.kalshi),
+            FairSource::Blend => self.blend.unwrap_or(self.kalshi),
+            FairSource::Anchored => self.anchored.unwrap_or(self.kalshi),
         }
     }
 }
@@ -300,6 +310,26 @@ pub fn spot_fair(spot: f64, strike: f64, sigma: f64, tau_s: f64) -> f64 {
     norm_cdf((spot / strike).ln() / (sigma * tau_s.max(1.0).sqrt()))
 }
 
+/// P(Up) from Binance's own move since the window opened: `d` is
+/// `ln(S_now / S_open)`, and `offset` the steady Binance-vs-strike log gap
+/// (0 until learned). Near the close a few bp of level gap between Binance
+/// USDT and Predict's Chainlink start price dominates the strike formula;
+/// the anchored fair only moves when Binance itself moves.
+pub fn anchored_fair(mid: f64, s_open: f64, offset: f64, sigma: f64, tau_s: f64) -> f64 {
+    norm_cdf(((mid / s_open).ln() + offset) / (sigma * tau_s.max(1.0).sqrt()))
+}
+
+/// Logit-space blend of the Binance fair with Predict's own mid (which
+/// carries what other traders know): `σ(w·logit(b) + (1−w)·logit(m))`.
+pub fn blend_fair(binance: f64, predict_mid: f64, w: f64) -> f64 {
+    let logit = |p: f64| {
+        let p = p.clamp(0.02, 0.98);
+        (p / (1.0 - p)).ln()
+    };
+    let z = w.clamp(0.0, 1.0) * logit(binance) + (1.0 - w.clamp(0.0, 1.0)) * logit(predict_mid);
+    1.0 / (1.0 + (-z).exp())
+}
+
 /// Standard normal CDF (Abramowitz–Stegun 7.1.26 erf, |error| < 1.5e-7).
 pub fn norm_cdf(x: f64) -> f64 {
     let z = x.abs() / std::f64::consts::SQRT_2;
@@ -331,7 +361,7 @@ pub fn norm_inv(p: f64) -> f64 {
 }
 
 /// Mean and standard error by Welford's method.
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Stat {
     pub n: u64,
     pub mean: f64,
@@ -357,21 +387,61 @@ impl Stat {
     }
 }
 
-/// One scoring sample: the three fairs and Predict's own YES mid.
+/// One scoring sample: the fairs and Predict's own YES mid (excluding our
+/// orders). A blend or anchored fair that is unavailable at the moment is
+/// NaN; the window still scores every other source.
 #[derive(Clone, Copy, Debug)]
 pub struct Sample {
     pub ms: i64,
-    pub fairs: [f64; 4], // kalshi, adjusted, spot, predict mid
+    pub fairs: [f64; N_SOURCES],
 }
 
-pub const SOURCES: [&str; 4] = ["kalshi", "adjusted", "binance", "predict_mid"];
+pub const N_SOURCES: usize = SOURCES.len();
+pub const SOURCES: [&str; 6] = ["kalshi", "adjusted", "binance", "blend", "binance_anchored", "predict_mid"];
+pub const IDX_KALSHI: usize = 0;
+pub const IDX_MID: usize = 5;
+
+/// Opening bids are placed in the window's first 5 minutes; the scorecard
+/// splits there so each source is judged where it is actually used.
+pub const EARLY_BUCKET_MS: i64 = 300_000;
+const WINDOW_MS: i64 = 900_000;
 
 #[derive(Default)]
 struct Pending {
     close_ms: i64,
     samples: Vec<Sample>,
-    /// |fair − Predict's mid 5 s later|, per source.
-    lead: Vec<[f64; 4]>,
+    /// The earlier sample's ms with |fair − Predict's mid 5 s later|, per source.
+    lead: Vec<(i64, [f64; N_SOURCES])>,
+}
+
+/// One time bucket's window-level evidence.
+#[derive(Default, Serialize, Deserialize)]
+pub struct BucketScores {
+    pub windows: u64,
+    #[serde(deserialize_with = "widen", default)]
+    pub brier: [Stat; N_SOURCES],
+    #[serde(deserialize_with = "widen", default)]
+    pub lead: [Stat; N_SOURCES],
+    /// Kalshi's score minus the source's (positive: the source beats Kalshi).
+    #[serde(deserialize_with = "widen", default)]
+    pub brier_gain: [Stat; N_SOURCES],
+    #[serde(deserialize_with = "widen", default)]
+    pub lead_gain: [Stat; N_SOURCES],
+}
+
+/// A saved stat array, widened to today's sources: a missing column (a saved
+/// scorecard from before the blend and anchored fairs existed) is no data,
+/// so the existing history stays.
+fn widen<'de, D>(deserializer: D) -> Result<[Stat; N_SOURCES], D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let saved = Vec::<Stat>::deserialize(deserializer)?;
+    let mut out = [Stat::default(); N_SOURCES];
+    for (slot, stat) in out.iter_mut().zip(saved) {
+        *slot = stat;
+    }
+    Ok(out)
 }
 
 /// Window-level evidence: each settled window contributes one value per
@@ -379,11 +449,21 @@ struct Pending {
 #[derive(Default, Serialize, Deserialize)]
 pub struct FairScores {
     pub windows: u64,
-    pub brier: [Stat; 4],
-    pub lead: [Stat; 4],
+    #[serde(deserialize_with = "widen")]
+    pub brier: [Stat; N_SOURCES],
+    #[serde(deserialize_with = "widen")]
+    pub lead: [Stat; N_SOURCES],
     /// Kalshi's score minus the source's (positive: the source beats Kalshi).
-    pub brier_gain: [Stat; 4],
-    pub lead_gain: [Stat; 4],
+    #[serde(deserialize_with = "widen")]
+    pub brier_gain: [Stat; N_SOURCES],
+    #[serde(deserialize_with = "widen")]
+    pub lead_gain: [Stat; N_SOURCES],
+    /// The window's first 5 minutes (when opening bids are placed) …
+    #[serde(default)]
+    pub early: BucketScores,
+    /// … and the rest.
+    #[serde(default)]
+    pub late: BucketScores,
     #[serde(skip)]
     pending: HashMap<String, Pending>,
 }
@@ -407,8 +487,8 @@ impl FairScores {
         if let Some(prev) = p.samples.last()
             && (4_000..=7_000).contains(&(sample.ms - prev.ms))
         {
-            let mid = sample.fairs[3];
-            p.lead.push(prev.fairs.map(|f| (f - mid).abs()));
+            let mid = sample.fairs[IDX_MID];
+            p.lead.push((prev.ms, prev.fairs.map(|f| (f - mid).abs())));
         }
         p.samples.push(sample);
     }
@@ -422,43 +502,122 @@ impl FairScores {
         self.pending.remove(market);
     }
 
-    /// Score `market` at its outcome.
+    /// Score `market` at its outcome, overall and per time bucket. Each
+    /// source averages over the samples where it has a value; gains stay
+    /// paired with Kalshi on the same samples.
     pub fn resolve(&mut self, market: &str, yes_won: bool) {
         let Some(p) = self.pending.remove(market) else { return };
         if p.samples.is_empty() {
             return;
         }
         let outcome = if yes_won { 1.0 } else { 0.0 };
-        let n = p.samples.len() as f64;
-        let mut brier = [0.0; 4];
-        for s in &p.samples {
-            for i in 0..4 {
-                brier[i] += (s.fairs[i] - outcome).powi(2) / n;
-            }
-        }
+        let cut = p.close_ms - WINDOW_MS + EARLY_BUCKET_MS;
+        let early_samples: Vec<Sample> = p.samples.iter().copied().filter(|s| s.ms < cut).collect();
+        let late_samples: Vec<Sample> = p.samples.iter().copied().filter(|s| s.ms >= cut).collect();
+        let early_lead: Vec<(i64, [f64; N_SOURCES])> =
+            p.lead.iter().copied().filter(|(ms, _)| *ms < cut).collect();
+        let late_lead: Vec<(i64, [f64; N_SOURCES])> =
+            p.lead.iter().copied().filter(|(ms, _)| *ms >= cut).collect();
+        Self::score_bucket(
+            &mut self.brier,
+            &mut self.lead,
+            &mut self.brier_gain,
+            &mut self.lead_gain,
+            &p.samples,
+            &p.lead,
+            outcome,
+        );
         self.windows += 1;
-        for i in 0..4 {
-            self.brier[i].push(brier[i]);
-            self.brier_gain[i].push(brier[0] - brier[i]);
+        if Self::score_bucket(
+            &mut self.early.brier,
+            &mut self.early.lead,
+            &mut self.early.brier_gain,
+            &mut self.early.lead_gain,
+            &early_samples,
+            &early_lead,
+            outcome,
+        ) {
+            self.early.windows += 1;
         }
-        if !p.lead.is_empty() {
-            let m = p.lead.len() as f64;
-            let mut lead = [0.0; 4];
-            for e in &p.lead {
-                for i in 0..4 {
-                    lead[i] += e[i] / m;
-                }
-            }
-            for i in 0..4 {
-                self.lead[i].push(lead[i]);
-                self.lead_gain[i].push(lead[0] - lead[i]);
-            }
+        if Self::score_bucket(
+            &mut self.late.brier,
+            &mut self.late.lead,
+            &mut self.late.brier_gain,
+            &mut self.late.lead_gain,
+            &late_samples,
+            &late_lead,
+            outcome,
+        ) {
+            self.late.windows += 1;
         }
     }
 
+    /// Push one window's means over `samples`/`leads`; true when anything scored.
+    fn score_bucket(
+        brier: &mut [Stat; N_SOURCES],
+        lead: &mut [Stat; N_SOURCES],
+        brier_gain: &mut [Stat; N_SOURCES],
+        lead_gain: &mut [Stat; N_SOURCES],
+        samples: &[Sample],
+        leads: &[(i64, [f64; N_SOURCES])],
+        outcome: f64,
+    ) -> bool {
+        if samples.is_empty() {
+            return false;
+        }
+        let mut scored = false;
+        for i in 0..N_SOURCES {
+            let mut n = 0u32;
+            let (mut sum, mut gain) = (0.0, 0.0);
+            for s in samples {
+                let (fair, kalshi) = (s.fairs[i], s.fairs[IDX_KALSHI]);
+                if fair.is_finite() && kalshi.is_finite() {
+                    n += 1;
+                    sum += (fair - outcome).powi(2);
+                    gain += (kalshi - outcome).powi(2) - (fair - outcome).powi(2);
+                }
+            }
+            if n > 0 {
+                scored = true;
+                brier[i].push(sum / n as f64);
+                brier_gain[i].push(gain / n as f64);
+            }
+        }
+        for i in 0..N_SOURCES {
+            let mut n = 0u32;
+            let (mut sum, mut gain) = (0.0, 0.0);
+            for (_, errs) in leads {
+                let (err, base) = (errs[i], errs[IDX_KALSHI]);
+                if err.is_finite() && base.is_finite() {
+                    n += 1;
+                    sum += err;
+                    gain += base - err;
+                }
+            }
+            if n > 0 {
+                lead[i].push(sum / n as f64);
+                lead_gain[i].push(gain / n as f64);
+            }
+        }
+        scored
+    }
+
     pub fn status(&self) -> Value {
-        let per = |stats: &[Stat; 4]| -> Value {
+        let per = |stats: &[Stat; N_SOURCES]| -> Value {
             Value::Object(SOURCES.iter().zip(stats).map(|(k, s)| ((*k).to_owned(), s.json())).collect())
+        };
+        let bucket = |windows: u64,
+                      brier: &[Stat; N_SOURCES],
+                      lead: &[Stat; N_SOURCES],
+                      brier_gain: &[Stat; N_SOURCES],
+                      lead_gain: &[Stat; N_SOURCES]| {
+            json!({
+                "windows": windows,
+                "brier": per(brier),
+                "lead_5s": per(lead),
+                "brier_gain_vs_kalshi": per(brier_gain),
+                "lead_gain_vs_kalshi": per(lead_gain),
+            })
         };
         json!({
             "windows": self.windows,
@@ -467,6 +626,8 @@ impl FairScores {
             "lead_5s": per(&self.lead),
             "brier_gain_vs_kalshi": per(&self.brier_gain),
             "lead_gain_vs_kalshi": per(&self.lead_gain),
+            "early": bucket(self.early.windows, &self.early.brier, &self.early.lead, &self.early.brier_gain, &self.early.lead_gain),
+            "late": bucket(self.late.windows, &self.late.brier, &self.late.lead, &self.late.brier_gain, &self.late.lead_gain),
         })
     }
 }
@@ -561,13 +722,77 @@ mod tests {
     fn scores_count_windows_and_gains() {
         let mut f = FairScores::default();
         // Adjusted is right (0.9) where Kalshi was not (0.5); YES wins.
-        f.sample("7", 10_000, Sample { ms: 0, fairs: [0.5, 0.9, 0.7, 0.5] });
-        f.sample("7", 10_000, Sample { ms: 5_000, fairs: [0.5, 0.9, 0.7, 0.8] });
-        assert_eq!(f.due(10_000 + 60_000, 60_000), vec![("7".to_string(), 10_000)]);
+        f.sample("7", 900_000, Sample { ms: 890_000, fairs: [0.5, 0.9, 0.7, 0.8, 0.75, 0.5] });
+        f.sample("7", 900_000, Sample { ms: 895_000, fairs: [0.5, 0.9, 0.7, 0.8, 0.75, 0.8] });
+        assert_eq!(f.due(900_000 + 60_000, 60_000), vec![("7".to_string(), 900_000)]);
         f.resolve("7", true);
         assert_eq!(f.windows, 1);
         assert!(f.brier_gain[1].mean > 0.0 && f.lead_gain[1].mean > 0.0);
         assert!(f.due(1 << 40, 0).is_empty());
+    }
+
+    #[test]
+    fn blend_sits_between_its_inputs_and_clamps() {
+        let mid = blend_fair(0.7, 0.5, 0.5);
+        assert!(mid > 0.5 && mid < 0.7, "{mid}");
+        assert!((blend_fair(0.7, 0.5, 1.0) - 0.7).abs() < 1e-9, "all Binance");
+        assert!((blend_fair(0.7, 0.5, 0.0) - 0.5).abs() < 1e-9, "all Predict mid");
+        assert!(blend_fair(0.0, 1.0, 0.5).is_finite(), "extremes clamp, never NaN");
+        assert_eq!(FairSource::parse("blend").unwrap(), FairSource::Blend);
+        assert_eq!(FairSource::parse("binance_anchored").unwrap(), FairSource::Anchored);
+    }
+
+    #[test]
+    fn anchored_moves_with_binance_not_the_level_gap() {
+        let (sigma, tau) = (1.5e-4, 600.0);
+        // +20 bp from the open prices exactly like the strike formula at the strike.
+        let moved = anchored_fair(100.2, 100.0, 0.0, sigma, tau);
+        assert!((moved - spot_fair(100.2, 100.0, sigma, tau)).abs() < 1e-9, "{moved}");
+        // A 6 bp Binance-vs-strike gap no longer moves a late-window fair.
+        let late = anchored_fair(100.06, 100.06, 0.0, sigma, 10.0);
+        assert!((late - 0.5).abs() < 1e-9, "{late}");
+        assert!(spot_fair(100.06, 100.0, sigma, 10.0) > 0.85, "the strike formula blows up");
+    }
+
+    #[test]
+    fn old_four_wide_scorecards_load_with_empty_new_columns() {
+        let dir = std::env::temp_dir().join(format!("pk-predict-scores-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("fair_scores.json");
+        let stat = serde_json::json!({"n": 287u64, "mean": 0.174, "m2": 1.0});
+        let four = vec![stat.clone(), stat.clone(), stat.clone(), stat.clone()];
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&serde_json::json!({
+                "windows": 287u64, "brier": four, "lead": four, "brier_gain": four, "lead_gain": four,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let loaded = FairScores::load(&path);
+        assert_eq!(loaded.windows, 287);
+        assert_eq!(loaded.brier[IDX_MID], Stat { n: 0, mean: 0.0, m2: 0.0 });
+        assert_eq!(loaded.brier[0].n, 287);
+        assert!((loaded.brier[0].mean - 0.174).abs() < 1e-12);
+        assert_eq!(loaded.early.windows, 0, "buckets start empty");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn buckets_split_early_and_late_and_skip_nan_sources() {
+        let mut f = FairScores::default();
+        // Window closes at t=900 s; samples at 60 s (early) and 600 s (late).
+        // The anchored fair is missing early (NaN); YES wins.
+        f.sample("7", 900_000, Sample { ms: 60_000, fairs: [0.5, 0.6, 0.6, 0.6, f64::NAN, 0.5] });
+        f.sample("7", 900_000, Sample { ms: 65_000, fairs: [0.5, 0.6, 0.6, 0.6, f64::NAN, 0.6] });
+        f.sample("7", 900_000, Sample { ms: 600_000, fairs: [0.5, 0.6, 0.6, 0.6, 0.6, 0.5] });
+        f.sample("7", 900_000, Sample { ms: 605_000, fairs: [0.5, 0.6, 0.6, 0.6, 0.6, 0.6] });
+        f.resolve("7", true);
+        assert_eq!((f.windows, f.early.windows, f.late.windows), (1, 1, 1));
+        assert_eq!(f.early.brier[4].n, 0, "anchored had no early value");
+        assert_eq!(f.late.brier[4].n, 1);
+        assert_eq!(f.early.brier[1].n, 1, "other sources still score early");
+        assert!(f.early.brier_gain[1].mean > 0.0);
     }
 
     #[test]
