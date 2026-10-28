@@ -218,6 +218,14 @@ void Engine::on_spot(int coin, double mid, std::int64_t t_ns) {
   c.spots[at] = {now_ms, ln};
   if (c.spots_size < c.spots.size()) ++c.spots_size;
   else c.spots_head = (c.spots_head + 1) % c.spots.size();
+  const bool second_due =
+      c.spot_secs_size == 0 || now_ms - c.spot_secs[(c.spot_secs_head + c.spot_secs_size - 1) % c.spot_secs.size()].first >= 1'000;
+  if (second_due) {
+    const std::size_t sat = (c.spot_secs_head + c.spot_secs_size) % c.spot_secs.size();
+    c.spot_secs[sat] = {now_ms, ln};
+    if (c.spot_secs_size < c.spot_secs.size()) ++c.spot_secs_size;
+    else c.spot_secs_head = (c.spot_secs_head + 1) % c.spot_secs.size();
+  }
   // A fall takes the Up first leg off, a rise the Down one.
   const double rise = (ln - c.spot_trail.min()) * 1e4;
   const double fall = (c.spot_trail.max() - ln) * 1e4;
@@ -241,6 +249,18 @@ std::optional<double> Engine::spot_move_bps(const Coin& c, std::int64_t now_ms) 
     if (ms >= now_ms - kSpotWindowMs) return (latest - ln) * 1e4;
   }
   return 0.0;
+}
+
+std::optional<double> Engine::spot_trend_bps(const Coin& c, std::int64_t now_ms, std::int64_t span_ms) noexcept {
+  if (c.spot_secs_size == 0 || !spot_fresh(c, now_ms)) return std::nullopt;
+  const auto& oldest = c.spot_secs[c.spot_secs_head];
+  // History must reach back (nearly) the whole span.
+  if (oldest.first > now_ms - span_ms + 2'000) return std::nullopt;
+  for (std::size_t k = 0; k < c.spot_secs_size; ++k) {
+    const auto& [ms, ln] = c.spot_secs[(c.spot_secs_head + k) % c.spot_secs.size()];
+    if (ms >= now_ms - span_ms) return (std::log(c.spot_mid) - ln) * 1e4;
+  }
+  return std::nullopt;
 }
 
 void Engine::sample_beta(Coin& c, std::int64_t now_ms, double kalshi) noexcept {
@@ -727,6 +747,11 @@ void Engine::book_fill(const OrderRec& o, double shares, std::int64_t t_ns) {
   std::optional<double> smove_bps;
   if (const auto sm = spot_move_bps(c, now_ms)) smove_bps = o.up ? *sm : -*sm;
   if (smove_bps) line += " smove_bps " + fixed(*smove_bps, 1);
+  // The slower trend (30 s, 60 s), signed likewise: one-sided windows lose
+  // over minutes, after the fill, past what the 1 s guard sees.
+  for (const auto [span, name] : {std::pair<std::int64_t, const char*>{30'000, " strend30_bps "},
+                                  std::pair<std::int64_t, const char*>{60'000, " strend60_bps "}})
+    if (const auto tr = spot_trend_bps(c, now_ms, span)) line += name + fixed(o.up ? *tr : -*tr, 1);
   note(std::move(line));
   if (q) markouts_.push_back({o.coin, o.key, o.up, o.px, shares, o.up ? *q : 1.0 - *q, kmove_c, smove_bps, now_ms});
 }

@@ -30,6 +30,10 @@ MOVE_BUCKETS = (("Kalshi against (≤ −0.5¢)", lambda c: c <= -0.5), ("Kalshi
                 ("Kalshi with (≥ +0.5¢)", lambda c: c >= 0.5))
 SPOT_BUCKETS = (("spot against (≤ −2 bp)", lambda b: b <= -2), ("spot flat", lambda b: -2 < b < 2),
                 ("spot with (≥ +2 bp)", lambda b: b >= 2))
+# Spot's 30 s and 60 s trend before a fill, signed likewise (bp): the slow
+# moves one-sided windows lose to, past the 1 s guard.
+TREND = {30: re.compile(r" strend30_bps (\S+)"), 60: re.compile(r" strend60_bps (\S+)")}
+TREND_BUCKETS = (("against (≤ −5 bp)", lambda b: b <= -5), ("flat", lambda b: -5 < b < 5), ("with (≥ +5 bp)", lambda b: b >= 5))
 
 
 def unix(iso):
@@ -90,6 +94,7 @@ def main():
                          age=int(m.group(7)), opens=(before >= -1e-9) if up else (before <= 1e-9),
                          kmove=float(km.group(1)) if km else None,
                          smove=float(SMOVE.search(line).group(1)) if SMOVE.search(line) else None,
+                         **{f"trend{n}": float(m.group(1)) if (m := rx.search(line)) else None for n, rx in TREND.items()},
                          r=(1.0 if (v["settled"] == "yes") == up else 0.0) - px))
     if not rows:
         print("(no fills on stdin: pipe `journalctl -u pkm -o cat` for the per-fill breakdown)")
@@ -107,6 +112,8 @@ def main():
         ("second >= 120", lambda r: r["s"] >= 120),
         *[(name, lambda r, sel=sel: r["kmove"] is not None and sel(r["kmove"])) for name, sel in MOVE_BUCKETS],
         *[(name, lambda r, sel=sel: r["smove"] is not None and sel(r["smove"])) for name, sel in SPOT_BUCKETS],
+        *[(f"60 s trend {name}", lambda r, sel=sel: r["trend60"] is not None and sel(r["trend60"])) for name, sel in TREND_BUCKETS],
+        *[(f"30 s trend {name}", lambda r, sel=sel: r["trend30"] is not None and sel(r["trend30"])) for name, sel in TREND_BUCKETS],
     ]
     for leg, pick in (("first legs", lambda r: r["opens"]), ("pairing legs", lambda r: not r["opens"])):
         print(leg)
@@ -114,14 +121,14 @@ def main():
             xs = [r for r in rows if pick(r) and sel(r)]
             if xs:
                 c, se, usd = clustered(xs)
-                print(f"  {name:24s} fills {len(xs):4d}  {c:+6.2f}¢/share ± {se:5.2f}  ${usd:+8.2f}")
+                print(f"  {name:30s} fills {len(xs):4d}  {c:+6.2f}¢/share ± {se:5.2f}  ${usd:+8.2f}")
     if marks:
         print("5 s markout vs Kalshi's fair, by the move before the fill")
         for name, sel, idx in [(n, s, 0) for n, s in MOVE_BUCKETS] + [(n, s, 2) for n, s in SPOT_BUCKETS]:
             xs = [m[1] for m in marks if m[idx] is not None and sel(m[idx])]
             if len(xs) > 1:
                 se = statistics.pstdev(xs) / math.sqrt(len(xs))
-                print(f"  {name:24s} fills {len(xs):4d}  {statistics.mean(xs):+6.2f}¢ ± {se:5.2f}")
+                print(f"  {name:30s} fills {len(xs):4d}  {statistics.mean(xs):+6.2f}¢ ± {se:5.2f}")
 
 
 if __name__ == "__main__":

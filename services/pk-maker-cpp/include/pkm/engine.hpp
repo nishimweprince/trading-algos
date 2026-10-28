@@ -366,6 +366,11 @@ class Engine final {
     std::array<std::pair<std::int64_t, double>, 256> spots{};
     std::size_t spots_head = 0;
     std::size_t spots_size = 0;
+    // One log mid a second, `(ms, ln mid)`, for the 30/60 s trend a fill's tag
+    // reports (the print ring above spans only tens of seconds).
+    std::array<std::pair<std::int64_t, double>, 128> spot_secs{};
+    std::size_t spot_secs_head = 0;
+    std::size_t spot_secs_size = 0;
     std::int64_t up_off_until_ms = 0;    // set by a fall
     std::int64_t down_off_until_ms = 0;  // set by a rise
     // β = cov(Δk, Δln S) / var(Δln S) over 5 s samples (EWMA), and spot's
@@ -400,6 +405,9 @@ class Engine final {
   // Spot's signed log move over the last second, in bp (none when stale or empty).
   [[nodiscard]] std::optional<double> spot_move_bps(const Coin& c, std::int64_t now_ms) const noexcept;
   [[nodiscard]] static bool spot_fresh(const Coin& c, std::int64_t now_ms) noexcept;
+  // Spot's signed log move over the last `span_ms`, in bp, from the 1 s
+  // samples (none without that much history, or when stale).
+  [[nodiscard]] static std::optional<double> spot_trend_bps(const Coin& c, std::int64_t now_ms, std::int64_t span_ms) noexcept;
   [[nodiscard]] static std::optional<double> beta_of(const Coin& c) noexcept;
   // Kalshi's fair moved by β × spot's log move since Kalshi last changed.
   [[nodiscard]] std::optional<double> spot_corrected(const Coin& c, double kalshi, std::int64_t now_ms) const noexcept;

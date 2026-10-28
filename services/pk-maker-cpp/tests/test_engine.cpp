@@ -734,3 +734,35 @@ PKM_TEST(engine_reprices_through_a_kalshi_jump_only_in_reprice_mode) {
     require(up && near(up->first, 0.50), "Up quoted 2¢ wider from the corrected fair");
   }
 }
+
+PKM_TEST(engine_fill_tags_carry_the_30_and_60_second_spot_trend) {
+  auto e = make();
+  const std::int64_t t0 = (OPEN + 100) * NS;
+  books(e, 0.54, 0.56, {0.53, 0.57}, {0.43, 0.47}, t0);
+  take(e);
+  e.on_posted(0, false, 0.43, 5, true, "d1", t0);
+  // Spot rises 1 bp a second for 65 s: against a Down fill, too slow for the guard.
+  for (int i = 0; i <= 65; ++i) e.on_spot(0, 100'000.0 * (1.0 + 1e-4 * i), t0 + i * NS);
+  require(e.counters().spot_pauses == 0, "1 bp a second never trips the 5 bp guard");
+  e.log().clear();
+  e.on_order("d1", 5, true, t0 + 65 * NS + 100'000'000);
+  bool tagged = false;
+  for (const auto& line : e.log())
+    if (line.rfind("fill ", 0) == 0) {
+      const auto t30 = line.find("strend30_bps -");
+      const auto t60 = line.find("strend60_bps -");
+      tagged = t30 != std::string::npos && t60 != std::string::npos;
+    }
+  require(tagged, "a Down fill against a rising minute carries negative 30 s and 60 s trends");
+
+  auto fresh = make();  // under 60 s of history: no 60 s trend
+  books(fresh, 0.54, 0.56, {0.53, 0.57}, {0.43, 0.47}, t0);
+  take(fresh);
+  fresh.on_posted(0, false, 0.43, 5, true, "d1", t0);
+  for (int i = 0; i <= 20; ++i) fresh.on_spot(0, 100'000.0, t0 + i * NS);
+  fresh.log().clear();
+  fresh.on_order("d1", 5, true, t0 + 20 * NS + 100'000'000);
+  bool has60 = false;
+  for (const auto& line : fresh.log()) has60 = has60 || line.find("strend60_bps") != std::string::npos;
+  require(!has60, "no 60 s trend without 60 s of history");
+}
