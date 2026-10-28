@@ -164,6 +164,7 @@ impl Spot {
     }
 
     /// The perp–spot basis in bp, once sampled.
+    #[cfg(test)]
     pub fn basis_bps(&self, asset: &str) -> Option<f64> {
         self.assets.get(asset).and_then(|s| s.basis).map(|(b, _)| b * 1e4)
     }
