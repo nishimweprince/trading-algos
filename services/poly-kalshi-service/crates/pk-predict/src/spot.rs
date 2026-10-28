@@ -14,9 +14,10 @@
 //! 3. **Spot fair**: `Φ(ln(S / K) / (σ √τ))` from Binance alone, K being
 //!    Predict's own start price for the window.
 //!
-//! With the USDⓈ-M perpetual connected (`perp_primary`) its mid drives all
-//! three, being Binance's busiest book and the first to move (~930 updates a
-//! second against spot's ~280, Tokyo 10-28). The perp trades a few bp off
+//! With the USDⓈ-M perpetual connected (`perp_primary`, off by default) its
+//! mid drives all three. It is Binance's busiest book (~930 updates a second
+//! against spot's ~280, Tokyo 10-28) but did not move first: spot fired the
+//! 5 bp guard first on 76% of shared moves. The perp trades a few bp off
 //! spot, so it is brought to spot's level by the basis `ln perp − ln spot`, an
 //! EWMA (`BASIS_HALF_LIFE_MS`) sampled on each spot frame: the spot fair keeps
 //! spot's level against Predict's start price and moves at the perp's speed.
