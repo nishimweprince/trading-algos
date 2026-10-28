@@ -101,6 +101,9 @@ struct App {
     /// meanwhile is that submit's own (its event beats the HTTP answer by
     /// ~300 ms), not one to adopt.
     submitting: Mutex<std::collections::HashMap<String, u32>>,
+    /// The wallet's USDT and when it was read: bids beyond it less resting
+    /// bids are skipped here (1,830 venue refusals on 10-27).
+    wallet_usdt: Mutex<Option<(f64, i64)>>,
     kalshi_http: reqwest::Client,
     kalshi_signer: Arc<KalshiSigner>,
     markouts: Mutex<MarkoutTracker>,
@@ -358,9 +361,22 @@ impl App {
             let mut state = self.state.lock();
             let mut reserved = self.reserved_usd.lock();
             state.risk.state.open_usd += *reserved;
-            let checked =
+            let mut checked =
                 if pairing { state.risk.check_pairing_order(cost) } else { state.risk.check_order(cost, new_market) };
             state.risk.state.open_usd -= *reserved;
+            // Predict refuses a bid when the wallet's USDT is under every
+            // resting bid plus it: refuse it here first.
+            if checked.is_ok()
+                && self.cfg.mode == VenueMode::Live
+                && let Some((usdt, read_ms)) = *self.wallet_usdt.lock()
+                && now_ms() - read_ms <= WALLET_STALE_MS
+            {
+                let resting: f64 =
+                    state.orders.iter().filter(|o| o.status == "submitted").map(|o| o.price * o.quantity).sum();
+                if resting + *reserved + cost > usdt - self.cfg.collateral_margin_usd {
+                    checked = Err(format!("free collateral: {:.2} USDT, {:.2} resting", usdt, resting + *reserved));
+                }
+            }
             if checked.is_ok() {
                 *reserved += cost;
             }
@@ -482,6 +498,9 @@ impl App {
                 // let funds free up, without counting toward the latch.
                 if is_collateral_refusal(&reason) {
                     *self.collateral_pause_until.lock() = now_ms() + COLLATERAL_PAUSE_MS;
+                } else if reason.contains("HTTP 429") {
+                    // The venue's rate limit, not a refused order: the client
+                    // backs off every call; it does not count toward the latch.
                 } else {
                     state.risk.state.consecutive_rejections += 1;
                     let _ = state.risk.check_latches();
@@ -649,6 +668,7 @@ fn main() -> anyhow::Result<()> {
         };
         let api_key = cfg.predict_api_key.clone().unwrap_or_default();
         let client = Arc::new(Client::new(&cfg.predict_api_url, &api_key, signer)?);
+        client.set_rate_limit(cfg.max_requests_per_s);
         match args.command {
             Some(Command::Preflight) => preflight(&cfg, &client).await,
             Some(Command::Approve { confirm }) => approve(&cfg, &client, confirm).await,
@@ -798,6 +818,7 @@ async fn run(cfg: Config, client: Arc<Client>) -> anyhow::Result<()> {
         cancel_epoch: std::sync::atomic::AtomicU64::new(0),
         fill_tags: Mutex::new(Vec::new()),
         submitting: Mutex::new(Default::default()),
+        wallet_usdt: Mutex::new(None),
         kalshi_http: reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(3))
             .timeout(Duration::from_secs(8))
@@ -890,6 +911,7 @@ async fn run(cfg: Config, client: Arc<Client>) -> anyhow::Result<()> {
     tokio::spawn(settlement_accounting_loop(app.clone()));
     tokio::spawn(orphan_sweep_loop(app.clone()));
     tokio::spawn(fair_score_loop(app.clone()));
+    tokio::spawn(wallet_loop(app.clone()));
 
     app.state.lock().ready = true;
     let routes = routes(app.clone());
@@ -1305,6 +1327,29 @@ async fn settlement_accounting_loop(app: Arc<App>) {
 }
 
 /// Kalshi's `result` for a settled contract: Some(true) for "yes".
+/// Reads the wallet's USDT every `WALLET_POLL_S` for the free-collateral check.
+async fn wallet_loop(app: Arc<App>) {
+    if app.cfg.mode != VenueMode::Live || app.cfg.privy_private_key.is_none() {
+        return;
+    }
+    let mut interval = tokio::time::interval(Duration::from_secs(WALLET_POLL_S));
+    let mut chain: Option<chain::PredictChain> = None;
+    loop {
+        interval.tick().await;
+        if chain.is_none() {
+            chain = settle_chain(&app).await.ok();
+        }
+        let Some(c) = chain.as_ref() else { continue };
+        match c.balances().await {
+            Ok((usdt, _gas)) => *app.wallet_usdt.lock() = Some((usdt, now_ms())),
+            Err(error) => {
+                app.record("wallet_error", json!({"error": public_error(&error)}));
+                chain = None;
+            }
+        }
+    }
+}
+
 /// Requotes remove only the order ids they tracked. An order the venue holds
 /// but we have no id for (a submit whose answer was lost) is removed once two
 /// sweeps in a row, `ORPHAN_SWEEP_S` apart, saw it untracked, so a submit
@@ -1803,6 +1848,9 @@ fn adopt_order(app: &Arc<App>, order_id: &str, data: &Value) {
 }
 
 const COLLATERAL_PAUSE_MS: i64 = 30_000;
+/// The wallet's USDT is read this often, and trusted this long.
+const WALLET_POLL_S: u64 = 15;
+const WALLET_STALE_MS: i64 = 60_000;
 
 /// Off-book quote removal: tries in all, and the backoff step between them.
 const REMOVE_ATTEMPTS: u32 = 3;

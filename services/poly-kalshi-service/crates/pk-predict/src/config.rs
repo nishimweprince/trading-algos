@@ -95,6 +95,12 @@ pub struct Config {
     /// The least σ a Binance-informed fair uses without a fresh Kalshi-implied
     /// one (`PK_PRED_SIGMA_FLOOR`, bp per √minute; stored per √second).
     pub sigma_floor: f64,
+    /// Requests a second to Predict over every call (`PK_PRED_MAX_REQUESTS_PER_S`;
+    /// 0 = unlimited): a window open's burst drew 429s that latched the adapter.
+    pub max_requests_per_s: f64,
+    /// Bids stay this far inside the wallet's USDT (`PK_PRED_COLLATERAL_MARGIN`),
+    /// checked here instead of drawing Predict's "insufficient collateral".
+    pub collateral_margin_usd: f64,
     pub fingerprint: String,
 }
 
@@ -283,6 +289,8 @@ impl Config {
             open_fair: FairSource::parse(get("PK_PRED_OPEN_FAIR").as_deref().unwrap_or("kalshi"))?,
             pair_fair: FairSource::parse(get("PK_PRED_PAIR_FAIR").as_deref().unwrap_or("kalshi"))?,
             sigma_floor: number("PK_PRED_SIGMA_FLOOR", 3.0)? * 1e-4 / 60_f64.sqrt(),
+            max_requests_per_s: number("PK_PRED_MAX_REQUESTS_PER_S", 6.0)?,
+            collateral_margin_usd: number("PK_PRED_COLLATERAL_MARGIN", 0.25)?,
             fingerprint,
         })
     }

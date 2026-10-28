@@ -10,6 +10,13 @@ use crate::sign::{OrderInput, PredictSigner, Side};
 
 pub struct Client {
     http: reqwest::Client,
+    /// Requests per second across every call (0 = unlimited) and the bucket
+    /// `(tokens, last refill)`: window opens sent a burst Predict refused
+    /// with 429 (10-28 02:00Z, six in a row latched the adapter).
+    rate: parking_lot::Mutex<f64>,
+    bucket: parking_lot::Mutex<(f64, Option<std::time::Instant>)>,
+    /// After a 429 every call waits until then; the wait doubles on repeats.
+    backoff: parking_lot::Mutex<(Option<std::time::Instant>, u64)>,
     base: String,
     api_key: String,
     signer: Option<Arc<PredictSigner>>,
@@ -49,12 +56,61 @@ impl Client {
                 .pool_idle_timeout(std::time::Duration::from_secs(20))
                 .tcp_keepalive(std::time::Duration::from_secs(15))
                 .build()?,
+            rate: parking_lot::Mutex::new(0.0),
+            bucket: parking_lot::Mutex::new((0.0, None)),
+            backoff: parking_lot::Mutex::new((None, 0)),
             base: base.trim_end_matches('/').into(),
             api_key: api_key.into(),
             signer,
             jwt: parking_lot::RwLock::new(None),
             request_id: AtomicU64::new(1),
         })
+    }
+
+    /// At most `per_second` requests a second over every call (0 = unlimited).
+    pub fn set_rate_limit(&self, per_second: f64) {
+        *self.rate.lock() = per_second.max(0.0);
+    }
+
+    /// Waits out a 429 back-off, then for a token of the rate limit.
+    async fn acquire(&self) {
+        loop {
+            let wait = {
+                let now = std::time::Instant::now();
+                let backoff = self.backoff.lock().0.filter(|until| *until > now);
+                if let Some(until) = backoff {
+                    until - now
+                } else {
+                    let rate = *self.rate.lock();
+                    if rate <= 0.0 {
+                        return;
+                    }
+                    let burst = rate.max(1.0);
+                    let mut bucket = self.bucket.lock();
+                    let elapsed = bucket.1.map_or(burst / rate, |last| (now - last).as_secs_f64());
+                    bucket.0 = (bucket.0 + elapsed * rate).min(burst);
+                    bucket.1 = Some(now);
+                    if bucket.0 >= 1.0 {
+                        bucket.0 -= 1.0;
+                        return;
+                    }
+                    std::time::Duration::from_secs_f64((1.0 - bucket.0) / rate)
+                }
+            };
+            tokio::time::sleep(wait.max(std::time::Duration::from_millis(1))).await;
+        }
+    }
+
+    /// A 429 starts (or doubles, up to `MAX_BACKOFF_MS`) the shared back-off;
+    /// any other answer ends the run.
+    fn note_status(&self, status: reqwest::StatusCode) {
+        let mut backoff = self.backoff.lock();
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            let ms = if backoff.1 == 0 { FIRST_BACKOFF_MS } else { (backoff.1 * 2).min(MAX_BACKOFF_MS) };
+            *backoff = (Some(std::time::Instant::now() + std::time::Duration::from_millis(ms)), ms);
+        } else {
+            backoff.1 = 0;
+        }
     }
 
     async fn request(
@@ -64,6 +120,7 @@ impl Client {
         body: Option<&Value>,
         jwt: bool,
     ) -> anyhow::Result<Value> {
+        self.acquire().await;
         let mut req =
             self.http.request(method, format!("{}{}", self.base, path)).header("x-api-key", &self.api_key);
         if jwt {
@@ -79,6 +136,7 @@ impl Client {
         }
         let response = req.send().await?;
         let status = response.status();
+        self.note_status(status);
         let value: Value = response.json().await.unwrap_or_else(|_| json!({}));
         anyhow::ensure!(
             status.is_success(),
@@ -225,6 +283,10 @@ impl Client {
     }
 }
 
+/// The first wait after a 429, and the most it doubles to.
+const FIRST_BACKOFF_MS: u64 = 1_000;
+const MAX_BACKOFF_MS: u64 = 8_000;
+
 fn find_array(value: &Value) -> &[Value] {
     value
         .pointer("/data/orders")
@@ -341,6 +403,33 @@ mod tests {
     fn client(base: &str) -> Client {
         let signer = Arc::new(PredictSigner::new(KEY, ACCOUNT, crate::sign::BNB_MAINNET).unwrap());
         Client::new(base, "api-key", Some(signer)).unwrap()
+    }
+
+    #[tokio::test]
+    async fn calls_are_rate_limited_after_a_burst() {
+        let c = client("http://127.0.0.1:9");
+        c.set_rate_limit(5.0);
+        let start = std::time::Instant::now();
+        for _ in 0..5 {
+            c.acquire().await;
+        }
+        assert!(start.elapsed() < std::time::Duration::from_millis(50), "a burst of 5 goes at once");
+        c.acquire().await;
+        c.acquire().await;
+        assert!(start.elapsed() >= std::time::Duration::from_millis(350), "then 5 a second");
+    }
+
+    #[tokio::test]
+    async fn a_429_backs_every_call_off_and_doubles() {
+        let c = client("http://127.0.0.1:9");
+        c.note_status(reqwest::StatusCode::TOO_MANY_REQUESTS);
+        let start = std::time::Instant::now();
+        c.acquire().await;
+        assert!(start.elapsed() >= std::time::Duration::from_millis(950), "waits the first second out");
+        c.note_status(reqwest::StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(c.backoff.lock().1, 2 * FIRST_BACKOFF_MS, "a repeat doubles");
+        c.note_status(reqwest::StatusCode::OK);
+        assert_eq!(c.backoff.lock().1, 0, "a normal answer ends the run");
     }
 
     #[tokio::test]
