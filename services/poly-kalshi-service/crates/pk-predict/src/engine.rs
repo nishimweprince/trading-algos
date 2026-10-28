@@ -187,8 +187,8 @@ impl Engine {
     }
 
     /// A Binance frame; true when it updated an asset.
-    pub fn binance_frame(&mut self, cfg: &Config, text: &str) -> bool {
-        self.spot.frame(text, now_ms(), cfg.binance_pause_bps, cfg.binance_pause_ms).is_some()
+    pub fn binance_frame(&mut self, cfg: &Config, text: &str, perp: bool) -> bool {
+        self.spot.frame(text, perp, now_ms(), cfg.binance_pause_bps, cfg.binance_pause_ms).is_some()
     }
 
     /// Kalshi's fair and the two Binance-informed fairs of `market` now.
@@ -801,8 +801,8 @@ mod tests {
         assert_eq!(quoted_sides(&mut e, &HashMap::new()).len(), 2, "both first legs quoted");
         let c = cfg();
         let frame = |px: f64| format!(r#"{{"stream":"btcusdt@bookTicker","data":{{"s":"BTCUSDT","b":"{px}","a":"{px}"}}}}"#);
-        assert!(e.binance_frame(&c, &frame(100_000.0)));
-        assert!(e.binance_frame(&c, &frame(100_100.0)), "+10 bp at once");
+        assert!(e.binance_frame(&c, &frame(100_000.0), false));
+        assert!(e.binance_frame(&c, &frame(100_100.0), false), "+10 bp at once");
         e.quotes.clear(); // re-evaluate from scratch
         let sides = quoted_sides(&mut e, &HashMap::new());
         assert_eq!(sides.len(), 1, "a rise holds only the Down first leg off: {sides:?}");
@@ -837,14 +837,14 @@ mod tests {
                 })
         };
         // Spot 30 bp over the start; Kalshi 0.70 implies σ; Predict agrees.
-        assert!(e.binance_frame(&c, &frame(100_300.0)));
+        assert!(e.binance_frame(&c, &frame(100_300.0), false));
         let _ = e.kalshi_frame(r#"{"type":"orderbook_snapshot","msg":{"market_ticker":"KXBTC15M-ABC","yes_dollars_fp":[["0.69","3"]],"no_dollars_fp":[["0.29","2"]]}}"#);
         e.venue_book("7".into(), Book { bid: Some(0.64), bid_size: 5.0, ask: Some(0.76), ask_size: 5.0, update_ms: now_ms() });
         let before = yes_bid(&mut e).expect("YES first leg at Kalshi's level");
         assert!((before - 0.65).abs() < 1e-9, "{before}");
         assert!(e.sigma("BTC", now_ms()).is_some(), "Kalshi implied a σ");
         // Spot +20 bp, Kalshi silent: the adjusted fair (~0.81) moves the bid now.
-        assert!(e.binance_frame(&c, &frame(100_500.0)));
+        assert!(e.binance_frame(&c, &frame(100_500.0), false));
         e.venue_book("7".into(), Book { bid: Some(0.76), bid_size: 5.0, ask: Some(0.86), ask_size: 5.0, update_ms: now_ms() });
         let after = yes_bid(&mut e).expect("YES first leg");
         assert!(after > before + 0.05, "{before} -> {after}");
@@ -868,7 +868,7 @@ mod tests {
         let mut e = quoting_at("0.45", "0.50", (0.40, 0.50));
         let frame = r#"{"stream":"btcusdt@bookTicker","data":{"s":"BTCUSDT","b":"100000","a":"100000"}}"#;
         let mut c = cfg();
-        assert!(e.binance_frame(&c, frame));
+        assert!(e.binance_frame(&c, frame, false));
         e.kalshi_update.insert("KXBTC15M-ABC".into(), now_ms() - 5_000); // quiet 5 s
         assert!(matches!(e.evaluate(&c, &HashMap::new()).as_slice(), [Action::CancelAll { .. }]), "Kalshi-priced: stale");
         e.stale_cancelled = false;

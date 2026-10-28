@@ -14,6 +14,14 @@
 //! 3. **Spot fair**: `Φ(ln(S / K) / (σ √τ))` from Binance alone, K being
 //!    Predict's own start price for the window.
 //!
+//! With the USDⓈ-M perpetual connected (`perp_primary`) its mid drives all
+//! three, being Binance's busiest book and the first to move (~930 updates a
+//! second against spot's ~280, Tokyo 10-28). The perp trades a few bp off
+//! spot, so it is brought to spot's level by the basis `ln perp − ln spot`, an
+//! EWMA (`BASIS_HALF_LIFE_MS`) sampled on each spot frame: the spot fair keeps
+//! spot's level against Predict's start price and moves at the perp's speed.
+//! With the perp stale for `PERP_MAX_AGE_MS`, spot frames drive as before.
+//!
 //! σ is the larger of Binance's realised volatility (an EWMA of squared 1 s
 //! log returns) and the volatility Kalshi's own price implies (`implied_sigma`,
 //! smoothed per asset). Realised alone ran ~2.4× under Kalshi's in a calm
@@ -31,6 +39,11 @@ use serde_json::{Value, json};
 pub const GUARD_WINDOW_MS: i64 = 1_000;
 /// A Binance mid older than this is no signal (the guard and both fairs fall back).
 pub const SPOT_MAX_AGE_MS: i64 = 5_000;
+/// A perp mid older than this neither samples the basis nor stops spot
+/// frames from driving.
+const PERP_MAX_AGE_MS: i64 = 1_000;
+/// EWMA half-life of the perp–spot basis.
+const BASIS_HALF_LIFE_MS: f64 = 60_000.0;
 /// σ needs this many 1 s returns (a few minutes) before it is used.
 const MIN_VOL_SAMPLES: u32 = 120;
 /// EWMA half-life of the variance, in 1 s samples (5 minutes).
@@ -91,17 +104,25 @@ struct AssetSpot {
     last_sample: Option<(i64, f64)>,
     var_per_s: f64,
     samples: u32,
+    /// The last raw perp log mid, and when.
+    perp_ln: f64,
+    perp_ms: i64,
+    /// `ln perp − ln spot` (EWMA) and when it was last sampled.
+    basis: Option<(f64, i64)>,
 }
 
 #[derive(Default)]
 pub struct Spot {
     assets: HashMap<String, AssetSpot>,
+    /// The perpetual drives (spot sets the level); otherwise spot alone.
+    pub perp_primary: bool,
 }
 
 impl Spot {
     /// A Binance `bookTicker` frame (bare or under the combined stream's
-    /// `data`); the asset it updated.
-    pub fn frame(&mut self, text: &str, now: i64, pause_bps: f64, pause_ms: i64) -> Option<String> {
+    /// `data`) from spot or, with `perp`, the USDⓈ-M perpetual; the asset
+    /// whose mid it moved.
+    pub fn frame(&mut self, text: &str, perp: bool, now: i64, pause_bps: f64, pause_ms: i64) -> Option<String> {
         let value: Value = serde_json::from_str(text).ok()?;
         let data = value.get("data").unwrap_or(&value);
         let symbol = data.get("s")?.as_str()?;
@@ -111,8 +132,40 @@ impl Spot {
         if !(bid > 0.0 && ask >= bid) {
             return None;
         }
-        self.update(&asset, (bid + ask) / 2.0, now, pause_bps, pause_ms);
-        Some(asset)
+        let ln = ((bid + ask) / 2.0).ln();
+        if !self.perp_primary {
+            if perp {
+                return None;
+            }
+            self.update(&asset, ln.exp(), now, pause_bps, pause_ms);
+            return Some(asset);
+        }
+        let s = self.assets.entry(asset.clone()).or_default();
+        if perp {
+            s.perp_ln = ln;
+            s.perp_ms = now;
+            let (basis, _) = s.basis?;
+            self.update(&asset, (ln - basis).exp(), now, pause_bps, pause_ms);
+            return Some(asset);
+        }
+        if now - s.perp_ms > PERP_MAX_AGE_MS {
+            self.update(&asset, ln.exp(), now, pause_bps, pause_ms);
+            return Some(asset);
+        }
+        let x = s.perp_ln - ln;
+        s.basis = Some(match s.basis {
+            None => (x, now),
+            Some((b, t)) => {
+                let lambda = 0.5_f64.powf((now - t).max(0) as f64 / BASIS_HALF_LIFE_MS);
+                (lambda * b + (1.0 - lambda) * x, now)
+            }
+        });
+        None
+    }
+
+    /// The perp–spot basis in bp, once sampled.
+    pub fn basis_bps(&self, asset: &str) -> Option<f64> {
+        self.assets.get(asset).and_then(|s| s.basis).map(|(b, _)| b * 1e4)
     }
 
     fn update(&mut self, asset: &str, mid: f64, now: i64, pause_bps: f64, pause_ms: i64) {
@@ -200,6 +253,8 @@ impl Spot {
                     "down_off": now < s.rise_until,
                     "move_signed_bps": s.signed_bps,
                     "pauses": s.pauses,
+                    "driver": if self.perp_primary && now - s.perp_ms <= PERP_MAX_AGE_MS && s.basis.is_some() { "perp" } else { "spot" },
+                    "basis_bps": s.basis.map(|(b, _)| b * 1e4),
                 }),
             );
         }
@@ -465,18 +520,39 @@ mod tests {
     fn a_fast_move_pauses_and_vol_warms_up() {
         let mut s = Spot::default();
         let frame = |px: f64| format!(r#"{{"stream":"btcusdt@bookTicker","data":{{"s":"BTCUSDT","b":"{px}","a":"{}"}}}}"#, px + 0.1);
-        assert_eq!(s.frame(&frame(100_000.0), 0, 5.0, 2_000).as_deref(), Some("BTC"));
+        assert_eq!(s.frame(&frame(100_000.0), false, 0, 5.0, 2_000).as_deref(), Some("BTC"));
         assert_eq!(s.guard("BTC", 100), (false, false));
-        s.frame(&frame(100_060.0), 500, 5.0, 2_000); // +6 bp in 0.5 s
+        s.frame(&frame(100_060.0), false, 500, 5.0, 2_000); // +6 bp in 0.5 s
         assert_eq!(s.guard("BTC", 600), (false, true), "a rise holds the Down bid off, not the Up bid");
         assert_eq!(s.guard("BTC", 2_600), (false, false), "over after pause_ms");
         assert!(s.ln_and_move("BTC", 600).unwrap().1 > 5.0);
         assert!(s.sigma("BTC", 600).is_none(), "not warmed up");
         for i in 1..=MIN_VOL_SAMPLES as i64 {
-            s.frame(&frame(100_060.0 + (i % 2) as f64 * 10.0), 500 + i * 1_000, 5.0, 2_000);
+            s.frame(&frame(100_060.0 + (i % 2) as f64 * 10.0), false, 500 + i * 1_000, 5.0, 2_000);
         }
         assert!(s.sigma("BTC", 500 + MIN_VOL_SAMPLES as i64 * 1_000).is_some());
         assert!(s.mid("BTC", 10_000_000).is_none(), "stale");
+    }
+
+    #[test]
+    fn the_perp_drives_at_spot_level() {
+        let mut s = Spot { perp_primary: true, ..Default::default() };
+        let frame = |px: f64| format!(r#"{{"stream":"btcusdt@bookTicker","data":{{"s":"BTCUSDT","b":"{px}","a":"{px}"}}}}"#);
+        assert_eq!(s.frame(&frame(100_050.0), true, 0, 5.0, 2_000), None, "no basis yet");
+        assert_eq!(s.frame(&frame(100_000.0), false, 10, 5.0, 2_000), None, "spot only samples the basis");
+        assert!((s.basis_bps("BTC").unwrap() - 5.0).abs() < 0.01, "perp 5 bp over spot");
+        // The perp's move lands at spot's level.
+        assert_eq!(s.frame(&frame(100_110.0), true, 20, 5.0, 2_000).as_deref(), Some("BTC"));
+        assert!((s.mid("BTC", 20).unwrap() - 100_060.0).abs() < 0.1);
+        assert_eq!(s.guard("BTC", 30), (false, false), "6 bp from the level's first print, inside one window");
+        assert_eq!(s.frame(&frame(100_170.0), true, 40, 5.0, 2_000).as_deref(), Some("BTC"));
+        assert_eq!(s.guard("BTC", 50), (false, true), "+6 bp on the perp is a rise");
+        // A stale perp hands driving back to spot.
+        assert_eq!(s.frame(&frame(100_200.0), false, 2_000, 5.0, 2_000).as_deref(), Some("BTC"));
+        assert!((s.mid("BTC", 2_000).unwrap() - 100_200.0).abs() < 1e-6);
+        // Off: perp frames are ignored.
+        let mut off = Spot::default();
+        assert_eq!(off.frame(&frame(100_000.0), true, 0, 5.0, 2_000), None);
     }
 
     #[test]

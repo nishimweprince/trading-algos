@@ -79,6 +79,10 @@ pub struct Config {
     /// Binance spot (`PK_PRED_BINANCE_WS_URL`, the combined-stream endpoint):
     /// the guard and the Binance-informed fairs (see `spot`).
     pub binance_ws_url: String,
+    /// Binance USDⓈ-M perpetuals (`PK_PRED_BINANCE_PERP_WS_URL`; "off" for
+    /// spot alone): when set the perp drives the guard and fairs, spot only
+    /// sets their level (see `spot`).
+    pub binance_perp_ws_url: Option<String>,
     /// Pull a coin's first-leg quotes on a Binance move (`PK_PRED_BINANCE_GUARD`) …
     pub binance_guard: bool,
     /// … of `binance_pause_bps` within 1 s (`PK_PRED_BINANCE_PAUSE_BPS`), for
@@ -282,6 +286,11 @@ impl Config {
             open_min_edge: number("PK_PRED_OPEN_MIN_EDGE", 0.01)?,
             binance_ws_url: get("PK_PRED_BINANCE_WS_URL")
                 .unwrap_or_else(|| "wss://stream.binance.com:9443/stream".into()),
+            binance_perp_ws_url: match get("PK_PRED_BINANCE_PERP_WS_URL") {
+                Some(v) if v.trim().is_empty() || v.trim().eq_ignore_ascii_case("off") => None,
+                Some(v) => Some(v),
+                None => Some("wss://fstream.binance.com/stream".into()),
+            },
             binance_guard: flag("PK_PRED_BINANCE_GUARD", true)?,
             binance_pause_bps: number("PK_PRED_BINANCE_PAUSE_BPS", 5.0)?,
             binance_pause_ms: integer("PK_PRED_BINANCE_PAUSE_MS", 2_000)? as i64,

@@ -83,6 +83,7 @@ struct App {
     raw: Mutex<Option<Journal>>,
     kalshi: Mutex<Option<FeedHandle>>,
     binance: Mutex<Option<FeedHandle>>,
+    binance_perp: Mutex<Option<FeedHandle>>,
     /// Kalshi vs the Binance-informed fairs, scored per settled window.
     scores: Mutex<spot::FairScores>,
     /// Woken by every Binance, Kalshi and Predict message: the strategy
@@ -804,6 +805,7 @@ async fn run(cfg: Config, client: Arc<Client>) -> anyhow::Result<()> {
         raw: Mutex::new(if cfg.raw { Some(Journal::open(cfg.state_dir.join("raw"))?) } else { None }),
         engine: Mutex::new({
             let mut engine = Engine::new();
+            engine.spot.perp_primary = cfg.binance_perp_ws_url.is_some();
             engine.sigma_floor = cfg.sigma_floor;
             engine.restore_implied(load_implied(&cfg.state_dir.join(IMPLIED_SIGMA_FILE)));
             engine
@@ -811,6 +813,7 @@ async fn run(cfg: Config, client: Arc<Client>) -> anyhow::Result<()> {
         state: Mutex::new(state),
         kalshi: Mutex::new(None),
         binance: Mutex::new(None),
+        binance_perp: Mutex::new(None),
         scores: Mutex::new(spot::FairScores::load(&cfg.state_dir.join(FAIR_SCORES_FILE))),
         wake: tokio::sync::Notify::new(),
         lanes: Mutex::new(Default::default()),
@@ -882,24 +885,32 @@ async fn run(cfg: Config, client: Arc<Client>) -> anyhow::Result<()> {
     kalshi.set_wanted(kalshi_wanted(&app));
     *app.kalshi.lock() = Some(kalshi);
 
-    // Binance spot: the guard and the Binance-informed fairs (see `spot`).
+    // Binance: the guard and the Binance-informed fairs (see `spot`); the
+    // perp drives when connected, spot sets the level.
     let weak = Arc::downgrade(&app);
-    let emit = Arc::new(move |_venue: char, text: String| {
+    let emit = Arc::new(move |venue: char, text: String| {
         let Some(app) = weak.upgrade() else { return };
-        let updated = app.engine.lock().binance_frame(&app.cfg, &text);
+        let perp = venue == 'f';
+        let updated = app.engine.lock().binance_frame(&app.cfg, &text, perp);
+        {
+            let mut state = app.state.lock();
+            let feed = state.feeds.entry(if perp { "binance_perp" } else { "binance" }.into()).or_default();
+            feed.connected = true;
+            feed.last_message_ms = now_ms();
+        }
         if updated {
-            {
-                let mut state = app.state.lock();
-                let feed = state.feeds.entry("binance".into()).or_default();
-                feed.connected = true;
-                feed.last_message_ms = now_ms();
-            }
             app.wake.notify_one();
         }
     });
-    let binance = spawn_feed(app.cfg.binance_ws_url.clone(), FeedKind::Binance { futures: false }, emit);
-    binance.set_wanted(app.cfg.assets.iter().map(|a| format!("{}usdt@bookTicker", a.to_lowercase())).collect());
+    let wanted: std::collections::BTreeSet<String> = app.cfg.assets.iter().map(|a| format!("{}usdt@bookTicker", a.to_lowercase())).collect();
+    let binance = spawn_feed(app.cfg.binance_ws_url.clone(), FeedKind::Binance { futures: false }, emit.clone());
+    binance.set_wanted(wanted.clone());
     *app.binance.lock() = Some(binance);
+    if let Some(url) = app.cfg.binance_perp_ws_url.clone() {
+        let perp = spawn_feed(url, FeedKind::Binance { futures: true }, emit);
+        perp.set_wanted(wanted);
+        *app.binance_perp.lock() = Some(perp);
+    }
 
     tokio::spawn(predict_ws(app.clone()));
     tokio::spawn(discovery_loop(app.clone()));
