@@ -359,7 +359,8 @@ pub struct DepthBook {
 }
 
 impl DepthBook {
-    /// A book with only its top level (tests, and feeds without depth).
+    /// A book with only its top level (tests).
+    #[cfg(test)]
     pub fn top_only(top: Book) -> Self {
         Self {
             bids: top.bid.map(|p| vec![(p, top.bid_size)]).unwrap_or_default(),
@@ -369,6 +370,7 @@ impl DepthBook {
     }
 }
 
+#[cfg(test)]
 pub fn book_from_ws(value: &Value) -> Option<(String, Book)> {
     depth_from_ws(value).map(|(market, depth)| (market, depth.top))
 }
