@@ -50,15 +50,35 @@ def conversion(record_dir: Path, start: date, end: date, symbols: list[str], log
         )
         for s in symbols
     }
-    results, errors = [], []
+    partial = (
+        sorted(p.name for p in (record_dir / ".partial").glob("*"))
+        if (record_dir / ".partial").is_dir()
+        else []
+    )
+    # An error stands only until its symbol-day is tried again: a later line
+    # for the same day (done, skipped or failed anew), or the day converting
+    # now or complete on disk, supersedes it.
+    results, errors = [], {}
     for line in _tail(log, 5000):
+        if line.startswith("--- restart"):
+            errors.clear()  # a hand-written marker: same as run_started
         if not line.startswith("{"):
             continue
         row = json.loads(line)
+        if "run_started" in row:
+            errors.clear()  # each run retries every unfinished day
+            continue
+        key = (row.get("date"), row.get("symbol"))
+        errors.pop(key, None)
         if "error" in row:
-            errors.append(row)
+            errors[key] = row
         elif "lines" in row:
             results.append(row)
+    for day, symbol in list(errors):
+        stamp = str(day).replace("-", "")
+        complete = len(list((record_dir / str(symbol) / stamp).glob("*.gz"))) == 24
+        if complete or f"{stamp}-{symbol}" in partial:
+            errors.pop((day, symbol))
     missing = [f"{r['date']} {r['symbol']}: {r['missing']}" for r in results if r.get("missing")]
     seconds = [r["seconds"] for r in results[-30:]]
     return {
@@ -67,11 +87,9 @@ def conversion(record_dir: Path, start: date, end: date, symbols: list[str], log
         "total": days * len(symbols),
         "by_symbol": done,
         "mean_seconds": round(sum(seconds) / len(seconds)) if seconds else None,
-        "errors": errors[-10:],
+        "errors": list(errors.values())[-10:],
         "missing_hours": missing[-10:],
-        "partial": sorted(p.name for p in (record_dir / ".partial").glob("*"))
-        if (record_dir / ".partial").is_dir()
-        else [],
+        "partial": partial,
         "log": [line for line in _tail(log, 8) if "retry" not in line],
     }
 

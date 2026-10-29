@@ -738,6 +738,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(json.dumps({"date": day.isoformat(), "symbol": symbol, "skipped": "done"}))
             else:
                 todo.append((day, symbol, args.dest, key, args.keep_parquet))
+    started = datetime.now(UTC).isoformat(timespec="seconds")
+    print(json.dumps({"run_started": started, "todo": len(todo)}), flush=True)
     failures = 0
     with ProcessPoolExecutor(max_workers=args.jobs) as pool:
         queue = iter(todo)
