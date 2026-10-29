@@ -56,6 +56,8 @@ struct App {
     exec: Option<Arc<Exec>>,
     kalshi: Mutex<Option<FeedHandle>>,
     poly: Mutex<Option<FeedHandle>>,
+    /// Coinbase `ticker`, only with `PK_PM_SPOT_GUARD=yes`.
+    spot: Mutex<Option<FeedHandle>>,
     last_k_ns: AtomicI64,
     last_p_ns: AtomicI64,
     last_tick_ns: AtomicI64,
@@ -84,6 +86,7 @@ impl App {
         st["feeds"] = json!({
             "kalshi": self.kalshi.lock().as_ref().map(FeedHandle::stats),
             "polymarket": self.poly.lock().as_ref().map(FeedHandle::stats),
+            "coinbase": self.spot.lock().as_ref().map(FeedHandle::stats),
             "ok": self.feeds_ok(t),
         });
         let ack = self.post_ack_ms.lock();
@@ -180,6 +183,7 @@ async fn run(settings: Settings, pm: PmSettings) -> anyhow::Result<()> {
         exec,
         kalshi: Mutex::new(None),
         poly: Mutex::new(None),
+        spot: Mutex::new(None),
         last_k_ns: AtomicI64::new(0),
         last_p_ns: AtomicI64::new(0),
         last_tick_ns: AtomicI64::new(now_ns()),
@@ -231,6 +235,19 @@ async fn run(settings: Settings, pm: PmSettings) -> anyhow::Result<()> {
         });
         let kind = FeedKind::Poly { shard: None, silence: Some(Duration::from_secs(30)) };
         *app.poly.lock() = Some(spawn_feed(settings.poly_ws_url.clone(), kind, emit));
+    }
+    // Spot for the directional guard. A stale spot only lifts the guard (as
+    // pk-maker-cpp); it does not stop the quotes.
+    if app.pm.cfg.spot_guard {
+        let a = app.clone();
+        let emit: pk_feeds::Emit = Arc::new(move |venue, text: String| {
+            if venue == 'o' {
+                a.engine.lock().on_spot(&text, now_ns());
+            }
+        });
+        let feed = spawn_feed(settings.coinbase_ws_url.clone(), FeedKind::Coinbase, emit);
+        feed.set_wanted(app.pm.assets.iter().filter_map(|a| pk_feeds::ws::coinbase_product(a)).collect());
+        *app.spot.lock() = Some(feed);
     }
 
     // Discovery: this window on both venues, every 2 s until found.

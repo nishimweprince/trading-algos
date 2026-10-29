@@ -310,8 +310,8 @@ pub fn pick_pm(status: Option<&Value>) -> Option<Value> {
     let mut out = Map::new();
     for k in [
         "mode", "halted", "halt", "kill", "realised_today", "loss_today_vs_limit", "daily_loss_usd", "realised_total",
-        "realised_by_day", "open_cost", "max_open_cost_usd", "orders_tracked", "coins", "held", "totals", "counters",
-        "recent", "cfg", "host", "uptime_s",
+        "realised_by_day", "open_cost", "max_open_cost_usd", "orders_tracked", "coins", "open", "to_redeem", "settled",
+        "settled_recent", "totals", "counters", "recent", "cfg", "host", "uptime_s",
     ] {
         out.insert(k.into(), st.get(k).cloned().unwrap_or(Value::Null));
     }

@@ -59,6 +59,10 @@ const RECENT: usize = 80;
 /// Markout horizons after a fill; the last three stop at the window's close,
 /// and one more is taken at the close itself (Kalshi's mid 1 s before it).
 const CASH_HOLD_MS: i64 = 3_000;
+/// The spot guard measures moves over this window, and ignores a spot older
+/// than `SPOT_MAX_AGE_MS` (as pk-maker-cpp).
+const SPOT_WINDOW_MS: i64 = 1_000;
+const SPOT_MAX_AGE_MS: i64 = 5_000;
 /// A markout without a two-sided Kalshi book takes the last mid up to this old.
 const MID_MAX_AGE_MS: i64 = 30_000;
 const MARKOUTS_MS: [i64; 4] = [5_000, 30_000, 120_000, 300_000];
@@ -93,6 +97,18 @@ pub struct PmCfg {
     /// … and while Kalshi's fair is within this band.
     pub open_min_fair: f64,
     pub open_max_fair: f64,
+    /// No first leg priced under this (pkm: legs under 0.35 lost 8.9¢/share).
+    pub open_min_px: f64,
+    /// A resting first leg within this of fair is pulled at once, with no
+    /// adverse hold (pkm: first legs filled on 1–5 s old quotes lost 6¢/share).
+    pub open_min_edge: f64,
+    /// Half-spread of bids that pair shares already held.
+    pub pair_half_spread: f64,
+    /// Directional spot guard (Coinbase): a fall of `spot_pause_bps` within
+    /// 1 s takes the Up first leg off for `spot_pause_ms`, a rise the Down one.
+    pub spot_guard: bool,
+    pub spot_pause_bps: f64,
+    pub spot_pause_ms: i64,
 }
 
 /// What the executor must do.
@@ -203,6 +219,26 @@ impl Inventory {
     fn close_ns(&self) -> i64 {
         (self.open_unix + WINDOW_S) * NS
     }
+
+    /// "paired" (equal shares both sides), "uneven" (both sides, unequal) or
+    /// "one_sided". One-sided windows are where adverse selection shows: on
+    /// 10-26..29 they won 20 of 210 and lost $425 while pairs made $381.
+    pub fn kind(&self) -> &'static str {
+        match (self.up > 1e-9, self.down > 1e-9) {
+            (true, true) if (self.up - self.down).abs() < 1e-9 => "paired",
+            (true, true) => "uneven",
+            _ => "one_sided",
+        }
+    }
+
+    /// Settled, and we hold shares of the side that won.
+    pub fn winner_held(&self) -> bool {
+        match self.settled.as_deref() {
+            Some("yes") => self.up > 1e-9,
+            Some("no") => self.down > 1e-9,
+            _ => false,
+        }
+    }
 }
 
 /// One order we sent, until its final state is known.
@@ -266,6 +302,12 @@ struct Coin {
     /// Kalshi's last two-sided mid (venue-received ms): markouts near the
     /// close use it, as Kalshi's book thins out there.
     last_mid: Option<(i64, f64)>,
+    /// Coinbase mid: when last seen, and ln(mid) over the last `SPOT_WINDOW_MS`.
+    spot_ms: i64,
+    spot_trail: VecDeque<(i64, f64)>,
+    /// The directional guard holds this side's first leg off until then.
+    up_off_until_ms: i64,
+    down_off_until_ms: i64,
 }
 
 impl Coin {
@@ -285,7 +327,17 @@ impl Coin {
             pauses: 0,
             last_mid: None,
             gate: "no window",
+            spot_ms: 0,
+            spot_trail: VecDeque::new(),
+            up_off_until_ms: 0,
+            down_off_until_ms: 0,
         }
+    }
+
+    /// The guard's sides held off now: (Up, Down). A stale spot holds nothing.
+    fn spot_off(&self, now_ms: i64, cfg: &PmCfg) -> (bool, bool) {
+        let on = cfg.spot_guard && self.spot_ms > 0 && now_ms - self.spot_ms <= SPOT_MAX_AGE_MS;
+        (on && now_ms < self.up_off_until_ms, on && now_ms < self.down_off_until_ms)
     }
 
     fn key(&self) -> Option<String> {
@@ -556,6 +608,53 @@ impl Engine {
         self.count("poly_resets");
     }
 
+    /// A Coinbase `ticker` frame (`o` line): the spot mid for the directional
+    /// guard. A fall of `spot_pause_bps` within 1 s takes the Up first leg off
+    /// for `spot_pause_ms`, a rise the Down one.
+    pub fn on_spot(&mut self, text: &str, t_ns: i64) {
+        #[derive(Deserialize)]
+        struct Ticker<'a> {
+            #[serde(rename = "type")]
+            kind: &'a str,
+            product_id: &'a str,
+            best_bid: Option<&'a str>,
+            best_ask: Option<&'a str>,
+        }
+        let Ok(t) = serde_json::from_str::<Ticker>(text) else { return };
+        let (Some(b), Some(a)) = (t.best_bid.and_then(|x| x.parse::<f64>().ok()), t.best_ask.and_then(|x| x.parse::<f64>().ok())) else {
+            return;
+        };
+        let asset = t.product_id.split('-').next().unwrap_or_default();
+        if t.kind != "ticker" || b <= 0.0 || a < b {
+            return;
+        }
+        let Some(i) = self.coins.iter().position(|c| c.name == asset) else { return };
+        let now_ms = t_ns / 1_000_000;
+        let (bps, pause_ms) = (self.cfg.spot_pause_bps, self.cfg.spot_pause_ms);
+        let c = &mut self.coins[i];
+        let ln = ((a + b) / 2.0).ln();
+        c.spot_ms = now_ms;
+        while c.spot_trail.front().is_some_and(|(ms, _)| *ms < now_ms - SPOT_WINDOW_MS) {
+            c.spot_trail.pop_front();
+        }
+        c.spot_trail.push_back((now_ms, ln));
+        let (lo, hi) = c.spot_trail.iter().fold((ln, ln), |(lo, hi), (_, x)| (lo.min(*x), hi.max(*x)));
+        let (rise, fall) = ((ln - lo) * 1e4, (hi - ln) * 1e4);
+        if bps <= 0.0 || (rise < bps && fall < bps) {
+            return;
+        }
+        let fresh_pause = c.up_off_until_ms.max(c.down_off_until_ms) < now_ms;
+        if fall >= bps {
+            c.up_off_until_ms = now_ms + pause_ms;
+        }
+        if rise >= bps {
+            c.down_off_until_ms = now_ms + pause_ms;
+        }
+        if fresh_pause {
+            self.count("spot_pauses");
+        }
+    }
+
     /// A Polymarket market-channel frame (`p` line).
     pub fn on_poly(&mut self, text: &str, t_ns: i64) {
         let Ok(msgs) = pk_engine::parse::poly_msgs(text) else { return };
@@ -736,6 +835,7 @@ impl Engine {
         let gate: &'static str;
         let mut want: [Option<(f64, f64)>; 2] = [None, None];
         let fair = c.fair(now_ms, &cfg);
+        let (up_off, down_off) = c.spot_off(now_ms, &cfg);
         match &c.window {
             _ if self.stopped => gate = "stopped",
             _ if halted => gate = "halted",
@@ -756,15 +856,27 @@ impl Engine {
                     if ua.is_none() || da.is_none() {
                         gate = "no poly book";
                     } else {
-                        gate = "quoting";
+                        gate = match (up_off, down_off) {
+                            (true, true) => "quoting:spot-both-off",
+                            (true, false) => "quoting:spot-up-off",
+                            (false, true) => "quoting:spot-down-off",
+                            _ => "quoting",
+                        };
                         let (u, d) = desired_px(&cfg, q, net, ua, da);
-                        for (n, px) in [u, d].into_iter().enumerate() {
+                        let pairing = PmCfg { half_spread: cfg.pair_half_spread, ..cfg.clone() };
+                        let (pu, pd) = desired_px(&pairing, q, net, ua, da);
+                        for (n, (px, pair_px)) in [(u, pu), (d, pd)].into_iter().enumerate() {
                             let up = n == 0;
-                            if opens(net, up) && !first_leg_ok(&cfg, s, q) {
+                            let opening = opens(net, up);
+                            if opening
+                                && (!first_leg_ok(&cfg, s, q)
+                                    || (if up { up_off } else { down_off })
+                                    || px.is_none_or(|p| p < cfg.open_min_px - 1e-9))
+                            {
                                 continue;
                             }
                             let opposite = held_avg.and_then(|h| h[1 - n]);
-                            let Some(px) = pair_cap(&cfg, px, opposite) else { continue };
+                            let Some(px) = pair_cap(&cfg, if opening { px } else { pair_px }, opposite) else { continue };
                             let Some(size) = room(&cfg, net, up) else { continue };
                             // The resting order's own notional is already in open cost.
                             let mine = c.slots[n].order.as_ref().map(|_| c.slots[n].px * c.slots[n].remaining).unwrap_or(0.0);
@@ -792,11 +904,17 @@ impl Engine {
         c.last_tick_ms = Some(now_ms);
         c.gate = gate;
         for (n, w) in want.into_iter().enumerate() {
-            self.step_slot(i, n, w, key.as_deref(), now_ms);
+            // The most a resting bid may pay before it is pulled at once, with
+            // no adverse hold: fair less `open_min_edge` for a first leg, fair
+            // for a pairing bid.
+            let up = n == 0;
+            let edge = if opens(net, up) { cfg.open_min_edge } else { 0.0 };
+            let ceiling = fair.map(|q| if up { q } else { 1.0 - q } - edge);
+            self.step_slot(i, n, w, key.as_deref(), now_ms, ceiling);
         }
     }
 
-    fn step_slot(&mut self, i: usize, n: usize, want: Option<(f64, f64)>, key: Option<&str>, now_ms: i64) {
+    fn step_slot(&mut self, i: usize, n: usize, want: Option<(f64, f64)>, key: Option<&str>, now_ms: i64, ceiling: Option<f64>) {
         let cfg = &self.cfg;
         let (asset, up) = (self.coins[i].name.clone(), n == 0);
         let order_key = self.coins[i].slots[n].order.as_ref().and_then(|id| self.orders.get(id)).map(|o| o.key.clone());
@@ -826,7 +944,8 @@ impl Engine {
                     };
                     s.off = since.map(|t| (dir, t));
                     let held = since.map(|t| now_ms - t).unwrap_or(0);
-                    let too_high = dir == 1 && held >= adverse_ms;
+                    let underwater = ceiling.is_some_and(|c| s.px > c - 1e-9);
+                    let too_high = dir == 1 && (held >= adverse_ms || underwater);
                     let raise = dir == -1 && held >= raise_ms && now_ms - s.last_change_ms >= raise_ms;
                     s.remaining > size + 1e-9 || too_high || raise
                 }
@@ -1240,25 +1359,46 @@ impl Engine {
                     "net": inv.map(|v| round_dp(v.net(), 2)),
                     "cost": inv.map(|v| round_dp(v.cost(), 4)),
                     "pauses": c.pauses,
+                    "spot": {
+                        "age_ms": (c.spot_ms > 0).then(|| now_ms - c.spot_ms),
+                        "up_off": c.spot_off(now_ms, &self.cfg).0,
+                        "down_off": c.spot_off(now_ms, &self.cfg).1,
+                    },
                     "uptime": (c.live_ms > 0).then(|| round_dp(c.quoting_ms as f64 / c.live_ms as f64, 3)),
                     "stats": self.per.get(&c.name).map(Stat::json),
                 })
             })
             .collect();
-        let held: Vec<Value> = self
+        let row = |k: &String, v: &Inventory| {
+            json!({"key": k, "up": v.up, "down": v.down, "cost": round_dp(v.cost(), 4), "settled": v.settled,
+                   "pnl": round_opt(v.pnl, 4), "redeemed": v.redeemed.is_some(), "kind": v.kind()})
+        };
+        // Windows still open, and settled winners whose tokens await
+        // redemption. A settled loser holds nothing to redeem, so it is in
+        // neither: `settled` and `settled_recent` cover every settled window.
+        let open: Vec<Value> = self.inv.iter().filter(|(_, v)| v.settled.is_none() && v.fills > 0).map(|(k, v)| row(k, v)).collect();
+        let to_redeem: Vec<Value> = self
             .inv
             .iter()
-            .filter(|(_, v)| {
-                let winner = match v.settled.as_deref() {
-                    Some("yes") => v.up > 0.0,
-                    Some("no") => v.down > 0.0,
-                    _ => false,
-                };
-                v.settled.is_none() || winner && v.redeemed.is_none()
-            })
-            .map(|(k, v)| json!({"key": k, "up": v.up, "down": v.down, "cost": round_dp(v.cost(), 4), "settled": v.settled, "pnl": round_opt(v.pnl, 4), "redeemed": v.redeemed.is_some()}))
+            .filter(|(_, v)| v.settled.is_some() && v.redeemed.is_none() && v.pnl.is_some() && v.winner_held())
+            .map(|(k, v)| row(k, v))
             .collect();
         let day = utc_day(t_ns);
+        let mut settled: Vec<(&String, &Inventory)> = self.inv.iter().filter(|(_, v)| v.pnl.is_some()).collect();
+        settled.sort_by_key(|(_, v)| std::cmp::Reverse(v.settled_ns.unwrap_or(0)));
+        let summary = |today: bool| {
+            let mut by: BTreeMap<&str, (u64, f64, u64)> = BTreeMap::new();
+            for (_, v) in settled.iter().filter(|(_, v)| !today || v.settled_ns.is_some_and(|t| utc_day(t) == day)) {
+                let e = by.entry(v.kind()).or_default();
+                e.0 += 1;
+                e.1 += v.pnl.unwrap_or(0.0);
+                e.2 += u64::from(v.pnl.unwrap_or(0.0) > 0.0);
+            }
+            by.into_iter()
+                .map(|(k, (n, pnl, won))| (k.to_owned(), json!({"windows": n, "pnl": round_dp(pnl, 4), "won": won})))
+                .collect::<Map<String, Value>>()
+        };
+        let settled_recent: Vec<Value> = settled.iter().take(60).map(|(k, v)| row(k, v)).collect();
         json!({
             "mode": if self.shadow { "shadow" } else { "live" },
             "halted": self.halted(t_ns),
@@ -1273,12 +1413,18 @@ impl Engine {
             "orders_tracked": self.orders.len(),
             "cash_hint": self.cash_hint.filter(|(_, u)| now_ms < *u).map(|(f, _)| round_dp(f, 4)),
             "coins": coins,
-            "held": held,
+            "open": open,
+            "to_redeem": to_redeem,
+            "settled": {"total": summary(false), "today": summary(true)},
+            "settled_recent": settled_recent,
             "totals": self.totals.json(),
             "counters": self.counters,
             "recent": self.recent,
             "cfg": {"half_spread": self.cfg.half_spread, "shares": self.cfg.shares, "max_net": self.cfg.max_net,
-                    "pause_jump": self.cfg.pause_jump, "stop_s": self.cfg.stop_s, "entry_early_s": self.cfg.entry_early_s},
+                    "pause_jump": self.cfg.pause_jump, "stop_s": self.cfg.stop_s, "entry_early_s": self.cfg.entry_early_s,
+                    "pair_half_spread": self.cfg.pair_half_spread, "open_min_px": self.cfg.open_min_px,
+                    "open_min_edge": self.cfg.open_min_edge, "spot_guard": self.cfg.spot_guard,
+                    "spot_pause_bps": self.cfg.spot_pause_bps, "spot_pause_ms": self.cfg.spot_pause_ms},
         })
     }
 
@@ -1317,6 +1463,12 @@ mod tests {
             open_leg_s: 300,
             open_min_fair: 0.15,
             open_max_fair: 0.85,
+            open_min_px: 0.0,
+            open_min_edge: 0.0,
+            pair_half_spread: 0.02,
+            spot_guard: false,
+            spot_pause_bps: 5.0,
+            spot_pause_ms: 2_000,
         }
     }
 
@@ -1764,6 +1916,88 @@ mod tests {
         e.on_poly(&trade.to_string(), t0 + NS);
         assert!(e.orders.contains_key("o1"));
         assert!(e.inv.is_empty(), "live fills only from the CLOB poll");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn engine_with(dir: &std::path::Path, c: PmCfg) -> Engine {
+        let mut e = Engine::new(c, &["BTC".into()], dir, Map::new(), false);
+        e.set_window(window("BTC"), OPEN * NS);
+        e
+    }
+
+    fn spot(e: &mut Engine, mid: f64, t: i64) {
+        let frame = json!({"type": "ticker", "product_id": "BTC-USD",
+                           "best_bid": format!("{:.2}", mid - 0.005), "best_ask": format!("{:.2}", mid + 0.005)});
+        e.on_spot(&frame.to_string(), t);
+    }
+
+    #[test]
+    fn spot_fall_holds_the_up_first_leg_off() {
+        let dir = tmp("spotguard");
+        let mut e = engine_with(&dir, PmCfg { spot_guard: true, ..cfg() });
+        let t0 = (OPEN + 100) * NS;
+        spot(&mut e, 100_000.0, t0 - 500_000_000);
+        spot(&mut e, 99_940.0, t0); // −6 bp within 1 s
+        books(&mut e, 0.54, 0.56, (0.53, 0.57), (0.43, 0.47), t0);
+        e.tick(t0, &Gates { kill: false, feeds_ok: true });
+        let a = e.take_actions();
+        assert_eq!(a.len(), 1, "{a:?}");
+        assert!(matches!(&a[0], Action::Post { up: false, .. }));
+        assert_eq!(e.coins[0].gate, "quoting:spot-up-off");
+        assert_eq!(e.counters.get("spot_pauses"), Some(&1));
+        // After spot_pause_ms the Up bid comes back.
+        spot(&mut e, 99_940.0, t0 + 2_100_000_000);
+        e.tick(t0 + 2_100_000_000, &Gates { kill: false, feeds_ok: true });
+        assert!(e.take_actions().iter().any(|x| matches!(x, Action::Post { up: true, .. })));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn no_first_leg_under_open_min_px() {
+        let dir = tmp("openminpx");
+        let mut e = engine_with(&dir, PmCfg { open_min_px: 0.35, ..cfg() });
+        let t0 = (OPEN + 100) * NS;
+        // Fair 0.25: Up would bid 0.23 (under 0.35), Down 0.73.
+        books(&mut e, 0.24, 0.26, (0.23, 0.27), (0.73, 0.77), t0);
+        e.tick(t0, &Gates { kill: false, feeds_ok: true });
+        let a = e.take_actions();
+        assert_eq!(a.len(), 1, "{a:?}");
+        assert!(matches!(&a[0], Action::Post { up: false, px, .. } if (*px - 0.73).abs() < 1e-9));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pairing_bid_uses_its_own_half_spread() {
+        let dir = tmp("pairh");
+        let mut e = engine_with(&dir, PmCfg { pair_half_spread: 0.01, ..cfg() });
+        let t0 = (OPEN + 100) * NS;
+        e.inv.insert(wkey("BTC", OPEN), Inventory { asset: "BTC".into(), open_unix: OPEN, up: 5.0, up_cost: 2.5, ..Default::default() });
+        books(&mut e, 0.54, 0.56, (0.53, 0.57), (0.43, 0.47), t0);
+        e.tick(t0, &Gates { kill: false, feeds_ok: true });
+        let a = e.take_actions();
+        // Down pairs: floor(1 − (0.55 + 0.01 − 0.0025)) = 0.44 (0.43 at h = 0.02);
+        // Up adds to the position, so it stays at h = 0.02: floor(0.55 − 0.02 − 0.0025) = 0.52.
+        assert!(a.iter().any(|x| matches!(x, Action::Post { up: false, px, .. } if (*px - 0.44).abs() < 1e-9)), "{a:?}");
+        assert!(a.iter().any(|x| matches!(x, Action::Post { up: true, px, .. } if (*px - 0.52).abs() < 1e-9)), "{a:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn first_leg_within_open_min_edge_of_fair_is_pulled_at_once() {
+        let dir = tmp("minedge");
+        let mut e = engine_with(&dir, PmCfg { open_min_edge: 0.03, pause_jump: 0.5, ..cfg() });
+        let t0 = (OPEN + 100) * NS;
+        books(&mut e, 0.54, 0.56, (0.53, 0.57), (0.43, 0.47), t0);
+        e.tick(t0, &Gates { kill: false, feeds_ok: true });
+        e.take_actions();
+        e.on_posted("BTC", true, 0.53, 5.0, Ok("o1".into()), t0);
+        e.on_posted("BTC", false, 0.43, 5.0, Ok("o2".into()), t0);
+        // Fair down a cent: the Up bid at 0.53 is now within 3¢ of fair 0.54,
+        // so it goes on this tick instead of after adverse_ms.
+        let t1 = t0 + 100_000_000;
+        books(&mut e, 0.53, 0.55, (0.53, 0.57), (0.43, 0.47), t1);
+        e.tick(t1, &Gates { kill: false, feeds_ok: true });
+        assert_eq!(e.take_actions(), vec![Action::Cancel { asset: "BTC".into(), up: true, order_id: "o1".into() }]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

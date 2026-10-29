@@ -100,8 +100,9 @@ impl PmSettings {
             .filter(|a| !a.is_empty())
             .collect();
         anyhow::ensure!(!assets.is_empty(), "PK_PM_ASSETS is empty");
+        let half_spread = e.num("PK_PM_HALF_SPREAD", 0.02)?;
         let cfg = crate::engine::PmCfg {
-            half_spread: e.num("PK_PM_HALF_SPREAD", 0.02)?,
+            half_spread,
             shares: e.num("PK_PM_SHARES", 5.0)?,
             min_shares: e.num("PK_PM_MIN_SHARES", 5.0)?,
             max_net: e.num("PK_PM_MAX_NET", 20.0)?,
@@ -125,6 +126,16 @@ impl PmSettings {
             open_leg_s: e.num("PK_PM_OPEN_LEG_S", 300)?,
             open_min_fair: e.num("PK_PM_OPEN_MIN_FAIR", 0.15)?,
             open_max_fair: e.num("PK_PM_OPEN_MAX_FAIR", 0.85)?,
+            open_min_px: e.num("PK_PM_OPEN_MIN_PX", 0.0)?,
+            open_min_edge: e.num("PK_PM_OPEN_MIN_EDGE", 0.0)?,
+            pair_half_spread: e.num("PK_PM_PAIR_HALF_SPREAD", half_spread)?,
+            spot_guard: match e.or("PK_PM_SPOT_GUARD", "no").to_lowercase().as_str() {
+                "yes" | "true" | "1" => true,
+                "no" | "false" | "0" => false,
+                other => anyhow::bail!("PK_PM_SPOT_GUARD={other} is not yes or no"),
+            },
+            spot_pause_bps: e.num("PK_PM_SPOT_PAUSE_BPS", 5.0)?,
+            spot_pause_ms: e.num("PK_PM_SPOT_PAUSE_MS", 2_000)?,
         };
         let pm = Self {
             mode,
@@ -143,6 +154,13 @@ impl PmSettings {
         anyhow::ensure!((0.005..=0.2).contains(&c.half_spread), "PK_PM_HALF_SPREAD must be within 0.005..=0.2");
         anyhow::ensure!(c.daily_loss_usd > 0.0 && c.max_open_cost_usd > 0.0, "PK_PM risk caps must be positive");
         anyhow::ensure!(c.max_orders_per_s >= 1.0, "PK_PM_MAX_ORDERS_PER_S must be at least 1");
+        anyhow::ensure!((0.0..=0.95).contains(&c.open_min_px), "PK_PM_OPEN_MIN_PX must be within 0..=0.95");
+        anyhow::ensure!((0.0..=0.2).contains(&c.open_min_edge), "PK_PM_OPEN_MIN_EDGE must be within 0..=0.2");
+        anyhow::ensure!((0.0..=0.2).contains(&c.pair_half_spread), "PK_PM_PAIR_HALF_SPREAD must be within 0..=0.2");
+        anyhow::ensure!(
+            c.spot_pause_bps >= 0.0 && c.spot_pause_ms >= 0,
+            "PK_PM_SPOT_PAUSE_BPS and PK_PM_SPOT_PAUSE_MS must not be negative"
+        );
         anyhow::ensure!(
             ![settings.port, settings.observer_port, settings.status_port, settings.lim_port, settings.okx_port]
                 .contains(&pm.port),
@@ -177,6 +195,12 @@ impl PmSettings {
             "open_leg_s": c.open_leg_s,
             "open_min_fair": c.open_min_fair,
             "open_max_fair": c.open_max_fair,
+            "open_min_px": c.open_min_px,
+            "open_min_edge": c.open_min_edge,
+            "pair_half_spread": c.pair_half_spread,
+            "spot_guard": c.spot_guard,
+            "spot_pause_bps": c.spot_pause_bps,
+            "spot_pause_ms": c.spot_pause_ms,
         })
     }
 }

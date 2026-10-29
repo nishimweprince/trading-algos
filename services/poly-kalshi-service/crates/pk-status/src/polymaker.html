@@ -61,8 +61,17 @@ svg.mkt .k { stroke:var(--kalshi); } svg.mkt .l { stroke:var(--lim); } svg.mkt .
 <h3 class="section">Quotes</h3>
 <div class="card"><table id="coins"></table><div class="note">Fair = Kalshi YES mid. Our bids: Up at fair − h − skew, Down at 1 − (fair + h − skew), post-only, 1¢ ticks. Capture = fair at fill − price; markouts = Kalshi's mid 5 s / 30 s later − price (negative = adverse selection); 2 min and 5 min stop at the close, and "at close" is Kalshi's mid 1 s before it. Pair guard: with shares held on one side, the other side bids at most 1 − their average cost − 2¢, so every completed pair locks ≥ 2¢. Uptime = share of the window with a bid resting.</div></div>
 
-<h3 class="section">Windows held</h3>
-<div class="card"><table id="held"></table></div>
+<h3 class="section">Settled windows by type</h3>
+<div class="card"><table id="kinds"></table><div class="note">Every settled window, losers included. Paired = equal Up and Down shares (pays $1 a pair whatever the outcome); uneven = both sides, unequal; one-sided = only one side filled, so the outcome decides it. Won = P&amp;L &gt; 0.</div></div>
+
+<h3 class="section">Settled windows (latest 60)</h3>
+<div class="card"><table id="settled"></table></div>
+
+<h3 class="section">Open windows</h3>
+<div class="card"><table id="open"></table></div>
+
+<h3 class="section">To redeem</h3>
+<div class="card"><table id="redeem"></table><div class="note">Settled windows whose winning tokens we still hold. A window where only the losing side was held has nothing to redeem and is not listed here; see the settled tables above.</div></div>
 
 <h3 class="section">Recent</h3>
 <div class="card"><table id="recent"></table></div>
@@ -142,14 +151,27 @@ async function tick() {
     const st = x.stats || {};
     const bid = (b) => b && b.order ? `<b>${px(b.px)}</b>×${f(b.remaining, 0)}` : (b && b.inflight ? "…" : "–");
     const pu = x.poly_up || {}, pd = x.poly_down || {};
-    return `<tr><td>${esc(x.asset)}</td><td class="${x.gate === "quoting" ? "good" : "muted"}">${esc(x.gate)}</td><td>${px(x.kalshi && x.kalshi.bid)} / ${px(x.kalshi && x.kalshi.ask)}</td><td>${f(x.fair, 3)}</td>
+    return `<tr><td>${esc(x.asset)}</td><td class="${String(x.gate).startsWith("quoting") ? "good" : "muted"}">${esc(x.gate)}</td><td>${px(x.kalshi && x.kalshi.bid)} / ${px(x.kalshi && x.kalshi.ask)}</td><td>${f(x.fair, 3)}</td>
       <td>${px(pu.bid)} / ${px(pu.ask)}</td><td>${bid(x.bid_up)}</td><td>${px(pd.bid)} / ${px(pd.ask)}</td><td>${bid(x.bid_down)}</td>
       <td>${x.net == null ? "–" : f(x.net, 0)}</td><td>${x.uptime == null ? "–" : f(x.uptime * 100, 0) + "%"}</td><td>${x.pauses}</td>
       <td>${st.fills || 0}</td><td>${c(st.markout30)}</td><td class="${sgn(st.pnl)}">${money(st.pnl)}</td></tr>`;
   }).join("");
   put("coins", `<tr><th>Coin</th><th>State</th><th>Kalshi bid / ask</th><th>Fair</th><th>Up bid / ask</th><th>Our Up bid</th><th>Down bid / ask</th><th>Our Down bid</th><th>Net</th><th>Uptime</th><th>Pauses</th><th>Fills</th><th>Markout 30 s</th><th>P&amp;L</th></tr>${rows}`);
-  const held = (s.held || []).map((h) => `<tr><td>${esc(h.key)}</td><td>${f(h.up, 0)}</td><td>${f(h.down, 0)}</td><td>${money(h.cost)}</td><td>${esc(h.settled || "open")}</td><td class="${sgn(h.pnl)}">${money(h.pnl)}</td><td>${h.settled ? (h.redeemed ? "redeemed" : "to redeem") : ""}</td></tr>`).join("");
-  put("held", held ? `<tr><th>Window</th><th>Up</th><th>Down</th><th>Cost</th><th>Outcome</th><th>P&amp;L</th><th></th></tr>${held}` : '<tr><td class="muted">nothing held</td></tr>');
+  const KIND = { paired: "Paired", uneven: "Uneven", one_sided: "One-sided" };
+  const settled = s.settled || {};
+  const kindRows = ["paired", "uneven", "one_sided"].map((k) => {
+    const cell = (x) => x ? `<td>${x.windows}</td><td>${x.won}</td><td class="${sgn(x.pnl)}">${money(x.pnl)}</td>` : "<td>0</td><td>–</td><td>–</td>";
+    return `<tr><td>${KIND[k]}</td>${cell((settled.today || {})[k])}${cell((settled.total || {})[k])}</tr>`;
+  }).join("");
+  const sum = (part) => Object.values(part || {}).reduce((a, x) => ({ windows: a.windows + x.windows, won: a.won + x.won, pnl: a.pnl + x.pnl }), { windows: 0, won: 0, pnl: 0 });
+  const tot = (x) => `<td><b>${x.windows}</b></td><td><b>${x.won}</b></td><td class="${sgn(x.pnl)}"><b>${money(x.pnl)}</b></td>`;
+  put("kinds", `<tr><th>Type</th><th>Today</th><th>Won</th><th>P&amp;L</th><th>All</th><th>Won</th><th>P&amp;L</th></tr>${kindRows}<tr><td><b>All</b></td>${tot(sum(settled.today))}${tot(sum(settled.total))}</tr>`);
+  const win = (h, extra) => `<tr><td>${esc(h.key)}</td><td>${esc(KIND[h.kind] || h.kind || "")}</td><td>${f(h.up, 0)}</td><td>${f(h.down, 0)}</td><td>${money(h.cost)}</td><td>${esc(h.settled || "open")}</td><td class="${sgn(h.pnl)}">${money(h.pnl)}</td>${extra || ""}</tr>`;
+  const head = `<tr><th>Window</th><th>Type</th><th>Up</th><th>Down</th><th>Cost</th><th>Outcome</th><th>P&amp;L</th></tr>`;
+  const table = (id, list, empty) => put(id, list.length ? head + list.map((h) => win(h)).join("") : `<tr><td class="muted">${empty}</td></tr>`);
+  table("settled", s.settled_recent || [], "no settled windows yet");
+  table("open", s.open || [], "no open positions");
+  table("redeem", s.to_redeem || [], "nothing to redeem");
   const rec = (s.recent || []).slice(0, 40).map((r) => {
     const what = r.type === "pm_fill" ? `${r.asset} ${r.up ? "Up" : "Down"} ${f(r.shares, 0)} @ ${px(r.px)} · fair ${f(r.fair, 3)} · capture ${r.capture == null ? "–" : f(r.capture * 100, 1) + "¢"} · net ${f(r.net, 0)}`
       : r.type === "pm_settle" ? `${r.asset} ${r.outcome} · ${f(r.up, 0)} Up / ${f(r.down, 0)} Down · P&L ${money(r.pnl)}`
