@@ -62,6 +62,7 @@ from pathlib import Path
 from typing import IO, Any
 
 import httpx
+import pyarrow as pa
 import pyarrow.parquet as pq
 
 from ofi_scalper_service.recorder import hour_path
@@ -185,6 +186,38 @@ class Api:
             print(f"{file} retry {attempt} in {backoff}s: {error}", flush=True)
             time.sleep(backoff)
         raise AssertionError("unreachable")
+
+
+ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
+PARQUET_MAGIC = b"PAR1"
+
+
+def plain_parquet(path: Path) -> Path:
+    """``path`` as a readable Parquet file, decompressing a zstd download in place.
+
+    Some objects (mostly hours 00–01) arrive with ``Content-Encoding: zstd``,
+    which httpx does not decode without the zstandard package, so the body is
+    the compressed file. pyarrow's own zstd codec undoes it. A file that is
+    still not Parquet is deleted, so a rerun downloads it again.
+    """
+    with path.open("rb") as handle:
+        head = handle.read(4)
+    if head == ZSTD_MAGIC:
+        tmp = path.with_name(path.name + ".unzstd")
+        with pa.input_stream(str(path), compression="zstd") as source, tmp.open("wb") as out:
+            while chunk := source.read(1 << 22):
+                out.write(chunk)
+        tmp.replace(path)
+    with path.open("rb") as handle:
+        head = handle.read(4)
+        handle.seek(-4, os.SEEK_END)
+        tail = handle.read(4)
+    if head != PARQUET_MAGIC or tail != PARQUET_MAGIC:
+        path.unlink(missing_ok=True)
+        raise ValueError(
+            f"{path}: not a Parquet file after download (head {head!r}); deleted for a retry"
+        )
+    return path
 
 
 def object_name(day: date, hour: int, symbol: str, data_type: str) -> str:
@@ -607,7 +640,7 @@ def convert_symbol_day(
                 name = object_name(day, hour, symbol, data_type)
                 local = (keep_parquet / name) if keep_parquet else tmp_dir / name.replace("/", "_")
                 found = True if job is None else job.result()
-                files[data_type] = local if found else None
+                files[data_type] = plain_parquet(local) if found else None
             return files
 
         # Prefetch one hour ahead while the current one converts.
