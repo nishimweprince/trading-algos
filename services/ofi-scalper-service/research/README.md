@@ -60,6 +60,32 @@ times are Tardis's collector's, not Tokyo's, so manifests say `host: tardis`
 and `pipeline.eligible_days` keeps these days out of the gates: they answer
 "is there a signal at all", not "does it pass".
 
+## CryptoHFTData history (2026-10-29)
+
+`research/collect/cryptohftdata.py` rebuilds Binance USDⓈ-M frames from
+CryptoHFTData's hourly Parquet (`CRYPTOHFTDATA_API_KEY` in `.env.dev`;
+anonymous downloads work at a lower rate limit). Order book history starts in
+June 2025. Their hour-start snapshot chains to the next diff's `pu`, so it is
+written as our `bookCheckpoint`; per-fill trades are merged into aggTrades.
+Replaying 2026-09-30 through the live code verified 46 of 46 hourly
+checkpoints with no mismatch. About 0.7 GB and 10–12 min per symbol-day.
+
+```sh
+PYTHONPATH=src python -m research.collect.cryptohftdata --start 2026-06-01 --end 2026-10-28 \
+    --dest /data/ofi/raw/cryptohftdata --keep-parquet /data/ofi/parquet --jobs 6
+python -m research.pipeline --profile dev --binding --host-tag cryptohftdata ...
+```
+
+Receive times are the vendor collector's (~125 ms behind Binance), so the
+manifests say `host: cryptohftdata` and only a run with `--host-tag
+cryptohftdata` uses these days. `research/latency.json` should still come from
+`ofi-latency` on a Tokyo host: the backtest models our order path, not theirs.
+
+On the research VM, `research/train_cryptohftdata.sh` waits for the
+conversion and runs the binding pipeline, and `python -m research.monitor`
+(systemd `ofi-monitor`, `127.0.0.1:8077`, JSON at `/api`) shows conversion,
+pipeline and host status.
+
 ## Replay (built)
 
 `research/replay.py` turns recordings into the exact feature rows the live
