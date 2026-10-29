@@ -43,12 +43,16 @@ members = [
 # pyproject.toml; a glob that matched them would fail resolution. They are
 # npm projects driven from the root package.json. leadlag-go is a Go module
 # (its own go.mod), built with the Go toolchain. poly-kalshi-service is a Cargo
-# workspace (Rust since 2026-10).
+# workspace (Rust since 2026-10). The rest are C++ (CMake) projects.
 exclude = [
   "services/notification-service",
   "packages/ta-market-data-js",
   "services/leadlag-go",
   "services/poly-kalshi-service",
+  "services/bar-portion-mm-service",
+  "services/crossex-arbitrage",
+  "services/hyperliquid-arb",
+  "services/pk-maker-cpp",
 ]
 
 [tool.ruff]
