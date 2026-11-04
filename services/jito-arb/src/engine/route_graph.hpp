@@ -1,7 +1,8 @@
 #pragma once
 // Route graph and cycle index (spec §6.1). Built at discovery time from the tracked pools:
-// every 2-hop (base -> X -> base) and 3-hop (base -> X -> Y -> base) cycle, capped per pool
-// at max_cycles_per_pool, keeping the cycles whose shallowest pool is deepest.
+// every 2-hop (base -> X -> base) and 3-hop (base -> X -> Y -> base) cycle. Each pool's list (the cycles
+// its update re-prices) holds at most max_cycles_per_pool, deepest first; a cycle is kept while any of its
+// pools still lists it.
 #include <cstdint>
 #include <span>
 #include <vector>

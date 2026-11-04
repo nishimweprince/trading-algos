@@ -439,3 +439,23 @@ TEST(engine_finds_an_injected_cycle_on_fixture_pools) {
   eng2.set_own_balance(mint::WSOL, 1'000'000'000'000ULL);
   CHECK(eng2.evaluate(pick->id, 1001));
 }
+
+TEST(cycle_cap_lists_per_pool_hub_does_not_block) {
+  // A hub pool H (B/X) on every cycle, and many spoke pools. With a cap of 2, H's list fills at once, but
+  // cycles through H stay reachable from their other legs.
+  Pubkey B = mint::WSOL, X = key_n(1);
+  std::vector<PoolDef> pools = {def(10, B, X)};  // hub
+  for (uint8_t i = 0; i < 6; ++i) pools.push_back(def(uint8_t(20 + i), X, B));
+  std::vector<double> tvl = {1000, 60, 50, 40, 30, 20, 10};
+  GraphConfig g;
+  g.base_mints = {B};
+  g.max_hops = 2;
+  g.max_cycles_per_pool = 2;
+  CycleIndex idx;
+  idx.build(pools, tvl, g);
+  CHECK(idx.cycles_of(0).size() <= 2);  // the hub re-prices at most its 2 deepest cycles
+  size_t spokes_with_cycles = 0;
+  for (uint32_t p = 1; p < pools.size(); ++p) spokes_with_cycles += idx.cycles_of(p).empty() ? 0 : 1;
+  CHECK_EQ(spokes_with_cycles, size_t(6));  // every spoke still evaluates its cycles with the hub
+  CHECK(idx.size() >= 12);                  // hub->spoke and spoke->hub for every spoke
+}

@@ -43,7 +43,9 @@ bool mid_x64(const PoolState& p, const Pubkey& from, u128& out) {
 EngineConfig engine_config(const Config& c) {
   EngineConfig e;
   e.max_state_age_slots = uint64_t(c.engine.max_state_age_slots);
-  e.max_slot_lag = uint64_t(c.helius.resync_lag_slots);
+  // Twice the resync threshold: live mode refreshes a quiet pool by RPC once it lags resync_lag_slots, well
+  // before the engine would call it stale.
+  e.max_slot_lag = 2 * uint64_t(c.helius.resync_lag_slots);
   e.min_edge_ppm = ppm(c.engine.min_spot_edge);
   e.max_input_fraction_ppm = ppm(c.engine.max_input_fraction);
   e.max_trade_lamports = c.engine.max_trade_lamports;

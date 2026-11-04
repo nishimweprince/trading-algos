@@ -2,6 +2,7 @@
 
 #include <unistd.h>
 
+#include <algorithm>
 #include <chrono>
 #include <fstream>
 #include <memory>
@@ -90,17 +91,36 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   LOG_INFO("%s: %zu pools, %zu cycles, %zu shards (%zu pool keys, %zu wallet/reserve keys)", recorder ? "recorder" : "live dry run",
            pf.pools.size(), rt.cycles().size(), shards.size(), only_pools.size(), wallet_keys.size());
 
-  // Initial state by RPC (marked awaiting a push), then the streams.
+  // Streams first, then the initial state by RPC: once every stream is subscribed, no change after the read
+  // can be missed, so the read is usable at once (quiet pools are quotable without waiting for a trade).
+  // Frames that arrive meanwhile queue in the rings; older ones lose to the read by (slot, write_version).
+  for (auto& s : shards) s.thread = std::thread([&s] { s.client->run(); });
+  auto all_up = [&] {
+    for (auto& s : shards)
+      if (!s.client->counters().up.load()) return false;
+    return true;
+  };
   Rpc rpc(resolve_rpc_url(cfg), cfg.helius.rpc_timeout_ms);
   if (!recorder) {
+    auto wait_until = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    while (!all_up() && !stop && std::chrono::steady_clock::now() < wait_until)
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    // `up` is set when the stream opens, a moment before the server applies the subscription request.
+    if (all_up()) std::this_thread::sleep_for(std::chrono::seconds(1));
+    std::vector<uint32_t> ids(rt.store().pool_count());
+    for (uint32_t i = 0; i < ids.size(); ++i) ids[i] = i;
+    std::vector<Pubkey> keys = feed::pool_ordered_keys(rt.store(), ids);
+    for (const Pubkey& k : pool_keys)  // reserves and anything else subscribed
+      if (std::find(keys.begin(), keys.end(), k) == keys.end()) keys.push_back(k);
+    bool live = all_up();
     try {
-      auto st = feed::resync(rpc, rt.store(), pool_keys);
-      LOG_INFO("initial resync: %zu applied, %zu missing", st.applied, st.missing);
+      auto st = feed::resync(rpc, rt.store(), keys, live);
+      LOG_INFO("initial resync: %zu applied, %zu missing (%s)", st.applied, st.missing,
+               live ? "streams up: usable at once" : "streams not all up: waiting for pushes");
     } catch (const std::exception& e) {
       LOG_WARN("initial resync failed: %s", e.what());
     }
   }
-  for (auto& s : shards) s.thread = std::thread([&s] { s.client->run(); });
 
   // Send side (dry run): virtual lookup tables until discovery's real ones exist; real recent blockhash.
   tx::AltManager alts;
@@ -234,17 +254,15 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
     if (!recorder && now - last_resync >= std::chrono::seconds(10)) {
       last_resync = now;
       uint64_t clock = rt.clock().slot.load();
-      std::vector<Pubkey> lag;
+      std::vector<uint32_t> lagging;
       for (uint32_t i = 0; i < rt.store().pool_count() && clock; ++i) {
         auto p = rt.store().pool(i);
-        if (p && clock > p->slot + uint64_t(cfg.helius.resync_lag_slots)) {
-          const PoolDef& d = rt.store().def(i);
-          lag.insert(lag.end(), {d.address, d.vault_a, d.vault_b});
-        }
+        if (p && clock > p->slot + uint64_t(cfg.helius.resync_lag_slots)) lagging.push_back(i);
       }
-      if (!lag.empty()) {
+      if (!lagging.empty()) {
         try {
-          feed::resync(rpc, rt.store(), lag);
+          // Quiet pools are refreshed here about once a minute; with every stream up the read is usable at once.
+          feed::resync(rpc, rt.store(), feed::pool_ordered_keys(rt.store(), lagging), all_up());
         } catch (const std::exception& e) {
           LOG_WARN("resync: %s", e.what());
         }

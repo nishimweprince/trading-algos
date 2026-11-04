@@ -9,6 +9,7 @@
 #include "feed/feed_handler.hpp"
 #include "obs/latency.hpp"
 #include "feed/frames.hpp"
+#include "feed/resync.hpp"
 #include "feed/subscription.hpp"
 #include "feed/update.hpp"
 #include "fixture.hpp"
@@ -326,4 +327,23 @@ TEST(feed_latency_created_at_and_slot_offset) {
   auto off = h.slot_offset_us().stats(recv);
   CHECK(lag.count == 1 && lag.p50 >= 29'000 && lag.p50 <= 31'000);  // ~30 ms (clock read jitter only)
   CHECK(off.count == 1 && off.p50 == 120'000);
+}
+
+TEST(resync_with_live_stream_is_quotable_at_once) {
+  // A resync read with every stream already subscribed is usable at once; one without waits for a push.
+  auto rays = pool_list("raydium_v4");
+  auto cfg = discovery_cfg();
+  for (bool live : {true, false}) {
+    StateStore store;
+    auto def = state::pool_def_from_account(fixture(rays[0])->raw, cfg);
+    uint32_t id = store.add_pool(*def);
+    std::vector<Pubkey> keys = feed::pool_ordered_keys(store, {id});
+    CHECK(keys.size() >= 5 && keys[0] == def->address && keys[1] == def->vault_a && keys[2] == def->vault_b);
+    for (const Pubkey& k : keys) {
+      const FixtureAccount* a = fixture(b58(k));
+      AccountUpdate u{k, a->raw.owner, a->raw.data.data(), a->raw.data.size(), 1000, 0, !a->exists, !live};
+      store.apply(u);
+    }
+    CHECK_EQ(store.pool(id)->quotable(2), live);
+  }
 }

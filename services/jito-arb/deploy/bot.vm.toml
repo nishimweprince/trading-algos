@@ -15,6 +15,9 @@ api_key_env = "HELIUS_API_KEY"
 max_grpc_connections = 4
 shard_size = 1500                 # 4 x 1500 keys: ~1,000 pools need ~5,000 (spec suggests 300; not a Helius limit)
 
+[engine]
+max_cycles_per_pool = 256         # cycles one pool's update re-prices (each pool's deepest 256)
+
 [jito]
 regions = ["frankfurt", "amsterdam"]
 
