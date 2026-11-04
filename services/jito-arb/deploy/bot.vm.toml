@@ -1,0 +1,40 @@
+# jito-arb on the Frankfurt VM (installed as /etc/jito-arb/bot.toml by deploy/install.sh).
+# Secrets are not here: HELIUS_API_KEY and LASERSTREAM_ENDPOINT come from /etc/jito-arb/jito-arb.env.
+# Dry run: this build refuses dry_run = false (phase 4 needs the owner's review, RUNBOOK-VM.md).
+pools_path = "/var/lib/jito-arb/pools.json"
+
+[mode]
+dry_run = true
+funding_mode = "flash"
+kill_file = "/var/lib/jito-arb/KILL"
+
+[helius]
+laserstream_endpoint = "VERIFY"   # overridden by LASERSTREAM_ENDPOINT
+rpc_url = "https://mainnet.helius-rpc.com"
+api_key_env = "HELIUS_API_KEY"
+max_grpc_connections = 4
+shard_size = 300
+
+[jito]
+regions = ["frankfurt", "amsterdam"]
+
+[dex]
+raydium_v4_enabled = true
+whirlpool_enabled = false         # until Helius-funded sim-parity proves it (RUNBOOK-VM.md step 4)
+
+[discovery]
+min_pool_tvl_sol = 50
+max_tracked_pools = 1500
+
+[keys]
+hot_wallet_path = "/etc/jito-arb/hot_wallet.json"   # absent: dry run signs with the fixed test key
+executor_program_id = "VERIFY"
+
+[obs]
+metrics_addr = "127.0.0.1"
+metrics_port = 9100
+log_level = "info"
+decision_log_dir = "/var/lib/jito-arb/decisions"
+
+[recorder]
+dir = "/var/lib/jito-arb/frames"

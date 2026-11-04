@@ -150,6 +150,8 @@ Config load_config(const std::string& path) {
   if (c.mode.funding_mode != "flash" && c.mode.funding_mode != "own")
     throw std::runtime_error("config: mode.funding_mode must be flash or own");
   if (c.engine.max_hops < 2 || c.engine.max_hops > 3) throw std::runtime_error("config: engine.max_hops must be 2 or 3");
+  // The LaserStream endpoint comes with the Helius key, so it may live in the environment file instead.
+  if (const char* ep = std::getenv("LASERSTREAM_ENDPOINT"); ep && *ep) c.helius.laserstream_endpoint = ep;
   return c;
 }
 
