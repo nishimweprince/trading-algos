@@ -1,0 +1,26 @@
+[package]
+name = "jito-arb-executor"
+version = "0.1.0"
+edition = "2021"
+description = "Stateless atomic-arb executor: CPI swap legs, end-of-route min_out guard (spec §8)"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[features]
+# msg! logging is compiled out of release builds; enable for validator debugging only.
+logs = []
+no-entrypoint = []
+
+[dependencies]
+# Pinned: build with `cargo build-sbf` from the Solana/Agave 2.1 toolchain (VM step, RUNBOOK-VM.md).
+solana-program = "=2.1.0"
+
+[dev-dependencies]
+serde_json = "=1.0.132"
+
+[profile.release]
+overflow-checks = true
+lto = "fat"
+codegen-units = 1
