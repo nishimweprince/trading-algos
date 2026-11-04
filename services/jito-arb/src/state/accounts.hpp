@@ -1,0 +1,171 @@
+#pragma once
+// Decoded account layouts. Each decoder checks the owner program, the exact
+// length (or minimum, for TLV/variable accounts) and the discriminator before
+// reading a field. Sources (pinned in config/dex_programs.toml):
+//   Raydium AMM v4  raydium-io/raydium-amm@91739d8 program/src/state.rs (AmmInfo, Fees, StateData)
+//   Whirlpool       orca-so/whirlpools@cc683ec programs/whirlpool/src/state/{whirlpool,fixed_tick_array,dynamic_tick_array,tick}.rs
+//   SPL Token       spl-token Account/Mint pack layouts; Token-2022 TLV extensions (solana-program/token-2022@f052d0a)
+//   Kamino Reserve  Kamino-Finance/klend@77e8185 libs/klend-interface/src/state/reserve.rs (repr(C), 8616 bytes + 8)
+#include <array>
+#include <cstddef>
+#include <cstdint>
+
+#include "core/bytes.hpp"
+#include "core/error.hpp"
+#include "core/types.hpp"
+
+namespace arb::state {
+
+// --- SPL Token / Token-2022 --------------------------------------------------
+
+constexpr size_t TOKEN_ACCOUNT_LEN = 165;
+constexpr size_t MINT_LEN = 82;
+
+struct TokenAccount {
+  Pubkey mint{}, owner{};
+  uint64_t amount = 0;
+  bool has_delegate = false;
+  uint8_t state = 0;  // 0 uninitialized, 1 initialized, 2 frozen
+  bool is_native = false;
+  bool has_close_authority = false;
+  Pubkey token_program{};
+};
+
+/** Token-2022 extension type numbers (ExtensionType in token-2022 program/src/extension/mod.rs). */
+namespace ext {
+enum : uint16_t {
+  TransferFeeConfig = 1,
+  MintCloseAuthority = 3,
+  ConfidentialTransferMint = 4,
+  DefaultAccountState = 6,
+  NonTransferable = 9,
+  InterestBearingConfig = 10,
+  PermanentDelegate = 12,
+  TransferHook = 14,
+  ConfidentialTransferFeeConfig = 16,
+  MetadataPointer = 18,
+  TokenMetadata = 19,
+  ScaledUiAmount = 25,
+  Pausable = 26,
+};
+}
+
+struct TransferFee {
+  uint64_t epoch = 0;
+  uint64_t maximum_fee = 0;
+  uint16_t basis_points = 0;
+};
+
+struct Mint {
+  uint8_t decimals = 0;
+  uint64_t supply = 0;
+  bool has_mint_authority = false;
+  bool has_freeze_authority = false;
+  Pubkey freeze_authority{};
+  Pubkey token_program{};
+  uint64_t ext_mask = 0;  // bit n = extension type n present (n < 64)
+  uint16_t ext_types[24]{};
+  uint8_t n_ext = 0;
+  bool has_transfer_fee = false;
+  TransferFee older_fee, newer_fee;
+  uint8_t default_account_state = 0;  // DefaultAccountState extension value (2 = frozen)
+
+  bool has_ext(uint16_t t) const { return t < 64 && (ext_mask >> t) & 1; }
+  /** TransferFeeConfig::get_epoch_fee. */
+  const TransferFee& epoch_fee(uint64_t epoch) const { return epoch >= newer_fee.epoch ? newer_fee : older_fee; }
+};
+
+/** TransferFee::calculate_fee: ceil(amount * bps / 10000), capped at maximum_fee. */
+uint64_t transfer_fee(const TransferFee& f, uint64_t amount);
+
+Result<TokenAccount> decode_token_account(const uint8_t* d, size_t n, const Pubkey& owner);
+Result<Mint> decode_mint(const uint8_t* d, size_t n, const Pubkey& owner);
+
+// --- Raydium AMM v4 ------------------------------------------------------------
+
+constexpr size_t RAYDIUM_V4_LEN = 752;
+
+struct RaydiumV4 {
+  uint64_t status = 0, nonce = 0;
+  uint64_t coin_decimals = 0, pc_decimals = 0;
+  uint64_t trade_fee_numerator = 0, trade_fee_denominator = 0;
+  uint64_t swap_fee_numerator = 0, swap_fee_denominator = 0;
+  uint64_t need_take_pnl_coin = 0, need_take_pnl_pc = 0;
+  uint64_t pool_open_time = 0;
+  Pubkey coin_vault{}, pc_vault{}, coin_mint{}, pc_mint{}, lp_mint{};
+  Pubkey open_orders{}, market{}, market_program{}, target_orders{}, amm_owner{};
+  uint64_t lp_amount = 0;
+
+  /** AmmStatus::swap_permission (Initialized, SwapOnly, WaitingTrade). */
+  bool swap_permitted() const { return status == 1 || status == 6 || status == 7; }
+};
+
+Result<RaydiumV4> decode_raydium_v4(const uint8_t* d, size_t n, const Pubkey& owner);
+
+// --- Orca Whirlpool --------------------------------------------------------------
+
+constexpr size_t WHIRLPOOL_LEN = 653;
+constexpr int32_t TICK_ARRAY_SIZE = 88;
+constexpr size_t FIXED_TICK_ARRAY_LEN = 8 + 4 + 113 * 88 + 32;  // 9988
+constexpr size_t DYNAMIC_TICK_ARRAY_MIN_LEN = 8 + 4 + 32 + 16 + 88;
+constexpr int32_t MIN_TICK_INDEX = -443636;
+constexpr int32_t MAX_TICK_INDEX = 443636;
+
+inline constexpr uint8_t DISC_WHIRLPOOL[8] = {63, 149, 209, 12, 225, 128, 99, 9};
+inline constexpr uint8_t DISC_FIXED_TICK_ARRAY[8] = {69, 97, 189, 190, 110, 7, 66, 187};
+inline constexpr uint8_t DISC_DYNAMIC_TICK_ARRAY[8] = {17, 216, 246, 142, 225, 199, 218, 56};
+
+struct Whirlpool {
+  Pubkey whirlpools_config{};
+  uint16_t tick_spacing = 0;
+  uint16_t fee_tier_index = 0;
+  uint16_t fee_rate = 0;           // hundredths of a bp
+  uint16_t protocol_fee_rate = 0;  // bp of the fee
+  u128 liquidity = 0;
+  u128 sqrt_price = 0;  // Q64.64
+  int32_t tick_current_index = 0;
+  uint64_t protocol_fee_owed_a = 0, protocol_fee_owed_b = 0;
+  Pubkey token_mint_a{}, token_vault_a{}, token_mint_b{}, token_vault_b{};
+  u128 fee_growth_global_a = 0, fee_growth_global_b = 0;
+
+  /** Whirlpool::is_initialized_with_adaptive_fee_tier: such pools price through an Oracle account. */
+  bool adaptive_fee() const { return fee_tier_index != tick_spacing; }
+};
+
+struct Tick {
+  bool initialized = false;
+  i128 liquidity_net = 0;
+  u128 liquidity_gross = 0;
+};
+
+/** Fixed and dynamic tick arrays normalized to one in-memory form. */
+struct TickArray {
+  int32_t start_tick_index = 0;
+  Pubkey whirlpool{};
+  bool dynamic = false;
+  std::array<Tick, TICK_ARRAY_SIZE> ticks{};
+};
+
+Result<Whirlpool> decode_whirlpool(const uint8_t* d, size_t n, const Pubkey& owner);
+Result<TickArray> decode_tick_array(const uint8_t* d, size_t n, const Pubkey& owner);
+
+// --- Kamino Lend reserve -----------------------------------------------------------
+
+constexpr size_t KAMINO_RESERVE_LEN = 8 + 8616;
+inline constexpr uint8_t DISC_KAMINO_RESERVE[8] = {43, 242, 204, 202, 26, 247, 59, 127};
+
+struct KaminoReserve {
+  Pubkey lending_market{};
+  Pubkey liquidity_mint{}, supply_vault{}, fee_vault{}, token_program{};
+  uint64_t available_amount = 0;
+  uint64_t mint_decimals = 0;
+  uint64_t flash_loan_fee_sf = 0;  // u64::MAX = flash loans disabled
+  uint8_t status = 0;              // 0 active, 1 obsolete, 2 hidden
+  uint64_t last_update_slot = 0;
+
+  bool flash_enabled() const { return flash_loan_fee_sf != UINT64_MAX && status == 0; }
+};
+
+Result<KaminoReserve> decode_kamino_reserve(const uint8_t* d, size_t n, const Pubkey& owner);
+
+}  // namespace arb::state

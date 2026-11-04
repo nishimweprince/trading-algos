@@ -1,0 +1,38 @@
+# Program IDs, verified 2026-11-04 by getAccountInfo on mainnet (executable = true,
+# owner = BPFLoaderUpgradeab1e11111111111111111111111; see tests/fixtures/accounts.json "programs").
+# Layouts and math were ported from the source commits pinned below (read-only fetches).
+
+[raydium_v4]
+program_id = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8"
+source = "https://github.com/raydium-io/raydium-amm"
+commit = "91739d8d9f5cf347e0ce14ebe4d2bb7069fb31b6"   # program/src/{state,processor,math,instruction}.rs
+swap_instruction = "SwapBaseInV2 (tag 16, 8 accounts)"  # tag 9 (17/18 accounts) kept for reference
+amm_authority = "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1" # PDA ["amm authority"]
+account_len = 752
+
+[whirlpool]
+program_id = "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc"
+source = "https://github.com/orca-so/whirlpools"
+commit = "cc683ec92acb5e7606caa3d8e514d9383e9c7c11"   # programs/whirlpool/src/{state,math,manager,util}
+idl = "harness/idl/whirlpool.json"                     # @orca-so/whirlpools-sdk@0.22.0 dist/artifacts (program 0.9.0)
+swap_instruction = "swap (legacy, SPL token only, 11 accounts incl. oracle PDA)"
+account_len = 653
+fixed_tick_array_len = 9988
+adaptive_fee_pools = "unsupported (quoter refuses; needs the Oracle account)"
+
+[kamino_lend]
+program_id = "KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD"
+source = "https://github.com/Kamino-Finance/klend"
+commit = "77e81854909ab7ffea3a2e898b2554d96e07daac"   # programs/klend/src/{state/reserve.rs,handlers/handler_flash_*,lending_market/flash_ixs.rs}, libs/klend-interface
+main_market = "7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF"
+reserve_sol = "d4A2prbA2whesmvHaL88BH6Ewn5N4bTSU2Ze8P6Bc4Q"
+reserve_usdc = "D6q6wuQSrifJKZYpR1M8R4YawnLDtDsMmWM1NbBmgJ59"
+reserve_len = 8624
+
+[token]
+spl_token = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+token_2022 = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+token_2022_source_commit = "f052d0aa91884157861bd724b70c016026517697"  # solana-program/token-2022
+
+[yellowstone]
+protos = "proto/geyser.proto, proto/solana-storage.proto (copied from pump-desk, which pins rpcpool/yellowstone-grpc)"
