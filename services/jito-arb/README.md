@@ -11,6 +11,123 @@ is the default, replay mode is always a dry run, and in dry run the submitter ho
 The VM steps (live feed, recording, the phase-2 replay gate, the executor build and validator tests) are in
 [RUNBOOK-VM.md](RUNBOOK-VM.md). No mainnet send should happen before the owner has reviewed the gate.
 
+## Documentation
+
+| Document | What it covers |
+|---|---|
+| [docs/jito-arb.md](docs/jito-arb.md) | The full spec: architecture (§2), Helius/Jito/hosting (§3), market data and DEX list (§4), exact quoters (§5), decision engine, sizing, cost model and tips (§6), Kamino flash loans and the tx layout (§7), the Rust executor (§8), building and submitting (§9), risk limits (§10), observability and replay (§11), layout and config (§12), phases and acceptance criteria (§13) |
+| [docs/implementation-plan.md](docs/implementation-plan.md) | How phases 0–3 were built offline: what was reused from pump-desk, the per-phase work list, the guardrails for the unattended run, and the end-of-run checks |
+| [RUNBOOK-VM.md](RUNBOOK-VM.md) | Frankfurt VM steps 0–11: install, build, secrets, Whirlpool and SDK parity, discovery, 24 h LaserStream hold, 3-day recording, the phase-2 replay gate, executor validator tests, devnet ALTs, owner review |
+| [config/bot.example.toml](config/bot.example.toml) | Every config key with its default (defaults live in `src/core/config.hpp`) |
+| [config/dex_programs.toml](config/dex_programs.toml) | Pinned program IDs and the source commits each quoter/decoder was ported from |
+| [config/denylist.json](config/denylist.json) | Mints and pools the bot must never touch |
+| [deploy/](deploy/) | `install.sh`, the VM config `bot.vm.toml`, the env template, and systemd units: `jito-arb` (live dry run), `jito-arb-discover` (+ 10-minute timer), `jito-arb-recorder`, `jito-arb-ui` |
+| [ui/server.py](ui/server.py) | Read-only dashboard on 127.0.0.1:8088 (metrics, decision log, discovery summary); the docstring lists its endpoints |
+| [harness/](harness/) | `sim_parity.cpp` (simulation oracle), `holders_seed.json`, `idl/`, and `parity-node/` (official-SDK parity harness, VM only) |
+| [program/executor/](program/executor/) | On-chain executor (Rust) and `tests/validator.sh` |
+
+## DEX coverage (where is Orca?)
+
+Orca's DEX is **Whirlpool** (program `whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc`); every "Whirlpool" in
+this repo is Orca. The spec (§4) plans six DEXes in three phases. Only the phase-1 pair is built:
+
+| DEX | Model | Decoder | Quoter | Parity | Trading |
+|---|---|---|---|---|---|
+| Raydium AMM v4 | Constant product | Built | Built (`src/dex/raydium_v4.cpp`) | 313/313 exact | **Enabled** (`raydium_v4_enabled = true`) |
+| Orca Whirlpool | Concentrated liquidity | Built (pool + tick arrays) | Built (`src/dex/whirlpool.cpp`, static-fee pools only; adaptive-fee pools refused) | **Not proven**: 10/10 exact on one pool, far under the 200-sample bar | **Disabled** (`whirlpool_enabled = false`). Discovery still tracks its pools (`discovery.track_whirlpool = true`) so the VM streams their state, but no cycle through a Whirlpool is quoted |
+| Raydium CPMM | Constant product, Token-2022 aware | — | — | — | Spec phase 2, not built |
+| Meteora DLMM | Discrete bins | — | — | — | Spec phase 2, not built |
+| Raydium CLMM | Concentrated liquidity | — | — | — | Spec phase 3, not built |
+| PumpSwap AMM | Constant product | — | — | — | Spec phase 3, not built |
+
+To turn Orca on: run the Helius-funded sim-parity run (RUNBOOK-VM.md step 4) until it has at least 200
+exact samples and no mismatches, store them in `tests/fixtures/`, then set `whirlpool_enabled = true`.
+The test `parity_whirlpool_exact` fails if Whirlpool is enabled without that proof. On the VM, cycles are
+limited by the token graph (a mint needs a second pool), so adding Orca, then PumpSwap, is the main way
+to get more cycles.
+
+## Profitability formula
+
+This is what `src/engine/sizer.cpp` and `src/engine/costs.cpp` compute for each cycle (spec §6.3–6.8).
+All arithmetic is integer: raw base-token units, lamports, and parts per million. A base-token amount is
+converted to lamports at the mid price of the deepest pool against SOL (wSOL = 1).
+
+**1. Prefilter (spot edge).** With `r_i` the leg's mid price (Raydium: `R_out / R_in` using vault minus
+`need_take_pnl`; Whirlpool: `sqrt_price² / 2^128`, or its inverse) and `f_i` the pool fee:
+
+```
+spot_edge = Π_i  r_i · (1 − f_i)  −  1        sized only if spot_edge ≥ min_spot_edge (0.0005 = 5 bps)
+```
+
+**2. Gross profit at size x** (in base units). `out_i` is the exact on-chain quote, so DEX fees and
+rounding are already inside it (Raydium: `fee = ceil(in · num / den)`, `out = floor(R_out · in' / (R_in + in'))`).
+
+```
+flash_fee(x) = max(x · fee_sf / 2^60, 1), rounded half up      (Kamino; fee_sf read live from the reserve;
+                                                                fee_sf = u64::MAX means flash loans off)
+π(x)         = out_n( … out_1(x) … )  −  x  −  flash_fee(x)
+```
+
+**3. Size.** `x*` maximises π(x) over `[min_trade, x_max]` by golden-section search (≤ 24 quotes), seeded
+with the closed-form optimum for 2-hop Raydium cycles. With `a = R_in1 · R_in2`,
+`S = √(n1 n2 · R_out1 R_out2 · R_in1 R_in2)` and `n_i = den_i − num_i` (the fraction the pool keeps):
+
+```
+x*_seed = (S · √(d1 d2) − a · d1 d2) / (n1 · (d2 · R_in2 + n2 · R_out1))
+x_max   = min(flash reserve liquidity (or own balance), max_input_fraction (20%) × shallowest leg depth, max_trade)
+```
+
+A size that crosses a tick-array or liquidity boundary is rejected.
+
+**4. Costs, tip and net** (lamports; `gross = π(x*)` in lamports):
+
+```
+CU       = (Σ leg CU + 60,000 overhead) × 1.15                must be ≤ 1,200,000
+fees     = 5,000 base fee + cu_price × CU / 10^6               (cu_price = 0 on the bundle path)
+tip_min  = max(tip_min_lamports (1,000), Jito tip floor p25)
+tip      = clamp(α_k · gross, tip_min, tip_max (0.05 SOL))
+tip      = min(tip, gross − fees − min_net)                    never lets the tip eat the floor profit
+net      = gross − tip − fees
+EV       = p_land · net − (1 − p_land) · c_fail                c_fail = 0 on the Jito bundle path
+SEND if  gross − fees − min_net ≥ tip_min  AND  EV ≥ min_ev   (min_net = 10,000, min_ev = 20,000 lamports)
+```
+
+`α_k` is the tip share for route class `k` (hops plus DEX mix). It starts at 0.5, and every 50 attempts it
+moves by 0.05 toward a 30% landing rate, bounded to [0.2, 0.95]. `p_land` is the class's landing rate,
+smoothed toward 0.10 with 10 pseudo-attempts.
+
+**5. On-chain guard.** The executor reverts the whole transaction (flash borrow included) unless the
+cycle output reaches
+
+```
+min_out = x* + flash_fee + ceil(tip in base units) + ceil(min_net in base units)      must be ≤ x* + flash_fee + π(x*)
+```
+
+So a bundle that lands keeps at least `min_net` after repaying the loan and paying the tip. A bundle that
+does not land costs nothing, because the tip is paid inside the arb transaction.
+
+**Worked example** (made-up numbers for a SOL-based cycle, assuming a 1 bp flash fee and a tip floor
+under the computed tip):
+
+| Step | Value |
+|---|---|
+| x* | 10 SOL = 10,000,000,000 |
+| Cycle output | 10,003,000,000 |
+| flash_fee (1 bp) | 1,000,000 |
+| gross π | 10,003,000,000 − 10,000,000,000 − 1,000,000 = 2,000,000 |
+| fees | 5,000 |
+| tip = 0.5 × gross | 1,000,000 (cap 2,000,000 − 5,000 − 10,000 = 1,985,000, so not capped) |
+| net | 2,000,000 − 1,000,000 − 5,000 = 995,000 lamports ≈ 0.001 SOL |
+| EV at p_land = 0.10 | 99,500 ≥ 20,000, so it is sent |
+| min_out | 10,000,000,000 + 1,000,000 + 1,000,000 + 10,000 = 10,002,010,000 |
+
+**Smallest opportunity that gets sent.** Two checks bind:
+
+- Guard: `gross ≥ fees + min_net + tip_min = 5,000 + 10,000 + 1,000 = 16,000` lamports beyond the flash fee.
+- EV: `p_land · net ≥ min_ev`. At the starting `p_land = 0.10` and `α = 0.5`, `net ≈ 0.5 · gross`, so
+  `gross ≥ 2 · 20,000 / 0.10 ≈ 400,000` lamports (0.0004 SOL) beyond the flash fee. This is the bar that
+  binds until the bot has its own landing history. As `p_land` rises, the bar falls toward the guard floor.
+
 ## Build and test
 
 Laptop (macOS, Homebrew libsodium, simdjson, openssl; no gRPC or Rust):
