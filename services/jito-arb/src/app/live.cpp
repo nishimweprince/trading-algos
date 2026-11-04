@@ -264,26 +264,29 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       if (now - last_example >= std::chrono::seconds(30)) {
         last_example = now;
         // The largest predicted edge that sized to no profit: what the prefilter believed vs what quoting found.
-        engine::SizerExample ex = rt.engine().take_example();
-        if (ex.set) {
+        for (const engine::SizerExample& ex : rt.engine().take_examples()) {
           const engine::Cycle& c = rt.cycles().cycle(ex.cycle);
           std::string legs;
           for (int i = 0; i < c.n; ++i) {
             auto p = rt.store().pool(c.legs[i].pool);
-            char buf[256];
+            char buf[320];
             if (p->kind == DexKind::Whirlpool)
-              std::snprintf(buf, sizeof buf, " | wp %s %s liq=%llu tick=%d spacing=%u fee=%u arrays=%u", b58(p->address).substr(0, 8).c_str(),
-                            c.legs[i].a_to_b ? "a>b" : "b>a", (unsigned long long)uint64_t(p->wp.liquidity), p->wp.tick_current_index,
-                            unsigned(p->wp.tick_spacing), unsigned(p->wp.fee_rate), unsigned(p->n_ticks));
+              std::snprintf(buf, sizeof buf, " | %swp %s %s liq=%llu tick=%d sqrt=%llu.. spacing=%u fee=%u arrays=%u", i == ex.fail_leg ? "*" : "",
+                            b58(p->address).substr(0, 8).c_str(), c.legs[i].a_to_b ? "a>b" : "b>a", (unsigned long long)uint64_t(p->wp.liquidity),
+                            p->wp.tick_current_index, (unsigned long long)uint64_t(p->wp.sqrt_price >> 64), unsigned(p->wp.tick_spacing),
+                            unsigned(p->wp.fee_rate), unsigned(p->n_ticks));
             else
-              std::snprintf(buf, sizeof buf, " | ray %s %s a=%llu b=%llu fee=%llu/%llu", b58(p->address).substr(0, 8).c_str(),
-                            c.legs[i].a_to_b ? "a>b" : "b>a", (unsigned long long)p->vault_a_amount, (unsigned long long)p->vault_b_amount,
+              std::snprintf(buf, sizeof buf, " | %sray %s %s a=%llu b=%llu pnl=%llu/%llu status=%llu fee=%llu/%llu", i == ex.fail_leg ? "*" : "",
+                            b58(p->address).substr(0, 8).c_str(), c.legs[i].a_to_b ? "a>b" : "b>a", (unsigned long long)p->vault_a_amount,
+                            (unsigned long long)p->vault_b_amount, (unsigned long long)p->ray.need_take_pnl_coin,
+                            (unsigned long long)p->ray.need_take_pnl_pc, (unsigned long long)p->ray.status,
                             (unsigned long long)p->ray.swap_fee_numerator, (unsigned long long)p->ray.swap_fee_denominator);
             legs += buf;
           }
-          LOG_INFO("sizer example: cycle %u slot %llu predicted edge %.2f bps, x_max %llu, best x %llu profit %lld (%.2f bps)%s", ex.cycle,
-                   (unsigned long long)ex.slot, double(ex.edge_ppm) / 100.0, (unsigned long long)ex.x_max, (unsigned long long)ex.best_x,
-                   (long long)ex.best_profit, ex.best_x ? 1e4 * double(ex.best_profit) / double(ex.best_x) : 0.0, legs.c_str());
+          LOG_INFO("sizer example [%s]: cycle %u base %s predicted edge %.2f bps, x_max %llu, min_trade %llu, best x %llu profit %lld, err %s%s",
+                   engine::reason_name(ex.reason), ex.cycle, b58(c.base).substr(0, 4).c_str(), double(ex.edge_ppm) / 100.0,
+                   (unsigned long long)ex.x_max, (unsigned long long)ex.min_trade, (unsigned long long)ex.best_x, (long long)ex.best_profit,
+                   ex.reason == engine::Reason::sizer_quote_error ? errc_name(ex.err) : "-", legs.c_str());
         }
       }
       uint64_t last = rt.last_update_ns();

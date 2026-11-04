@@ -201,11 +201,12 @@ bool Engine::evaluate(uint32_t cycle, uint64_t slot, Opportunity* out) {
     else if (r.n_zero_out) { why = Reason::sizer_zero_out; ++diag_.zero_out; }
     else if (r.n_boundary) { why = Reason::boundary; ++diag_.boundary; }
     else { why = Reason::sizer_failed; ++diag_.other; }
-    if (why == Reason::sizer_no_profit && r.best_x) {
+    if (why == Reason::sizer_no_profit && r.best_x)
       failed_profit_ppm_.add(tnow, int64_t(__int128(r.best_profit) * 1'000'000 / __int128(r.best_x)));
-      if (!example_.set || edge_ppm > example_.edge_ppm)
-        example_ = SizerExample{true, cycle, slot, edge_ppm, sc.x_max, r.best_x, r.best_profit, why};
-    }
+    SizerExample& ex = examples_[size_t(why) & 31];
+    if (!ex.set || edge_ppm > ex.edge_ppm)
+      ex = SizerExample{true, cycle, slot, edge_ppm, sc.x_max, r.best_x, r.any_clean ? r.best_profit : 0, why, sc.min_trade,
+                        r.last_err, r.last_fail_leg};
     return log_skip(why);
   }
   o.x = r.x;
