@@ -1,0 +1,17 @@
+[Unit]
+Description=jito-arb pool discovery (writes /var/lib/jito-arb/pools.json)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=jito-arb
+Group=jito-arb
+EnvironmentFile=/etc/jito-arb/jito-arb.env
+WorkingDirectory=/var/lib/jito-arb
+ExecStart=/opt/jito-arb/bin/discover --config /etc/jito-arb/bot.toml --out /var/lib/jito-arb/pools.json --previous /var/lib/jito-arb/pools.json
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/jito-arb

@@ -56,16 +56,24 @@ class HttpResponseParser {
   bool next();
   int status() const { return status_; }
   std::string_view body() const { return body_; }
-  void reset() { buf_.clear(); status_ = 0; done_ = false; consumed_ = 0; body_ = {}; decoded_.clear(); }
+  void reset() {
+    buf_.clear();
+    restart();
+  }
 
  private:
   bool parse();
   std::string buf_;
+  void restart();  // forget the current response's parse state (not the buffer)
   std::string decoded_;
   int status_ = 0;
   bool done_ = false;
   size_t consumed_ = 0;
   std::string_view body_;
+  // Incremental state: the head is parsed once and each chunk decoded once, so a large body is linear.
+  bool head_parsed_ = false, chunked_ = false;
+  long content_length_ = -1;
+  size_t body_start_ = 0, chunk_pos_ = 0;
 };
 
 /** Format a request into `out` (reused buffer). `headers`: extra "Name: value\r\n" lines. */

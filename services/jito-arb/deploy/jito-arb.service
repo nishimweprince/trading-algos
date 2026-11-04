@@ -1,0 +1,24 @@
+[Unit]
+Description=jito-arb live feed and engine (dry run: never sends)
+After=network-online.target
+Wants=network-online.target
+# Needs a pools file from jito-arb-discover.service first.
+ConditionPathExists=/var/lib/jito-arb/pools.json
+
+[Service]
+User=jito-arb
+Group=jito-arb
+EnvironmentFile=/etc/jito-arb/jito-arb.env
+WorkingDirectory=/var/lib/jito-arb
+ExecStart=/opt/jito-arb/bin/jito-arb --config /etc/jito-arb/bot.toml --mode live --dry-run
+Restart=on-failure
+RestartSec=10
+LimitNOFILE=65536
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/jito-arb
+
+[Install]
+WantedBy=multi-user.target

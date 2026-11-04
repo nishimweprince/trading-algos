@@ -4,6 +4,7 @@
 #include <sodium.h>
 #include <unistd.h>
 
+#include <chrono>
 #include <cstring>
 
 #include "app/bundle_builder.hpp"
@@ -11,6 +12,7 @@
 #include "fixture.hpp"
 #include "risk/limits.hpp"
 #include "risk/sign_guard.hpp"
+#include "submit/conn.hpp"
 #include "submit/jito.hpp"
 #include "test.hpp"
 #include "tx/alt_manager.hpp"
@@ -415,4 +417,36 @@ TEST(dry_run_replay_signs_bundles_with_zero_sends) {
   CHECK(bk.stats().built > 0 && bk.stats().risk_blocked == bk.stats().built && bk.stats().signed_ok == 0);
   std::remove(K.cfg.mode.kill_file.c_str());
   rmdir(dir);
+}
+
+TEST(http_parser_incremental_chunked_and_pipelined) {
+  std::string chunked = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n7\r\n, world\r\n0\r\n\r\n";
+  std::string plain = "HTTP/1.1 429 Too Many\r\nContent-Length: 2\r\n\r\n{}";
+  std::string both = chunked + plain;
+  for (size_t step : {size_t(1), size_t(3), size_t(7), both.size()}) {
+    HttpResponseParser p;
+    bool done = false;
+    size_t i = 0;
+    for (; i < both.size() && !done; i += step) done = p.feed(both.data() + i, std::min(step, both.size() - i));
+    CHECK(done && p.status() == 200 && p.body() == "hello, world");
+    // The rest (pipelined) arrives later or is already buffered.
+    bool second = p.next();
+    for (; i < both.size() && !second; i += step) second = p.feed(both.data() + i, std::min(step, both.size() - i));
+    CHECK(second && p.status() == 429 && p.body() == "{}");
+  }
+  // A large chunked body fed in 16 KB reads must parse in linear time (it was quadratic).
+  std::string chunk(1 << 16, 'x');
+  char hdr[16];
+  std::snprintf(hdr, sizeof hdr, "%zx\r\n", chunk.size());
+  std::string big = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n";
+  for (int i = 0; i < 1024; ++i) big += hdr + chunk + "\r\n";  // 64 MB
+  big += "0\r\n\r\n";
+  auto t0 = std::chrono::steady_clock::now();
+  HttpResponseParser p;
+  bool done = false;
+  for (size_t i = 0; i < big.size() && !done; i += 16384) done = p.feed(big.data() + i, std::min<size_t>(16384, big.size() - i));
+  double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+  CHECK(done && p.body().size() == size_t(1024) << 16);
+  std::printf("    64 MB chunked body parsed in %.3f s\n", secs);
+  CHECK(secs < 2.0);
 }

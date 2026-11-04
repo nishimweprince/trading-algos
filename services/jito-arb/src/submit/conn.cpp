@@ -211,68 +211,74 @@ bool HttpResponseParser::feed(const char* data, size_t len) {
   return parse();
 }
 
-bool HttpResponseParser::next() {
-  if (!done_) return false;
-  buf_.erase(0, consumed_);
+void HttpResponseParser::restart() {
   status_ = 0;
   done_ = false;
   consumed_ = 0;
   body_ = {};
   decoded_.clear();
+  head_parsed_ = chunked_ = false;
+  content_length_ = -1;
+  body_start_ = chunk_pos_ = 0;
+}
+
+bool HttpResponseParser::next() {
+  if (!done_) return false;
+  buf_.erase(0, consumed_);
+  restart();
   return parse();
 }
 
 bool HttpResponseParser::parse() {
   if (done_) return true;
-  size_t hdr_end = buf_.find("\r\n\r\n");
-  if (hdr_end == std::string::npos) return false;
-  std::string_view head(buf_.data(), hdr_end);
-  // "HTTP/1.1 200 OK"
-  size_t sp = head.find(' ');
-  if (sp == std::string_view::npos) return false;
-  status_ = std::atoi(std::string(head.substr(sp + 1, 3)).c_str());
-  long content_length = -1;
-  bool chunked = false;
-  size_t pos = head.find("\r\n");
-  while (pos != std::string_view::npos && pos < head.size()) {
-    size_t next = head.find("\r\n", pos + 2);
-    std::string_view line = head.substr(pos + 2, (next == std::string_view::npos ? head.size() : next) - pos - 2);
-    size_t colon = line.find(':');
-    if (colon != std::string_view::npos) {
-      std::string name(line.substr(0, colon));
-      for (auto& c : name) c = char(std::tolower(static_cast<unsigned char>(c)));
-      std::string_view value = line.substr(colon + 1);
-      while (!value.empty() && value.front() == ' ') value.remove_prefix(1);
-      if (name == "content-length") content_length = std::atol(std::string(value).c_str());
-      if (name == "transfer-encoding" && value.find("chunked") != std::string_view::npos) chunked = true;
+  if (!head_parsed_) {
+    size_t hdr_end = buf_.find("\r\n\r\n");
+    if (hdr_end == std::string::npos) return false;
+    std::string_view head(buf_.data(), hdr_end);
+    // "HTTP/1.1 200 OK"
+    size_t sp = head.find(' ');
+    if (sp == std::string_view::npos) return false;
+    status_ = std::atoi(std::string(head.substr(sp + 1, 3)).c_str());
+    size_t pos = head.find("\r\n");
+    while (pos != std::string_view::npos && pos < head.size()) {
+      size_t next = head.find("\r\n", pos + 2);
+      std::string_view line = head.substr(pos + 2, (next == std::string_view::npos ? head.size() : next) - pos - 2);
+      size_t colon = line.find(':');
+      if (colon != std::string_view::npos) {
+        std::string name(line.substr(0, colon));
+        for (auto& c : name) c = char(std::tolower(static_cast<unsigned char>(c)));
+        std::string_view value = line.substr(colon + 1);
+        while (!value.empty() && value.front() == ' ') value.remove_prefix(1);
+        if (name == "content-length") content_length_ = std::atol(std::string(value).c_str());
+        if (name == "transfer-encoding" && value.find("chunked") != std::string_view::npos) chunked_ = true;
+      }
+      pos = next;
     }
-    pos = next;
+    body_start_ = chunk_pos_ = hdr_end + 4;
+    head_parsed_ = true;
   }
-  size_t body_start = hdr_end + 4;
-  if (chunked) {
-    decoded_.clear();
-    size_t p = body_start;
+  if (chunked_) {
     for (;;) {
-      size_t le = buf_.find("\r\n", p);
+      size_t le = buf_.find("\r\n", chunk_pos_);
       if (le == std::string::npos) return false;
-      long n = std::strtol(buf_.substr(p, le - p).c_str(), nullptr, 16);
-      p = le + 2;
+      long n = std::strtol(buf_.c_str() + chunk_pos_, nullptr, 16);
+      size_t data = le + 2;
       if (n == 0) {
-        size_t end = buf_.find("\r\n", p);
+        size_t end = buf_.find("\r\n", data);
         if (end == std::string::npos) return false;
         consumed_ = end + 2;
         break;
       }
-      if (buf_.size() < p + size_t(n) + 2) return false;
-      decoded_.append(buf_, p, size_t(n));
-      p += size_t(n) + 2;
+      if (buf_.size() < data + size_t(n) + 2) return false;  // wait for the whole chunk; resume here next feed
+      decoded_.append(buf_, data, size_t(n));
+      chunk_pos_ = data + size_t(n) + 2;
     }
     body_ = decoded_;
   } else {
-    size_t n = content_length < 0 ? 0 : size_t(content_length);
-    if (buf_.size() < body_start + n) return false;
-    body_ = std::string_view(buf_.data() + body_start, n);
-    consumed_ = body_start + n;
+    size_t n = content_length_ < 0 ? 0 : size_t(content_length_);
+    if (buf_.size() < body_start_ + n) return false;
+    body_ = std::string_view(buf_.data() + body_start_, n);
+    consumed_ = body_start_ + n;
   }
   done_ = true;
   return true;

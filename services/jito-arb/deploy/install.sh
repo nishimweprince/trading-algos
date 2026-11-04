@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Install jito-arb on the VM from a vm-preset build: binaries to /opt/jito-arb/bin, config to /etc/jito-arb,
+# data under /var/lib/jito-arb, systemd units. Idempotent; never overwrites an existing config or env file.
+#   sudo services/jito-arb/deploy/install.sh
+set -euo pipefail
+HERE=$(cd "$(dirname "$0")" && pwd)
+SRC=$(cd "$HERE/.." && pwd)
+BUILD="$SRC/build/vm"
+[ -x "$BUILD/jito-arb" ] || { echo "build first: cmake --preset vm && cmake --build --preset vm" >&2; exit 1; }
+
+id jito-arb >/dev/null 2>&1 || useradd --system --home-dir /var/lib/jito-arb --shell /sbin/nologin jito-arb
+install -d -m 0755 /opt/jito-arb/bin /opt/jito-arb/share
+install -d -m 0750 -o root -g jito-arb /etc/jito-arb
+install -d -m 0750 -o jito-arb -g jito-arb /var/lib/jito-arb /var/lib/jito-arb/frames /var/lib/jito-arb/decisions
+
+for b in jito-arb discover recorder replay-report sim-parity sim-check fixture-frames arb_tests arb_bench; do
+  [ -x "$BUILD/$b" ] && install -m 0755 "$BUILD/$b" /opt/jito-arb/bin/
+done
+install -m 0644 "$SRC/config/denylist.json" "$SRC/config/dex_programs.toml" /opt/jito-arb/share/
+[ -f /etc/jito-arb/bot.toml ] || install -m 0640 -o root -g jito-arb "$HERE/bot.vm.toml" /etc/jito-arb/bot.toml
+[ -f /etc/jito-arb/jito-arb.env ] || install -m 0600 -o root -g root "$HERE/jito-arb.env.example" /etc/jito-arb/jito-arb.env
+# The engine reads config/denylist.json relative to its working directory.
+install -d -m 0750 -o jito-arb -g jito-arb /var/lib/jito-arb/config
+install -m 0644 "$SRC/config/denylist.json" /var/lib/jito-arb/config/denylist.json
+
+for u in jito-arb.service jito-arb-recorder.service jito-arb-discover.service jito-arb-discover.timer; do
+  install -m 0644 "$HERE/$u" /etc/systemd/system/
+done
+systemctl daemon-reload
+echo "installed. Fill /etc/jito-arb/jito-arb.env, then:"
+echo "  sudo systemctl start jito-arb-discover.service   # first pools.json"
+echo "  sudo systemctl enable --now jito-arb-discover.timer jito-arb.service"

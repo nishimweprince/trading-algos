@@ -1,5 +1,7 @@
 #include "tx/dex_ix.hpp"
 
+#include <cstring>
+
 #include "core/programs.hpp"
 #include "state/discovery.hpp"
 
@@ -64,13 +66,18 @@ std::vector<AccountMeta> swap_accounts(const PoolState& p, bool a_to_b, const Us
 }
 
 std::vector<uint8_t> swap_data(DexKind kind, bool a_to_b, uint64_t amount_in, uint64_t min_out) {
-  std::vector<uint8_t> d;
-  auto put = [&](const void* p, size_t n) { d.insert(d.end(), (const uint8_t*)p, (const uint8_t*)p + n); };
+  // Filled in a fixed buffer (GCC 14 reports a false -Wstringop-overflow on vector::insert after push_back).
+  uint8_t d[42];
+  size_t n = 0;
+  auto put = [&](const void* p, size_t len) {
+    std::memcpy(d + n, p, len);
+    n += len;
+  };
   if (kind == DexKind::RaydiumV4) {
-    d.push_back(RAYDIUM_SWAP_BASE_IN_V2);
+    d[n++] = RAYDIUM_SWAP_BASE_IN_V2;
     put(&amount_in, 8);
     put(&min_out, 8);
-    return d;
+    return std::vector<uint8_t>(d, d + n);
   }
   // swap(amount, other_amount_threshold, sqrt_price_limit, amount_specified_is_input, a_to_b)
   put(WHIRLPOOL_SWAP_DISC, 8);
@@ -78,9 +85,9 @@ std::vector<uint8_t> swap_data(DexKind kind, bool a_to_b, uint64_t amount_in, ui
   put(&min_out, 8);
   unsigned __int128 no_limit = 0;  // NO_EXPLICIT_SQRT_PRICE_LIMIT
   put(&no_limit, 16);
-  d.push_back(1);
-  d.push_back(a_to_b ? 1 : 0);
-  return d;
+  d[n++] = 1;
+  d[n++] = a_to_b ? 1 : 0;
+  return std::vector<uint8_t>(d, d + n);
 }
 
 void swap(IxList& l, const PoolState& p, bool a_to_b, const UserAccounts& u, uint64_t amount_in, uint64_t min_out) {

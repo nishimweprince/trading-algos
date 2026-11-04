@@ -84,6 +84,9 @@ struct Config {
     double min_pool_tvl_sol = 50;
     int max_tracked_pools = 1500;
     int interval_s = 600;
+    // Track (subscribe, record) Whirlpool pools even while dex.whirlpool_enabled keeps them out of quoting:
+    // they give Raydium tokens a second pool, and the recordings serve the replay once parity is proven.
+    bool track_whirlpool = true;
   } discovery;
 
   struct Flash {
