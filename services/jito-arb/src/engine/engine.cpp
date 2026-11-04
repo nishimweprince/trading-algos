@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "core/programs.hpp"
+#include "core/sys.hpp"
 #include "core/u256.hpp"
 
 namespace arb::engine {
@@ -43,7 +44,9 @@ bool mid_x64(const PoolState& p, const Pubkey& from, u128& out) {
 EngineConfig engine_config(const Config& c) {
   EngineConfig e;
   e.max_state_age_slots = uint64_t(c.engine.max_state_age_slots);
-  e.max_slot_lag = uint64_t(c.helius.resync_lag_slots);
+  // Twice the resync threshold: live mode refreshes a quiet pool by RPC once it lags resync_lag_slots, well
+  // before the engine would call it stale.
+  e.max_slot_lag = 2 * uint64_t(c.helius.resync_lag_slots);
   e.min_edge_ppm = ppm(c.engine.min_spot_edge);
   e.max_input_fraction_ppm = ppm(c.engine.max_input_fraction);
   e.max_trade_lamports = c.engine.max_trade_lamports;
@@ -135,7 +138,8 @@ bool Engine::evaluate(uint32_t cycle, uint64_t slot, Opportunity* out) {
       return false;
     }
   }
-  if (spot_product_x64(c, s) < edge_x64_) return false;
+  u128 prod = spot_product_x64(c, s);
+  if (prod < edge_x64_) return false;
   ++n_.prefilter_pass;
   Opportunity o;
   o.cycle = cycle;
@@ -175,7 +179,35 @@ bool Engine::evaluate(uint32_t cycle, uint64_t slot, Opportunity* out) {
   sc.max_evals = cfg_.sizer_max_evals;
   SizeResult r = size_cycle(c, s, q_, fee, sc);
   ++n_.sized;
-  if (!r.ok) return log_skip(r.retried ? Reason::boundary : Reason::sizer_failed);
+  uint64_t tnow = now_ns();
+  int64_t edge_ppm = int64_t((__int128(prod) - (__int128(1) << 64)) * 1'000'000 >> 64);
+  edge_ppm_.add(tnow, edge_ppm);
+  for (int i = 0; i < c.n; ++i)
+    if (s[i]->kind == DexKind::Whirlpool && s[i]->wp.liquidity == 0) {
+      ++diag_.zero_liquidity_leg;
+      break;
+    }
+  if (!r.ok) {
+    Reason why;
+    if (sc.x_max < sc.min_trade) { why = Reason::sizer_no_room; ++diag_.no_room; }
+    else if (r.retried) { why = Reason::boundary; ++diag_.boundary; }
+    else if (r.any_clean) { why = Reason::sizer_no_profit; ++diag_.no_profit; }
+    else if (r.n_partial) { why = Reason::sizer_partial_fill; ++diag_.partial_fill; }
+    else if (r.n_quote_error) {
+      why = Reason::sizer_quote_error;
+      ++diag_.quote_error;
+      ++diag_.quote_error_by_code[size_t(r.last_err) & 31];
+    }
+    else if (r.n_zero_out) { why = Reason::sizer_zero_out; ++diag_.zero_out; }
+    else if (r.n_boundary) { why = Reason::boundary; ++diag_.boundary; }
+    else { why = Reason::sizer_failed; ++diag_.other; }
+    if (why == Reason::sizer_no_profit && r.best_x) {
+      failed_profit_ppm_.add(tnow, int64_t(__int128(r.best_profit) * 1'000'000 / __int128(r.best_x)));
+      if (!example_.set || edge_ppm > example_.edge_ppm)
+        example_ = SizerExample{true, cycle, slot, edge_ppm, sc.x_max, r.best_x, r.best_profit, why};
+    }
+    return log_skip(why);
+  }
   o.x = r.x;
   o.final_out = r.chain.final_out;
   o.flash_fee = r.flash_fee;

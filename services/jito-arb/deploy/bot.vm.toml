@@ -13,18 +13,22 @@ laserstream_endpoint = "VERIFY"   # overridden by LASERSTREAM_ENDPOINT
 rpc_url = "https://mainnet.helius-rpc.com"
 api_key_env = "HELIUS_API_KEY"
 max_grpc_connections = 4
-shard_size = 1000                 # 4 x 1000 keys: 775 pools need ~3,900 (spec suggests 300; not a Helius limit)
+shard_size = 1500                 # 4 x 1500 keys: ~1,000 pools need ~5,000 (spec suggests 300; not a Helius limit)
+
+[engine]
+max_cycles_per_pool = 256         # cycles one pool's update re-prices (each pool's deepest 256)
 
 [jito]
 regions = ["frankfurt", "amsterdam"]
 
 [dex]
 raydium_v4_enabled = true
-whirlpool_enabled = false         # until Helius-funded sim-parity proves it (RUNBOOK-VM.md step 4)
+whirlpool_enabled = true          # 204/204 exact (tests/fixtures/parity_whirlpool.json, Helius-funded, 2026-11-04)
 
 [discovery]
-min_pool_tvl_sol = 50
+min_pool_tvl_sol = 20             # 50 tracked 775 pools, 20 tracks ~984 (with the full Raydium fetch); the EV gate drops small profits
 max_tracked_pools = 1500
+raydium_fetch_cap = 16000         # every Raydium v4 pool whose base vault clears the floor
 
 [flash]
 # Kamino Main Market reserves for the base mints (wSOL, USDC); see config/dex_programs.toml.

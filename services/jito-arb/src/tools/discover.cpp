@@ -114,7 +114,7 @@ int run(int argc, char** argv) {
       }
     }
     std::sort(cand.begin(), cand.end(), [](auto& a, auto& b) { return a.first > b.first; });
-    size_t cap = std::max<size_t>(4 * dc.max_tracked_pools, 2000);
+    size_t cap = size_t(std::max(1, cfg.discovery.raydium_fetch_cap));
     std::vector<Pubkey> keys;
     for (auto& [amt, k] : cand)
       if (keys.size() < cap && seen.insert(k).second) keys.push_back(k);

@@ -2,6 +2,7 @@
 
 #include <unistd.h>
 
+#include <algorithm>
 #include <chrono>
 #include <fstream>
 #include <memory>
@@ -90,17 +91,36 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   LOG_INFO("%s: %zu pools, %zu cycles, %zu shards (%zu pool keys, %zu wallet/reserve keys)", recorder ? "recorder" : "live dry run",
            pf.pools.size(), rt.cycles().size(), shards.size(), only_pools.size(), wallet_keys.size());
 
-  // Initial state by RPC (marked awaiting a push), then the streams.
+  // Streams first, then the initial state by RPC: once every stream is subscribed, no change after the read
+  // can be missed, so the read is usable at once (quiet pools are quotable without waiting for a trade).
+  // Frames that arrive meanwhile queue in the rings; older ones lose to the read by (slot, write_version).
+  for (auto& s : shards) s.thread = std::thread([&s] { s.client->run(); });
+  auto all_up = [&] {
+    for (auto& s : shards)
+      if (!s.client->counters().up.load()) return false;
+    return true;
+  };
   Rpc rpc(resolve_rpc_url(cfg), cfg.helius.rpc_timeout_ms);
   if (!recorder) {
+    auto wait_until = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    while (!all_up() && !stop && std::chrono::steady_clock::now() < wait_until)
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    // `up` is set when the stream opens, a moment before the server applies the subscription request.
+    if (all_up()) std::this_thread::sleep_for(std::chrono::seconds(1));
+    std::vector<uint32_t> ids(rt.store().pool_count());
+    for (uint32_t i = 0; i < ids.size(); ++i) ids[i] = i;
+    std::vector<Pubkey> keys = feed::pool_ordered_keys(rt.store(), ids);
+    for (const Pubkey& k : pool_keys)  // reserves and anything else subscribed
+      if (std::find(keys.begin(), keys.end(), k) == keys.end()) keys.push_back(k);
+    bool live = all_up();
     try {
-      auto st = feed::resync(rpc, rt.store(), pool_keys);
-      LOG_INFO("initial resync: %zu applied, %zu missing", st.applied, st.missing);
+      auto st = feed::resync(rpc, rt.store(), keys, live);
+      LOG_INFO("initial resync: %zu applied, %zu missing (%s)", st.applied, st.missing,
+               live ? "streams up: usable at once" : "streams not all up: waiting for pushes");
     } catch (const std::exception& e) {
       LOG_WARN("initial resync failed: %s", e.what());
     }
   }
-  for (auto& s : shards) s.thread = std::thread([&s] { s.client->run(); });
 
   // Send side (dry run): virtual lookup tables until discovery's real ones exist; real recent blockhash.
   tx::AltManager alts;
@@ -140,6 +160,43 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   auto& g_skipped = reg.gauge("arb_engine_skipped", "sized candidates not dispatched");
   auto& g_signed = reg.gauge("arb_bundles_signed", "bundles built and signed");
   auto& g_shards = reg.gauge("arb_feed_shards_up", "LaserStream streams currently up");
+  // Latency windows (last 60 s), microseconds: p50 / p99 / max and the sample count.
+  struct LatGauges {
+    obs::Gauge *p50, *p99, *max, *n;
+  };
+  auto lat = [&](const std::string& name, const std::string& help) {
+    return LatGauges{&reg.gauge(name + "_p50", help + " (p50, last 60 s)"), &reg.gauge(name + "_p99", help + " (p99, last 60 s)"),
+                     &reg.gauge(name + "_max", help + " (max, last 60 s)"), &reg.gauge(name + "_samples", help + " (samples, last 60 s)")};
+  };
+  LatGauges g_lag = lat("arb_feed_lag_us", "account update received minus the server's created_at, us");
+  LatGauges g_off = lat("arb_slot_offset_us", "account update received minus its slot's start, us");
+  LatGauges g_det = lat("arb_detect_to_signed_us", "frame received to bundle signed, us");
+  LatGauges g_edge = lat("arb_sized_edge_ppm", "spot edge the prefilter saw on sized cycles, ppm");
+  LatGauges g_fprof = lat("arb_failed_profit_ppm", "best realized profit / size on cycles that sized to no profit, ppm");
+  struct DiagGauge {
+    const char* name;
+    uint64_t engine::SizerDiag::*field;
+    obs::Gauge* g;
+  };
+  DiagGauge diag_gauges[] = {
+      {"arb_sizer_fail_no_room", &engine::SizerDiag::no_room, nullptr},
+      {"arb_sizer_fail_no_profit", &engine::SizerDiag::no_profit, nullptr},
+      {"arb_sizer_fail_partial_fill", &engine::SizerDiag::partial_fill, nullptr},
+      {"arb_sizer_fail_quote_error", &engine::SizerDiag::quote_error, nullptr},
+      {"arb_sizer_fail_zero_out", &engine::SizerDiag::zero_out, nullptr},
+      {"arb_sizer_fail_boundary", &engine::SizerDiag::boundary, nullptr},
+      {"arb_sizer_fail_other", &engine::SizerDiag::other, nullptr},
+      {"arb_sizer_zero_liquidity_leg", &engine::SizerDiag::zero_liquidity_leg, nullptr},
+  };
+  for (auto& d : diag_gauges) d.g = &reg.gauge(d.name, "sized cycles that failed, by reason (since start)");
+  auto last_example = std::chrono::steady_clock::now();
+  auto put = [](LatGauges& g, obs::LatencyWindow& w, uint64_t now) {
+    auto st = w.stats(now);
+    g.p50->set(st.p50);
+    g.p99->set(st.p99);
+    g.max->set(st.max);
+    g.n->set(int64_t(st.count));
+  };
   g_pools.set(int64_t(pf.pools.size()));
   g_cycles.set(int64_t(rt.cycles().size()));
 
@@ -196,6 +253,39 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
         q += p && p->quotable(uint64_t(cfg.engine.max_state_age_slots)) ? 1 : 0;
       }
       g_quotable.set(q);
+      uint64_t tnow = mono_ns();
+      put(g_lag, rt.feed().feed_lag_us(), tnow);
+      put(g_off, rt.feed().slot_offset_us(), tnow);
+      put(g_det, builder.detect_to_signed_us(), tnow);
+      put(g_edge, rt.engine().sized_edge_ppm(), tnow);
+      put(g_fprof, rt.engine().failed_profit_ppm(), tnow);
+      const auto& dg = rt.engine().sizer_diag();
+      for (auto& d : diag_gauges) d.g->set(int64_t(dg.*(d.field)));
+      if (now - last_example >= std::chrono::seconds(30)) {
+        last_example = now;
+        // The largest predicted edge that sized to no profit: what the prefilter believed vs what quoting found.
+        engine::SizerExample ex = rt.engine().take_example();
+        if (ex.set) {
+          const engine::Cycle& c = rt.cycles().cycle(ex.cycle);
+          std::string legs;
+          for (int i = 0; i < c.n; ++i) {
+            auto p = rt.store().pool(c.legs[i].pool);
+            char buf[256];
+            if (p->kind == DexKind::Whirlpool)
+              std::snprintf(buf, sizeof buf, " | wp %s %s liq=%llu tick=%d spacing=%u fee=%u arrays=%u", b58(p->address).substr(0, 8).c_str(),
+                            c.legs[i].a_to_b ? "a>b" : "b>a", (unsigned long long)uint64_t(p->wp.liquidity), p->wp.tick_current_index,
+                            unsigned(p->wp.tick_spacing), unsigned(p->wp.fee_rate), unsigned(p->n_ticks));
+            else
+              std::snprintf(buf, sizeof buf, " | ray %s %s a=%llu b=%llu fee=%llu/%llu", b58(p->address).substr(0, 8).c_str(),
+                            c.legs[i].a_to_b ? "a>b" : "b>a", (unsigned long long)p->vault_a_amount, (unsigned long long)p->vault_b_amount,
+                            (unsigned long long)p->ray.swap_fee_numerator, (unsigned long long)p->ray.swap_fee_denominator);
+            legs += buf;
+          }
+          LOG_INFO("sizer example: cycle %u slot %llu predicted edge %.2f bps, x_max %llu, best x %llu profit %lld (%.2f bps)%s", ex.cycle,
+                   (unsigned long long)ex.slot, double(ex.edge_ppm) / 100.0, (unsigned long long)ex.x_max, (unsigned long long)ex.best_x,
+                   (long long)ex.best_profit, ex.best_x ? 1e4 * double(ex.best_profit) / double(ex.best_x) : 0.0, legs.c_str());
+        }
+      }
       uint64_t last = rt.last_update_ns();
       g_age.set(last ? int64_t((mono_ns() - std::min(mono_ns(), last)) / 1'000'000) : -1);
       if (!recorder && blockhash.needs_refresh(wall_ms())) {
@@ -212,17 +302,15 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
     if (!recorder && now - last_resync >= std::chrono::seconds(10)) {
       last_resync = now;
       uint64_t clock = rt.clock().slot.load();
-      std::vector<Pubkey> lag;
+      std::vector<uint32_t> lagging;
       for (uint32_t i = 0; i < rt.store().pool_count() && clock; ++i) {
         auto p = rt.store().pool(i);
-        if (p && clock > p->slot + uint64_t(cfg.helius.resync_lag_slots)) {
-          const PoolDef& d = rt.store().def(i);
-          lag.insert(lag.end(), {d.address, d.vault_a, d.vault_b});
-        }
+        if (p && clock > p->slot + uint64_t(cfg.helius.resync_lag_slots)) lagging.push_back(i);
       }
-      if (!lag.empty()) {
+      if (!lagging.empty()) {
         try {
-          feed::resync(rpc, rt.store(), lag);
+          // Quiet pools are refreshed here about once a minute; with every stream up the read is usable at once.
+          feed::resync(rpc, rt.store(), feed::pool_ordered_keys(rt.store(), lagging), all_up());
         } catch (const std::exception& e) {
           LOG_WARN("resync: %s", e.what());
         }

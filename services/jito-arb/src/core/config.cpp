@@ -134,7 +134,7 @@ Config load_config(const std::string& path) {
   G(engine, cu_price_micro_lamports);
   G(dex, raydium_v4_enabled); G(dex, whirlpool_enabled); G(dex, raydium_v4_cu); G(dex, whirlpool_cu);
   G(discovery, min_pool_tvl_sol); G(discovery, max_tracked_pools); G(discovery, interval_s);
-  G(discovery, track_whirlpool);
+  G(discovery, track_whirlpool); G(discovery, raydium_fetch_cap);
   G(flash, provider); G(flash, lending_market); G(flash, reserves);
   G(risk, max_daily_fee_spend_sol); G(risk, min_sol_float); G(risk, max_sol_float);
   G(risk, max_consecutive_rejects); G(risk, reject_pause_s); G(risk, max_feed_lag_ms);

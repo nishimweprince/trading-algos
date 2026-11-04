@@ -38,7 +38,8 @@ assert REC.size == 392
 MAGIC = b"ARBDEC01"
 REASONS = ["none", "base_price_unknown", "no_profit", "cu_over_budget", "below_min_net", "guard_overflow",
            "guard_above_quote", "below_min_ev", "pool_conflict", "slot_cap", "send_lag", "sizer_failed",
-           "boundary", "flash_disabled", "risk_block", "tx_build_failed", "sign_guard"]
+           "boundary", "flash_disabled", "risk_block", "tx_build_failed", "sign_guard", "sizer_no_room",
+           "sizer_no_profit", "sizer_partial_fill", "sizer_quote_error", "sizer_zero_out"]
 ACTIONS = {0: "skipped", 1: "sent", 2: "dry_run"}
 DEXES = {0: "raydium_v4", 1: "whirlpool", 2: "cpmm", 3: "dlmm", 4: "clmm", 5: "pumpswap"}
 B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
@@ -130,11 +131,15 @@ def unit_states():
         except Exception as e:
             out[u] = "unknown: %s" % e
     try:
-        r = subprocess.run(["systemctl", "show", "jito-arb-discover.service", "-p", "ExecMainExitTimestamp", "--value"],
-                           capture_output=True, text=True, timeout=3)
-        out["last_discovery"] = r.stdout.strip()
+        r = subprocess.run(["systemctl", "show", "jito-arb-discover.service", "-p", "ExecMainExitTimestamp", "-p", "Result",
+                            "--no-pager"], capture_output=True, text=True, timeout=3)
+        props = dict(l.split("=", 1) for l in r.stdout.splitlines() if "=" in l)
+        out["last_discovery"] = props.get("ExecMainExitTimestamp", "")
+        out["discovery_result"] = props.get("Result", "")
+        r = subprocess.run(["systemctl", "is-enabled", "jito-arb-recorder.service"], capture_output=True, text=True, timeout=3)
+        out["recorder_enabled"] = r.stdout.strip()
     except Exception:
-        out["last_discovery"] = ""
+        out.setdefault("last_discovery", "")
     return out
 
 
@@ -245,7 +250,9 @@ class Handler(BaseHTTPRequestHandler):
             elif u.path == "/api/history":
                 minutes = max(5, min(360, int(q.get("minutes", ["60"])[0])))
                 s = [x for x in self.sampler.snapshot() if x[0] >= time.time() - minutes * 60]
-                keys = ["arb_feed_update_age_ms", "arb_pools_quotable", "arb_feed_shards_up", "arb_feed_reconnects"]
+                keys = ["arb_feed_update_age_ms", "arb_pools_quotable", "arb_feed_shards_up", "arb_feed_reconnects",
+                        "arb_feed_lag_us_p50", "arb_feed_lag_us_p99", "arb_slot_offset_us_p50", "arb_slot_offset_us_p99",
+                        "arb_detect_to_signed_us_p50", "arb_detect_to_signed_us_p99"]
                 series = {"t": [t for t, _ in s]}
                 for k in keys:  # the bot reports -1 for "nothing yet"
                     series[k] = [m.get(k) if m.get(k, -1) >= 0 else None for _, m in s]

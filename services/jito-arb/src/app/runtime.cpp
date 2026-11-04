@@ -106,6 +106,7 @@ void Runtime::refresh_slot_inputs(uint64_t slot) {
 void Runtime::on_frame(const uint8_t* data, size_t len, uint64_t recv_ns, int64_t wall_ms) {
   ++stats_.frames;
   wall_ms_ = wall_ms;
+  frame_recv_ns_ = recv_ns;
   if (!handler_.on_frame(data, len, recv_ns)) ++stats_.bad_frames;
   uint32_t id;
   bool refreshed = false;

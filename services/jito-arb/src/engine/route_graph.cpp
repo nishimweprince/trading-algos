@@ -77,16 +77,19 @@ void CycleIndex::build(std::span<const PoolDef> pools, std::span<const double> t
       }
     }
   }
-  // Deepest first; a cycle is kept only while every pool on it is under its cap.
+  // Deepest first. The cap bounds what one pool's update evaluates: each pool's list holds its
+  // max_cycles_per_pool deepest cycles. A cycle is kept if at least one of its pools lists it, so a busy hub
+  // pool (SOL/USDC) with a full list no longer blocks cycles that its quieter legs still evaluate.
   std::stable_sort(all.begin(), all.end(), [](const Cycle& a, const Cycle& b) { return a.score > b.score; });
   std::vector<int> count(pools.size(), 0);
   for (Cycle& c : all) {
-    bool room = true;
-    for (int i = 0; i < c.n; ++i) room &= count[c.legs[i].pool] < cfg.max_cycles_per_pool;
-    if (!room) continue;
+    bool listed = false;
+    for (int i = 0; i < c.n; ++i) listed |= count[c.legs[i].pool] < cfg.max_cycles_per_pool;
+    if (!listed) continue;
     c.id = uint32_t(cycles_.size());
     for (int i = 0; i < c.n; ++i) {
       uint32_t p = c.legs[i].pool;
+      if (count[p] >= cfg.max_cycles_per_pool) continue;
       // A pool used twice on one route (impossible by construction) would be indexed once.
       if (by_pool_[p].empty() || by_pool_[p].back() != c.id) by_pool_[p].push_back(c.id);
       ++count[p];

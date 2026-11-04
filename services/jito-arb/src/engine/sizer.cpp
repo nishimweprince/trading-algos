@@ -62,15 +62,24 @@ ChainQuote quote_chain(const Cycle& c, const Snapshots& s, const Quoters& q, uin
   uint64_t amt = x;
   for (int i = 0; i < c.n; ++i) {
     const dex::IQuoter* qq = q.get(s[i]->kind);
-    if (!qq) return out;
+    auto failed = [&](ChainQuote::Fail f) {
+      out.fail = f;
+      out.fail_leg = int8_t(i);
+      return out;
+    };
+    if (!qq) return failed(ChainQuote::no_quoter);
     auto r = qq->quote_exact_in(*s[i], c.legs[i].a_to_b, amt);
-    if (!r) return out;
+    if (!r) {
+      out.err = r.error().code;
+      return failed(ChainQuote::quote_error);
+    }
     if (r->crosses_boundary) {
       out.boundary = true;
-      return out;
+      return failed(ChainQuote::boundary_fail);
     }
     // A leg that stops short of its input (Whirlpool price limit) leaves tokens mid-route: not a clean cycle.
-    if (r->amount_in != amt || r->amount_out == 0) return out;
+    if (r->amount_in != amt) return failed(ChainQuote::partial_fill);
+    if (r->amount_out == 0) return failed(ChainQuote::zero_out);
     out.outs[i] = r->amount_out;
     out.cu += r->est_compute_units;
     amt = r->amount_out;
@@ -147,9 +156,24 @@ SizeResult size_cycle(const Cycle& c, const Snapshots& s, const Quoters& q, cons
     ChainQuote ch = quote_chain(c, s, q, x);
     uint64_t ff = 0;
     if (ch.boundary && (boundary_at == 0 || x < boundary_at)) boundary_at = x;
+    switch (ch.fail) {
+      case ChainQuote::quote_error: ++best.n_quote_error; best.last_err = ch.err; break;
+      case ChainQuote::boundary_fail: ++best.n_boundary; break;
+      case ChainQuote::partial_fill: ++best.n_partial; break;
+      case ChainQuote::zero_out: ++best.n_zero_out; break;
+      case ChainQuote::no_quoter: ++best.n_no_quoter; break;
+      case ChainQuote::none: break;
+    }
+    if (ch.fail != ChainQuote::none) best.last_fail_leg = ch.fail_leg;
+    if (ch.ok && !fee(x, ff)) ++best.n_fee;
     if (ch.ok && fee(x, ff)) {
       __int128 p = __int128(ch.final_out) - __int128(x) - __int128(ff);
       v = p > INT64_MAX ? INT64_MAX : p < INT64_MIN + 1 ? INT64_MIN + 1 : int64_t(p);
+      best.any_clean = true;
+      if (v > best.best_profit) {
+        best.best_profit = v;
+        best.best_x = x;
+      }
       if (!best.ok || v > best.profit) {
         best.ok = true;
         best.x = x;

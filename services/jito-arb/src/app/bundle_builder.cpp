@@ -7,6 +7,7 @@
 
 #include "core/base58.hpp"
 #include "core/programs.hpp"
+#include "core/sys.hpp"
 #include "tx/dex_ix.hpp"
 
 namespace arb::app {
@@ -140,6 +141,10 @@ void BundleBuilder::operator()(const engine::Opportunity& o, const engine::Cycle
     return skip(engine::Reason::tx_build_failed);
   }
   ++n_.signed_ok;
+  if (uint64_t t0 = rt_.frame_recv_ns(); t0) {
+    uint64_t t1 = now_ns();
+    detect_us_.add(t1, int64_t(t1 - std::min(t1, t0)) / 1000);
+  }
   std::memcpy(rec.signature, last_.sig.data(), 64);
   switch (submitter_.submit(last_, slot, rt_.clock().slot.load(std::memory_order_relaxed), rec.wall_ms)) {
     case submit::SubmitOutcome::DryRun:

@@ -10,6 +10,7 @@
 #include "engine/dispatcher.hpp"
 #include "engine/sizer.hpp"
 #include "flash/kamino.hpp"
+#include "obs/latency.hpp"
 #include "state/state_store.hpp"
 
 namespace arb::engine {
@@ -29,6 +30,30 @@ struct EngineConfig {
 
 EngineConfig engine_config(const Config& c);
 TipPolicy::Params tip_params(const Config& c);
+
+/** Why sized cycles failed (each sized-and-failed cycle counts once), plus a cross-cut. */
+struct SizerDiag {
+  uint64_t no_room = 0;       // x_max below min_trade (depth fraction, reserve liquidity or max_trade)
+  uint64_t no_profit = 0;     // clean quotes, but profit <= 0 at every size tried: the spot edge was not real
+  uint64_t partial_fill = 0;  // a leg could not take its whole input (Whirlpool price limit)
+  uint64_t quote_error = 0;   // a quoter returned an error at every size
+  uint64_t zero_out = 0;
+  uint64_t boundary = 0;      // every size needed a tick array outside the cache
+  uint64_t other = 0;
+  uint64_t zero_liquidity_leg = 0;  // a Whirlpool leg with zero active liquidity (spot price is not tradable)
+  uint64_t quote_error_by_code[32]{};
+};
+
+/** The largest predicted edge that sized to no profit since the last take(): for the log. */
+struct SizerExample {
+  bool set = false;
+  uint32_t cycle = 0;
+  uint64_t slot = 0;
+  int64_t edge_ppm = 0;      // spot-product edge the prefilter saw
+  uint64_t x_max = 0, best_x = 0;
+  int64_t best_profit = 0;   // base units, <= 0
+  Reason reason = Reason::none;
+};
 
 struct EngineCounters {
   uint64_t updates = 0, cycles_seen = 0, stale = 0, unsupported = 0, cooling = 0, prefilter_pass = 0, sized = 0, candidates = 0,
@@ -59,6 +84,16 @@ class Engine {
   bool evaluate(uint32_t cycle, uint64_t slot, Opportunity* out = nullptr);
 
   const EngineCounters& counters() const { return n_; }
+  const SizerDiag& sizer_diag() const { return diag_; }
+  /** Predicted spot edge of every sized cycle, ppm (60 s window). */
+  obs::LatencyWindow& sized_edge_ppm() { return edge_ppm_; }
+  /** Best realized profit / size of cycles that sized to no profit, ppm (<= 0; 60 s window). */
+  obs::LatencyWindow& failed_profit_ppm() { return failed_profit_ppm_; }
+  SizerExample take_example() {
+    SizerExample e = example_;
+    example_ = {};
+    return e;
+  }
   const CycleIndex& cycles() const { return idx_; }
   const BasePrice* base_price(const Pubkey& mint) const;
   const flash::FlashReserve* flash_reserve(const Pubkey& mint) const {
@@ -82,6 +117,9 @@ class Engine {
   SendFn send_;
   LogFn skip_;
   EngineCounters n_;
+  SizerDiag diag_;
+  obs::LatencyWindow edge_ppm_, failed_profit_ppm_;
+  SizerExample example_;
 };
 
 }  // namespace arb::engine

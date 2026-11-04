@@ -59,6 +59,7 @@ bool parse_update(const uint8_t* data, size_t len, UpdateView& out) {
   // SubscribeUpdate { filters 1, account 2, slot 3, transaction 4, block 5, ping 6, block_meta 7, entry 8, pong 9, ... }
   out.kind = UpdateView::None;
   out.n_filters = 0;
+  out.created_at_ns = 0;
   Reader r(data, len);
   uint32_t f, wt;
   while (r.next(f, wt)) {
@@ -80,6 +81,19 @@ bool parse_update(const uint8_t* data, size_t len, UpdateView& out) {
         r.skip(wt);
         out.kind = UpdateView::Ping;
         break;
+      case 11: {  // created_at: google.protobuf.Timestamp { seconds 1, nanos 2 }
+        if (wt != pb::LEN) { r.skip(wt); break; }
+        Reader ts(r.bytes());
+        uint32_t f2, wt2;
+        int64_t sec = 0, nanos = 0;
+        while (ts.next(f2, wt2)) {
+          if (f2 == 1 && wt2 == pb::VARINT) sec = int64_t(ts.varint());
+          else if (f2 == 2 && wt2 == pb::VARINT) nanos = int64_t(ts.varint());
+          else ts.skip(wt2);
+        }
+        out.created_at_ns = sec * 1'000'000'000LL + nanos;
+        break;
+      }
       case 9: {
         Reader in(r.bytes());
         uint32_t f2, wt2;
@@ -103,7 +117,7 @@ bool parse_update(const uint8_t* data, size_t len, UpdateView& out) {
 namespace arb::feed {
 
 std::string encode_account_frame(const Pubkey& key, const Pubkey& owner, const uint8_t* data, size_t len, uint64_t lamports,
-                                 uint64_t slot, uint64_t write_version, std::string_view filter) {
+                                 uint64_t slot, uint64_t write_version, std::string_view filter, int64_t created_at_ns) {
   pb::Writer info;
   info.bytes(1, std::string_view(reinterpret_cast<const char*>(key.data()), 32));
   info.u64(2, lamports);
@@ -116,6 +130,12 @@ std::string encode_account_frame(const Pubkey& key, const Pubkey& owner, const u
   pb::Writer up;
   up.bytes(1, filter);
   up.message(2, acc);
+  if (created_at_ns > 0) {
+    pb::Writer ts;
+    ts.u64(1, uint64_t(created_at_ns / 1'000'000'000LL));
+    ts.u64(2, uint64_t(created_at_ns % 1'000'000'000LL));
+    up.message(11, ts);
+  }
   return up.out;
 }
 

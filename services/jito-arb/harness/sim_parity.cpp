@@ -360,10 +360,15 @@ bool run_pool(DexKind kind, const Pubkey& pool, std::vector<Batch>& out, Stats& 
   // source balance is short (processor.rs: user_source.amount < amount_in -> InsufficientFunds), which is
   // the holder's wallet, not pool state the quoter models.
   auto funding_moved = [&](const Sample& s) { return !s.sim_ok && !src_same[s.a_to_b ? 0 : 1]; };
+  // The simulated transaction is [create the destination ATA, swap]: a failure at any instruction but the swap
+  // (index 1) is the harness's (e.g. a classic-SPL ATA for a Token-2022 mint), not the DEX rejecting the swap.
+  auto pre_swap_failure = [&](const Sample& s) {
+    return !s.sim_ok && s.err.find("\"InstructionError\":[1,") == std::string::npos;
+  };
   size_t mism = 0;
   for (auto& s : b.samples) {
     if (s.sim_ok && !s.verified) continue;  // simulation ran on a different state than the bracket
-    if (funding_moved(s)) continue;
+    if (funding_moved(s) || pre_swap_failure(s)) continue;
     bool bad = (s.sim_ok && s.quote_ok && (s.sim_out != s.quote_out || (s.sim_in && s.sim_in != s.quote_in))) ||
                (s.sim_ok != s.quote_ok && !s.quote_boundary);
     if (bad) {
@@ -383,7 +388,7 @@ bool run_pool(DexKind kind, const Pubkey& pool, std::vector<Batch>& out, Stats& 
   size_t unverified = 0;
   std::vector<Sample> kept;
   for (auto& s : b.samples) {
-    if ((s.sim_ok && !s.verified) || funding_moved(s)) { ++unverified; continue; }
+    if ((s.sim_ok && !s.verified) || funding_moved(s) || pre_swap_failure(s)) { ++unverified; continue; }
     kept.push_back(s);
   }
   b.samples = std::move(kept);

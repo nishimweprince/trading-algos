@@ -2,11 +2,14 @@
 #include <unistd.h>
 
 #include <cstdio>
+#include <ctime>
 #include <set>
 
 #include "core/programs.hpp"
 #include "feed/feed_handler.hpp"
+#include "obs/latency.hpp"
 #include "feed/frames.hpp"
+#include "feed/resync.hpp"
 #include "feed/subscription.hpp"
 #include "feed/update.hpp"
 #include "fixture.hpp"
@@ -287,4 +290,60 @@ TEST(token_safety_rules) {
   e.newer_fee = {20, 0, 20};
   CHECK_EQ(e.epoch_fee(19).basis_points, uint16_t(10));
   CHECK_EQ(e.epoch_fee(20).basis_points, uint16_t(20));
+}
+
+TEST(feed_latency_created_at_and_slot_offset) {
+  // LatencyWindow: percentiles over the window; old samples expire.
+  obs::LatencyWindow w(60);
+  for (int i = 1; i <= 100; ++i) w.add(uint64_t(i) * 1'000'000'000ULL / 10, i);  // 0.1 s apart
+  auto s = w.stats(10'000'000'000ULL);
+  CHECK(s.count == 100 && s.p50 == 50 && s.p99 == 99 && s.max == 100);
+  CHECK_EQ(w.stats(80'000'000'000ULL).count, uint64_t(0));  // all older than 60 s
+  CHECK_EQ(w.stats(80'000'000'000ULL).p50, int64_t(-1));
+
+  StateStore store;
+  feed::SlotClock clock;
+  feed::FeedHandler h(store, clock);
+  // An interslot status (first shred received) marks the slot start but does not move the clock.
+  std::string fs = feed::encode_slot_frame(500, 3);
+  CHECK(h.on_frame(reinterpret_cast<const uint8_t*>(fs.data()), fs.size(), 1'000'000'000ULL));
+  CHECK_EQ(clock.slot.load(), uint64_t(0));
+  std::string pr = feed::encode_slot_frame(499, 0);
+  CHECK(h.on_frame(reinterpret_cast<const uint8_t*>(pr.data()), pr.size(), 1'000'100'000ULL));
+  CHECK_EQ(clock.slot.load(), uint64_t(499));
+  // An account update in slot 500, 120 ms after the slot started, created by the server 30 ms before we got it.
+  timespec wt, mt;
+  clock_gettime(CLOCK_REALTIME, &wt);
+  clock_gettime(CLOCK_MONOTONIC, &mt);
+  uint64_t recv = 1'120'000'000ULL;
+  int64_t wall_at_recv = (int64_t(wt.tv_sec) - int64_t(mt.tv_sec)) * 1'000'000'000LL + (int64_t(wt.tv_nsec) - int64_t(mt.tv_nsec)) + int64_t(recv);
+  uint8_t data[165] = {};
+  std::string f = feed::encode_account_frame(mint::USDC, prog::TOKEN, data, sizeof data, 1, 500, 1, "accounts", wall_at_recv - 30'000'000LL);
+  feed::UpdateView v;
+  CHECK(feed::parse_update(reinterpret_cast<const uint8_t*>(f.data()), f.size(), v));
+  CHECK_EQ(v.created_at_ns, wall_at_recv - 30'000'000LL);
+  h.on_frame(reinterpret_cast<const uint8_t*>(f.data()), f.size(), recv);  // an unregistered account: not applied, but timed
+  auto lag = h.feed_lag_us().stats(recv);
+  auto off = h.slot_offset_us().stats(recv);
+  CHECK(lag.count == 1 && lag.p50 >= 29'000 && lag.p50 <= 31'000);  // ~30 ms (clock read jitter only)
+  CHECK(off.count == 1 && off.p50 == 120'000);
+}
+
+TEST(resync_with_live_stream_is_quotable_at_once) {
+  // A resync read with every stream already subscribed is usable at once; one without waits for a push.
+  auto rays = pool_list("raydium_v4");
+  auto cfg = discovery_cfg();
+  for (bool live : {true, false}) {
+    StateStore store;
+    auto def = state::pool_def_from_account(fixture(rays[0])->raw, cfg);
+    uint32_t id = store.add_pool(*def);
+    std::vector<Pubkey> keys = feed::pool_ordered_keys(store, {id});
+    CHECK(keys.size() >= 5 && keys[0] == def->address && keys[1] == def->vault_a && keys[2] == def->vault_b);
+    for (const Pubkey& k : keys) {
+      const FixtureAccount* a = fixture(b58(k));
+      AccountUpdate u{k, a->raw.owner, a->raw.data.data(), a->raw.data.size(), 1000, 0, !a->exists, !live};
+      store.apply(u);
+    }
+    CHECK_EQ(store.pool(id)->quotable(2), live);
+  }
 }
