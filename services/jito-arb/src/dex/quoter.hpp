@@ -50,7 +50,10 @@ class WhirlpoolQuoter final : public IQuoter {
 /** Marginal output per unit input at size zero, after fee, as a Q64.64 ratio (spot-edge prefilter). */
 u128 spot_rate_x64(const PoolState& p, bool a_to_b);
 
-/** Input-side depth (raw units) used by the sizer's max_input_fraction bound. */
+/**
+ * Input-side depth (raw units) used by the sizer's max_input_fraction bound: the input vault for a
+ * constant-product pool; for a Whirlpool, the input that moves sqrt-price 5% within the active liquidity.
+ */
 uint64_t input_depth(const PoolState& p, bool a_to_b);
 
 }  // namespace arb::dex
