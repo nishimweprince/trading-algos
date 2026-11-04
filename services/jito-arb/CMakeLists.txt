@@ -66,12 +66,18 @@ target_link_libraries(arbcore PUBLIC arb_sodium simdjson::simdjson OpenSSL::SSL 
 add_executable(jito-arb src/main.cpp src/app/live.cpp)
 target_link_libraries(jito-arb PRIVATE arbcore)
 if(ARB_WITH_GRPC)
-  # The VM has grpc++ via pkg-config (as pump-desk's ingest does).
-  find_package(PkgConfig REQUIRED)
-  pkg_check_modules(GRPCPP REQUIRED IMPORTED_TARGET grpc++)
+  # gRPC's CMake config when installed (Amazon Linux 2023's grpc++.pc has a doubled /usr/usr/include
+  # prefix), pkg-config otherwise (as pump-desk's ingest does).
+  find_package(gRPC CONFIG QUIET)
   target_sources(jito-arb PRIVATE src/feed/laserstream_client.cpp)
   target_compile_definitions(jito-arb PRIVATE ARB_WITH_GRPC=1)
-  target_link_libraries(jito-arb PRIVATE PkgConfig::GRPCPP)
+  if(TARGET gRPC::grpc++)
+    target_link_libraries(jito-arb PRIVATE gRPC::grpc++)
+  else()
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(GRPCPP REQUIRED IMPORTED_TARGET grpc++)
+    target_link_libraries(jito-arb PRIVATE PkgConfig::GRPCPP)
+  endif()
 else()
   target_sources(jito-arb PRIVATE src/feed/laserstream_stub.cpp)
 endif()
