@@ -87,6 +87,9 @@ struct Config {
     // Track (subscribe, record) Whirlpool pools even while dex.whirlpool_enabled keeps them out of quoting:
     // they give Raydium tokens a second pool, and the recordings serve the replay once parity is proven.
     bool track_whirlpool = true;
+    // Raydium v4 pools whose base-side vault clears the floor are fetched in full, deepest first, up to this
+    // many (about 16k cleared 25 SOL in Nov 2026); the cycle prefilter and TVL filter then cut the set.
+    int raydium_fetch_cap = 16000;
   } discovery;
 
   struct Flash {

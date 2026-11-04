@@ -209,7 +209,18 @@ async function refreshState() {
     const p = s.pools;
     $("poolsum").textContent = p.error ? "pools file: " + p.error : `${fmt(p.count)} pools (${Object.entries(p.by_kind).map(([k, v]) => v + " " + k).join(", ")}), ${fmt(p.tvl_sol_total)} SOL TVL · discovery ${ago(p.updated)}`;
     $("pools").innerHTML = p.top ? `<tr><th>Pool</th><th>DEX</th><th class="num">TVL (SOL)</th></tr>` + p.top.map((x) => `<tr><td class="mono"><a href="https://solscan.io/account/${esc(x.address)}" target="_blank" rel="noopener" style="color:inherit">${esc(short(x.address))}</a></td><td>${esc(x.kind)}</td><td class="num">${fmt(x.tvl_sol)}</td></tr>`).join("") : "";
-    $("units").innerHTML = Object.entries(u).filter(([k]) => k !== "last_discovery").map(([k, v]) => `<tr><td class="mono">${esc(k)}</td><td><span class="pill ${v === "active" ? "good" : v === "inactive" ? "" : "bad"}">${esc(v)}</span></td></tr>`).join("") + `<tr><td>Last discovery run</td><td class="sub">${esc(u.last_discovery || "–")}</td></tr>`;
+    // The discovery service is a one-shot the timer starts every 10 minutes: "inactive" between runs is normal.
+    // The recorder is installed but off until the 3-day recording starts.
+    const unitView = (k, v) => {
+      if (k === "jito-arb-discover.service" && (v === "inactive" || v === "activating"))
+        return v === "activating" ? ["running now", "good"] : u.discovery_result === "success" ? ["idle · last run ok", "good"] : ["idle · last run " + (u.discovery_result || "?"), "bad"];
+      if (k === "jito-arb-recorder.service" && v === "inactive" && u.recorder_enabled === "disabled") return ["off (not enabled)", ""];
+      return [v, v === "active" ? "good" : v === "inactive" ? "" : v === "no systemd" ? "warn" : "bad"];
+    };
+    $("units").innerHTML = Object.entries(u).filter(([k]) => k.endsWith(".service") || k.endsWith(".timer")).map(([k, v]) => {
+      const [label, cls] = unitView(k, v);
+      return `<tr><td class="mono">${esc(k)}</td><td><span class="pill ${cls}">${esc(label)}</span></td></tr>`;
+    }).join("") + `<tr><td>Last discovery run</td><td class="sub">${esc(u.last_discovery || "–")}</td></tr>`;
   } catch (e) {
     $("updated").textContent = "dashboard error: " + e.message;
   }

@@ -130,11 +130,15 @@ def unit_states():
         except Exception as e:
             out[u] = "unknown: %s" % e
     try:
-        r = subprocess.run(["systemctl", "show", "jito-arb-discover.service", "-p", "ExecMainExitTimestamp", "--value"],
-                           capture_output=True, text=True, timeout=3)
-        out["last_discovery"] = r.stdout.strip()
+        r = subprocess.run(["systemctl", "show", "jito-arb-discover.service", "-p", "ExecMainExitTimestamp", "-p", "Result",
+                            "--no-pager"], capture_output=True, text=True, timeout=3)
+        props = dict(l.split("=", 1) for l in r.stdout.splitlines() if "=" in l)
+        out["last_discovery"] = props.get("ExecMainExitTimestamp", "")
+        out["discovery_result"] = props.get("Result", "")
+        r = subprocess.run(["systemctl", "is-enabled", "jito-arb-recorder.service"], capture_output=True, text=True, timeout=3)
+        out["recorder_enabled"] = r.stdout.strip()
     except Exception:
-        out["last_discovery"] = ""
+        out.setdefault("last_discovery", "")
     return out
 
 
