@@ -68,6 +68,7 @@ target_link_libraries(jito-arb PRIVATE arbcore)
 if(ARB_WITH_GRPC)
   # gRPC's CMake config when installed (Amazon Linux 2023's grpc++.pc has a doubled /usr/usr/include
   # prefix), pkg-config otherwise (as pump-desk's ingest does).
+  find_package(Protobuf QUIET)  # gRPCConfig references protobuf::libprotobuf without finding it
   find_package(gRPC CONFIG QUIET)
   target_sources(jito-arb PRIVATE src/feed/laserstream_client.cpp)
   target_compile_definitions(jito-arb PRIVATE ARB_WITH_GRPC=1)
