@@ -75,7 +75,7 @@ struct Config {
 
   struct Dex {
     bool raydium_v4_enabled = true;
-    bool whirlpool_enabled = true;
+    bool whirlpool_enabled = false;  // off until sim-parity has >= 200 exact samples (README, RUNBOOK-VM.md)
     uint32_t raydium_v4_cu = 40000;  // measured on a local validator (VM step); placeholder until then
     uint32_t whirlpool_cu = 80000;
   } dex;

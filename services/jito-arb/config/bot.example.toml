@@ -31,8 +31,9 @@ target_land_rate = 0.30
 max_bundles_per_slot = 3
 
 [dex]
-raydium_v4_enabled = true
-whirlpool_enabled = true
+# A DEX is enabled only after its quoter matches the chain exactly on >= 200 sim-parity samples.
+raydium_v4_enabled = true       # 313/313 exact (tests/fixtures/parity_raydium_v4.json)
+whirlpool_enabled = false       # parity not yet proven: needs the Helius-funded sim-parity run (RUNBOOK-VM.md)
 
 [discovery]
 min_pool_tvl_sol = 50

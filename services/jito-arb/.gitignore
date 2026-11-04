@@ -3,3 +3,5 @@ data/
 KILL
 *.key
 hot_wallet*.json
+compile_commands.json
+.cache/

@@ -74,7 +74,7 @@ if(ARB_WITH_GRPC)
   target_link_libraries(jito-arb PRIVATE PkgConfig::GRPCPP)
 endif()
 
-foreach(tool discover recorder replay_report fetch_fixtures sim_check)
+foreach(tool discover recorder replay_report fetch_fixtures sim_check fixture_frames)
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/${tool}.cpp)
     string(REPLACE "_" "-" exe ${tool})
     add_executable(${exe} src/tools/${tool}.cpp)
