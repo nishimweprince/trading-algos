@@ -143,6 +143,16 @@ bool Engine::evaluate(uint32_t cycle, uint64_t slot, Opportunity* out) {
       ++n_.unsupported;
       return false;
     }
+    if (!untradable_.empty()) {
+      auto it = untradable_.find((uint64_t(c.legs[i].pool) << 1) | uint64_t(c.legs[i].a_to_b));
+      if (it != untradable_.end()) {
+        if (it->second == s[i]->seq) {
+          ++n_.untradable;
+          return false;
+        }
+        untradable_.erase(it);  // the pool changed: try it again
+      }
+    }
   }
   u128 prod = spot_product_x64(c, s);
   if (prod < edge_x64_) return false;
@@ -203,6 +213,11 @@ bool Engine::evaluate(uint32_t cycle, uint64_t slot, Opportunity* out) {
       why = Reason::sizer_quote_error;
       ++diag_.quote_error;
       ++diag_.quote_error_by_code[size_t(r.last_err) & 31];
+      // Every size failed on one leg with a program error: remember that pool and direction until it changes.
+      if (r.last_fail_leg >= 0 && r.last_fail_leg < c.n) {
+        const Leg& l = c.legs[r.last_fail_leg];
+        untradable_[(uint64_t(l.pool) << 1) | uint64_t(l.a_to_b)] = s[size_t(r.last_fail_leg)]->seq;
+      }
     }
     else if (r.n_zero_out) { why = Reason::sizer_zero_out; ++diag_.zero_out; }
     else if (r.n_boundary) { why = Reason::boundary; ++diag_.boundary; }

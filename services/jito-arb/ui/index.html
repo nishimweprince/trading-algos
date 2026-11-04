@@ -224,7 +224,7 @@ async function refreshState() {
     ].join("");
     const steps = [
       ["Pool updates", m.arb_engine_pool_updates], ["Cycle evaluations", m.arb_engine_cycles_seen],
-      ["Skipped: stale leg", m.arb_engine_stale], ["Skipped: DEX not quoted", m.arb_engine_unsupported],
+      ["Skipped: stale leg", m.arb_engine_stale], ["Skipped: DEX not quoted", m.arb_engine_unsupported], ["Skipped: pool can't swap", m.arb_engine_untradable],
       ["Passed prefilter", m.arb_engine_prefilter_pass], ["Sized", m.arb_engine_sized],
       ["Candidates", m.arb_engine_candidates], ["Dry-run bundles", m.arb_bundles_dry_run],
     ];
