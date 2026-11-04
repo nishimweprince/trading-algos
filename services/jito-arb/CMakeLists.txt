@@ -1,0 +1,106 @@
+cmake_minimum_required(VERSION 3.22)
+project(jito_arb CXX)
+
+# C++23 for <expected> (spec §1 allows the C++23 library type). Everything else is C++20.
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+
+option(ARB_WITH_GRPC "Build the LaserStream gRPC transport (needs grpc++; the VM, not the laptop)" OFF)
+option(ARB_NATIVE "Build with -march=native (the binary runs on the host that builds it)" ON)
+
+set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
+if(ARB_NATIVE AND NOT CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
+  string(APPEND CMAKE_CXX_FLAGS_RELEASE " -march=native")
+endif()
+add_compile_options(-Wall -Wextra -Werror)
+
+find_package(Threads REQUIRED)
+if(APPLE AND NOT OPENSSL_ROOT_DIR)
+  foreach(p /opt/homebrew/opt/openssl@3 /opt/homebrew/opt/openssl /usr/local/opt/openssl@3)
+    if(EXISTS ${p})
+      set(OPENSSL_ROOT_DIR ${p})
+      break()
+    endif()
+  endforeach()
+endif()
+find_package(OpenSSL REQUIRED)
+
+# libsodium and simdjson: pkg-config when present, plain find_path/find_library otherwise
+# (Homebrew on the laptop has no pkg-config).
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+  pkg_check_modules(SODIUM QUIET IMPORTED_TARGET libsodium)
+endif()
+if(TARGET PkgConfig::SODIUM)
+  add_library(arb_sodium ALIAS PkgConfig::SODIUM)
+else()
+  find_path(SODIUM_INCLUDE_DIR sodium.h HINTS /opt/homebrew/include /usr/local/include REQUIRED)
+  find_library(SODIUM_LIBRARY NAMES sodium HINTS /opt/homebrew/lib /usr/local/lib REQUIRED)
+  add_library(arb_sodium INTERFACE)
+  target_include_directories(arb_sodium INTERFACE ${SODIUM_INCLUDE_DIR})
+  target_link_libraries(arb_sodium INTERFACE ${SODIUM_LIBRARY})
+endif()
+find_package(simdjson CONFIG QUIET)
+if(NOT simdjson_FOUND)
+  find_path(SIMDJSON_INCLUDE_DIR simdjson.h HINTS /opt/homebrew/include /usr/local/include REQUIRED)
+  find_library(SIMDJSON_LIBRARY NAMES simdjson HINTS /opt/homebrew/lib /usr/local/lib REQUIRED)
+  add_library(simdjson_imported INTERFACE)
+  target_include_directories(simdjson_imported INTERFACE ${SIMDJSON_INCLUDE_DIR})
+  target_link_libraries(simdjson_imported INTERFACE ${SIMDJSON_LIBRARY})
+  add_library(simdjson::simdjson ALIAS simdjson_imported)
+endif()
+
+# Everything but the gRPC transport and main: tested on its own.
+file(GLOB_RECURSE ARB_CORE_SRC CONFIGURE_DEPENDS
+  src/core/*.cpp src/feed/*.cpp src/state/*.cpp src/dex/*.cpp src/engine/*.cpp src/flash/*.cpp
+  src/tx/*.cpp src/submit/*.cpp src/risk/*.cpp src/obs/*.cpp src/app/*.cpp)
+list(FILTER ARB_CORE_SRC EXCLUDE REGEX "laserstream_client\\.cpp$")
+add_library(arbcore STATIC ${ARB_CORE_SRC})
+target_include_directories(arbcore PUBLIC src)
+target_link_libraries(arbcore PUBLIC arb_sodium simdjson::simdjson OpenSSL::SSL OpenSSL::Crypto Threads::Threads)
+
+add_executable(jito-arb src/main.cpp)
+target_link_libraries(jito-arb PRIVATE arbcore)
+if(ARB_WITH_GRPC)
+  # The VM has grpc++ via pkg-config (as pump-desk's ingest does).
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(GRPCPP REQUIRED IMPORTED_TARGET grpc++)
+  target_sources(jito-arb PRIVATE src/feed/laserstream_client.cpp)
+  target_compile_definitions(jito-arb PRIVATE ARB_WITH_GRPC=1)
+  target_link_libraries(jito-arb PRIVATE PkgConfig::GRPCPP)
+endif()
+
+foreach(tool discover recorder replay_report fetch_fixtures sim_check)
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/${tool}.cpp)
+    string(REPLACE "_" "-" exe ${tool})
+    add_executable(${exe} src/tools/${tool}.cpp)
+    target_link_libraries(${exe} PRIVATE arbcore)
+  endif()
+endforeach()
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/harness/sim_parity.cpp)
+  add_executable(sim-parity harness/sim_parity.cpp)
+  target_link_libraries(sim-parity PRIVATE arbcore)
+endif()
+
+enable_testing()
+file(GLOB ARB_TESTS CONFIGURE_DEPENDS tests/unit/*.cpp)
+add_executable(arb_tests ${ARB_TESTS})
+target_include_directories(arb_tests PRIVATE tests)
+target_compile_definitions(arb_tests PRIVATE
+  ARB_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
+  ARB_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/golden_tx"
+  ARB_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(arb_tests PRIVATE arbcore)
+add_test(NAME arb_tests COMMAND arb_tests)
+
+file(GLOB ARB_BENCH CONFIGURE_DEPENDS tests/bench/*.cpp)
+if(ARB_BENCH)
+  add_executable(arb_bench ${ARB_BENCH})
+  target_include_directories(arb_bench PRIVATE tests)
+  target_compile_definitions(arb_bench PRIVATE ARB_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+  target_link_libraries(arb_bench PRIVATE arbcore)
+endif()
