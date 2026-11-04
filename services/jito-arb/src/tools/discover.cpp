@@ -29,7 +29,8 @@
 
 using namespace arb;
 
-int main(int argc, char** argv) {
+namespace {
+int run(int argc, char** argv) {
   std::string cfg_path, out = "data/pools.json", previous;
   for (int i = 1; i + 1 < argc; i += 2) {
     std::string a = argv[i];
@@ -173,4 +174,14 @@ int main(int argc, char** argv) {
     }
   }
   return 0;
+}
+}  // namespace
+
+int main(int argc, char** argv) {
+  try {
+    return run(argc, argv);
+  } catch (const std::exception& e) {
+    std::fprintf(stderr, "discover failed: %s\n", e.what());
+    return 1;
+  }
 }
