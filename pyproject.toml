@@ -53,6 +53,7 @@ exclude = [
   "services/crossex-arbitrage",
   "services/hyperliquid-arb",
   "services/pk-maker-cpp",
+  "services/jito-arb",
 ]
 
 [tool.ruff]

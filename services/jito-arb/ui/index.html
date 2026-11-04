@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jito-arb</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --ink: #14181f; --muted: #5d6675; --line: #e3e6eb;
+    --accent: #2f6fde; --accent-soft: rgba(47, 111, 222, .12); --good: #1f8a4c; --warn: #b7791f; --bad: #c53030;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1116; --panel: #161a21; --ink: #e6e9ee; --muted: #8a93a3; --line: #252b35;
+      --accent: #6aa0ff; --accent-soft: rgba(106, 160, 255, .14); --good: #45c07a; --warn: #e0a84a; --bad: #f06a6a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px 20px; padding: 18px 24px 8px; }
+  h1 { font-size: 18px; margin: 0; letter-spacing: .2px; }
+  h2 { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 0 0 10px; }
+  .sub { color: var(--muted); font-size: 13px; }
+  .pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid var(--line); }
+  .pill.good { color: var(--good); border-color: currentColor; }
+  .pill.warn { color: var(--warn); border-color: currentColor; }
+  .pill.bad { color: var(--bad); border-color: currentColor; }
+  main { padding: 8px 24px 32px; display: grid; gap: 16px; max-width: 1400px; }
+  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; min-width: 0; }
+  .tile .k { color: var(--muted); font-size: 12px; }
+  .tile .v { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .tile .d { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .tile .v.warnv { color: var(--warn); }
+  .cols { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+  .chart { width: 100%; height: 120px; display: block; }
+  .chart .area { fill: var(--accent-soft); }
+  .chart .line { fill: none; stroke: var(--accent); stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+  .chart .axis { stroke: var(--line); }
+  .chart text { fill: var(--muted); font-size: 10px; }
+  .chartwrap .row { display: flex; justify-content: space-between; align-items: baseline; }
+  .chartwrap .now { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .funnel { display: grid; gap: 6px; }
+  .bar { display: grid; grid-template-columns: 150px 1fr 90px; gap: 10px; align-items: center; font-size: 13px; }
+  .bar .track { height: 10px; background: var(--line); border-radius: 5px; overflow: hidden; }
+  .bar .fill { height: 100%; background: var(--accent); border-radius: 5px; min-width: 2px; }
+  .bar .n { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .tablewrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .mono { font-family: var(--mono); font-size: 12px; }
+  .empty { color: var(--muted); padding: 10px 0; }
+  .note { color: var(--muted); font-size: 12px; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+  .seg button { background: none; border: 0; color: var(--muted); padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+  .seg button.on { background: var(--accent-soft); color: var(--ink); }
+  @media (max-width: 600px) { header, main { padding-left: 16px; padding-right: 16px; } .bar { grid-template-columns: 110px 1fr 70px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>jito-arb</h1>
+  <span id="mode" class="pill">…</span>
+  <span id="svc" class="pill">…</span>
+  <span class="sub" id="updated">connecting…</span>
+</header>
+<main>
+  <section class="grid" id="tiles"></section>
+
+  <section class="panel">
+    <div class="row" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <h2 style="margin:0">Feed and engine</h2>
+      <div class="seg" id="range"><button data-m="15">15m</button><button data-m="60" class="on">1h</button><button data-m="360">6h</button></div>
+    </div>
+    <div class="cols" id="charts"></div>
+  </section>
+
+  <section class="cols">
+    <div class="panel">
+      <h2>Engine funnel (since start)</h2>
+      <div class="funnel" id="funnel"></div>
+      <p class="note">Cycles through Whirlpool count as "unsupported" until its quoter passes parity.</p>
+    </div>
+    <div class="panel">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <h2 style="margin:0">Decisions</h2>
+        <div class="seg" id="drange"><button data-h="24" class="on">24h</button><button data-h="168">7d</button><button data-h="336">14d</button></div>
+      </div>
+      <div id="days"></div>
+      <div id="reasons" style="margin-top:10px"></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Latest candidates</h2>
+    <div class="tablewrap"><table id="latest"></table></div>
+  </section>
+
+  <section class="cols">
+    <div class="panel">
+      <h2>Tracked pools</h2>
+      <div id="poolsum" class="sub" style="margin-bottom:8px"></div>
+      <div class="tablewrap"><table id="pools"></table></div>
+    </div>
+    <div class="panel">
+      <h2>Services</h2>
+      <div class="tablewrap"><table id="units"></table></div>
+      <p class="note">Dry run: bundles are built and signed but never sent. This build refuses dry_run = false.</p>
+    </div>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const fmt = (v, d = 0) => v == null || isNaN(v) ? "–" : Number(v).toLocaleString(undefined, {maximumFractionDigits: d, minimumFractionDigits: d});
+const big = (v) => v == null ? "–" : v >= 1e9 ? fmt(v / 1e9, 2) + "B" : v >= 1e6 ? fmt(v / 1e6, 2) + "M" : v >= 1e4 ? fmt(v / 1e3, 1) + "k" : fmt(v);
+const bytes = (v) => v == null ? "–" : v >= 1 << 20 ? fmt(v / 1048576, 1) + " MB" : v >= 1024 ? fmt(v / 1024, 1) + " KB" : fmt(v) + " B";
+const ago = (t) => { if (!t) return "–"; const s = Math.max(0, Date.now() / 1000 - t); return s < 90 ? fmt(s) + "s ago" : s < 5400 ? fmt(s / 60) + "m ago" : fmt(s / 3600, 1) + "h ago"; };
+const dur = (s) => s == null ? "–" : s < 3600 ? fmt(s / 60) + "m" : s < 86400 ? fmt(s / 3600, 1) + "h" : fmt(s / 86400, 1) + "d";
+const short = (k) => k ? k.slice(0, 4) + "…" + k.slice(-4) : "";
+let minutes = 60, hours = 24;
+
+function tile(k, v, d = "", cls = "") {
+  return `<div class="panel tile"><div class="k">${esc(k)}</div><div class="v ${cls}">${v}</div><div class="d">${d}</div></div>`;
+}
+
+function chart(title, ts, vals, unit, digits = 0) {
+  const pts = ts.map((t, i) => [t, vals[i]]).filter((p) => p[1] != null);
+  const now = pts.length ? pts[pts.length - 1][1] : null;
+  if (pts.length < 2) return `<div class="chartwrap"><div class="row"><span>${esc(title)}</span><span class="now">${fmt(now, digits)} ${unit}</span></div><div class="empty">collecting samples…</div></div>`;
+  const W = 600, H = 120, P = 4;
+  const t0 = pts[0][0], t1 = pts[pts.length - 1][0];
+  const ys = pts.map((p) => p[1]);
+  const max = Math.max(...ys) * 1.1 || 1, min = 0;
+  const x = (t) => P + (W - 2 * P) * (t - t0) / Math.max(1, t1 - t0);
+  const y = (v) => H - 14 - (H - 24) * (v - min) / (max - min);
+  const d = pts.map((p, i) => (i ? "L" : "M") + x(p[0]).toFixed(1) + " " + y(p[1]).toFixed(1)).join(" ");
+  const area = d + ` L ${x(t1).toFixed(1)} ${H - 14} L ${x(t0).toFixed(1)} ${H - 14} Z`;
+  return `<div class="chartwrap"><div class="row"><span>${esc(title)}</span><span class="now">${fmt(now, digits)} ${unit}</span></div>
+    <svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${esc(title)}">
+      <line class="axis" x1="0" x2="${W}" y1="${H - 14}" y2="${H - 14}"/>
+      <path class="area" d="${area}"/><path class="line" d="${d}"/>
+      <text x="${P}" y="10">${fmt(max / 1.1, digits)}</text><text x="${P}" y="${H - 2}">${new Date(t0 * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}</text>
+      <text x="${W - P}" y="${H - 2}" text-anchor="end">now</text>
+    </svg></div>`;
+}
+
+async function getJSON(u) { const r = await fetch(u, {cache: "no-store"}); if (!r.ok) throw new Error(u + " " + r.status); return r.json(); }
+
+async function refreshState() {
+  try {
+    const s = await getJSON("/api/state");
+    const m = s.metrics, r = s.rates, u = s.units;
+    const live = u["jito-arb.service"] === "active";
+    $("mode").textContent = m.arb_dry_run === 1 ? "dry run" : m.arb_dry_run === 0 ? "LIVE" : "no metrics";
+    $("mode").className = "pill " + (m.arb_dry_run === 1 ? "good" : m.arb_dry_run === 0 ? "bad" : "warn");
+    const st = u["jito-arb.service"] || "?";
+    $("svc").textContent = live ? (m.arb_kill_switch ? "KILL switch on" : "running") : st === "no systemd" ? "no systemd (dev)" : "service " + st;
+    $("svc").className = "pill " + (live && !m.arb_kill_switch ? "good" : st === "no systemd" ? "warn" : "bad");
+    $("updated").textContent = s.scrape_error ? "metrics unavailable: " + s.scrape_error : "updated " + ago(s.sampled_at) + " · slot " + fmt(m.arb_slot) + " · up " + dur(m.arb_uptime_seconds);
+    const age = m.arb_feed_update_age_ms;
+    $("tiles").innerHTML = [
+      tile("Pools tracked", fmt(m.arb_pools), `${fmt(m.arb_pools_quotable)} quotable now`),
+      tile("Cycles", fmt(m.arb_cycles), "2- and 3-hop"),
+      tile("Feed", fmt(r.arb_feed_frames, 1) + "/s", bytes(r.arb_feed_bytes) + "/s"),
+      tile("Newest update", age == null || age < 0 ? "–" : fmt(age) + " ms", "sends pause above 800 ms", age > 800 ? "warnv" : ""),
+      tile("Streams up", `${fmt(m.arb_feed_shards_up)}`, `${fmt(m.arb_feed_reconnects)} reconnects`),
+      tile("Decode failures", fmt(m.arb_decode_failures), "since start"),
+      tile("Candidates", fmt(m.arb_engine_candidates), "priced above min EV"),
+      tile("Bundles (dry run)", fmt(m.arb_bundles_dry_run), `${fmt(m.arb_bundles_signed)} signed`),
+    ].join("");
+    const steps = [
+      ["Pool updates", m.arb_engine_pool_updates], ["Cycle evaluations", m.arb_engine_cycles_seen],
+      ["Skipped: stale leg", m.arb_engine_stale], ["Skipped: DEX not quoted", m.arb_engine_unsupported],
+      ["Passed prefilter", m.arb_engine_prefilter_pass], ["Sized", m.arb_engine_sized],
+      ["Candidates", m.arb_engine_candidates], ["Dry-run bundles", m.arb_bundles_dry_run],
+    ];
+    const top = Math.max(1, ...steps.map((x) => x[1] || 0));
+    $("funnel").innerHTML = steps.map(([k, v]) => `<div class="bar"><span>${esc(k)}</span><div class="track"><div class="fill" style="width:${(100 * Math.log10(1 + (v || 0)) / Math.log10(1 + top)).toFixed(1)}%"></div></div><span class="n">${big(v)}</span></div>`).join("") + `<p class="note">Bar length is logarithmic.</p>`;
+    const p = s.pools;
+    $("poolsum").textContent = p.error ? "pools file: " + p.error : `${fmt(p.count)} pools (${Object.entries(p.by_kind).map(([k, v]) => v + " " + k).join(", ")}), ${fmt(p.tvl_sol_total)} SOL TVL · discovery ${ago(p.updated)}`;
+    $("pools").innerHTML = p.top ? `<tr><th>Pool</th><th>DEX</th><th class="num">TVL (SOL)</th></tr>` + p.top.map((x) => `<tr><td class="mono"><a href="https://solscan.io/account/${esc(x.address)}" target="_blank" rel="noopener" style="color:inherit">${esc(short(x.address))}</a></td><td>${esc(x.kind)}</td><td class="num">${fmt(x.tvl_sol)}</td></tr>`).join("") : "";
+    $("units").innerHTML = Object.entries(u).filter(([k]) => k !== "last_discovery").map(([k, v]) => `<tr><td class="mono">${esc(k)}</td><td><span class="pill ${v === "active" ? "good" : v === "inactive" ? "" : "bad"}">${esc(v)}</span></td></tr>`).join("") + `<tr><td>Last discovery run</td><td class="sub">${esc(u.last_discovery || "–")}</td></tr>`;
+  } catch (e) {
+    $("updated").textContent = "dashboard error: " + e.message;
+  }
+}
+
+async function refreshHistory() {
+  try {
+    const h = await getJSON("/api/history?minutes=" + minutes);
+    $("charts").innerHTML = [
+      chart("Frames per second", h.t, h.arb_feed_frames_rate, "/s", 1),
+      chart("Newest update age", h.t, h.arb_feed_update_age_ms, "ms"),
+      chart("Cycle evaluations per second", h.t, h.arb_engine_cycles_seen_rate, "/s", 1),
+      chart("Quotable pools", h.t, h.arb_pools_quotable, ""),
+    ].join("");
+  } catch (e) { $("charts").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+
+async function refreshDecisions() {
+  try {
+    const d = await getJSON("/api/decisions?hours=" + hours);
+    const days = Object.entries(d.by_day);
+    $("days").innerHTML = days.length ? `<table><tr><th>Day (UTC)</th><th class="num">Candidates</th><th class="num">Dry-run</th><th class="num">Gross SOL</th><th class="num">Tip SOL</th><th class="num">Net SOL</th></tr>` +
+      days.map(([k, v]) => `<tr><td>${esc(k)}</td><td class="num">${fmt(v.candidates)}</td><td class="num">${fmt(v.dispatched)}</td><td class="num">${fmt(v.gross_lamports / 1e9, 4)}</td><td class="num">${fmt(v.tip_lamports / 1e9, 4)}</td><td class="num">${fmt(v.net_lamports / 1e9, 4)}</td></tr>`).join("") + `</table>`
+      : `<div class="empty">No candidates in this window. A candidate is a sized cycle; most mainnet gaps close before they clear fees and the tip.</div>`;
+    const rs = Object.entries(d.skipped_by_reason);
+    $("reasons").innerHTML = rs.length ? `<div class="note">Skipped: ${rs.map(([k, v]) => `${esc(k)} ${fmt(v)}`).join(" · ")}</div>` : "";
+    $("latest").innerHTML = d.latest.length ? `<tr><th>Time</th><th>Route</th><th>Base</th><th class="num">Size</th><th class="num">Gross SOL</th><th class="num">Tip SOL</th><th class="num">Net SOL</th><th>Action</th></tr>` +
+      d.latest.map((x) => `<tr><td>${new Date(x.t).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit"})}</td><td>${esc(x.route)}</td><td>${esc(x.base)}</td><td class="num">${fmt(x.size, 3)}</td><td class="num">${fmt(x.gross_sol, 5)}</td><td class="num">${fmt(x.tip_sol, 5)}</td><td class="num">${fmt(x.net_sol, 5)}</td><td>${x.action === "skipped" ? `<span class="sub">${esc(x.reason)}</span>` : `<span class="pill good">${esc(x.action)}</span>`}</td></tr>`).join("")
+      : `<tr><td class="empty">No decisions recorded yet.</td></tr>`;
+  } catch (e) { $("days").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+
+$("range").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  minutes = +b.dataset.m;
+  [...$("range").children].forEach((x) => x.classList.toggle("on", x === b));
+  refreshHistory();
+});
+$("drange").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  hours = +b.dataset.h;
+  [...$("drange").children].forEach((x) => x.classList.toggle("on", x === b));
+  refreshDecisions();
+});
+refreshState(); refreshHistory(); refreshDecisions();
+setInterval(refreshState, 5000);
+setInterval(refreshHistory, 15000);
+setInterval(refreshDecisions, 30000);
+</script>
+</body>
+</html>
