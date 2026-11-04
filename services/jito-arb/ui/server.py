@@ -245,7 +245,9 @@ class Handler(BaseHTTPRequestHandler):
             elif u.path == "/api/history":
                 minutes = max(5, min(360, int(q.get("minutes", ["60"])[0])))
                 s = [x for x in self.sampler.snapshot() if x[0] >= time.time() - minutes * 60]
-                keys = ["arb_feed_update_age_ms", "arb_pools_quotable", "arb_feed_shards_up", "arb_feed_reconnects"]
+                keys = ["arb_feed_update_age_ms", "arb_pools_quotable", "arb_feed_shards_up", "arb_feed_reconnects",
+                        "arb_feed_lag_us_p50", "arb_feed_lag_us_p99", "arb_slot_offset_us_p50", "arb_slot_offset_us_p99",
+                        "arb_detect_to_signed_us_p50", "arb_detect_to_signed_us_p99"]
                 series = {"t": [t for t, _ in s]}
                 for k in keys:  # the bot reports -1 for "nothing yet"
                     series[k] = [m.get(k) if m.get(k, -1) >= 0 else None for _, m in s]

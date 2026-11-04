@@ -15,10 +15,12 @@ std::string encode_subscribe_request(const ShardSpec& spec) {
     for (const Pubkey& k : spec.accounts) a.bytes(2, b58(k));
     req.map_entry(1, "accounts", a);
   }
-  // slots (2): SubscribeRequestFilterSlots { filter_by_commitment = 1 }
+  // slots (2): SubscribeRequestFilterSlots { filter_by_commitment = 1, interslot_updates = 2 }. Interslot
+  // updates (first shred received, bank created) mark when each slot starts, for the slot-offset metric.
   if (spec.slots) {
     pb::Writer s;
-    s.boolean(1, true);
+    s.boolean(1, false);
+    s.boolean(2, true);
     req.map_entry(2, "slots", s);
   }
   // commitment (6) = PROCESSED (0): optional, so presence is explicit.

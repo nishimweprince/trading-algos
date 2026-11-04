@@ -33,6 +33,8 @@
   .tile .v { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; margin-top: 2px; }
   .tile .d { color: var(--muted); font-size: 12px; margin-top: 2px; }
   .tile .v.warnv { color: var(--warn); }
+  .tile .v.goodv { color: var(--good); }
+  .tile .v.badv { color: var(--bad); }
   .cols { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
   .chart { width: 100%; height: 120px; display: block; }
   .chart .area { fill: var(--accent-soft); }
@@ -69,6 +71,16 @@
 </header>
 <main>
   <section class="grid" id="tiles"></section>
+
+  <section class="panel">
+    <h2>Latency to land a candidate</h2>
+    <div class="grid" id="lattiles"></div>
+    <div class="cols" id="latcharts" style="margin-top:12px"></div>
+    <p class="note">Targets come from Jito's 50 ms auction tick: land in the first tick after a gap opens.
+      Feed lag is when we receive an account update minus when Helius produced it (created_at), on synced clocks.
+      Slot offset adds where in the 400 ms slot the trade happened. Detect to signed covers everything we control
+      before the HTTP write; Jito Frankfurt adds about 1 ms one way (1.9 ms RTT measured).</p>
+  </section>
 
   <section class="panel">
     <div class="row" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
@@ -172,6 +184,20 @@ async function refreshState() {
       tile("Candidates", fmt(m.arb_engine_candidates), "priced above min EV"),
       tile("Bundles (dry run)", fmt(m.arb_bundles_dry_run), `${fmt(m.arb_bundles_signed)} signed`),
     ].join("");
+    const ms = (us) => us == null || us < 0 ? null : us / 1000;
+    const judge = (v, ok, warn) => v == null ? "" : v <= ok ? "goodv" : v <= warn ? "warnv" : "badv";
+    const lagP50 = ms(m.arb_feed_lag_us_p50), lagP99 = ms(m.arb_feed_lag_us_p99);
+    const offP50 = ms(m.arb_slot_offset_us_p50), offP99 = ms(m.arb_slot_offset_us_p99);
+    const detP50 = m.arb_detect_to_signed_us_p50, detP99 = m.arb_detect_to_signed_us_p99;
+    const none = (n) => !n ? "no samples yet" : `${fmt(n)} samples / 60 s`;
+    $("lattiles").innerHTML = [
+      tile("Feed lag p50", lagP50 == null ? "–" : fmt(lagP50, 1) + " ms", "target < 30 ms · " + none(m.arb_feed_lag_us_samples), judge(lagP50, 30, 50)),
+      tile("Feed lag p99", lagP99 == null ? "–" : fmt(lagP99, 1) + " ms", "within one 50 ms tick", judge(lagP99, 50, 100)),
+      tile("Slot offset p50", offP50 == null ? "–" : fmt(offP50) + " ms", "slot start to update · " + none(m.arb_slot_offset_us_samples)),
+      tile("Slot offset p99", offP99 == null ? "–" : fmt(offP99) + " ms", "a slot is ~400 ms"),
+      tile("Detect to signed p50", detP50 == null || detP50 < 0 ? "–" : fmt(detP50) + " µs", none(m.arb_detect_to_signed_us_samples), judge(detP50 < 0 ? null : detP50, 250, 500)),
+      tile("Detect to signed p99", detP99 == null || detP99 < 0 ? "–" : fmt(detP99) + " µs", "target < 500 µs", judge(detP99 < 0 ? null : detP99, 500, 2000)),
+    ].join("");
     const steps = [
       ["Pool updates", m.arb_engine_pool_updates], ["Cycle evaluations", m.arb_engine_cycles_seen],
       ["Skipped: stale leg", m.arb_engine_stale], ["Skipped: DEX not quoted", m.arb_engine_unsupported],
@@ -197,6 +223,12 @@ async function refreshHistory() {
       chart("Newest update age", h.t, h.arb_feed_update_age_ms, "ms"),
       chart("Cycle evaluations per second", h.t, h.arb_engine_cycles_seen_rate, "/s", 1),
       chart("Quotable pools", h.t, h.arb_pools_quotable, ""),
+    ].join("");
+    const toMs = (a) => a.map((v) => v == null ? null : v / 1000);
+    $("latcharts").innerHTML = [
+      chart("Feed lag p50", h.t, toMs(h.arb_feed_lag_us_p50), "ms", 1),
+      chart("Feed lag p99", h.t, toMs(h.arb_feed_lag_us_p99), "ms", 1),
+      chart("Detect to signed p99", h.t, h.arb_detect_to_signed_us_p99, "µs"),
     ].join("");
   } catch (e) { $("charts").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 }

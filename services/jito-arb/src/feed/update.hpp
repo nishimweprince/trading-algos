@@ -35,6 +35,7 @@ struct UpdateView {
   AccountView account;
   SlotView slot;
   int32_t pong_id = 0;
+  int64_t created_at_ns = 0;  // SubscribeUpdate.created_at (when the server produced it), epoch ns; 0 if absent
 };
 
 /** Parse one frame. False on malformed protobuf (counted and dropped by the caller). */
@@ -45,7 +46,8 @@ bool parse_update(const uint8_t* data, size_t len, UpdateView& out);
 namespace arb::feed {
 /** Encode a SubscribeUpdate account frame (synthetic frames for tests and fixture replays). */
 std::string encode_account_frame(const Pubkey& key, const Pubkey& owner, const uint8_t* data, size_t len, uint64_t lamports,
-                                 uint64_t slot, uint64_t write_version, std::string_view filter = "accounts");
+                                 uint64_t slot, uint64_t write_version, std::string_view filter = "accounts",
+                                 int64_t created_at_ns = 0);
 /** Encode a SubscribeUpdate slot frame. */
 std::string encode_slot_frame(uint64_t slot, uint32_t status = 0);
 }  // namespace arb::feed

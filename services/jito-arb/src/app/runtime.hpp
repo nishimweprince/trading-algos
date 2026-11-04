@@ -45,6 +45,9 @@ class Runtime {
   const RuntimeStats& stats() const { return stats_; }
   /** Receive time (monotonic ns, the stream's clock) of the newest account update; 0 before the first. */
   uint64_t last_update_ns() const { return handler_.last_update_ns(); }
+  /** Receive time (monotonic ns) of the frame being processed: the start of detect-to-send. */
+  uint64_t frame_recv_ns() const { return frame_recv_ns_; }
+  feed::FeedHandler& feed() { return handler_; }
 
  private:
   void refresh_slot_inputs(uint64_t slot);
@@ -63,6 +66,7 @@ class Runtime {
   SendHook send_hook_;
   RuntimeStats stats_;
   int64_t wall_ms_ = 0;
+  uint64_t frame_recv_ns_ = 0;
   uint64_t inputs_slot_ = 0;
 };
 

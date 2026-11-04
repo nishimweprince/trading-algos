@@ -4,7 +4,10 @@
 #include <atomic>
 #include <cstdint>
 
+#include <unordered_map>
+
 #include "feed/update.hpp"
+#include "obs/latency.hpp"
 #include "state/state_store.hpp"
 
 namespace arb::feed {
@@ -30,6 +33,10 @@ class FeedHandler {
   uint64_t bad_frames() const { return bad_; }
   uint64_t account_updates() const { return accounts_; }
   uint64_t last_update_ns() const { return last_update_ns_.load(std::memory_order_relaxed); }
+  /** Account updates: our receive time minus the server's created_at (Helius -> us), microseconds. */
+  obs::LatencyWindow& feed_lag_us() { return feed_lag_us_; }
+  /** Account updates: receive time minus the moment their slot started (first shred / bank created), microseconds. */
+  obs::LatencyWindow& slot_offset_us() { return slot_offset_us_; }
 
  private:
   StateStore& store_;
@@ -37,6 +44,9 @@ class FeedHandler {
   UpdateView view_;
   uint64_t frames_ = 0, bad_ = 0, accounts_ = 0;
   std::atomic<uint64_t> last_update_ns_{0};
+  obs::LatencyWindow feed_lag_us_, slot_offset_us_;
+  std::unordered_map<uint64_t, uint64_t> slot_start_ns_;  // slot -> earliest interslot status time (monotonic)
+  int64_t wall_minus_mono_ns_ = 0;                         // refreshed every 4096 frames
 };
 
 }  // namespace arb::feed

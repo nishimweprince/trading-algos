@@ -6,6 +6,7 @@
 #include <random>
 
 #include "app/runtime.hpp"
+#include "obs/latency.hpp"
 #include "risk/limits.hpp"
 #include "risk/sign_guard.hpp"
 #include "submit/jito.hpp"
@@ -49,6 +50,8 @@ class BundleBuilder {
   const BuilderStats& stats() const { return n_; }
   const tx::SignedTx& last_tx() const { return last_; }
   const risk::SignGuard& guard() const { return guard_; }
+  /** Frame received -> bundle signed (everything before the HTTP write), microseconds. */
+  obs::LatencyWindow& detect_to_signed_us() { return detect_us_; }
 
  private:
   const Config& cfg_;
@@ -66,6 +69,7 @@ class BundleBuilder {
   tx::IxList ixs_;
   tx::SignedTx last_;
   BuilderStats n_;
+  obs::LatencyWindow detect_us_;
 };
 
 }  // namespace arb::app

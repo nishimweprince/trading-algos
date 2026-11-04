@@ -140,6 +140,24 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   auto& g_skipped = reg.gauge("arb_engine_skipped", "sized candidates not dispatched");
   auto& g_signed = reg.gauge("arb_bundles_signed", "bundles built and signed");
   auto& g_shards = reg.gauge("arb_feed_shards_up", "LaserStream streams currently up");
+  // Latency windows (last 60 s), microseconds: p50 / p99 / max and the sample count.
+  struct LatGauges {
+    obs::Gauge *p50, *p99, *max, *n;
+  };
+  auto lat = [&](const std::string& name, const std::string& help) {
+    return LatGauges{&reg.gauge(name + "_p50", help + " (p50, last 60 s)"), &reg.gauge(name + "_p99", help + " (p99, last 60 s)"),
+                     &reg.gauge(name + "_max", help + " (max, last 60 s)"), &reg.gauge(name + "_samples", help + " (samples, last 60 s)")};
+  };
+  LatGauges g_lag = lat("arb_feed_lag_us", "account update received minus the server's created_at, us");
+  LatGauges g_off = lat("arb_slot_offset_us", "account update received minus its slot's start, us");
+  LatGauges g_det = lat("arb_detect_to_signed_us", "frame received to bundle signed, us");
+  auto put = [](LatGauges& g, obs::LatencyWindow& w, uint64_t now) {
+    auto st = w.stats(now);
+    g.p50->set(st.p50);
+    g.p99->set(st.p99);
+    g.max->set(st.max);
+    g.n->set(int64_t(st.count));
+  };
   g_pools.set(int64_t(pf.pools.size()));
   g_cycles.set(int64_t(rt.cycles().size()));
 
@@ -196,6 +214,10 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
         q += p && p->quotable(uint64_t(cfg.engine.max_state_age_slots)) ? 1 : 0;
       }
       g_quotable.set(q);
+      uint64_t tnow = mono_ns();
+      put(g_lag, rt.feed().feed_lag_us(), tnow);
+      put(g_off, rt.feed().slot_offset_us(), tnow);
+      put(g_det, builder.detect_to_signed_us(), tnow);
       uint64_t last = rt.last_update_ns();
       g_age.set(last ? int64_t((mono_ns() - std::min(mono_ns(), last)) / 1'000'000) : -1);
       if (!recorder && blockhash.needs_refresh(wall_ms())) {
