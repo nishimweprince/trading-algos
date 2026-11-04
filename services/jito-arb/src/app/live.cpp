@@ -1,0 +1,205 @@
+#include "app/live.hpp"
+
+#include <unistd.h>
+
+#include <chrono>
+#include <fstream>
+#include <memory>
+#include <sstream>
+#include <thread>
+#include <vector>
+
+#include "app/bundle_builder.hpp"
+#include "app/pools_file.hpp"
+#include "app/runtime.hpp"
+#include "core/base58.hpp"
+#include "core/rpc.hpp"
+#include "core/ring.hpp"
+#include "feed/frames.hpp"
+#include "feed/laserstream_client.hpp"
+#include "feed/resync.hpp"
+#include "obs/log.hpp"
+#include "obs/metrics.hpp"
+#include "submit/jito.hpp"
+
+namespace arb::app {
+
+namespace {
+
+uint64_t mono_ns() {
+  return uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+int64_t wall_ms() {
+  return int64_t(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+}
+
+struct Shard {
+  std::unique_ptr<FrameRing> ring;
+  std::unique_ptr<feed::LaserstreamClient> client;
+  std::thread thread;
+  uint64_t next = 0;
+};
+
+constexpr size_t RING_SLOTS = 1024, RING_SLOT_BYTES = 16 << 10;  // whirlpool tick arrays are ~10 KB
+
+}  // namespace
+
+int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_seconds) {
+  if (!cfg.mode.dry_run) {
+    LOG_ERROR("dry_run = false is refused in this build: mainnet sends start at phase 4, after the owner reviews the "
+              "phase-2 replay gate and the phase-3 validator tests (RUNBOOK-VM.md)");
+    return 2;
+  }
+  std::ifstream f(cfg.pools_path);
+  if (!f) {
+    LOG_ERROR("pools file %s not found: run `discover` first", cfg.pools_path.c_str());
+    return 1;
+  }
+  std::stringstream ss;
+  ss << f.rdbuf();
+  PoolsFile pf;
+  std::string err;
+  if (!from_json(ss.str(), pf, &err)) {
+    LOG_ERROR("%s", err.c_str());
+    return 1;
+  }
+  Runtime rt(cfg, pf);
+  auto& reg = obs::Registry::get();
+
+  // Signer: the hot wallet when its file exists (mode 0600 enforced), else the fixed dry-run key.
+  Keypair wallet = dry_run_keypair();
+  if (::access(cfg.keys.hot_wallet_path.c_str(), R_OK) == 0) wallet = Keypair::load_file(cfg.keys.hot_wallet_path);
+  else LOG_WARN("no hot wallet at %s: dry run signs with the fixed test key", cfg.keys.hot_wallet_path.c_str());
+
+  // Subscriptions: pool accounts over the pool shards; wallet and flash reserves on their own stream.
+  std::vector<Pubkey> pool_keys = rt.store().subscribed_keys(), wallet_keys = pf.reserves;
+  wallet_keys.push_back(wallet.pubkey());
+  std::vector<Pubkey> only_pools;
+  for (const Pubkey& k : pool_keys)
+    if (std::find(wallet_keys.begin(), wallet_keys.end(), k) == wallet_keys.end()) only_pools.push_back(k);
+  auto plan = feed::plan_subscriptions(only_pools, wallet_keys, cfg.helius.max_grpc_connections, cfg.helius.shard_size);
+  if (plan.overflow) LOG_WARN("subscription overflow: %zu keys do not fit %d x %d", plan.overflow, cfg.helius.max_grpc_connections, cfg.helius.shard_size);
+  std::vector<feed::ShardSpec> specs = plan.pool_shards;
+  specs.push_back(plan.wallet_shard);
+  std::vector<Shard> shards(specs.size());
+  for (size_t i = 0; i < specs.size(); ++i) {
+    shards[i].ring = std::make_unique<FrameRing>(RING_SLOTS, RING_SLOT_BYTES);
+    shards[i].client = std::make_unique<feed::LaserstreamClient>(cfg, "shard" + std::to_string(i), *shards[i].ring, stop);
+    shards[i].client->set_spec(specs[i]);
+  }
+  LOG_INFO("%s: %zu pools, %zu cycles, %zu shards (%zu pool keys, %zu wallet/reserve keys)", recorder ? "recorder" : "live dry run",
+           pf.pools.size(), rt.cycles().size(), shards.size(), only_pools.size(), wallet_keys.size());
+
+  // Initial state by RPC (marked awaiting a push), then the streams.
+  Rpc rpc(resolve_rpc_url(cfg), cfg.helius.rpc_timeout_ms);
+  if (!recorder) {
+    try {
+      auto st = feed::resync(rpc, rt.store(), pool_keys);
+      LOG_INFO("initial resync: %zu applied, %zu missing", st.applied, st.missing);
+    } catch (const std::exception& e) {
+      LOG_WARN("initial resync failed: %s", e.what());
+    }
+  }
+  for (auto& s : shards) s.thread = std::thread([&s] { s.client->run(); });
+
+  // Send side (dry run): virtual lookup tables until discovery's real ones exist; real recent blockhash.
+  tx::AltManager alts;
+  tx::BlockhashCache blockhash;
+  risk::Limits limits(risk::limits_config(cfg));
+  submit::Submitter submitter(true, nullptr);
+  Pubkey executor = cfg.keys.executor_program_id == "VERIFY" ? dry_run_executor() : parse_pubkey(cfg.keys.executor_program_id);
+  BundleBuilder builder(cfg, rt, wallet, executor, alts, blockhash, limits, submitter);
+  builder.set_virtual_tables(true);
+  obs::DecisionLog dlog(cfg.obs.decision_log_dir, cfg.obs.decision_log_rotate_s);
+  feed::FrameWriter frames(cfg.recorder.dir, cfg.recorder.rotate_s);
+  if (!recorder) {
+    rt.set_decision_log(&dlog);
+    rt.set_send_hook([&](const engine::Opportunity& o, const engine::Cycle& c, obs::DecisionRecord& r) { builder(o, c, r); });
+  }
+
+  auto& g_frames = reg.gauge("arb_feed_frames", "frames received (all shards)");
+  auto& g_bytes = reg.gauge("arb_feed_bytes", "bytes received (all shards)");
+  auto& g_reconnects = reg.gauge("arb_feed_reconnects", "stream reconnects (all shards)");
+  auto& g_age = reg.gauge("arb_feed_update_age_ms", "age of the newest account update");
+  auto& g_decode = reg.gauge("arb_decode_failures", "account decode failures");
+  auto& g_cand = reg.gauge("arb_engine_candidates", "candidates priced above min_ev");
+  auto& g_dry = reg.gauge("arb_bundles_dry_run", "bundles built and signed in dry run");
+  auto& g_rec = reg.gauge("arb_recorder_bytes", "bytes written by the recorder");
+  auto& g_kill = reg.gauge("arb_kill_switch", "1 while the KILL file is present");
+
+  auto t0 = std::chrono::steady_clock::now();
+  auto last_tick = t0, last_resync = t0;
+  std::vector<uint8_t> buf(RING_SLOT_BYTES);
+  while (!stop) {
+    bool any = false;
+    for (auto& s : shards) {
+      const uint8_t* data;
+      uint32_t len;
+      uint64_t recv;
+      while (s.ring->peek(s.next, data, len, recv)) {
+        any = true;
+        if (recorder) frames.write(data, len, recv, wall_ms());
+        else rt.on_frame(data, len, recv, wall_ms());
+        s.ring->release(++s.next);
+      }
+    }
+    auto now = std::chrono::steady_clock::now();
+    if (now - last_tick >= std::chrono::seconds(1)) {
+      last_tick = now;
+      uint64_t fr = 0, by = 0, rc = 0;
+      for (auto& s : shards) {
+        fr += s.client->counters().frames.load();
+        by += s.client->counters().bytes.load();
+        rc += s.client->counters().reconnects.load();
+      }
+      g_frames.set(int64_t(fr));
+      g_bytes.set(int64_t(by));
+      g_reconnects.set(int64_t(rc));
+      g_decode.set(int64_t(rt.store().decode_failures()));
+      g_cand.set(int64_t(rt.engine().counters().candidates));
+      g_dry.set(int64_t(builder.stats().dry_run));
+      g_rec.set(int64_t(frames.bytes_written()));
+      g_kill.set(::access(cfg.mode.kill_file.c_str(), F_OK) == 0 ? 1 : 0);
+      uint64_t last = rt.last_update_ns();
+      g_age.set(last ? int64_t((mono_ns() - std::min(mono_ns(), last)) / 1'000'000) : -1);
+      if (!recorder && blockhash.needs_refresh(wall_ms())) {
+        try {
+          auto bh = rpc.latest_blockhash("processed");
+          blockhash.set(bh.hash, bh.slot, wall_ms());
+        } catch (const std::exception& e) {
+          LOG_WARN("blockhash: %s", e.what());
+        }
+      }
+    }
+    // Resync (spec §4): pools whose snapshot lags the slot clock by more than resync_lag_slots, every 10 s,
+    // on this thread (the StateStore has a single writer).
+    if (!recorder && now - last_resync >= std::chrono::seconds(10)) {
+      last_resync = now;
+      uint64_t clock = rt.clock().slot.load();
+      std::vector<Pubkey> lag;
+      for (uint32_t i = 0; i < rt.store().pool_count() && clock; ++i) {
+        auto p = rt.store().pool(i);
+        if (p && clock > p->slot + uint64_t(cfg.helius.resync_lag_slots)) {
+          const PoolDef& d = rt.store().def(i);
+          lag.insert(lag.end(), {d.address, d.vault_a, d.vault_b});
+        }
+      }
+      if (!lag.empty()) {
+        try {
+          feed::resync(rpc, rt.store(), lag);
+        } catch (const std::exception& e) {
+          LOG_WARN("resync: %s", e.what());
+        }
+      }
+    }
+    if (run_seconds > 0 && now - t0 >= std::chrono::seconds(run_seconds)) stop = true;
+    if (!any) std::this_thread::sleep_for(std::chrono::microseconds(50));
+  }
+  for (auto& s : shards) s.thread.join();
+  LOG_INFO("%s stopped: frames=%llu candidates=%llu dry_run_bundles=%llu recorder_bytes=%llu", recorder ? "recorder" : "live",
+           (unsigned long long)rt.stats().frames, (unsigned long long)rt.engine().counters().candidates,
+           (unsigned long long)builder.stats().dry_run, (unsigned long long)frames.bytes_written());
+  return 0;
+}
+
+}  // namespace arb::app

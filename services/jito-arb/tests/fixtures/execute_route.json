@@ -1,0 +1,74 @@
+{
+ "layout": "u8 tag=0 | u64 amount_in | u64 min_out | u8 num_legs | 3 x (u8 dex, u8 a_to_b, u8 acct_start, u8 acct_len), little-endian, 30 bytes; unused leg slots are zero",
+ "cases": [
+  {
+   "name": "two_leg_raydium_whirlpool",
+   "amount_in": 1000000000,
+   "min_out": 1000050000,
+   "legs": [
+    [
+     0,
+     1,
+     0,
+     9
+    ],
+    [
+     1,
+     0,
+     9,
+     12
+    ]
+   ],
+   "num_legs": 2,
+   "hex": "0000ca9a3b00000000508d9b3b0000000002000100090100090c00000000"
+  },
+  {
+   "name": "three_leg",
+   "amount_in": 123456789012,
+   "min_out": 123456999999,
+   "legs": [
+    [
+     1,
+     1,
+     0,
+     12
+    ],
+    [
+     0,
+     0,
+     12,
+     9
+    ],
+    [
+     1,
+     1,
+     21,
+     12
+    ]
+   ],
+   "num_legs": 3,
+   "hex": "00141a99be1c0000003f529cbe1c000000030101000c00000c090101150c"
+  },
+  {
+   "name": "max_values",
+   "amount_in": 18446744073709551615,
+   "min_out": 18446744073709551614,
+   "legs": [
+    [
+     5,
+     1,
+     255,
+     255
+    ],
+    [
+     2,
+     0,
+     0,
+     1
+    ]
+   ],
+   "num_legs": 2,
+   "hex": "00fffffffffffffffffeffffffffffffff020501ffff0200000100000000"
+  }
+ ]
+}

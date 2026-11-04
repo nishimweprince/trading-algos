@@ -1,0 +1,55 @@
+# jito-arb example config. Defaults live in src/core/config.hpp; every key here is optional.
+# dry_run stays true until the owner flips it after the phase-2 replay gate and phase-3 validator tests.
+
+[mode]
+dry_run = true
+funding_mode = "flash"          # flash | own
+kill_file = "KILL"
+simulate_before_send = true
+
+[helius]
+laserstream_endpoint = "VERIFY" # from the Helius dashboard, Frankfurt region
+rpc_url = "https://mainnet.helius-rpc.com"
+api_key_env = "HELIUS_API_KEY"
+max_grpc_connections = 4
+shard_size = 300
+
+[jito]
+regions = ["frankfurt", "amsterdam"]
+tip_min_lamports = 1000
+tip_max_lamports = 50000000
+
+[engine]
+base_mints = ["So11111111111111111111111111111111111111112", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"]
+max_hops = 3
+min_spot_edge = 0.0005
+min_ev_lamports = 20000
+min_net_lamports = 10000
+max_trade_lamports = 500_000_000_000
+max_input_fraction = 0.20
+target_land_rate = 0.30
+max_bundles_per_slot = 3
+
+[dex]
+# A DEX is enabled only after its quoter matches the chain exactly on >= 200 sim-parity samples.
+raydium_v4_enabled = true       # 313/313 exact (tests/fixtures/parity_raydium_v4.json)
+whirlpool_enabled = false       # parity not yet proven: needs the Helius-funded sim-parity run (RUNBOOK-VM.md)
+
+[discovery]
+min_pool_tvl_sol = 50
+max_tracked_pools = 1500
+
+[risk]
+max_daily_fee_spend_sol = 0.2
+min_sol_float = 0.3
+max_sol_float = 2.0
+
+[keys]
+hot_wallet_path = "/etc/jito-arb/hot_wallet.json"
+cold_wallet_pubkey = "VERIFY"
+executor_program_id = "VERIFY"
+
+[obs]
+metrics_addr = "127.0.0.1"
+metrics_port = 9100
+log_level = "info"

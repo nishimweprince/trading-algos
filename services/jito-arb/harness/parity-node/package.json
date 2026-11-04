@@ -1,0 +1,17 @@
+{
+  "name": "jito-arb-parity-node",
+  "private": true,
+  "description": "Official-SDK quote harness for the VM (spec §5/§11): expected amount_out per recorded snapshot and size. Not installed on the laptop.",
+  "type": "module",
+  "scripts": {
+    "quote": "node quote.mjs"
+  },
+  "dependencies": {
+    "@orca-so/whirlpools-sdk": "0.22.0",
+    "@raydium-io/raydium-sdk-v2": "0.1.110-alpha",
+    "@solana/web3.js": "1.98.0",
+    "bn.js": "5.2.1",
+    "decimal.js": "10.4.3"
+  },
+  "comment": "Pins are VERIFY items: confirm each exists with `npm view <pkg>@<ver>` before `npm ci`, and record the lockfile."
+}
