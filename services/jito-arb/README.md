@@ -36,7 +36,7 @@ simulations). Tools that talk to mainnet do reads and `simulateTransaction` only
 |---|---|---|
 | 0 | Core types, base58/64, u256, compact-u16, TOML config, logger, `/metrics` on 127.0.0.1:9100, KILL file | Known vectors; `jito-arb --dry-run` serves metrics |
 | 1 | Account decoders (Raydium v4, Whirlpool, tick arrays, SPL/Token-2022 with extensions, Kamino reserve), StateStore (RCU snapshots, SPSC change queue, quotability), subscription plan, resync, discovery, token safety, recorder | Decoders match spl-token / Anchor IDL / Raydium API on real fixtures; recorder round trip; discovery on recorded gPA |
-| 2 | Exact quoters (Raydium v4, Whirlpool static-fee path), route graph and cycle index, prefilter, sizer, cost model, tip controller, dispatcher, decision log, replay and report | **Raydium v4: 313/313 exact** against simulated mainnet swaps, plus a live Kamino+Raydium round trip predicted to the unit. **Whirlpool: not proven** (see below), so disabled. Engine tests on synthetic and fixture states; replay of a synthetic capture to a two-day report |
+| 2 | Exact quoters (Raydium v4, Whirlpool static-fee path), route graph and cycle index, prefilter, sizer, cost model, tip controller, dispatcher, decision log, replay and report | **Raydium v4: 313/313 exact** against simulated mainnet swaps, plus a live Kamino+Raydium round trip predicted to the unit. **Whirlpool: 204/204 exact** (Helius-funded run on the VM). Engine tests on synthetic and fixture states; replay of a synthetic capture to a two-day report |
 | 3 | Instruction builders, §7.3 route with computed `borrow_instruction_index`, ALT-aware v0 compiler, ALT manager, blockhash cache, sign guard, §10 limits, denylist, Jito client, bundle tracker, dry-run gate, Rust executor crate | **Byte-identical** to web3.js 1.99 goldens (0, 1, 2 lookup tables; ALT create+extend; signatures); `sim-check` on mainnet: Kamino fee exact, Kamino around a Raydium round trip exact, the full route rejected only for the undeployed executor; dry-run replay signs 50/50 bundles with zero transport calls |
 
 Laptop benchmark (Apple M-series, single thread; production numbers are a VM step):
@@ -60,11 +60,13 @@ unit test replays the stored samples offline and requires exact `amount_out` and
   run that recorded them predates one oracle fix: a failed simulation now counts only if the funding
   wallet did not move. The single failed sample in that file was a holder spending mid-batch (Raydium's
   `user_source.amount < amount_in`, error 40). It was dropped and is listed in the file.
-- Whirlpool: **not proven**. The public RPC cannot list wSOL/USDC holders and rate-limits
-  `getTokenLargestAccounts`, so the laptop run saw only 10 samples on one pool (all exact, far under the
-  200 bar). `whirlpool_enabled = false` in the defaults and the example config, and
-  `parity_whirlpool_exact` enforces that an unproven DEX stays disabled. The Helius-funded run, plus the
-  official-SDK harness (`harness/parity-node`) for the spec's 1,000 × 20, are VM steps.
+- Whirlpool: 204 samples in 11 batches (21 pool-direction pairs), 0 mismatches
+  (`tests/fixtures/parity_whirlpool.json`), recorded on the Frankfurt VM with Helius-funded holders. The
+  laptop's public RPC could not fund wSOL/USDC swaps. The 40 failed simulations from that run failed at
+  instruction 0 (the harness creating a classic-SPL ATA for a Token-2022 mint), before the swap ran; they are
+  dropped and listed in the file, the rule sim-parity now applies. Quoting is on (`whirlpool_enabled = true`).
+  The test still enforces that a DEX under 200 exact samples stays disabled. The spec's 1,000 × 20 against
+  the official SDKs (`harness/parity-node`) remains a VM step.
 
 ## VERIFY items
 
@@ -72,7 +74,7 @@ unit test replays the stored samples offline and requires exact `amount_out` and
 |---|---|---|
 | Program IDs (Raydium v4, Whirlpool, Kamino) | Confirmed executable on mainnet; pinned with source commits | `config/dex_programs.toml` |
 | Raydium v4 fee and rounding | Fee = ceil(in × num / den) on input; out floors; reserves = vault − need_take_pnl | raydium-amm@91739d8 `processor.rs`, `math.rs`; parity 313/313 |
-| Whirlpool swap math | Ported verbatim (tick sequence, U256 muldiv, rounding); adaptive-fee pools refused | whirlpools@cc683ec; parity **open** |
+| Whirlpool swap math | Ported verbatim (tick sequence, U256 muldiv, rounding); adaptive-fee pools refused | whirlpools@cc683ec; parity 204/204 |
 | Kamino flash fee | `max(amount × fee_sf / 2^60, 1)` rounded half-up; `u64::MAX` = disabled; `BorrowTooSmall` | klend@77e8185 `reserve.rs calculate_fees`; sim-check (a) exact |
 | Kamino CPI and pairing rules | Borrow and repay must be top level (`is_flash_forbidden_cpi_call`); exactly one repay after the borrow, same amount, **identical account list**, absolute `borrow_instruction_index` | klend@77e8185 `lending_market/flash_ixs.rs` |
 | Jito `sendBundle` | `[[base64 txs], {"encoding":"base64"}]` to `/api/v1/bundles`; up to 5 txs; min tip 1,000 lamports | docs.jito.wtf/lowlatencytxnsend (read 2026-11-04) |

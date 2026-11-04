@@ -23,7 +23,7 @@ regions = ["frankfurt", "amsterdam"]
 
 [dex]
 raydium_v4_enabled = true
-whirlpool_enabled = false         # until Helius-funded sim-parity proves it (RUNBOOK-VM.md step 4)
+whirlpool_enabled = true          # 204/204 exact (tests/fixtures/parity_whirlpool.json, Helius-funded, 2026-11-04)
 
 [discovery]
 min_pool_tvl_sol = 20             # 50 tracked 775 pools, 20 tracks ~984 (with the full Raydium fetch); the EV gate drops small profits
