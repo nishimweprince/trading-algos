@@ -53,6 +53,9 @@ struct SizerExample {
   uint64_t x_max = 0, best_x = 0;
   int64_t best_profit = 0;   // base units, <= 0
   Reason reason = Reason::none;
+  uint64_t min_trade = 0;
+  Errc err = Errc::bad_data;  // last quote error (sizer_quote_error)
+  int8_t fail_leg = -1;
 };
 
 struct EngineCounters {
@@ -89,10 +92,13 @@ class Engine {
   obs::LatencyWindow& sized_edge_ppm() { return edge_ppm_; }
   /** Best realized profit / size of cycles that sized to no profit, ppm (<= 0; 60 s window). */
   obs::LatencyWindow& failed_profit_ppm() { return failed_profit_ppm_; }
-  SizerExample take_example() {
-    SizerExample e = example_;
-    example_ = {};
-    return e;
+  /** One example per failure reason (the largest predicted edge since the last take), then cleared. */
+  std::vector<SizerExample> take_examples() {
+    std::vector<SizerExample> out;
+    for (auto& e : examples_)
+      if (e.set) out.push_back(e);
+    for (auto& e : examples_) e = {};
+    return out;
   }
   const CycleIndex& cycles() const { return idx_; }
   const BasePrice* base_price(const Pubkey& mint) const;
@@ -119,7 +125,7 @@ class Engine {
   EngineCounters n_;
   SizerDiag diag_;
   obs::LatencyWindow edge_ppm_, failed_profit_ppm_;
-  SizerExample example_;
+  SizerExample examples_[32];  // by Reason
 };
 
 }  // namespace arb::engine
