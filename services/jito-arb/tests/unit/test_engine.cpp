@@ -459,3 +459,56 @@ TEST(cycle_cap_lists_per_pool_hub_does_not_block) {
   CHECK_EQ(spokes_with_cycles, size_t(6));  // every spoke still evaluates its cycles with the hub
   CHECK(idx.size() >= 12);                  // hub->spoke and spoke->hub for every spoke
 }
+
+TEST(sizer_log_scan_finds_small_optimum_in_huge_range) {
+  Pubkey B = mint::WSOL, X = key_n(1);
+  Snapshots s{ray(0, B, X, 1000'000'000'000ULL, 102'000'000'000ULL), ray(1, B, X, 1000'000'000'000ULL, 100'000'000'000ULL)};
+  Cycle c = two_hop(0, true, 1, false, B, X);
+  FlashFeeFn fee;
+  SizerConfig sc;
+  sc.min_trade = 1'000'000;
+  sc.x_max = 1'000'000'000'000'000ULL;  // a million SOL: the optimum (~3.69 SOL) sits near the bottom of the range
+  sc.use_closed_form = false;
+  SizeResult r = size_cycle(c, s, both_quoters(), fee, sc);
+  std::printf("    log scan x=%llu profit=%lld evals=%d\n", (unsigned long long)r.x, (long long)r.profit, r.evals);
+  CHECK(r.ok && r.evals <= 24);
+  CHECK(r.profit >= 27'399'925LL * 99 / 100);  // the brute-force optimum is 27,399,925 (sizer test above)
+}
+
+TEST(whirlpool_depth_from_active_liquidity_and_cp_base_price) {
+  StateStore store;
+  load_fixture_pools(store, 1000);
+  size_t checked = 0;
+  for (uint32_t i = 0; i < store.pool_count(); ++i) {
+    auto p = store.pool(i);
+    if (p->kind != DexKind::Whirlpool || !p->complete || p->wp.liquidity == 0) continue;
+    for (bool d : {true, false}) {
+      uint64_t depth = dex::input_depth(*p, d);
+      CHECK(depth > 0);
+      // A stranded copy (1/1000 of the liquidity, same vaults) gets about 1/1000 of the depth.
+      PoolState stranded = *p;
+      stranded.wp.liquidity = p->wp.liquidity / 1000;
+      uint64_t sd = dex::input_depth(stranded, d);
+      CHECK(sd <= depth / 999 + 1);
+    }
+    ++checked;
+  }
+  std::printf("    whirlpools checked: %zu\n", checked);
+  CHECK(checked >= 10);
+  // USDC priced from constant-product pools: lamports per USDC unit lands in a sane range ($5..$5,000 per SOL).
+  std::vector<PoolDef> defs;
+  for (uint32_t i = 0; i < store.pool_count(); ++i) defs.push_back(store.def(i));
+  CycleIndex idx;
+  GraphConfig g;
+  g.base_mints = {mint::WSOL, mint::USDC};
+  idx.build(defs, {}, g);
+  TipPolicy tips;
+  Engine eng(store, idx, both_quoters(), EngineConfig{}, tips);
+  CHECK(eng.refresh_base_price_from_pools(mint::USDC));
+  const BasePrice* bp = eng.base_price(mint::USDC);
+  CHECK(bp != nullptr);
+  double lamports_per_unit = double(bp->lamports_per_unit_x64) / 18446744073709551616.0;
+  std::printf("    USDC: %.3f lamports per unit (%.2f USDC per SOL)\n", lamports_per_unit, 1e3 / lamports_per_unit);
+  CHECK(lamports_per_unit > 0.2 && lamports_per_unit < 200);
+  CHECK(bp->from_lamports_ceil(1'000'000) < 1'000'000'000ULL);  // min_trade in USDC units is finite
+}

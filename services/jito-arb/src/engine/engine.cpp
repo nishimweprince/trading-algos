@@ -92,16 +92,22 @@ const BasePrice* Engine::base_price(const Pubkey& mint) const {
 
 bool Engine::refresh_base_price_from_pools(const Pubkey& base) {
   if (base == mint::WSOL) return true;
+  // Constant-product pools first: their vault balances are their depth. A concentrated-liquidity pool's vaults
+  // can hold a stranded position at a price far from the market (one seen at ~370x off), so a Whirlpool is used
+  // only when no constant-product pair is quotable, ranked by active liquidity (dex::input_depth).
   std::shared_ptr<const PoolState> best;
-  uint64_t best_depth = 0;
+  std::pair<int, uint64_t> best_rank{-1, 0};
   for (uint32_t i = 0; i < store_.pool_count(); ++i) {
     auto p = store_.pool(i);
     if (!p || !p->quotable(cfg_.max_state_age_slots)) continue;
     bool pair = (p->mint_a == base && p->mint_b == mint::WSOL) || (p->mint_b == base && p->mint_a == mint::WSOL);
     if (!pair) continue;
-    uint64_t depth = p->mint_a == mint::WSOL ? p->vault_a_amount : p->vault_b_amount;
-    if (depth > best_depth) {
-      best_depth = depth;
+    bool sol_is_a = p->mint_a == mint::WSOL;
+    std::pair<int, uint64_t> rank{p->kind == DexKind::RaydiumV4 ? 1 : 0,
+                                  p->kind == DexKind::RaydiumV4 ? (sol_is_a ? p->vault_a_amount : p->vault_b_amount)
+                                                                : dex::input_depth(*p, sol_is_a)};
+    if (rank > best_rank) {
+      best_rank = rank;
       best = p;
     }
   }

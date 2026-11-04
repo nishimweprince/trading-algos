@@ -49,9 +49,17 @@ TEST(replay_frames_into_decision_log_and_report) {
   CHECK_EQ(dry, size_t(st.sent));
   auto rep = obs::aggregate(recs, int64_t(cfg.engine.min_ev_lamports), cfg.engine.min_net_lamports);
   CHECK_EQ(rep.days.size(), size_t(2));
-  uint64_t detections = 0;
+  // Detections = dispatched plus priced candidates that only dispatch rules dropped (a pool already used in
+  // the slot, the slot cap, send lag).
+  uint64_t detections = 0, dispatch_skips = 0;
   for (auto& [day, d] : rep.days) detections += d.detections;
-  CHECK_EQ(detections, uint64_t(st.sent));
+  for (auto& r : recs) {
+    auto why = engine::Reason(r.reason);
+    if (r.action == uint8_t(obs::Action::Skipped) &&
+        (why == engine::Reason::pool_conflict || why == engine::Reason::slot_cap || why == engine::Reason::send_lag))
+      ++dispatch_skips;
+  }
+  CHECK_EQ(detections, uint64_t(st.sent) + dispatch_skips);
   std::string text = obs::to_text(rep);
   CHECK(text.find("2026-11-01") != std::string::npos && text.find("2026-11-02") != std::string::npos);
   std::string json = obs::to_json(rep);
