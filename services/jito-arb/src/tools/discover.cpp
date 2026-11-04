@@ -128,15 +128,51 @@ int run(int argc, char** argv) {
       std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
   }
-  if (cfg.dex.whirlpool_enabled) {
+  if (cfg.dex.whirlpool_enabled || cfg.discovery.track_whirlpool) {
+    // ~143k Whirlpools pair wSOL or USDC (157 MB, Nov 2026). Keep live, static-fee pools only: zero
+    // liquidity cannot trade, and adaptive-fee pools are refused by the quoter.
+    size_t seen_wp = 0, kept_wp = 0;
     for (uint64_t off : {uint64_t(101), uint64_t(181)}) {  // token_mint_a, token_mint_b
       for (auto& base : dc.base_mints) {
         std::string body = rpc.program_accounts_raw(prog::WHIRLPOOL, state::WHIRLPOOL_LEN, {{off, b58(base)}});
-        for (auto& a : state::parse_gpa_response(body))
-          if (seen.insert(a.key).second) pools.push_back(std::move(a));
+        for (auto& a : state::parse_gpa_response(body)) {
+          ++seen_wp;
+          auto w = state::decode_whirlpool(a.data.data(), a.data.size(), a.owner);
+          if (!w || w->liquidity == 0 || w->adaptive_fee()) continue;
+          if (seen.insert(a.key).second) {
+            pools.push_back(std::move(a));
+            ++kept_wp;
+          }
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
       }
     }
+    std::fprintf(stderr, "whirlpool: %zu read, %zu live static-fee pools%s\n", seen_wp, kept_wp,
+                 cfg.dex.whirlpool_enabled ? "" : " (tracked only: quoting disabled)");
+  }
+  // A pool can sit on a cycle only if its non-base token has a second pool: drop the rest before the
+  // vault/mint lookups (discover() applies the same rule exactly after the TVL filter).
+  {
+    std::set<Pubkey> bases(dc.base_mints.begin(), dc.base_mints.end());
+    auto mints_of = [](const state::RawAccount& a) -> std::pair<Pubkey, Pubkey> {
+      if (auto r = state::decode_raydium_v4(a.data.data(), a.data.size(), a.owner)) return {r->coin_mint, r->pc_mint};
+      if (auto w = state::decode_whirlpool(a.data.data(), a.data.size(), a.owner)) return {w->token_mint_a, w->token_mint_b};
+      return {Pubkey{}, Pubkey{}};
+    };
+    std::map<Pubkey, int> count;
+    for (auto& a : pools) {
+      auto [x, y] = mints_of(a);
+      ++count[x];
+      ++count[y];
+    }
+    std::vector<state::RawAccount> kept;
+    for (auto& a : pools) {
+      auto [x, y] = mints_of(a);
+      bool ok = (bases.count(x) || count[x] >= 2) && (bases.count(y) || count[y] >= 2);
+      if (ok) kept.push_back(std::move(a));
+    }
+    std::fprintf(stderr, "cycle prefilter: %zu of %zu pools have a token in a second pool\n", kept.size(), pools.size());
+    pools = std::move(kept);
   }
   std::fprintf(stderr, "candidate pools: %zu\n", pools.size());
   auto keys = state::dependent_keys(pools, dc);
