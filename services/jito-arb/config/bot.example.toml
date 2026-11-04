@@ -39,6 +39,10 @@ whirlpool_enabled = false       # parity not yet proven: needs the Helius-funded
 min_pool_tvl_sol = 50
 max_tracked_pools = 1500
 
+[flash]
+# Kamino Main Market reserves for the base mints (wSOL, USDC); see config/dex_programs.toml.
+reserves = ["d4A2prbA2whesmvHaL88BH6Ewn5N4bTSU2Ze8P6Bc4Q", "D6q6wuQSrifJKZYpR1M8R4YawnLDtDsMmWM1NbBmgJ59"]
+
 [risk]
 max_daily_fee_spend_sol = 0.2
 min_sol_float = 0.3
