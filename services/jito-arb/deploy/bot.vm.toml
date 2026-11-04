@@ -13,7 +13,7 @@ laserstream_endpoint = "VERIFY"   # overridden by LASERSTREAM_ENDPOINT
 rpc_url = "https://mainnet.helius-rpc.com"
 api_key_env = "HELIUS_API_KEY"
 max_grpc_connections = 4
-shard_size = 300
+shard_size = 1000                 # 4 x 1000 keys: 775 pools need ~3,900 (spec suggests 300; not a Helius limit)
 
 [jito]
 regions = ["frankfurt", "amsterdam"]

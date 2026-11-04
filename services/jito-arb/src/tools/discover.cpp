@@ -191,12 +191,19 @@ int run(int argc, char** argv) {
     pf.tvl_sol.push_back(c.tvl_sol);
   }
   for (auto& r : cfg.flash.reserves) pf.reserves.push_back(parse_pubkey(r));
+  std::string prev_body;  // read before `out` is overwritten (it is usually the same file)
+  if (!previous.empty()) {
+    std::ifstream pf_in(previous);
+    std::stringstream pss;
+    pss << pf_in.rdbuf();
+    prev_body = pss.str();
+  }
   std::ofstream(out) << app::to_json(pf);
   std::fprintf(stderr, "tracked %zu pools (SOL = %.2f USDC); rejected:", res.tracked.size(), res.sol_price_usdc);
   for (auto& [why, n] : res.reject_counts) std::fprintf(stderr, " %s=%zu", why.c_str(), n);
   std::fprintf(stderr, "\n");
-  if (!previous.empty()) {
-    std::ifstream f(previous);
+  if (!previous.empty() && !prev_body.empty()) {
+    std::istringstream f(prev_body);
     std::stringstream ss;
     ss << f.rdbuf();
     app::PoolsFile old;
