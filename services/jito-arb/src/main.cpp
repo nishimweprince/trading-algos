@@ -21,6 +21,7 @@
 #include <sstream>
 
 #include "app/bundle_builder.hpp"
+#include "app/live.hpp"
 #include "app/pools_file.hpp"
 #include "app/runtime.hpp"
 #include "core/base58.hpp"
@@ -186,8 +187,12 @@ int main(int argc, char** argv) {
   }
   if (args.mode == "live" || args.mode == "recorder") {
 #if !defined(ARB_WITH_GRPC)
-    LOG_WARN("built without ARB_WITH_GRPC: no LaserStream feed; serving metrics only");
+    LOG_WARN("built without ARB_WITH_GRPC: the LaserStream stub yields no frames (the feed is a VM build)");
 #endif
+    rc = arb::app::run_live(cfg, args.mode == "recorder", g_stop, args.run_seconds);
+    metrics.stop();
+    log.stop();
+    return rc;
   }
   auto t0 = std::chrono::steady_clock::now();
   auto& kill_g = reg.gauge("arb_kill_switch", "");

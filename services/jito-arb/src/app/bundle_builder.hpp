@@ -38,11 +38,13 @@ class BundleBuilder {
   /** The Runtime send hook. */
   void operator()(const engine::Opportunity& o, const engine::Cycle& c, obs::DecisionRecord& rec);
   void set_wallet_lamports(uint64_t l) { wallet_lamports_ = l; }
+  /** Seed the virtual lookup tables on first use (until discovery has created the real ones). */
+  void set_virtual_tables(bool on) { virtual_tables_ = on; }
   /**
-   * Replay / dry run without RPC: seed the virtual lookup tables on first use and sign over a placeholder
-   * blockhash (all zeros) stamped at the current slot. Never used on a live send path.
+   * Replay without RPC: virtual tables, and sign over a placeholder blockhash (all zeros) stamped at the
+   * current slot. Never on a send path: the Submitter is dry run whenever this is used.
    */
-  void set_offline(bool on) { offline_ = on; }
+  void set_offline(bool on) { virtual_tables_ = placeholder_blockhash_ = on; }
   void set_tip_accounts(std::vector<Pubkey> v) { guard_.tip_accounts = std::move(v); }
   const BuilderStats& stats() const { return n_; }
   const tx::SignedTx& last_tx() const { return last_; }
@@ -60,7 +62,7 @@ class BundleBuilder {
   risk::SignGuard guard_;
   std::mt19937_64 rng_{0x5EED};
   uint64_t wallet_lamports_ = UINT64_MAX;  // unknown until the wallet subscription reports it
-  bool offline_ = false, seeded_ = false;
+  bool virtual_tables_ = false, placeholder_blockhash_ = false, seeded_ = false;
   tx::IxList ixs_;
   tx::SignedTx last_;
   BuilderStats n_;

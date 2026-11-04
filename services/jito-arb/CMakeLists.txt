@@ -58,12 +58,12 @@ endif()
 file(GLOB_RECURSE ARB_CORE_SRC CONFIGURE_DEPENDS
   src/core/*.cpp src/feed/*.cpp src/state/*.cpp src/dex/*.cpp src/engine/*.cpp src/flash/*.cpp
   src/tx/*.cpp src/submit/*.cpp src/risk/*.cpp src/obs/*.cpp src/app/*.cpp)
-list(FILTER ARB_CORE_SRC EXCLUDE REGEX "laserstream_client\\.cpp$")
+list(FILTER ARB_CORE_SRC EXCLUDE REGEX "(laserstream_client|laserstream_stub|app/live)\\.cpp$")
 add_library(arbcore STATIC ${ARB_CORE_SRC})
 target_include_directories(arbcore PUBLIC src)
 target_link_libraries(arbcore PUBLIC arb_sodium simdjson::simdjson OpenSSL::SSL OpenSSL::Crypto Threads::Threads)
 
-add_executable(jito-arb src/main.cpp)
+add_executable(jito-arb src/main.cpp src/app/live.cpp)
 target_link_libraries(jito-arb PRIVATE arbcore)
 if(ARB_WITH_GRPC)
   # The VM has grpc++ via pkg-config (as pump-desk's ingest does).
@@ -72,6 +72,8 @@ if(ARB_WITH_GRPC)
   target_sources(jito-arb PRIVATE src/feed/laserstream_client.cpp)
   target_compile_definitions(jito-arb PRIVATE ARB_WITH_GRPC=1)
   target_link_libraries(jito-arb PRIVATE PkgConfig::GRPCPP)
+else()
+  target_sources(jito-arb PRIVATE src/feed/laserstream_stub.cpp)
 endif()
 
 foreach(tool discover recorder replay_report fetch_fixtures sim_check fixture_frames)

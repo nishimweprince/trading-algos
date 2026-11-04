@@ -451,7 +451,9 @@ int main(int argc, char** argv) {
         if (done) continue;
         ++tried;
         try {
-          run_pool(kind, pk, batches, st);
+          // Written after every kept batch, so an interrupted run keeps what it collected.
+          if (run_pool(kind, pk, batches, st))
+            write_batches(root + "/tests/fixtures/parity_" + std::string(name) + ".json", batches, name);
         } catch (const std::exception& e) {
           std::fprintf(stderr, "  %s error: %s\n", addr.c_str(), e.what());
         }

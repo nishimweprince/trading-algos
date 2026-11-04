@@ -43,6 +43,8 @@ class Runtime {
   const engine::CycleIndex& cycles() const { return idx_; }
   feed::SlotClock& clock() { return clock_; }
   const RuntimeStats& stats() const { return stats_; }
+  /** Receive time (monotonic ns, the stream's clock) of the newest account update; 0 before the first. */
+  uint64_t last_update_ns() const { return handler_.last_update_ns(); }
 
  private:
   void refresh_slot_inputs(uint64_t slot);

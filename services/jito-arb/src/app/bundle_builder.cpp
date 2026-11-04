@@ -81,7 +81,7 @@ void BundleBuilder::operator()(const engine::Opportunity& o, const engine::Cycle
     rec.reason = uint8_t(r);
   };
   ++n_.built;
-  if (offline_ && !seeded_) {
+  if (virtual_tables_ && !seeded_) {
     std::vector<flash::FlashReserve> rs;
     for (const std::string& m : cfg_.engine.base_mints)
       if (auto r = rt_.engine().flash_reserve(parse_pubkey(m))) rs.push_back(*r);
@@ -125,7 +125,7 @@ void BundleBuilder::operator()(const engine::Opportunity& o, const engine::Cycle
     ++n_.guard_blocked;
     return skip(engine::Reason::sign_guard);
   }
-  if (offline_) blockhash_.set(Hash{}, slot, rec.wall_ms);
+  if (placeholder_blockhash_) blockhash_.set(Hash{}, slot, rec.wall_ms);
   auto bh = blockhash_.get(slot);
   if (!bh) {
     ++n_.build_failed;
