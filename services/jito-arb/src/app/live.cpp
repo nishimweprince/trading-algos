@@ -158,6 +158,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   auto& g_pass = reg.gauge("arb_engine_prefilter_pass", "cycles past the spot-edge prefilter");
   auto& g_sized = reg.gauge("arb_engine_sized", "cycles sized");
   auto& g_skipped = reg.gauge("arb_engine_skipped", "sized candidates not dispatched");
+  auto& g_untradable = reg.gauge("arb_engine_untradable", "evaluations skipped: a leg the program rejects in that direction");
   auto& g_signed = reg.gauge("arb_bundles_signed", "bundles built and signed");
   auto& g_shards = reg.gauge("arb_feed_shards_up", "LaserStream streams currently up");
   // Latency windows (last 60 s), microseconds: p50 / p99 / max and the sample count.
@@ -241,6 +242,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       g_pass.set(int64_t(n.prefilter_pass));
       g_sized.set(int64_t(n.sized));
       g_skipped.set(int64_t(n.skipped));
+      g_untradable.set(int64_t(n.untradable));
       g_signed.set(int64_t(builder.stats().signed_ok));
       g_slot.set(int64_t(rt.clock().slot.load()));
       g_uptime.set(int64_t(std::chrono::duration_cast<std::chrono::seconds>(now - t0).count()));

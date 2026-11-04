@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <unordered_map>
 
 #include "core/config.hpp"
 #include "engine/costs.hpp"
@@ -59,6 +60,7 @@ struct SizerExample {
 };
 
 struct EngineCounters {
+  uint64_t untradable = 0;  // a leg whose pool the program rejects in that direction (until its state changes)
   uint64_t updates = 0, cycles_seen = 0, stale = 0, unsupported = 0, cooling = 0, prefilter_pass = 0, sized = 0, candidates = 0,
            sent = 0, skipped = 0;
 };
@@ -126,6 +128,9 @@ class Engine {
   SizerDiag diag_;
   obs::LatencyWindow edge_ppm_, failed_profit_ppm_;
   SizerExample examples_[32];  // by Reason
+  // (pool id << 1 | a_to_b) -> snapshot seq at which every size failed with a program error (e.g. Whirlpool
+  // LiquidityUnderflow, which the chain returns too). Skipped until the pool's state changes.
+  std::unordered_map<uint64_t, uint64_t> untradable_;
 };
 
 }  // namespace arb::engine
