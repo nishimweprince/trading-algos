@@ -171,6 +171,25 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   LatGauges g_lag = lat("arb_feed_lag_us", "account update received minus the server's created_at, us");
   LatGauges g_off = lat("arb_slot_offset_us", "account update received minus its slot's start, us");
   LatGauges g_det = lat("arb_detect_to_signed_us", "frame received to bundle signed, us");
+  LatGauges g_edge = lat("arb_sized_edge_ppm", "spot edge the prefilter saw on sized cycles, ppm");
+  LatGauges g_fprof = lat("arb_failed_profit_ppm", "best realized profit / size on cycles that sized to no profit, ppm");
+  struct DiagGauge {
+    const char* name;
+    uint64_t engine::SizerDiag::*field;
+    obs::Gauge* g;
+  };
+  DiagGauge diag_gauges[] = {
+      {"arb_sizer_fail_no_room", &engine::SizerDiag::no_room, nullptr},
+      {"arb_sizer_fail_no_profit", &engine::SizerDiag::no_profit, nullptr},
+      {"arb_sizer_fail_partial_fill", &engine::SizerDiag::partial_fill, nullptr},
+      {"arb_sizer_fail_quote_error", &engine::SizerDiag::quote_error, nullptr},
+      {"arb_sizer_fail_zero_out", &engine::SizerDiag::zero_out, nullptr},
+      {"arb_sizer_fail_boundary", &engine::SizerDiag::boundary, nullptr},
+      {"arb_sizer_fail_other", &engine::SizerDiag::other, nullptr},
+      {"arb_sizer_zero_liquidity_leg", &engine::SizerDiag::zero_liquidity_leg, nullptr},
+  };
+  for (auto& d : diag_gauges) d.g = &reg.gauge(d.name, "sized cycles that failed, by reason (since start)");
+  auto last_example = std::chrono::steady_clock::now();
   auto put = [](LatGauges& g, obs::LatencyWindow& w, uint64_t now) {
     auto st = w.stats(now);
     g.p50->set(st.p50);
@@ -238,6 +257,35 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       put(g_lag, rt.feed().feed_lag_us(), tnow);
       put(g_off, rt.feed().slot_offset_us(), tnow);
       put(g_det, builder.detect_to_signed_us(), tnow);
+      put(g_edge, rt.engine().sized_edge_ppm(), tnow);
+      put(g_fprof, rt.engine().failed_profit_ppm(), tnow);
+      const auto& dg = rt.engine().sizer_diag();
+      for (auto& d : diag_gauges) d.g->set(int64_t(dg.*(d.field)));
+      if (now - last_example >= std::chrono::seconds(30)) {
+        last_example = now;
+        // The largest predicted edge that sized to no profit: what the prefilter believed vs what quoting found.
+        engine::SizerExample ex = rt.engine().take_example();
+        if (ex.set) {
+          const engine::Cycle& c = rt.cycles().cycle(ex.cycle);
+          std::string legs;
+          for (int i = 0; i < c.n; ++i) {
+            auto p = rt.store().pool(c.legs[i].pool);
+            char buf[256];
+            if (p->kind == DexKind::Whirlpool)
+              std::snprintf(buf, sizeof buf, " | wp %s %s liq=%llu tick=%d spacing=%u fee=%u arrays=%u", b58(p->address).substr(0, 8).c_str(),
+                            c.legs[i].a_to_b ? "a>b" : "b>a", (unsigned long long)uint64_t(p->wp.liquidity), p->wp.tick_current_index,
+                            unsigned(p->wp.tick_spacing), unsigned(p->wp.fee_rate), unsigned(p->n_ticks));
+            else
+              std::snprintf(buf, sizeof buf, " | ray %s %s a=%llu b=%llu fee=%llu/%llu", b58(p->address).substr(0, 8).c_str(),
+                            c.legs[i].a_to_b ? "a>b" : "b>a", (unsigned long long)p->vault_a_amount, (unsigned long long)p->vault_b_amount,
+                            (unsigned long long)p->ray.swap_fee_numerator, (unsigned long long)p->ray.swap_fee_denominator);
+            legs += buf;
+          }
+          LOG_INFO("sizer example: cycle %u slot %llu predicted edge %.2f bps, x_max %llu, best x %llu profit %lld (%.2f bps)%s", ex.cycle,
+                   (unsigned long long)ex.slot, double(ex.edge_ppm) / 100.0, (unsigned long long)ex.x_max, (unsigned long long)ex.best_x,
+                   (long long)ex.best_profit, ex.best_x ? 1e4 * double(ex.best_profit) / double(ex.best_x) : 0.0, legs.c_str());
+        }
+      }
       uint64_t last = rt.last_update_ns();
       g_age.set(last ? int64_t((mono_ns() - std::min(mono_ns(), last)) / 1'000'000) : -1);
       if (!recorder && blockhash.needs_refresh(wall_ms())) {

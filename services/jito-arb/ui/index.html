@@ -94,7 +94,14 @@
     <div class="panel">
       <h2>Engine funnel (since start)</h2>
       <div class="funnel" id="funnel"></div>
-      <p class="note">Cycles through Whirlpool count as "unsupported" until its quoter passes parity.</p>
+      <p class="note">"DEX not quoted" counts cycles with a leg on a DEX whose quoter has not passed parity.</p>
+    </div>
+    <div class="panel">
+      <h2>Why sizing fails (since start)</h2>
+      <div class="funnel" id="sizerfail"></div>
+      <div class="grid" id="edgetiles" style="margin-top:12px"></div>
+      <p class="note">"No profit" means every size quoted cleanly but lost money: the prefilter's spot edge was not
+        tradable. A zero-liquidity Whirlpool leg shows a price no trade can get.</p>
     </div>
     <div class="panel">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
@@ -197,6 +204,23 @@ async function refreshState() {
       tile("Slot offset p99", offP99 == null ? "–" : fmt(offP99) + " ms", "a slot is ~400 ms"),
       tile("Detect to signed p50", detP50 == null || detP50 < 0 ? "–" : fmt(detP50) + " µs", none(m.arb_detect_to_signed_us_samples), judge(detP50 < 0 ? null : detP50, 250, 500)),
       tile("Detect to signed p99", detP99 == null || detP99 < 0 ? "–" : fmt(detP99) + " µs", "target < 500 µs", judge(detP99 < 0 ? null : detP99, 500, 2000)),
+    ].join("");
+    const fails = [
+      ["No profit at any size", m.arb_sizer_fail_no_profit], ["Tick array not cached", m.arb_sizer_fail_boundary],
+      ["Leg cannot take input", m.arb_sizer_fail_partial_fill], ["Quote error", m.arb_sizer_fail_quote_error],
+      ["Zero output", m.arb_sizer_fail_zero_out], ["No room (x_max)", m.arb_sizer_fail_no_room], ["Other", m.arb_sizer_fail_other],
+    ];
+    const ftop = Math.max(1, ...fails.map((x) => x[1] || 0));
+    $("sizerfail").innerHTML = fails.map(([k, v]) => `<div class="bar"><span>${esc(k)}</span><div class="track"><div class="fill" style="width:${(100 * (v || 0) / ftop).toFixed(1)}%"></div></div><span class="n">${big(v)}</span></div>`).join("") +
+      `<div class="bar"><span class="sub">Zero-liquidity Whirlpool leg</span><span></span><span class="n">${big(m.arb_sizer_zero_liquidity_leg)}</span></div>`;
+    // -1 is the "no samples" value of these windows, but realized profit can itself be negative: use the count.
+    const bps = (ppm, n) => !n || ppm == null ? "–" : fmt(ppm / 100, 2) + " bps";
+    const ne = m.arb_sized_edge_ppm_samples, nf = m.arb_failed_profit_ppm_samples;
+    $("edgetiles").innerHTML = [
+      tile("Predicted edge p50", bps(m.arb_sized_edge_ppm_p50, ne), "spot product, sized cycles"),
+      tile("Predicted edge p99", bps(m.arb_sized_edge_ppm_p99, ne), (ne || 0) + " in 60 s"),
+      tile("Realized p50 (failed)", bps(m.arb_failed_profit_ppm_p50, nf), "best profit / size"),
+      tile("Realized p99 (failed)", bps(m.arb_failed_profit_ppm_p99, nf), "closest to profitable"),
     ].join("");
     const steps = [
       ["Pool updates", m.arb_engine_pool_updates], ["Cycle evaluations", m.arb_engine_cycles_seen],

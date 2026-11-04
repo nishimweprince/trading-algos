@@ -71,6 +71,8 @@ enum class Reason : uint8_t {
   none = 0, base_price_unknown, no_profit, cu_over_budget, below_min_net, guard_overflow, guard_above_quote,
   below_min_ev, pool_conflict, slot_cap, send_lag, sizer_failed, boundary, flash_disabled, risk_block,
   tx_build_failed, sign_guard,
+  // Why the sizer found no profitable size (appended: the values above are the on-disk encoding).
+  sizer_no_room, sizer_no_profit, sizer_partial_fill, sizer_quote_error, sizer_zero_out,
 };
 const char* reason_name(Reason r);
 

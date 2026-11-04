@@ -25,8 +25,13 @@ u128 spot_product_x64(const Cycle& c, const Snapshots& s);
 u128 edge_threshold_x64(uint32_t min_edge_ppm);
 
 struct ChainQuote {
+  /** Why a chain did not quote cleanly (diagnostics; `ok` is the decision). */
+  enum Fail : uint8_t { none = 0, no_quoter, quote_error, boundary_fail, partial_fill, zero_out };
   bool ok = false;        // every leg quoted, none crossed a boundary
   bool boundary = false;  // some leg needs a tick array outside the cache
+  Fail fail = none;
+  int8_t fail_leg = -1;
+  Errc err = Errc::bad_data;  // the quoter's error when fail == quote_error
   uint64_t outs[MAX_LEGS]{};
   uint64_t final_out = 0;
   uint32_t cu = 0;
@@ -57,6 +62,13 @@ struct SizeResult {
   ChainQuote chain;
   int evals = 0;
   bool retried = false;  // the 70% boundary retry ran
+  // Diagnostics for a failed search: the best clean quote seen (profit may be <= 0) and the failure tally.
+  bool any_clean = false;
+  int64_t best_profit = INT64_MIN;
+  uint64_t best_x = 0;
+  int n_quote_error = 0, n_boundary = 0, n_partial = 0, n_zero_out = 0, n_no_quoter = 0, n_fee = 0;
+  Errc last_err = Errc::bad_data;
+  int8_t last_fail_leg = -1;
 };
 
 /**

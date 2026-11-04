@@ -10,7 +10,8 @@ const char* reason_name(Reason r) {
   static const char* names[] = {"none", "base_price_unknown", "no_profit", "cu_over_budget", "below_min_net",
                                 "guard_overflow", "guard_above_quote", "below_min_ev", "pool_conflict", "slot_cap",
                                 "send_lag", "sizer_failed", "boundary", "flash_disabled", "risk_block",
-                                "tx_build_failed", "sign_guard"};
+                                "tx_build_failed", "sign_guard", "sizer_no_room", "sizer_no_profit",
+                                "sizer_partial_fill", "sizer_quote_error", "sizer_zero_out"};
   size_t i = size_t(r);
   return i < sizeof names / sizeof *names ? names[i] : "unknown";
 }

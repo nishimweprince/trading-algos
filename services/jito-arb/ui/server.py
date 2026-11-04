@@ -38,7 +38,8 @@ assert REC.size == 392
 MAGIC = b"ARBDEC01"
 REASONS = ["none", "base_price_unknown", "no_profit", "cu_over_budget", "below_min_net", "guard_overflow",
            "guard_above_quote", "below_min_ev", "pool_conflict", "slot_cap", "send_lag", "sizer_failed",
-           "boundary", "flash_disabled", "risk_block", "tx_build_failed", "sign_guard"]
+           "boundary", "flash_disabled", "risk_block", "tx_build_failed", "sign_guard", "sizer_no_room",
+           "sizer_no_profit", "sizer_partial_fill", "sizer_quote_error", "sizer_zero_out"]
 ACTIONS = {0: "skipped", 1: "sent", 2: "dry_run"}
 DEXES = {0: "raydium_v4", 1: "whirlpool", 2: "cpmm", 3: "dlmm", 4: "clmm", 5: "pumpswap"}
 B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
