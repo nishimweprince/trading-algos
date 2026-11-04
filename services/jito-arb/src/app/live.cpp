@@ -126,6 +126,22 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   auto& g_dry = reg.gauge("arb_bundles_dry_run", "bundles built and signed in dry run");
   auto& g_rec = reg.gauge("arb_recorder_bytes", "bytes written by the recorder");
   auto& g_kill = reg.gauge("arb_kill_switch", "1 while the KILL file is present");
+  auto& g_pools = reg.gauge("arb_pools", "tracked pools");
+  auto& g_cycles = reg.gauge("arb_cycles", "indexed cycles");
+  auto& g_quotable = reg.gauge("arb_pools_quotable", "pools whose snapshot is quotable now");
+  auto& g_slot = reg.gauge("arb_slot", "slot clock (newest slot seen)");
+  auto& g_uptime = reg.gauge("arb_uptime_seconds", "seconds since start");
+  auto& g_updates = reg.gauge("arb_engine_pool_updates", "pool updates evaluated");
+  auto& g_seen = reg.gauge("arb_engine_cycles_seen", "cycle evaluations");
+  auto& g_stale = reg.gauge("arb_engine_stale", "evaluations skipped: a leg not fresh");
+  auto& g_unsup = reg.gauge("arb_engine_unsupported", "evaluations skipped: a leg's DEX not quoted");
+  auto& g_pass = reg.gauge("arb_engine_prefilter_pass", "cycles past the spot-edge prefilter");
+  auto& g_sized = reg.gauge("arb_engine_sized", "cycles sized");
+  auto& g_skipped = reg.gauge("arb_engine_skipped", "sized candidates not dispatched");
+  auto& g_signed = reg.gauge("arb_bundles_signed", "bundles built and signed");
+  auto& g_shards = reg.gauge("arb_feed_shards_up", "LaserStream streams currently up");
+  g_pools.set(int64_t(pf.pools.size()));
+  g_cycles.set(int64_t(rt.cycles().size()));
 
   auto t0 = std::chrono::steady_clock::now();
   auto last_tick = t0, last_resync = t0;
@@ -160,6 +176,26 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       g_dry.set(int64_t(builder.stats().dry_run));
       g_rec.set(int64_t(frames.bytes_written()));
       g_kill.set(::access(cfg.mode.kill_file.c_str(), F_OK) == 0 ? 1 : 0);
+      const auto& n = rt.engine().counters();
+      g_updates.set(int64_t(n.updates));
+      g_seen.set(int64_t(n.cycles_seen));
+      g_stale.set(int64_t(n.stale));
+      g_unsup.set(int64_t(n.unsupported));
+      g_pass.set(int64_t(n.prefilter_pass));
+      g_sized.set(int64_t(n.sized));
+      g_skipped.set(int64_t(n.skipped));
+      g_signed.set(int64_t(builder.stats().signed_ok));
+      g_slot.set(int64_t(rt.clock().slot.load()));
+      g_uptime.set(int64_t(std::chrono::duration_cast<std::chrono::seconds>(now - t0).count()));
+      int up = 0;
+      for (auto& s : shards) up += s.client->counters().up.load() ? 1 : 0;
+      g_shards.set(up);
+      int64_t q = 0;
+      for (uint32_t i = 0; i < rt.store().pool_count(); ++i) {
+        auto p = rt.store().pool(i);
+        q += p && p->quotable(uint64_t(cfg.engine.max_state_age_slots)) ? 1 : 0;
+      }
+      g_quotable.set(q);
       uint64_t last = rt.last_update_ns();
       g_age.set(last ? int64_t((mono_ns() - std::min(mono_ns(), last)) / 1'000'000) : -1);
       if (!recorder && blockhash.needs_refresh(wall_ms())) {

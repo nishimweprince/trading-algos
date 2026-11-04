@@ -1,0 +1,18 @@
+[Unit]
+Description=jito-arb dashboard (read-only, 127.0.0.1:8088; publish through cloudflared with access control)
+After=network-online.target jito-arb.service
+
+[Service]
+User=jito-arb
+Group=jito-arb
+ExecStart=/usr/bin/python3 /opt/jito-arb/ui/server.py --bind 127.0.0.1 --port 8088 --metrics http://127.0.0.1:9100/metrics --data /var/lib/jito-arb
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/var/lib/jito-arb
+
+[Install]
+WantedBy=multi-user.target

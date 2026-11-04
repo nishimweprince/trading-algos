@@ -17,16 +17,18 @@ for b in jito-arb discover recorder replay-report sim-parity sim-check fixture-f
   [ -x "$BUILD/$b" ] && install -m 0755 "$BUILD/$b" /opt/jito-arb/bin/
 done
 install -m 0644 "$SRC/config/denylist.json" "$SRC/config/dex_programs.toml" /opt/jito-arb/share/
+install -d -m 0755 /opt/jito-arb/ui
+install -m 0644 "$SRC/ui/server.py" "$SRC/ui/index.html" /opt/jito-arb/ui/
 [ -f /etc/jito-arb/bot.toml ] || install -m 0640 -o root -g jito-arb "$HERE/bot.vm.toml" /etc/jito-arb/bot.toml
 [ -f /etc/jito-arb/jito-arb.env ] || install -m 0600 -o root -g root "$HERE/jito-arb.env.example" /etc/jito-arb/jito-arb.env
 # The engine reads config/denylist.json relative to its working directory.
 install -d -m 0750 -o jito-arb -g jito-arb /var/lib/jito-arb/config
 install -m 0644 "$SRC/config/denylist.json" /var/lib/jito-arb/config/denylist.json
 
-for u in jito-arb.service jito-arb-recorder.service jito-arb-discover.service jito-arb-discover.timer; do
+for u in jito-arb.service jito-arb-recorder.service jito-arb-discover.service jito-arb-discover.timer jito-arb-ui.service; do
   install -m 0644 "$HERE/$u" /etc/systemd/system/
 done
 systemctl daemon-reload
 echo "installed. Fill /etc/jito-arb/jito-arb.env, then:"
 echo "  sudo systemctl start jito-arb-discover.service   # first pools.json"
-echo "  sudo systemctl enable --now jito-arb-discover.timer jito-arb.service"
+echo "  sudo systemctl enable --now jito-arb-discover.timer jito-arb.service jito-arb-ui.service   # dashboard on 127.0.0.1:8088"
