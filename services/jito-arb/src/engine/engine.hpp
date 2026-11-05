@@ -64,6 +64,23 @@ struct EngineCounters {
   uint64_t untradable = 0;  // a leg whose pool the program rejects in that direction (until its state changes)
   uint64_t updates = 0, cycles_seen = 0, stale = 0, unsupported = 0, cooling = 0, prefilter_pass = 0, sized = 0, candidates = 0,
            sent = 0, skipped = 0;
+  // `stale` by cause (first failing leg): a component not yet seen, a resync read awaiting its push, the pool
+  // account and vaults written more than max_state_age_slots apart, or the snapshot behind the slot clock.
+  uint64_t stale_incomplete = 0, stale_resync = 0, stale_spread = 0, stale_lag = 0;
+  // Shadow pricing of cycles stale only by spread (never sent): how many cleared the spot-edge prefilter, how
+  // many sized and priced as a candidate, and the sum of their gross. Measures what the spread rule hides.
+  uint64_t spread_edge = 0, spread_priced = 0, spread_gross_lamports = 0;
+};
+
+/** Why a cycle's legs are not fresh (EngineCounters::stale_*). */
+enum class StaleCause : uint8_t { fresh = 0, incomplete, resync, spread, lag };
+
+/** A pool whose spread-only staleness hid priced candidates, for the log: the worst offenders since the last take. */
+struct SpreadExample {
+  uint32_t pool = 0;
+  uint64_t edge_hits = 0, priced = 0;  // spread-stale evaluations with this pool that cleared the prefilter / priced
+  int64_t best_net = 0;               // lamports, best priced candidate it blocked
+  uint32_t best_cycle = 0;
 };
 
 class Engine {
@@ -110,9 +127,14 @@ class Engine {
     return it == reserves_.end() ? nullptr : &it->second;
   }
   bool flash_mode() const { return cfg_.flash; }
+  /** Pools that blocked the most priced candidates by spread since the last call (at most `n`), then cleared. */
+  std::vector<SpreadExample> take_spread_examples(size_t n);
 
  private:
-  bool load(const Cycle& c, Snapshots& s, uint64_t slot) const;
+  StaleCause load(const Cycle& c, Snapshots& s, uint64_t slot, uint64_t* spread_mask) const;
+  /** x_max for a cycle (depth fraction, max_trade, flash reserve or own balance); false with `why` when none. */
+  bool x_max_for(const Cycle& c, const Snapshots& s, const BasePrice& bp, uint64_t& x_max, Reason& why) const;
+  void shadow_spread(uint32_t cycle, const Cycle& c, const Snapshots& s, uint64_t spread_mask);
   const StateStore& store_;
   const CycleIndex& idx_;
   Quoters q_;
@@ -132,6 +154,7 @@ class Engine {
   // (pool id << 1 | a_to_b) -> snapshot seq at which every size failed with a program error (e.g. Whirlpool
   // LiquidityUnderflow, which the chain returns too). Skipped until the pool's state changes.
   std::unordered_map<uint64_t, uint64_t> untradable_;
+  std::unordered_map<uint32_t, SpreadExample> spread_by_pool_;
 };
 
 }  // namespace arb::engine

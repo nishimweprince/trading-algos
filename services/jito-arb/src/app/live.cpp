@@ -159,6 +159,13 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   auto& g_pass = reg.gauge("arb_engine_prefilter_pass", "cycles past the spot-edge prefilter");
   auto& g_sized = reg.gauge("arb_engine_sized", "cycles sized");
   auto& g_skipped = reg.gauge("arb_engine_skipped", "sized candidates not dispatched");
+  auto& g_st_incomplete = reg.gauge("arb_engine_stale_incomplete", "stale: a pool component not yet seen");
+  auto& g_st_resync = reg.gauge("arb_engine_stale_resync", "stale: a resync read awaiting its stream push");
+  auto& g_st_spread = reg.gauge("arb_engine_stale_spread", "stale: pool account and vaults written over max_state_age_slots apart");
+  auto& g_st_lag = reg.gauge("arb_engine_stale_lag", "stale: snapshot behind the slot clock by over max_slot_lag");
+  auto& g_sp_edge = reg.gauge("arb_engine_spread_edge", "spread-stale cycles past the spot-edge prefilter (shadow, never sent)");
+  auto& g_sp_priced = reg.gauge("arb_engine_spread_priced", "spread-stale cycles that sized and priced as a candidate (shadow)");
+  auto& g_sp_gross = reg.gauge("arb_engine_spread_gross_lamports", "gross of spread-stale priced cycles (shadow), lamports");
   auto& g_untradable = reg.gauge("arb_engine_untradable", "evaluations skipped: a leg the program rejects in that direction");
   auto& g_signed = reg.gauge("arb_bundles_signed", "bundles built and signed");
   auto& g_shards = reg.gauge("arb_feed_shards_up", "LaserStream streams currently up");
@@ -254,6 +261,13 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       g_sized.set(int64_t(n.sized));
       g_skipped.set(int64_t(n.skipped));
       g_untradable.set(int64_t(n.untradable));
+      g_st_incomplete.set(int64_t(n.stale_incomplete));
+      g_st_resync.set(int64_t(n.stale_resync));
+      g_st_spread.set(int64_t(n.stale_spread));
+      g_st_lag.set(int64_t(n.stale_lag));
+      g_sp_edge.set(int64_t(n.spread_edge));
+      g_sp_priced.set(int64_t(n.spread_priced));
+      g_sp_gross.set(int64_t(n.spread_gross_lamports));
       g_signed.set(int64_t(builder.stats().signed_ok));
       g_slot.set(int64_t(rt.clock().slot.load()));
       g_uptime.set(int64_t(std::chrono::duration_cast<std::chrono::seconds>(now - t0).count()));
@@ -318,6 +332,15 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
                    engine::reason_name(ex.reason), ex.cycle, b58(c.base).substr(0, 4).c_str(), double(ex.edge_ppm) / 100.0,
                    (unsigned long long)ex.x_max, (unsigned long long)ex.min_trade, (unsigned long long)ex.best_x, (long long)ex.best_profit,
                    ex.reason == engine::Reason::sizer_quote_error ? errc_name(ex.err) : "-", legs.c_str());
+        }
+        // Pools whose pool/vault slot spread kept edges out of the engine (shadow-priced): is the rule too strict?
+        for (const engine::SpreadExample& e : rt.engine().take_spread_examples(5)) {
+          auto p = rt.store().pool(e.pool);
+          if (!p) continue;
+          LOG_INFO("spread stale: %s %s pool_slot %llu vaults %llu/%llu, %llu past prefilter, %llu priced, best net %lld (cycle %u)",
+                   dex_name(p->kind), b58(p->address).substr(0, 8).c_str(), (unsigned long long)p->pool_slot,
+                   (unsigned long long)p->vault_a_slot, (unsigned long long)p->vault_b_slot, (unsigned long long)e.edge_hits,
+                   (unsigned long long)e.priced, (long long)e.best_net, e.best_cycle);
         }
       }
       uint64_t last = rt.last_update_ns();
