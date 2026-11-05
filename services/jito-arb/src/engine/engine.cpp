@@ -117,13 +117,101 @@ bool Engine::refresh_base_price_from_pools(const Pubkey& base) {
   return true;
 }
 
-bool Engine::load(const Cycle& c, Snapshots& s, uint64_t slot) const {
+StaleCause Engine::load(const Cycle& c, Snapshots& s, uint64_t slot, uint64_t* spread_mask) const {
+  // Every leg is checked so a cycle stale only by spread can be told apart (spread on any leg, nothing else).
+  StaleCause cause = StaleCause::fresh;
+  *spread_mask = 0;
   for (int i = 0; i < c.n; ++i) {
     s[i] = store_.pool(c.legs[i].pool);
-    if (!s[i] || !s[i]->quotable(cfg_.max_state_age_slots)) return false;
-    if (slot > s[i]->slot && slot - s[i]->slot > cfg_.max_slot_lag) return false;
+    const PoolState* p = s[i].get();
+    if (!p || !p->complete) return StaleCause::incomplete;
+    if (p->awaiting_push) return StaleCause::resync;
+    if (slot > p->slot && slot - p->slot > cfg_.max_slot_lag) return StaleCause::lag;
+    if (!p->quotable(cfg_.max_state_age_slots)) {
+      cause = StaleCause::spread;
+      *spread_mask |= uint64_t(1) << i;
+    }
+  }
+  return cause;
+}
+
+bool Engine::x_max_for(const Cycle& c, const Snapshots& s, const BasePrice& bp, uint64_t& x_max, Reason& why) const {
+  x_max = std::min(depth_bound(c, s, cfg_.max_input_fraction_ppm), bp.from_lamports_ceil(cfg_.max_trade_lamports));
+  if (cfg_.flash) {
+    auto it = reserves_.find(c.base);
+    if (it == reserves_.end() || !it->second.enabled) {
+      why = Reason::flash_disabled;
+      return false;
+    }
+    x_max = std::min(x_max, it->second.available);
+  } else {
+    auto it = own_balance_.find(c.base);
+    x_max = std::min(x_max, it == own_balance_.end() ? 0 : it->second);
   }
   return true;
+}
+
+void Engine::shadow_spread(uint32_t cycle, const Cycle& c, const Snapshots& s, uint64_t spread_mask) {
+  // Shadow only: no dispatch, no decision record, no untradable memo, no sizer diagnostics.
+  for (int i = 0; i < c.n; ++i) {
+    const dex::IQuoter* q = q_.get(s[i]->kind);
+    if (!q || !q->supports(*s[i])) return;
+    auto it = untradable_.find((uint64_t(c.legs[i].pool) << 1) | uint64_t(c.legs[i].a_to_b));
+    if (it != untradable_.end() && it->second == s[i]->seq) return;
+  }
+  if (spot_product_x64(c, s) < edge_x64_) return;
+  ++n_.spread_edge;
+  const BasePrice* bp = base_price(c.base);
+  uint64_t x_max = 0;
+  Reason why = Reason::none;
+  bool priced = false;
+  int64_t net = 0;
+  if (bp && bp->known && x_max_for(c, s, *bp, x_max, why)) {
+    FlashFeeFn fee;
+    fee.flash = cfg_.flash;
+    if (cfg_.flash) fee.fee_sf = reserves_.find(c.base)->second.flash_loan_fee_sf;
+    SizerConfig sc;
+    sc.min_trade = std::max<uint64_t>(1, bp->from_lamports_ceil(cfg_.min_trade_lamports));
+    sc.x_max = x_max;
+    sc.max_evals = cfg_.sizer_max_evals;
+    if (sc.x_max >= sc.min_trade) {
+      SizeResult r = size_cycle(c, s, q_, fee, sc);
+      if (r.ok) {
+        Pricing pr = price(r.x, r.profit, r.flash_fee, r.chain.cu, c.route_class, *bp, tips_, cfg_.costs);
+        if (pr.ok) {
+          priced = true;
+          net = pr.net_lamports;
+          ++n_.spread_priced;
+          n_.spread_gross_lamports += pr.gross_lamports;
+        }
+      }
+    }
+  }
+  for (int i = 0; i < c.n; ++i) {
+    if (!(spread_mask >> i & 1)) continue;
+    SpreadExample& e = spread_by_pool_[c.legs[i].pool];
+    e.pool = c.legs[i].pool;
+    ++e.edge_hits;
+    if (priced) {
+      ++e.priced;
+      if (net > e.best_net) {
+        e.best_net = net;
+        e.best_cycle = cycle;
+      }
+    }
+  }
+}
+
+std::vector<SpreadExample> Engine::take_spread_examples(size_t n) {
+  std::vector<SpreadExample> v;
+  v.reserve(spread_by_pool_.size());
+  for (auto& [id, e] : spread_by_pool_) v.push_back(e);
+  spread_by_pool_.clear();
+  std::sort(v.begin(), v.end(), [](const SpreadExample& a, const SpreadExample& b) {
+    return a.priced != b.priced ? a.priced > b.priced : a.edge_hits > b.edge_hits;
+  });
+  if (v.size() > n) v.resize(n);
+  return v;
 }
 
 bool Engine::evaluate(uint32_t cycle, uint64_t slot, Opportunity* out) {
@@ -133,8 +221,16 @@ bool Engine::evaluate(uint32_t cycle, uint64_t slot, Opportunity* out) {
     return false;
   }
   Snapshots s;
-  if (!load(c, s, slot)) {
+  uint64_t spread_mask = 0;
+  if (StaleCause sc = load(c, s, slot, &spread_mask); sc != StaleCause::fresh) {
     ++n_.stale;
+    switch (sc) {
+      case StaleCause::incomplete: ++n_.stale_incomplete; break;
+      case StaleCause::resync: ++n_.stale_resync; break;
+      case StaleCause::lag: ++n_.stale_lag; break;
+      case StaleCause::spread: ++n_.stale_spread; shadow_spread(cycle, c, s, spread_mask); break;
+      case StaleCause::fresh: break;
+    }
     return false;
   }
   for (int i = 0; i < c.n; ++i) {
@@ -175,20 +271,11 @@ bool Engine::evaluate(uint32_t cycle, uint64_t slot, Opportunity* out) {
   if (!bp || !bp->known) return log_skip(Reason::base_price_unknown);
 
   // x_max (§6.4 step 1): flash liquidity (or own balance), depth fraction, max_trade.
-  uint64_t x_max = depth_bound(c, s, cfg_.max_input_fraction_ppm);
-  uint64_t max_trade = bp->from_lamports_ceil(cfg_.max_trade_lamports);
-  x_max = std::min(x_max, max_trade);
+  uint64_t x_max = 0;
+  if (Reason why = Reason::none; !x_max_for(c, s, *bp, x_max, why)) return log_skip(why);
   FlashFeeFn fee;
   fee.flash = cfg_.flash;
-  if (cfg_.flash) {
-    auto it = reserves_.find(c.base);
-    if (it == reserves_.end() || !it->second.enabled) return log_skip(Reason::flash_disabled);
-    fee.fee_sf = it->second.flash_loan_fee_sf;
-    x_max = std::min(x_max, it->second.available);
-  } else {
-    auto it = own_balance_.find(c.base);
-    x_max = std::min(x_max, it == own_balance_.end() ? 0 : it->second);
-  }
+  if (cfg_.flash) fee.fee_sf = reserves_.find(c.base)->second.flash_loan_fee_sf;
   SizerConfig sc;
   sc.min_trade = std::max<uint64_t>(1, bp->from_lamports_ceil(cfg_.min_trade_lamports));
   sc.x_max = x_max;

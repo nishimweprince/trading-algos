@@ -375,6 +375,7 @@ TEST(engine_finds_an_injected_cycle_on_fixture_pools) {
   Engine eng(store, idx, both_quoters(), ec, tips);
   // Flash reserve for wSOL from the fixture's Kamino reserve.
   bool have_reserve = false;
+  flash::FlashReserve wsol_reserve;
   std::string body = read_file(fixture_path("pools.json"));
   simdjson::dom::parser jp;
   simdjson::padded_string jps(body);
@@ -383,7 +384,8 @@ TEST(engine_finds_an_injected_cycle_on_fixture_pools) {
     Pubkey rk = parse_pubkey(std::string_view(e));
     auto r = store.reserve(rk);
     if (r && r->liquidity_mint == mint::WSOL) {
-      eng.set_flash_reserve(mint::WSOL, flash::make_reserve(rk, *r, 1000));
+      wsol_reserve = flash::make_reserve(rk, *r, 1000);
+      eng.set_flash_reserve(mint::WSOL, wsol_reserve);
       have_reserve = r->flash_enabled();
     }
   }
@@ -438,6 +440,40 @@ TEST(engine_finds_an_injected_cycle_on_fixture_pools) {
   CHECK(!eng2.evaluate(pick->id, 1001));
   eng2.set_own_balance(mint::WSOL, 1'000'000'000'000ULL);
   CHECK(eng2.evaluate(pick->id, 1001));
+
+  // Spread-stale: only the out vault is written again, 9 slots after the pool account. The engine refuses the
+  // cycle (stale by spread) but shadow-prices it: the same edge shows up in the spread counters and examples.
+  {
+    const FixtureAccount* fa = fixture(b58(out_vault));
+    AccountUpdate u{out_vault, fa->raw.owner, bytes.data(), bytes.size(), 1010, 0, false, false};
+    store.apply(u);
+  }
+  Engine eng3(store, idx, both_quoters(), ec, tips);
+  eng3.set_flash_reserve(mint::WSOL, wsol_reserve);
+  std::vector<Opportunity> sent3;
+  eng3.on_send([&](const Opportunity& o3) { sent3.push_back(o3); });
+  CHECK(!eng3.evaluate(pick->id, 1010));
+  eng3.dispatch_best(1010);
+  CHECK(sent3.empty());
+  const EngineCounters& n3 = eng3.counters();
+  CHECK_EQ(n3.stale, uint64_t(1));
+  CHECK_EQ(n3.stale_spread, uint64_t(1));
+  CHECK_EQ(n3.stale_incomplete + n3.stale_resync + n3.stale_lag, uint64_t(0));
+  CHECK_EQ(n3.spread_edge, uint64_t(1));
+  CHECK_EQ(n3.spread_priced, uint64_t(1));
+  CHECK(n3.spread_gross_lamports > 0);
+  CHECK_EQ(n3.candidates, uint64_t(0));
+  auto ex = eng3.take_spread_examples(5);
+  CHECK_EQ(ex.size(), size_t(1));
+  if (!ex.empty()) {
+    CHECK_EQ(ex[0].pool, l2.pool);
+    CHECK_EQ(ex[0].priced, uint64_t(1));
+    CHECK_EQ(ex[0].best_cycle, pick->id);
+  }
+  CHECK(eng3.take_spread_examples(5).empty());
+  // Far behind the slot clock counts as lag, not spread.
+  CHECK(!eng3.evaluate(pick->id, 1010 + ec.max_slot_lag + 100));
+  CHECK_EQ(eng3.counters().stale_lag, uint64_t(1));
 }
 
 TEST(cycle_cap_lists_per_pool_hub_does_not_block) {
