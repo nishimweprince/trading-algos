@@ -30,7 +30,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-FONT_NAME = re.compile(r"^AnthropicSans-[A-Za-z]+-[A-Za-z]+-Static\.otf$")
+FONT_NAME = re.compile(r"^Anthropic(Sans|Mono)-(Roman|Italic)-Web\.woff2$")
 SAMPLE_S = 5
 KEEP_S = 6 * 3600
 
@@ -243,7 +243,7 @@ class Handler(BaseHTTPRequestHandler):
                 with open(os.path.join(HERE, "index.html"), "rb") as f:
                     self.send(200, f.read(), "text/html; charset=utf-8")
             elif u.path.startswith("/fonts/"):
-                # Anthropic Sans, copied to ui/fonts/ on the host (never committed: the font is proprietary).
+                # Anthropic Sans and Mono (.woff2), copied to ui/fonts/ on the host (never committed: the font is proprietary).
                 # Only plain file names of the expected form; the page falls back to the system font without them.
                 name = u.path[len("/fonts/"):]
                 path = os.path.join(HERE, "fonts", name)
@@ -253,7 +253,7 @@ class Handler(BaseHTTPRequestHandler):
                     with open(path, "rb") as f:
                         body = f.read()
                     self.send_response(200)
-                    self.send_header("Content-Type", "font/otf")
+                    self.send_header("Content-Type", "font/woff2")
                     self.send_header("Content-Length", str(len(body)))
                     self.send_header("Cache-Control", "public, max-age=86400")
                     self.end_headers()

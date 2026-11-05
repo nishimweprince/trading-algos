@@ -5,17 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>jito-arb</title>
 <style>
-  /* Anthropic Sans, served from ui/fonts/ on the host; the system font stands in when it is absent. */
-  @font-face { font-family: "Anthropic Sans Text"; src: url("/fonts/AnthropicSans-Text-Regular-Static.otf") format("opentype"); font-weight: 400; font-display: swap; }
-  @font-face { font-family: "Anthropic Sans Text"; src: url("/fonts/AnthropicSans-Text-Medium-Static.otf") format("opentype"); font-weight: 500; font-display: swap; }
-  @font-face { font-family: "Anthropic Sans Text"; src: url("/fonts/AnthropicSans-Text-Semibold-Static.otf") format("opentype"); font-weight: 600 700; font-display: swap; }
-  @font-face { font-family: "Anthropic Sans Display"; src: url("/fonts/AnthropicSans-Display-Semibold-Static.otf") format("opentype"); font-weight: 600 700; font-display: swap; }
+  /* Anthropic Sans and Mono (variable web fonts: weight 300-800, Sans optical size 16-48), served from ui/fonts/
+     on the host; the system fonts stand in when they are absent. */
+  @font-face { font-family: "Anthropic Sans"; src: url("/fonts/AnthropicSans-Roman-Web.woff2") format("woff2"); font-weight: 300 800; font-style: normal; font-display: swap; }
+  @font-face { font-family: "Anthropic Mono"; src: url("/fonts/AnthropicMono-Roman-Web.woff2") format("woff2"); font-weight: 300 800; font-style: normal; font-display: swap; }
   :root {
     --bg: #f6f7f9; --panel: #ffffff; --ink: #14181f; --muted: #5d6675; --line: #e3e6eb;
     --accent: #2f6fde; --accent-soft: rgba(47, 111, 222, .12); --good: #1f8a4c; --warn: #b7791f; --bad: #c53030;
-    --text: "Anthropic Sans Text", system-ui, -apple-system, "Segoe UI", sans-serif;
-    --display: "Anthropic Sans Display", "Anthropic Sans Text", system-ui, -apple-system, "Segoe UI", sans-serif;
-    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --text: "Anthropic Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --display: "Anthropic Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "Anthropic Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     --gutter: 24px;
     --maxw: 1440px;
   }
