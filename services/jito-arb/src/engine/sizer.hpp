@@ -29,6 +29,7 @@ struct ChainQuote {
   enum Fail : uint8_t { none = 0, no_quoter, quote_error, boundary_fail, partial_fill, zero_out };
   bool ok = false;        // every leg quoted, none crossed a boundary
   bool boundary = false;  // some leg needs a tick array outside the cache
+  bool cache_gap = false; // ... one the bot could subscribe to (not the program's 3-array window)
   Fail fail = none;
   int8_t fail_leg = -1;
   Errc err = Errc::bad_data;  // the quoter's error when fail == quote_error
@@ -66,6 +67,7 @@ struct SizeResult {
   bool any_clean = false;
   int64_t best_profit = INT64_MIN;
   uint64_t best_x = 0;
+  int n_boundary_cache = 0;
   int n_quote_error = 0, n_boundary = 0, n_partial = 0, n_zero_out = 0, n_no_quoter = 0, n_fee = 0;
   Errc last_err = Errc::bad_data;
   int8_t last_fail_leg = -1;

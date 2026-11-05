@@ -15,6 +15,7 @@ struct Quote {
   uint64_t fee_paid = 0;    // in input-token units
   uint32_t est_compute_units = 0;
   bool crosses_boundary = false;  // a tick array outside the cache (or past the program's 3-array window) would be needed
+  bool cache_gap = false;         // ... and it is one the program would accept but the bot does not hold (vs the window)
 };
 
 class IQuoter {

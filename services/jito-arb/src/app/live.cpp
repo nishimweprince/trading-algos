@@ -186,6 +186,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       {"arb_sizer_fail_quote_error", &engine::SizerDiag::quote_error, nullptr},
       {"arb_sizer_fail_zero_out", &engine::SizerDiag::zero_out, nullptr},
       {"arb_sizer_fail_boundary", &engine::SizerDiag::boundary, nullptr},
+      {"arb_sizer_fail_boundary_cache", &engine::SizerDiag::boundary_cache, nullptr},
       {"arb_sizer_fail_other", &engine::SizerDiag::other, nullptr},
       {"arb_sizer_zero_liquidity_leg", &engine::SizerDiag::zero_liquidity_leg, nullptr},
   };

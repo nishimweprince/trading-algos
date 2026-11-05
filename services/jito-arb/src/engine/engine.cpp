@@ -206,7 +206,11 @@ bool Engine::evaluate(uint32_t cycle, uint64_t slot, Opportunity* out) {
   if (!r.ok) {
     Reason why;
     if (sc.x_max < sc.min_trade) { why = Reason::sizer_no_room; ++diag_.no_room; }
-    else if (r.retried) { why = Reason::boundary; ++diag_.boundary; }
+    else if (r.retried) {
+      why = Reason::boundary;
+      ++diag_.boundary;
+      if (r.n_boundary_cache) ++diag_.boundary_cache;
+    }
     else if (r.any_clean) { why = Reason::sizer_no_profit; ++diag_.no_profit; }
     else if (r.n_partial) { why = Reason::sizer_partial_fill; ++diag_.partial_fill; }
     else if (r.n_quote_error) {
@@ -220,7 +224,11 @@ bool Engine::evaluate(uint32_t cycle, uint64_t slot, Opportunity* out) {
       }
     }
     else if (r.n_zero_out) { why = Reason::sizer_zero_out; ++diag_.zero_out; }
-    else if (r.n_boundary) { why = Reason::boundary; ++diag_.boundary; }
+    else if (r.n_boundary) {
+      why = Reason::boundary;
+      ++diag_.boundary;
+      if (r.n_boundary_cache) ++diag_.boundary_cache;
+    }
     else { why = Reason::sizer_failed; ++diag_.other; }
     if (why == Reason::sizer_no_profit && r.best_x)
       failed_profit_ppm_.add(tnow, int64_t(__int128(r.best_profit) * 1'000'000 / __int128(r.best_x)));

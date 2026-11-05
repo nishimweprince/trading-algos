@@ -39,7 +39,8 @@ struct SizerDiag {
   uint64_t partial_fill = 0;  // a leg could not take its whole input (Whirlpool price limit)
   uint64_t quote_error = 0;   // a quoter returned an error at every size
   uint64_t zero_out = 0;
-  uint64_t boundary = 0;      // every size needed a tick array outside the cache
+  uint64_t boundary = 0;      // every size needed a tick array outside the cache or the 3-array window
+  uint64_t boundary_cache = 0;  // ... of which at least one size hit an array the bot does not hold
   uint64_t other = 0;
   uint64_t zero_liquidity_leg = 0;  // a Whirlpool leg with zero active liquidity (spot price is not tradable)
   uint64_t quote_error_by_code[32]{};
