@@ -2,7 +2,7 @@
 // Dispatch and conflicts (spec §6.7): candidates of one engine pass go into a max-heap by EV;
 // the best are taken while they share no pool with a bundle already sent this slot, at most
 // max_bundles_per_slot per slot, dropping any whose state is more than max_send_lag_slots old;
-// a sent cycle cools down for cooldown_slots.
+// a sent cycle cools down for cooldown_slots. (Both come from millisecond settings via chain.slot_ms.)
 #include <cstdint>
 #include <functional>
 #include <queue>

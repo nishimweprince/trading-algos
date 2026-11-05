@@ -5,6 +5,8 @@
 #include <cstdint>
 
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include "feed/update.hpp"
 #include "obs/latency.hpp"
@@ -38,6 +40,18 @@ class FeedHandler {
   /** Account updates: receive time minus the moment their slot started (first shred / bank created), microseconds. */
   obs::LatencyWindow& slot_offset_us() { return slot_offset_us_; }
 
+  /**
+   * Alpenglow: a slot can carry several candidate blocks (banks); Geyser tags each update with its bank_id
+   * (node-local, so only compared within this one connection). While a slot has updates from two or more
+   * banks, the accounts they touched are suspect (not quotable). When the slot's bank is confirmed, every
+   * account a losing bank touched is queued here for a trusted RPC re-read.
+   */
+  std::vector<Pubkey> take_resync() { return std::exchange(resync_, {}); }
+  struct BankCounters {
+    uint64_t updates_with_bank = 0, created_banks = 0, contested_slots = 0, resolved_slots = 0, accounts_resynced = 0;
+  };
+  const BankCounters& banks() const { return bank_n_; }
+
  private:
   StateStore& store_;
   SlotClock& clock_;
@@ -45,6 +59,16 @@ class FeedHandler {
   uint64_t frames_ = 0, bad_ = 0, accounts_ = 0;
   std::atomic<uint64_t> last_update_ns_{0};
   obs::LatencyWindow feed_lag_us_, slot_offset_us_;
+  struct SlotBanks {
+    std::vector<uint64_t> banks;
+    std::vector<std::pair<Pubkey, uint64_t>> touched;  // (account, bank) applied in this slot
+    bool contested = false;
+  };
+  void note_bank(uint64_t slot, uint64_t bank);
+  void resolve(uint64_t slot, uint64_t winner);
+  std::unordered_map<uint64_t, SlotBanks> slot_banks_;
+  std::vector<Pubkey> resync_;
+  BankCounters bank_n_;
   std::unordered_map<uint64_t, uint64_t> slot_start_ns_;  // slot -> earliest interslot status time (monotonic)
   int64_t wall_minus_mono_ns_ = 0;                         // refreshed every 4096 frames
 };

@@ -78,6 +78,13 @@ std::vector<Pubkey> StateStore::subscribed_keys() const {
   return out;
 }
 
+void StateStore::mark_suspect(const Pubkey& key) {
+  auto it = accounts_.find(key);
+  if (it == accounts_.end() || it->second.awaiting_push) return;
+  it->second.awaiting_push = true;
+  for (uint32_t id : it->second.pools) rebuild(id);
+}
+
 bool StateStore::apply(const AccountUpdate& u) {
   auto it = accounts_.find(u.key);
   if (it == accounts_.end()) return true;  // not ours (a stale subscription)

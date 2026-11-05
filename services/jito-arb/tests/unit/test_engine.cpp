@@ -512,3 +512,17 @@ TEST(whirlpool_depth_from_active_liquidity_and_cp_base_price) {
   CHECK(lamports_per_unit > 0.2 && lamports_per_unit < 200);
   CHECK(bp->from_lamports_ceil(1'000'000) < 1'000'000'000ULL);  // min_trade in USDC units is finite
 }
+
+TEST(time_limits_follow_slot_duration) {
+  Config c;  // 200 ms slots (Solana since October 2026)
+  CHECK_EQ(c.chain.slot_ms, 200);
+  EngineConfig e = engine_config(c);
+  CHECK_EQ(e.dispatch.max_send_lag_slots, 2);  // 400 ms
+  CHECK_EQ(e.dispatch.cooldown_slots, 4);      // 800 ms
+  CHECK_EQ(e.max_slot_lag, uint64_t(600));     // 2 x 60 s
+  c.chain.slot_ms = 400;                       // the old slot time gives back the old slot counts
+  e = engine_config(c);
+  CHECK(e.dispatch.max_send_lag_slots == 1 && e.dispatch.cooldown_slots == 2 && e.max_slot_lag == 300);
+  CHECK_EQ(ms_to_slots(c, 1), uint64_t(1));
+  CHECK_EQ(ms_to_slots(c, 0), uint64_t(1));
+}

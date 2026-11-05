@@ -20,12 +20,16 @@ struct AccountView {
   uint64_t write_version = 0;
   uint64_t slot = 0;
   bool is_startup = false;
+  bool has_bank = false;  // Alpenglow / Agave 4.3: the bank (candidate block) the update came from
+  uint64_t bank_id = 0;   // node-local counter: compare only within one connection
 };
 
 struct SlotView {
   uint64_t slot = 0;
   uint64_t parent = 0;
   uint32_t status = 0;  // SlotStatus: 0 processed, 1 confirmed, 2 finalized, 3 first shred, 4 completed, 5 created bank, 6 dead
+  bool has_bank = false;  // absent for first-shred and completed
+  uint64_t bank_id = 0;
 };
 
 struct UpdateView {
@@ -47,7 +51,7 @@ namespace arb::feed {
 /** Encode a SubscribeUpdate account frame (synthetic frames for tests and fixture replays). */
 std::string encode_account_frame(const Pubkey& key, const Pubkey& owner, const uint8_t* data, size_t len, uint64_t lamports,
                                  uint64_t slot, uint64_t write_version, std::string_view filter = "accounts",
-                                 int64_t created_at_ns = 0);
+                                 int64_t created_at_ns = 0, const uint64_t* bank_id = nullptr);
 /** Encode a SubscribeUpdate slot frame. */
-std::string encode_slot_frame(uint64_t slot, uint32_t status = 0);
+std::string encode_slot_frame(uint64_t slot, uint32_t status = 0, const uint64_t* bank_id = nullptr);
 }  // namespace arb::feed

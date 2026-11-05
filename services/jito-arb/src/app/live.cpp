@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <fstream>
 #include <memory>
 #include <sstream>
@@ -192,6 +193,15 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   };
   for (auto& d : diag_gauges) d.g = &reg.gauge(d.name, "sized cycles that failed, by reason (since start)");
   auto last_example = std::chrono::steady_clock::now();
+  auto& g_bank_updates = reg.gauge("arb_feed_updates_with_bank", "account updates carrying a bank_id (Alpenglow, Agave 4.3)");
+  auto& g_created_banks = reg.gauge("arb_feed_created_banks", "CreatedBank slot statuses seen");
+  auto& g_contested = reg.gauge("arb_feed_contested_slots", "slots with updates from two or more banks");
+  auto& g_resolved = reg.gauge("arb_feed_resolved_slots", "contested slots resolved when their bank was confirmed");
+  auto& g_bank_resyncs = reg.gauge("arb_feed_bank_resyncs", "accounts re-read because a losing bank had written them");
+  auto last_bank_resync = std::chrono::steady_clock::now();
+  auto& g_slot_ms = reg.gauge("arb_slot_time_ms", "measured slot duration over the last minute (config chain.slot_ms is the assumed one)");
+  auto slot_mark_t = std::chrono::steady_clock::now();
+  uint64_t slot_mark = 0;
   auto put = [](LatGauges& g, obs::LatencyWindow& w, uint64_t now) {
     auto st = w.stats(now);
     g.p50->set(st.p50);
@@ -260,6 +270,24 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       put(g_lag, rt.feed().feed_lag_us(), tnow);
       put(g_off, rt.feed().slot_offset_us(), tnow);
       put(g_det, builder.detect_to_signed_us(), tnow);
+      // Measured slot time, once a minute: chain.slot_ms should match it (slots went 400 -> 200 ms in Oct 2026).
+      if (uint64_t sl = rt.clock().slot.load(); slot_mark == 0) {
+        slot_mark = sl;
+        slot_mark_t = now;
+      } else if (now - slot_mark_t >= std::chrono::seconds(60) && sl > slot_mark) {
+        double ms = std::chrono::duration<double, std::milli>(now - slot_mark_t).count() / double(sl - slot_mark);
+        g_slot_ms.set(int64_t(ms + 0.5));
+        if (std::abs(ms - cfg.chain.slot_ms) > 0.25 * cfg.chain.slot_ms)
+          LOG_WARN("measured slot time %.0f ms differs from chain.slot_ms %d by over 25%%", ms, cfg.chain.slot_ms);
+        slot_mark = sl;
+        slot_mark_t = now;
+      }
+      const auto& bk = rt.feed().banks();
+      g_bank_updates.set(int64_t(bk.updates_with_bank));
+      g_created_banks.set(int64_t(bk.created_banks));
+      g_contested.set(int64_t(bk.contested_slots));
+      g_resolved.set(int64_t(bk.resolved_slots));
+      g_bank_resyncs.set(int64_t(bk.accounts_resynced));
       put(g_edge, rt.engine().sized_edge_ppm(), tnow);
       put(g_fprof, rt.engine().failed_profit_ppm(), tnow);
       const auto& dg = rt.engine().sizer_diag();
@@ -303,7 +331,23 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
         }
       }
     }
-    // Resync (spec §4): pools whose snapshot lags the slot clock by more than resync_lag_slots, every 10 s,
+    // Accounts a losing bank wrote: re-read them as soon as the slot's bank is confirmed (rare: equivocation,
+    // or fast leader handoff from Agave 4.4), at most every 250 ms.
+    if (!recorder && now - last_bank_resync >= std::chrono::milliseconds(250)) {
+      std::vector<Pubkey> keys = rt.feed().take_resync();
+      if (!keys.empty()) {
+        last_bank_resync = now;
+        std::sort(keys.begin(), keys.end());
+        keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+        try {
+          feed::resync(rpc, rt.store(), keys, all_up());
+          LOG_INFO("bank resync: %zu accounts written by a losing bank re-read", keys.size());
+        } catch (const std::exception& e) {
+          LOG_WARN("bank resync: %s", e.what());
+        }
+      }
+    }
+    // Resync (spec §4): pools whose snapshot lags the slot clock by more than resync_lag_ms, every 10 s,
     // on this thread (the StateStore has a single writer).
     if (!recorder && now - last_resync >= std::chrono::seconds(10)) {
       last_resync = now;
@@ -311,7 +355,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       std::vector<uint32_t> lagging;
       for (uint32_t i = 0; i < rt.store().pool_count() && clock; ++i) {
         auto p = rt.store().pool(i);
-        if (p && clock > p->slot + uint64_t(cfg.helius.resync_lag_slots)) lagging.push_back(i);
+        if (p && clock > p->slot + ms_to_slots(cfg, cfg.helius.resync_lag_ms)) lagging.push_back(i);
       }
       if (!lagging.empty()) {
         try {

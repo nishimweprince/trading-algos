@@ -226,6 +226,20 @@ unit test replays the stored samples offline and requires exact `amount_out` and
 - **Funding mode.** Own-capital mode caps `x_max` at the wallet's base balance, which the operator sets
   through `set_own_balance` until the wallet subscription feeds it (VM).
 
+## Alpenglow (live on mainnet since 2026-10-21)
+
+- **Competing banks.** A slot can carry more than one candidate block, and Geyser tags each update with
+  its `bank_id` (`SubscribeUpdateAccount` field 4, `SubscribeUpdateSlot` field 5). The feed tracks banks per
+  slot. While a slot has updates from two or more banks, the accounts touched in it are not quotable. When
+  the slot's bank is confirmed, every account a losing bank wrote is re-read by trusted RPC.
+  `bank_id` is node-local, so it is compared only within one connection.
+- **200 ms slots.** Time-based limits are in milliseconds and converted with `chain.slot_ms` (200):
+  `max_send_lag_ms`, `cooldown_ms`, `resync_lag_ms`. Limits the chain defines in slots stay in slots
+  (blockhash age, pool/vault same-slot consistency). `arb_slot_time_ms` reports the measured slot time
+  and warns past 25% drift.
+- Not adopted yet: block footers with finality certificates (for faster landing confirmation), and the
+  `SubscribeDeshredRequest` pre-execution transaction stream (a candidate for earlier detection).
+
 ## Not built yet
 
 - Telegram alerts and `/stop` (the KILL file works; spec §11 alerts are not wired).

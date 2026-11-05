@@ -79,6 +79,11 @@ class StateStore {
   void add_reserve(const Pubkey& reserve);
   /** Apply one account update. Returns false (and counts) on a decode failure. */
   bool apply(const AccountUpdate& u);
+  /**
+   * The account's current value may come from a candidate block that loses (Alpenglow: several banks per
+   * slot). Its pools stop being quotable until a newer push or a trusted resync replaces it.
+   */
+  void mark_suspect(const Pubkey& key);
   /** Engine side: next changed pool id. */
   bool pop_changed(uint32_t& pool_id) { return changed_.pop(pool_id); }
 
