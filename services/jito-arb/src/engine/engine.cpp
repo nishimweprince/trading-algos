@@ -230,6 +230,12 @@ bool Engine::evaluate(uint32_t cycle, uint64_t slot, Opportunity* out) {
       if (r.n_boundary_cache) ++diag_.boundary_cache;
     }
     else { why = Reason::sizer_failed; ++diag_.other; }
+    // Every size ran out of the program's 3-array window on one leg (not a cache gap): the chain would fail
+    // too, so that pool direction is skipped like a program error until its state changes.
+    if (why == Reason::boundary && r.n_boundary_cache == 0 && !r.any_clean && r.last_fail_leg >= 0 && r.last_fail_leg < c.n) {
+      const Leg& l = c.legs[r.last_fail_leg];
+      untradable_[(uint64_t(l.pool) << 1) | uint64_t(l.a_to_b)] = s[size_t(r.last_fail_leg)]->seq;
+    }
     if (why == Reason::sizer_no_profit && r.best_x)
       failed_profit_ppm_.add(tnow, int64_t(__int128(r.best_profit) * 1'000'000 / __int128(r.best_x)));
     SizerExample& ex = examples_[size_t(why) & 31];
