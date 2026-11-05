@@ -20,6 +20,7 @@ import datetime
 import glob
 import json
 import os
+import re
 import struct
 import subprocess
 import threading
@@ -29,6 +30,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+FONT_NAME = re.compile(r"^AnthropicSans-[A-Za-z]+-[A-Za-z]+-Static\.otf$")
 SAMPLE_S = 5
 KEEP_S = 6 * 3600
 
@@ -240,6 +242,22 @@ class Handler(BaseHTTPRequestHandler):
             if u.path in ("/", "/index.html"):
                 with open(os.path.join(HERE, "index.html"), "rb") as f:
                     self.send(200, f.read(), "text/html; charset=utf-8")
+            elif u.path.startswith("/fonts/"):
+                # Anthropic Sans, copied to ui/fonts/ on the host (never committed: the font is proprietary).
+                # Only plain file names of the expected form; the page falls back to the system font without them.
+                name = u.path[len("/fonts/"):]
+                path = os.path.join(HERE, "fonts", name)
+                if not FONT_NAME.match(name) or not os.path.isfile(path):
+                    self.send(404, "not found", "text/plain")
+                else:
+                    with open(path, "rb") as f:
+                        body = f.read()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "font/otf")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Cache-Control", "public, max-age=86400")
+                    self.end_headers()
+                    self.wfile.write(body)
             elif u.path == "/api/state":
                 s = self.sampler.snapshot()
                 self.json({
