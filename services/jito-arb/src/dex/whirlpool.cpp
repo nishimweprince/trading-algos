@@ -157,6 +157,7 @@ Result<Quote> WhirlpoolQuoter::quote_exact_in(const PoolState& p, bool a_to_b, u
   q.est_compute_units = cu_;
   if (seq.n == 0) {  // InvalidTickArraySequence (or nothing cached)
     q.crosses_boundary = true;
+    q.cache_gap = seq.truncated_by_cache;
     return q;
   }
   const uint16_t spacing = w.tick_spacing;
@@ -174,6 +175,9 @@ Result<Quote> WhirlpoolQuoter::quote_exact_in(const PoolState& p, bool a_to_b, u
       // The program fails (TickArraySequenceInvalidIndex / InvalidTickArraySequence): the swap needs more
       // tick arrays than the transaction can carry or the bot holds. Discard this size.
       q.crosses_boundary = true;
+      // Out of arrays: a cache gap if the sequence was cut short by an array the bot does not hold, otherwise
+      // the program's 3-array window is used up (the chain would fail the same way).
+      q.cache_gap = seq.truncated_by_cache;
       q.amount_in = amount - amount_remaining;
       q.amount_out = amount_calculated;
       q.fee_paid = fee_sum;

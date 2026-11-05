@@ -75,6 +75,7 @@ ChainQuote quote_chain(const Cycle& c, const Snapshots& s, const Quoters& q, uin
     }
     if (r->crosses_boundary) {
       out.boundary = true;
+      out.cache_gap = r->cache_gap;
       return failed(ChainQuote::boundary_fail);
     }
     // A leg that stops short of its input (Whirlpool price limit) leaves tokens mid-route: not a clean cycle.
@@ -158,7 +159,10 @@ SizeResult size_cycle(const Cycle& c, const Snapshots& s, const Quoters& q, cons
     if (ch.boundary && (boundary_at == 0 || x < boundary_at)) boundary_at = x;
     switch (ch.fail) {
       case ChainQuote::quote_error: ++best.n_quote_error; best.last_err = ch.err; break;
-      case ChainQuote::boundary_fail: ++best.n_boundary; break;
+      case ChainQuote::boundary_fail:
+        ++best.n_boundary;
+        if (ch.cache_gap) ++best.n_boundary_cache;
+        break;
       case ChainQuote::partial_fill: ++best.n_partial; break;
       case ChainQuote::zero_out: ++best.n_zero_out; break;
       case ChainQuote::no_quoter: ++best.n_no_quoter; break;
