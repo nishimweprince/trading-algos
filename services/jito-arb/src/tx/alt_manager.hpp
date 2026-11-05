@@ -47,7 +47,10 @@ class AltManager {
   std::map<Pubkey, Entry> tables_;
 };
 
-/** Recent blockhash, refreshed every 2 s off the hot path; refused when older than max_age_slots (60). */
+/**
+ * Recent blockhash, refreshed every 2 s off the hot path; refused when older than max_age_slots (60). Blockhash
+ * validity is counted in slots (150) by the chain itself, so this limit stays in slots: 12 s at 200 ms slots.
+ */
 class BlockhashCache {
  public:
   explicit BlockhashCache(uint64_t max_age_slots = 60, int64_t refresh_ms = 2000) : max_age_(max_age_slots), refresh_ms_(refresh_ms) {}

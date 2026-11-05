@@ -9,7 +9,7 @@ namespace {
 using pb::Reader;
 
 bool parse_account(std::string_view s, AccountView& a) {
-  // SubscribeUpdateAccount { account = 1 (Info), slot = 2, is_startup = 3 }
+  // SubscribeUpdateAccount { account = 1 (Info), slot = 2, is_startup = 3, optional bank_id = 4 }
   a = AccountView{};
   Reader r(s);
   uint32_t f, wt;
@@ -32,6 +32,9 @@ bool parse_account(std::string_view s, AccountView& a) {
       a.slot = r.varint();
     } else if (f == 3 && wt == pb::VARINT) {
       a.is_startup = r.varint() != 0;
+    } else if (f == 4 && wt == pb::VARINT) {
+      a.bank_id = r.varint();
+      a.has_bank = true;
     } else {
       r.skip(wt);
     }
@@ -40,7 +43,7 @@ bool parse_account(std::string_view s, AccountView& a) {
 }
 
 bool parse_slot(std::string_view s, SlotView& v) {
-  // SubscribeUpdateSlot { slot 1, parent 2, status 3, dead_error 4 }
+  // SubscribeUpdateSlot { slot 1, parent 2, status 3, dead_error 4, optional bank_id 5 }
   v = SlotView{};
   Reader r(s);
   uint32_t f, wt;
@@ -48,7 +51,10 @@ bool parse_slot(std::string_view s, SlotView& v) {
     if (f == 1 && wt == pb::VARINT) v.slot = r.varint();
     else if (f == 2 && wt == pb::VARINT) v.parent = r.varint();
     else if (f == 3 && wt == pb::VARINT) v.status = uint32_t(r.varint());
-    else r.skip(wt);
+    else if (f == 5 && wt == pb::VARINT) {
+      v.bank_id = r.varint();
+      v.has_bank = true;
+    } else r.skip(wt);
   }
   return r.ok;
 }
@@ -117,7 +123,8 @@ bool parse_update(const uint8_t* data, size_t len, UpdateView& out) {
 namespace arb::feed {
 
 std::string encode_account_frame(const Pubkey& key, const Pubkey& owner, const uint8_t* data, size_t len, uint64_t lamports,
-                                 uint64_t slot, uint64_t write_version, std::string_view filter, int64_t created_at_ns) {
+                                 uint64_t slot, uint64_t write_version, std::string_view filter, int64_t created_at_ns,
+                                 const uint64_t* bank_id) {
   pb::Writer info;
   info.bytes(1, std::string_view(reinterpret_cast<const char*>(key.data()), 32));
   info.u64(2, lamports);
@@ -127,6 +134,7 @@ std::string encode_account_frame(const Pubkey& key, const Pubkey& owner, const u
   pb::Writer acc;
   acc.message(1, info);
   acc.u64(2, slot);
+  if (bank_id) acc.u64(4, *bank_id);
   pb::Writer up;
   up.bytes(1, filter);
   up.message(2, acc);
@@ -139,10 +147,11 @@ std::string encode_account_frame(const Pubkey& key, const Pubkey& owner, const u
   return up.out;
 }
 
-std::string encode_slot_frame(uint64_t slot, uint32_t status) {
+std::string encode_slot_frame(uint64_t slot, uint32_t status, const uint64_t* bank_id) {
   pb::Writer s;
   s.u64(1, slot);
   if (status) s.u64(3, status);
+  if (bank_id) s.u64(5, *bank_id);
   pb::Writer up;
   up.bytes(1, "slots");
   up.message(3, s);

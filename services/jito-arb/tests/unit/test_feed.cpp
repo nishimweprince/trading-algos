@@ -347,3 +347,54 @@ TEST(resync_with_live_stream_is_quotable_at_once) {
     CHECK_EQ(store.pool(id)->quotable(2), live);
   }
 }
+
+TEST(alpenglow_competing_banks_suspect_then_resync_losers) {
+  auto rays = pool_list("raydium_v4");
+  auto cfg = discovery_cfg();
+  StateStore store;
+  auto def = state::pool_def_from_account(fixture(rays[0])->raw, cfg);
+  uint32_t id = store.add_pool(*def);
+  feed::SlotClock clock;
+  feed::FeedHandler h(store, clock);
+  auto push = [&](const Pubkey& k, uint64_t slot, uint64_t wv, const uint64_t* bank) {
+    const FixtureAccount* a = fixture(b58(k));
+    std::string f = feed::encode_account_frame(k, a->raw.owner, a->raw.data.data(), a->raw.data.size(), a->lamports, slot, wv,
+                                               "accounts", 0, bank);
+    h.on_frame(reinterpret_cast<const uint8_t*>(f.data()), f.size(), 1);
+  };
+  auto slot_status = [&](uint64_t slot, uint32_t status, uint64_t bank) {
+    std::string f = feed::encode_slot_frame(slot, status, &bank);
+    h.on_frame(reinterpret_cast<const uint8_t*>(f.data()), f.size(), 1);
+  };
+  // The parser reads bank_id on account and slot updates.
+  uint64_t b7 = 7;
+  std::string f = feed::encode_account_frame(def->address, prog::RAYDIUM_V4, nullptr, 0, 1, 2000, 1, "accounts", 0, &b7);
+  feed::UpdateView v;
+  CHECK(feed::parse_update(reinterpret_cast<const uint8_t*>(f.data()), f.size(), v) && v.account.has_bank && v.account.bank_id == 7);
+  // Slot 2000, bank 1: the pool and both vaults (plus mints) arrive and the pool is quotable.
+  uint64_t bank1 = 1, bank2 = 2;
+  for (const Pubkey& k : feed::pool_ordered_keys(store, {id})) push(k, 2000, 10, &bank1);
+  CHECK(store.pool(id)->quotable(2));
+  CHECK_EQ(h.banks().updates_with_bank, uint64_t(5));
+  // A second candidate block for the same slot: everything touched in slot 2000 becomes suspect.
+  slot_status(2000, 5, bank2);  // CreatedBank
+  CHECK_EQ(h.banks().contested_slots, uint64_t(1));
+  CHECK(!store.pool(id)->quotable(2));
+  // Bank 2 wins: the accounts bank 1 wrote are queued for a re-read, and stay suspect until it lands.
+  slot_status(2000, 1, bank2);  // Confirmed
+  auto keys = h.take_resync();
+  CHECK_EQ(keys.size(), size_t(5));
+  CHECK(!store.pool(id)->quotable(2));
+  // A trusted re-read (streams live) makes the pool quotable again.
+  for (const Pubkey& k : keys) {
+    const FixtureAccount* a = fixture(b58(k));
+    AccountUpdate u{k, a->raw.owner, a->raw.data.data(), a->raw.data.size(), 2001, 0, false, false};
+    store.apply(u);
+  }
+  CHECK(store.pool(id)->quotable(2));
+  // An uncontested slot whose only bank is confirmed queues nothing.
+  for (const Pubkey& k : feed::pool_ordered_keys(store, {id})) push(k, 2002, 11, &bank1);
+  slot_status(2002, 1, bank1);
+  CHECK(h.take_resync().empty());
+  CHECK(store.pool(id)->quotable(2));
+}

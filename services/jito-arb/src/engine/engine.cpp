@@ -44,9 +44,9 @@ bool mid_x64(const PoolState& p, const Pubkey& from, u128& out) {
 EngineConfig engine_config(const Config& c) {
   EngineConfig e;
   e.max_state_age_slots = uint64_t(c.engine.max_state_age_slots);
-  // Twice the resync threshold: live mode refreshes a quiet pool by RPC once it lags resync_lag_slots, well
+  // Twice the resync threshold: live mode refreshes a quiet pool by RPC once it lags resync_lag_ms, well
   // before the engine would call it stale.
-  e.max_slot_lag = 2 * uint64_t(c.helius.resync_lag_slots);
+  e.max_slot_lag = 2 * ms_to_slots(c, c.helius.resync_lag_ms);
   e.min_edge_ppm = ppm(c.engine.min_spot_edge);
   e.max_input_fraction_ppm = ppm(c.engine.max_input_fraction);
   e.max_trade_lamports = c.engine.max_trade_lamports;
@@ -63,8 +63,8 @@ EngineConfig engine_config(const Config& c) {
   e.costs.cu_headroom_ppm = ppm(c.engine.cu_headroom);
   e.costs.max_route_cu = c.engine.max_route_cu;
   e.dispatch.max_bundles_per_slot = c.engine.max_bundles_per_slot;
-  e.dispatch.cooldown_slots = c.engine.cooldown_slots;
-  e.dispatch.max_send_lag_slots = c.engine.max_send_lag_slots;
+  e.dispatch.cooldown_slots = int(ms_to_slots(c, c.engine.cooldown_ms));
+  e.dispatch.max_send_lag_slots = int(ms_to_slots(c, c.engine.max_send_lag_ms));
   return e;
 }
 

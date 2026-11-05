@@ -78,7 +78,7 @@
     <div class="cols" id="latcharts" style="margin-top:12px"></div>
     <p class="note">Targets come from Jito's 50 ms auction tick: land in the first tick after a gap opens.
       Feed lag is when we receive an account update minus when Helius produced it (created_at), on synced clocks.
-      Slot offset adds where in the 400 ms slot the trade happened. Detect to signed covers everything we control
+      Slot offset adds where in the ~200 ms slot the trade happened. Detect to signed covers everything we control
       before the HTTP write; Jito Frankfurt adds about 1 ms one way (1.9 ms RTT measured).</p>
   </section>
 
@@ -201,7 +201,7 @@ async function refreshState() {
       tile("Feed lag p50", lagP50 == null ? "–" : fmt(lagP50, 1) + " ms", "target < 30 ms · " + none(m.arb_feed_lag_us_samples), judge(lagP50, 30, 50)),
       tile("Feed lag p99", lagP99 == null ? "–" : fmt(lagP99, 1) + " ms", "within one 50 ms tick", judge(lagP99, 50, 100)),
       tile("Slot offset p50", offP50 == null ? "–" : fmt(offP50) + " ms", "slot start to update · " + none(m.arb_slot_offset_us_samples)),
-      tile("Slot offset p99", offP99 == null ? "–" : fmt(offP99) + " ms", "a slot is ~400 ms"),
+      tile("Slot offset p99", offP99 == null ? "–" : fmt(offP99) + " ms", m.arb_slot_time_ms > 0 ? `slot time ${fmt(m.arb_slot_time_ms)} ms (measured)` : "slot time ~200 ms"),
       tile("Detect to signed p50", detP50 == null || detP50 < 0 ? "–" : fmt(detP50) + " µs", none(m.arb_detect_to_signed_us_samples), judge(detP50 < 0 ? null : detP50, 250, 500)),
       tile("Detect to signed p99", detP99 == null || detP99 < 0 ? "–" : fmt(detP99) + " µs", "target < 500 µs", judge(detP99 < 0 ? null : detP99, 500, 2000)),
     ].join("");
