@@ -19,6 +19,12 @@ done
 install -m 0644 "$SRC/config/denylist.json" "$SRC/config/dex_programs.toml" /opt/jito-arb/share/
 install -d -m 0755 /opt/jito-arb/ui
 install -m 0644 "$SRC/ui/server.py" "$SRC/ui/index.html" /opt/jito-arb/ui/
+# Anthropic Sans is proprietary and never committed: copy the .otf files into ui/fonts/ on the host first.
+# Without them the dashboard falls back to the system font.
+if compgen -G "$SRC/ui/fonts/*.otf" >/dev/null; then
+  install -d -m 0755 /opt/jito-arb/ui/fonts
+  install -m 0644 "$SRC"/ui/fonts/*.otf /opt/jito-arb/ui/fonts/
+fi
 [ -f /etc/jito-arb/bot.toml ] || install -m 0640 -o root -g jito-arb "$HERE/bot.vm.toml" /etc/jito-arb/bot.toml
 [ -f /etc/jito-arb/jito-arb.env ] || install -m 0600 -o root -g root "$HERE/jito-arb.env.example" /etc/jito-arb/jito-arb.env
 # The engine reads config/denylist.json relative to its working directory.
