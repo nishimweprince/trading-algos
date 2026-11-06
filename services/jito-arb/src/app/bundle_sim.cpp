@@ -431,7 +431,19 @@ void BundleSim::process(SimJob& j, Rpc& rpc) {
       ++n_.too_large;
       return failed(obs::SimFail::too_large, pre_slot, 0);
     }
-    auto sim = rpc.simulate_full(txb, pre_keys, std::max(j.cand.slot, pre_slot), "processed");
+    Rpc::SimResult sim;
+    for (unsigned attempt = 0; ; ++attempt) {
+      try {
+        sim = rpc.simulate_full(txb, pre_keys, std::max(j.cand.slot, pre_slot), "processed");
+        break;
+      } catch (const std::exception& e) {
+        // simulateTransaction reads a frozen bank, which can briefly trail account-read context.
+        // Keep the same minimum slot and baseline; only the background worker waits.
+        if (attempt == 2 || std::string(e.what()).find("-32016") == std::string::npos) throw;
+        ++n_.context_retries;
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      }
+    }
     logs = sim.logs;
     error = sim.err;
     // These transactions do not alter mainnet. An unchanged bracket establishes that the holder's baseline
