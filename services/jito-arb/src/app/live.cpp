@@ -199,6 +199,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   auto& g_sim_dropped = reg.gauge("arb_sim_dropped", "dry-run bundles not simulated (rate cap or queue full)");
   auto& g_sim_no_holder = reg.gauge("arb_sim_no_holder", "dry-run bundles with no public holder of the trade size");
   auto& g_sim_too_large = reg.gauge("arb_sim_too_large", "dry-run bundles whose direct-swap message exceeds 1,232 bytes");
+  auto& g_sim_context_retries = reg.gauge("arb_sim_context_retries", "bounded retries while the simulation bank catches up to the unchanged minimum context slot");
   auto& g_sim_setup = reg.gauge("arb_sim_setup_error", "simulation setup or unclassified message errors; excludes failed swap legs");
   auto& g_sim_rpc = reg.gauge("arb_sim_rpc_error", "simulation RPC errors");
   auto& g_untradable = reg.gauge("arb_engine_untradable", "evaluations skipped: a leg the program rejects in that direction");
@@ -336,6 +337,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       g_sim_dropped.set(int64_t(sc.dropped.load()));
       g_sim_no_holder.set(int64_t(sc.no_holder.load()));
       g_sim_too_large.set(int64_t(sc.too_large.load()));
+      g_sim_context_retries.set(int64_t(sc.context_retries.load()));
       g_sim_setup.set(int64_t(sc.setup_error.load()));
       g_sim_rpc.set(int64_t(sc.rpc_error.load()));
       g_st_incomplete.set(int64_t(n.stale_incomplete));
