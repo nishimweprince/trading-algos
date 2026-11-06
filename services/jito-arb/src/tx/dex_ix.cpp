@@ -14,6 +14,11 @@ const Pubkey& raydium_authority() {
   return k;
 }
 
+const Pubkey& cpmm_authority() {
+  static const Pubkey k = pda({std::string_view("vault_and_lp_mint_auth_seed")}, prog::RAYDIUM_CPMM);
+  return k;
+}
+
 Pubkey whirlpool_oracle(const Pubkey& whirlpool) { return pda({std::string_view("oracle"), whirlpool}, prog::WHIRLPOOL); }
 
 std::array<Pubkey, 3> whirlpool_tick_arrays(const state::Whirlpool& w, const Pubkey& pool, bool a_to_b) {
@@ -43,8 +48,31 @@ const Pubkey& program_of(DexKind kind) {
 
 std::vector<AccountMeta> swap_accounts(const PoolState& p, bool a_to_b, const UserAccounts& u) {
   std::vector<AccountMeta> v;
-  if (p.kind != DexKind::RaydiumV4 && p.kind != DexKind::Whirlpool)
+  if (p.kind != DexKind::RaydiumV4 && p.kind != DexKind::Whirlpool && p.kind != DexKind::Cpmm)
     throw std::invalid_argument(std::string("swap accounts: unsupported dex ") + dex_name(p.kind));
+  if (p.kind == DexKind::Cpmm) {
+    // payer (signer), authority, amm_config, pool_state (w), input token account (w), output token account (w),
+    // input vault (w), output vault (w), input token program, output token program, input mint, output mint,
+    // observation_state (w). Token "a" is token_0.
+    const Pubkey& in_vault = a_to_b ? p.vault_a : p.vault_b;
+    const Pubkey& out_vault = a_to_b ? p.vault_b : p.vault_a;
+    const Pubkey& in_prog = a_to_b ? p.cpmm.token_0_program : p.cpmm.token_1_program;
+    const Pubkey& out_prog = a_to_b ? p.cpmm.token_1_program : p.cpmm.token_0_program;
+    v.push_back({u.authority, true, false});
+    v.push_back({cpmm_authority(), false, false});
+    v.push_back({p.cpmm.amm_config, false, false});
+    v.push_back({p.address, false, true});
+    v.push_back({a_to_b ? u.token_a : u.token_b, false, true});
+    v.push_back({a_to_b ? u.token_b : u.token_a, false, true});
+    v.push_back({in_vault, false, true});
+    v.push_back({out_vault, false, true});
+    v.push_back({in_prog, false, false});
+    v.push_back({out_prog, false, false});
+    v.push_back({a_to_b ? p.mint_a : p.mint_b, false, false});
+    v.push_back({a_to_b ? p.mint_b : p.mint_a, false, false});
+    v.push_back({p.cpmm.observation_key, false, true});
+    return v;
+  }
   if (p.kind == DexKind::RaydiumV4) {
     // 0 token program, 1 amm (w), 2 authority, 3 coin vault (w), 4 pc vault (w), 5 user source (w),
     // 6 user destination (w), 7 user owner (signer)
@@ -81,8 +109,14 @@ std::vector<uint8_t> swap_data(DexKind kind, bool a_to_b, uint64_t amount_in, ui
     std::memcpy(d + n, p, len);
     n += len;
   };
-  if (kind != DexKind::RaydiumV4 && kind != DexKind::Whirlpool)
+  if (kind != DexKind::RaydiumV4 && kind != DexKind::Whirlpool && kind != DexKind::Cpmm)
     throw std::invalid_argument(std::string("swap data: unsupported dex ") + dex_name(kind));
+  if (kind == DexKind::Cpmm) {  // swap_base_input(amount_in, minimum_amount_out)
+    put(CPMM_SWAP_BASE_INPUT_DISC, 8);
+    put(&amount_in, 8);
+    put(&min_out, 8);
+    return std::vector<uint8_t>(d, d + n);
+  }
   if (kind == DexKind::RaydiumV4) {
     d[n++] = RAYDIUM_SWAP_BASE_IN_V2;
     put(&amount_in, 8);

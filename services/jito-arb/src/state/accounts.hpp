@@ -149,6 +149,42 @@ struct TickArray {
 Result<Whirlpool> decode_whirlpool(const uint8_t* d, size_t n, const Pubkey& owner);
 Result<TickArray> decode_tick_array(const uint8_t* d, size_t n, const Pubkey& owner);
 
+// --- Raydium CPMM (raydium-cp-swap, programs/cp-swap/src/states/{pool,config}.rs) ---------
+
+constexpr size_t CPMM_POOL_LEN = 637;
+constexpr size_t CPMM_CONFIG_LEN = 236;
+inline constexpr uint8_t DISC_CPMM_POOL[8] = {247, 237, 227, 245, 215, 195, 222, 70};    // account:PoolState
+inline constexpr uint8_t DISC_CPMM_CONFIG[8] = {218, 244, 33, 104, 203, 203, 43, 111};  // account:AmmConfig
+
+struct CpmmPool {
+  Pubkey amm_config{}, token_0_vault{}, token_1_vault{}, token_0_mint{}, token_1_mint{};
+  Pubkey token_0_program{}, token_1_program{}, observation_key{};
+  uint8_t auth_bump = 0, status = 0;
+  uint64_t protocol_fees_0 = 0, protocol_fees_1 = 0, fund_fees_0 = 0, fund_fees_1 = 0;
+  uint64_t open_time = 0;
+  uint8_t creator_fee_on = 0;  // 0 both (on input), 1 only token 0, 2 only token 1
+  bool enable_creator_fee = false;
+  uint64_t creator_fees_0 = 0, creator_fees_1 = 0;
+
+  /** status bit 2 set = swap disabled. */
+  bool swap_enabled() const { return (status & 4) == 0; }
+  /** Fees owed to protocol, fund and creator sit in the vaults but are not reserves. */
+  uint64_t fees_owed_0() const { return protocol_fees_0 + fund_fees_0 + creator_fees_0; }
+  uint64_t fees_owed_1() const { return protocol_fees_1 + fund_fees_1 + creator_fees_1; }
+  /** PoolState::is_creator_fee_on_input. */
+  bool creator_fee_on_input(bool zero_for_one) const {
+    return creator_fee_on == 0 || (creator_fee_on == 1 && zero_for_one) || (creator_fee_on == 2 && !zero_for_one);
+  }
+};
+
+/** Fee rates in hundredths of a bp (1e-6). */
+struct CpmmConfig {
+  uint64_t trade_fee_rate = 0, protocol_fee_rate = 0, fund_fee_rate = 0, creator_fee_rate = 0;
+};
+
+Result<CpmmPool> decode_cpmm_pool(const uint8_t* d, size_t n, const Pubkey& owner);
+Result<CpmmConfig> decode_cpmm_config(const uint8_t* d, size_t n, const Pubkey& owner);
+
 // --- Kamino Lend reserve -----------------------------------------------------------
 
 constexpr size_t KAMINO_RESERVE_LEN = 8 + 8616;

@@ -17,7 +17,9 @@ uint32_t ppm(double v) { return uint32_t(std::llround(std::max(0.0, v) * 1e6)); 
 bool mid_x64(const PoolState& p, const Pubkey& from, u128& out) {
   bool a_to_b = p.mint_a == from;
   if (is_constant_product(p.kind)) {
-    u128 rin = a_to_b ? p.vault_a_amount : p.vault_b_amount, rout = a_to_b ? p.vault_b_amount : p.vault_a_amount;
+    uint64_t ri = a_to_b ? p.vault_a_amount : p.vault_b_amount, ro = a_to_b ? p.vault_b_amount : p.vault_a_amount;
+    dex::cp_reserves(p, a_to_b, ri, ro);  // less fees owed where the program excludes them
+    u128 rin = ri, rout = ro;
     if (rin == 0) return false;
     out = (rout << 64) / rin;
     return true;

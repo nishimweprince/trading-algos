@@ -17,6 +17,7 @@ inline constexpr Pubkey SYSVAR_INSTRUCTIONS = PK("Sysvar1nstructions111111111111
 
 inline constexpr Pubkey RAYDIUM_V4 = PK("675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8");
 inline constexpr Pubkey WHIRLPOOL = PK("whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc");
+inline constexpr Pubkey RAYDIUM_CPMM = PK("CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C");
 inline constexpr Pubkey KLEND = PK("KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD");
 
 }  // namespace arb::prog

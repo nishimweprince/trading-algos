@@ -2,6 +2,7 @@
 // Direct DEX swap instructions. Account order and data layouts are the programs':
 //   Raydium AMM v4 SwapBaseInV2 (tag 16): program/src/instruction.rs swap_base_in_v2 (raydium-amm@91739d8)
 //   Whirlpool swap: programs/whirlpool/src/instructions/swap.rs (whirlpools@cc683ec)
+//   Raydium CPMM swap_base_input: programs/cp-swap/src/instructions/swap_base_input.rs (raydium-cp-swap@3d69122)
 // The sim-parity oracle sends exactly these instructions through simulateTransaction, which is how the
 // account order is proven; the executor's CPI legs reuse the same account lists (spec §8).
 #include <array>
@@ -14,9 +15,11 @@ namespace arb::tx::dexix {
 
 inline constexpr uint8_t WHIRLPOOL_SWAP_DISC[8] = {248, 198, 158, 145, 225, 117, 135, 200};  // sha256("global:swap")[..8]
 constexpr uint8_t RAYDIUM_SWAP_BASE_IN_V2 = 16;
+inline constexpr uint8_t CPMM_SWAP_BASE_INPUT_DISC[8] = {143, 190, 90, 218, 196, 30, 51, 222};  // global:swap_base_input
 
 const Pubkey& raydium_authority();  // PDA ["amm authority"] of the v4 program
 Pubkey whirlpool_oracle(const Pubkey& whirlpool);
+const Pubkey& cpmm_authority();  // PDA ["vault_and_lp_mint_auth_seed"] of the CPMM program
 
 /** The three tick-array PDAs a swap in this direction walks (sparse_swap.rs get_start_tick_indexes). */
 std::array<Pubkey, 3> whirlpool_tick_arrays(const state::Whirlpool& w, const Pubkey& pool, bool a_to_b);

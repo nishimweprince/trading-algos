@@ -48,6 +48,25 @@ class WhirlpoolQuoter final : public IQuoter {
   uint32_t cu_;
 };
 
+class CpmmQuoter final : public IQuoter {
+ public:
+  explicit CpmmQuoter(uint32_t cu = 50000) : cu_(cu) {}
+  Result<Quote> quote_exact_in(const PoolState& p, bool a_to_b, uint64_t amount_in) const override;
+  DexKind kind() const override { return DexKind::Cpmm; }
+  /** Token-2022 transfer fees change the amounts the program sees: not ported, so such pools are refused. */
+  bool supports(const PoolState& p) const override;
+
+ private:
+  uint32_t cu_;
+};
+
+/**
+ * A constant-product pool's reserves for a swap direction: vault balances less what the program does not count
+ * (Raydium v4 need_take_pnl; CPMM protocol, fund and creator fees owed). False when not constant product or
+ * the fees exceed the vault.
+ */
+bool cp_reserves(const PoolState& p, bool a_to_b, uint64_t& rin, uint64_t& rout);
+
 /** Marginal output per unit input at size zero, after fee, as a Q64.64 ratio (spot-edge prefilter). */
 u128 spot_rate_x64(const PoolState& p, bool a_to_b);
 

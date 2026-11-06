@@ -81,6 +81,8 @@ struct PoolState {
   std::shared_ptr<const state::Mint> mint_a_info, mint_b_info;  // null until seen
   state::RaydiumV4 ray;
   state::Whirlpool wp;
+  state::CpmmPool cpmm;
+  state::CpmmConfig cpmm_cfg;
   std::array<TickArraySlot, MAX_TICK_ARRAYS> ticks{};
   uint8_t n_ticks = 0;
   // Freshness: slots of the pool account and of the vaults, newest component slot, store sequence.

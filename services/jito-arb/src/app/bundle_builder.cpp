@@ -43,7 +43,7 @@ void seed_virtual_tables(tx::AltManager& alts, const StateStore& store, const Pu
     a.addresses.push_back(k);
   };
   for (const Pubkey& k : {prog::TOKEN, prog::TOKEN_2022, prog::KLEND, prog::SYSVAR_INSTRUCTIONS, prog::RAYDIUM_V4, prog::WHIRLPOOL,
-                          tx::dexix::raydium_authority(), executor})
+                          prog::RAYDIUM_CPMM, tx::dexix::raydium_authority(), tx::dexix::cpmm_authority(), executor})
     add(shared, k);
   for (const flash::FlashReserve& r : reserves)
     for (const Pubkey& k : {r.reserve, r.lending_market, r.lending_market_authority, r.liquidity_mint, r.supply_vault, r.fee_vault})
@@ -64,6 +64,12 @@ void seed_virtual_tables(tx::AltManager& alts, const StateStore& store, const Pu
       case DexKind::Whirlpool:
         add(a, tx::dexix::whirlpool_oracle(p->address));
         for (uint8_t t = 0; t < p->n_ticks; ++t) add(a, p->ticks[t].key);
+        break;
+      case DexKind::Cpmm:
+        add(a, p->cpmm.amm_config);
+        add(a, p->cpmm.observation_key);
+        add(a, p->mint_a);
+        add(a, p->mint_b);
         break;
       default:
         break;
