@@ -89,6 +89,7 @@ std::optional<PoolDef> pool_def_from_account(const RawAccount& a, const Discover
     d.vault_a = c->token_vault_0;
     d.vault_b = c->token_vault_1;
     d.config = c->amm_config;
+    if (!include_arrays) return d;
     // The current tick's array, then up to three initialized arrays each way along the pool's bitmap.
     const uint16_t sp = c->tick_spacing;
     int32_t cur = dex::clmm::array_start_index(c->tick_current, sp);

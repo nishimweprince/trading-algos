@@ -42,6 +42,7 @@ int main(int argc, char** argv) {
   uint32_t id = store.add_pool(*def);
   std::vector<Pubkey> keys = {def->address, def->vault_a, def->vault_b, def->mint_a, def->mint_b};
   for (auto& [s, k] : def->tick_arrays) keys.push_back(k);
+  if (def->kind == DexKind::Clmm) keys.push_back(state::clmm_bitmap_extension_pda(def->address));
   if (!is_zero(def->config)) keys.push_back(def->config);
   if (!is_zero(def->fee_config)) keys.push_back(def->fee_config);
   uint64_t slot = 0;
