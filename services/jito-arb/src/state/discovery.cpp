@@ -11,6 +11,7 @@
 #include "core/base64.hpp"
 #include "core/crypto.hpp"
 #include "dex/clmm_math.hpp"
+#include "dex/dlmm.hpp"
 #include "core/programs.hpp"
 
 namespace arb::state {
@@ -59,6 +60,27 @@ bool is_base(const Pubkey& m, const DiscoveryConfig& c) {
 std::optional<PoolDef> pool_def_from_account(const RawAccount& a, const DiscoveryConfig& cfg, bool include_arrays) {
   PoolDef d;
   d.address = a.key;
+  if (a.owner == prog::METEORA_DLMM) {
+    auto p = decode_dlmm_pair(a.data.data(), a.data.size(), a.owner);
+    if (!p) return std::nullopt;
+    d.kind = DexKind::Dlmm;
+    d.mint_a = p->token_x_mint; d.mint_b = p->token_y_mint;
+    d.vault_a = p->reserve_x; d.vault_b = p->reserve_y;
+    d.bitmap_extension = dlmm_bitmap_pda(a.key);
+    if (!include_arrays) return d;
+    int32_t cur = dex::dlmm::array_index(p->active_id);
+    // Subscribe a bounded contiguous window, plus initialized internal arrays in either direction.
+    // Extension-based pools outside this window fail closed until rediscovery refreshes the cache.
+    std::set<int32_t> indices;
+    for (int o = -3; o <= 3; ++o) if (cur + o >= -6656 && cur + o < 6656) indices.insert(cur + o);
+    for (bool down : {true, false}) {
+      int count = 0;
+      for (int i = cur; i >= -512 && i < 512 && count < 3; i += down ? -1 : 1)
+        if (dex::dlmm::initialized(*p, nullptr, i)) { indices.insert(i); ++count; }
+    }
+    for (int i : indices) d.bin_arrays.emplace_back(i, dlmm_bin_array_pda(a.key, i));
+    return d;
+  }
   if (a.owner == prog::RAYDIUM_V4) {
     auto r = decode_raydium_v4(a.data.data(), a.data.size(), a.owner);
     if (!r) return std::nullopt;
@@ -150,6 +172,7 @@ std::vector<Pubkey> dependent_keys(const std::vector<RawAccount>& pools, const D
     if (d->kind == DexKind::Clmm) keys.insert(clmm_bitmap_extension_pda(d->address));
     if (!is_zero(d->config)) keys.insert(d->config);
     if (!is_zero(d->fee_config)) keys.insert(d->fee_config);
+    if (d->kind == DexKind::Dlmm) keys.insert(d->bitmap_extension);
   }
   return {keys.begin(), keys.end()};
 }
@@ -194,6 +217,36 @@ DiscoveryResult discover(const std::vector<RawAccount>& pool_accounts, const Acc
     if (ta->mint != d->mint_a || tb->mint != d->mint_b) { reject(c, "vault_mint_mismatch"); continue; }
     bool gate_ok = true;
     switch (d->kind) {
+      case DexKind::Dlmm: {
+        auto pair = decode_dlmm_pair(a.data.data(), a.data.size(), a.owner);
+        auto ext = accounts.find(d->bitmap_extension);
+        std::optional<DlmmBitmapExtension> bitmap;
+        if (ext != accounts.end()) {
+          auto decoded = decode_dlmm_bitmap(ext->second.data.data(), ext->second.data.size(), ext->second.owner);
+          if (!decoded || decoded->pair != d->address) { reject(c, "dlmm_bitmap"); gate_ok = false; break; }
+          bitmap = *decoded;
+        }
+        // The extension can select sparse arrays far beyond a contiguous active-bin window.
+        PoolState view; view.dlmm = *pair;
+        if (bitmap) view.dlmm_bitmap = std::make_shared<const DlmmBitmapExtension>(*bitmap);
+        std::set<int32_t> selected;
+        for (auto& [index, k] : c.def.bin_arrays) selected.insert(index);
+        for (bool down : {true, false}) {
+          int32_t from = dex::dlmm::array_index(pair->active_id), next;
+          for (int k = 0; k < 3 && dex::dlmm::next_array(view, from, down, next); ++k) {
+            selected.insert(next); from = next + (down ? -1 : 1);
+          }
+        }
+        c.def.bin_arrays.clear();
+        for (auto index : selected) c.def.bin_arrays.emplace_back(index, dlmm_bin_array_pda(d->address, index));
+        if (pair->status != 0 || pair->pair_type > 3 || pair->function_type > 2 || pair->collect_fee_mode > 1) {
+          reject(c, "dlmm_mode"); gate_ok = false; break;
+        }
+        if (pair->token_x_program_flag || pair->token_y_program_flag || va->second.owner != prog::TOKEN || vb->second.owner != prog::TOKEN) {
+          reject(c, "token2022_dlmm"); gate_ok = false;
+        }
+        break;
+      }
       case DexKind::RaydiumV4: {
         // Raydium v4 swaps only through the legacy token program.
         if (va->second.owner != prog::TOKEN || vb->second.owner != prog::TOKEN) { reject(c, "token2022_raydium"); gate_ok = false; break; }

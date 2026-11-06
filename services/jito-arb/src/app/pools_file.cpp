@@ -20,6 +20,14 @@ std::string to_json(const PoolsFile& f) {
     s += buf;
     if (!is_zero(d.config)) s += ",\"config\":\"" + b58(d.config) + "\"";
     if (!is_zero(d.fee_config)) s += ",\"fee_config\":\"" + b58(d.fee_config) + "\"";
+    if (d.kind == DexKind::Dlmm) {
+      s += ",\"bitmap_extension\":\"" + b58(d.bitmap_extension) + "\",\"bin_arrays\":[";
+      for (size_t j = 0; j < d.bin_arrays.size(); ++j) {
+        if (j) s += ",";
+        s += "[" + std::to_string(d.bin_arrays[j].first) + ",\"" + b58(d.bin_arrays[j].second) + "\"]";
+      }
+      s += "]";
+    }
     s += ",\"tick_arrays\":[";
     for (size_t j = 0; j < d.tick_arrays.size(); ++j) {
       if (j) s += ",";
@@ -81,6 +89,23 @@ bool from_json(const std::string& body, PoolsFile& out, std::string* err) {
           if (t.at(0).get(start) == simdjson::SUCCESS && t.at(1).get(pk) == simdjson::SUCCESS && b58_decode32(pk, k))
             d.tick_arrays.emplace_back(int32_t(start), k);
         }
+      }
+      if (d.kind == DexKind::Dlmm) {
+        if (!key(e, "bitmap_extension", d.bitmap_extension) || d.bitmap_extension != state::dlmm_bitmap_pda(d.address)) {
+          if (err) *err = "pools file: bad DLMM bitmap PDA";
+          return false;
+        }
+        simdjson::dom::array ba;
+        if (e["bin_arrays"].get(ba) != simdjson::SUCCESS) return false;
+        for (auto t : ba) {
+          int64_t index;
+          std::string_view pk;
+          Pubkey k;
+          if (t.at(0).get(index) != simdjson::SUCCESS || index < -6656 || index >= 6656 ||
+              t.at(1).get(pk) != simdjson::SUCCESS || !b58_decode32(pk, k) || state::dlmm_bin_array_pda(d.address, index) != k) return false;
+          d.bin_arrays.emplace_back(int32_t(index), k);
+        }
+        if (d.bin_arrays.empty() || d.bin_arrays.size() > 64) return false;
       }
       double tvl = 0;
       if (e["tvl_sol"].get(tvl) != simdjson::SUCCESS) tvl = 0;

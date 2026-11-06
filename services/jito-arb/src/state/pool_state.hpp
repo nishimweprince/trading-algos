@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <string_view>
+#include <vector>
 
 #include "core/types.hpp"
 #include "state/accounts.hpp"
@@ -71,6 +72,11 @@ struct TickArraySlot {
 
 constexpr int MAX_TICK_ARRAYS = 7;  // current array base -3 .. +3
 
+struct DlmmArraySlot {
+  int32_t index = 0;
+  Pubkey key{};
+  std::shared_ptr<const state::DlmmBinArray> array;
+};
 struct PoolState {
   DexKind kind = DexKind::RaydiumV4;
   Pubkey address{};
@@ -80,6 +86,12 @@ struct PoolState {
   Pubkey vault_a{}, vault_b{};
   uint64_t vault_a_amount = 0, vault_b_amount = 0;
   std::shared_ptr<const state::Mint> mint_a_info, mint_b_info;  // null until seen
+  state::DlmmPair dlmm;
+  std::vector<DlmmArraySlot> dlmm_arrays;
+  std::shared_ptr<const state::DlmmBitmapExtension> dlmm_bitmap;
+  bool dlmm_bitmap_known = false;
+  state::DlmmClock dlmm_clock;
+  uint64_t dlmm_clock_slot = 0;
   state::RaydiumV4 ray;
   state::Whirlpool wp;
   state::CpmmPool cpmm;

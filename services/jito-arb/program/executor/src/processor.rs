@@ -25,6 +25,7 @@ pub const RAYDIUM_V4: Pubkey = pubkey!("675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt
 pub const WHIRLPOOL: Pubkey = pubkey!("whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc");
 pub const RAYDIUM_CPMM: Pubkey = pubkey!("CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C");
 pub const RAYDIUM_CLMM: Pubkey = pubkey!("CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK");
+pub const METEORA_DLMM: Pubkey = pubkey!("LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo");
 pub const PUMPSWAP: Pubkey = pubkey!("pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA");
 const TOKEN: Pubkey = pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const TOKEN_2022: Pubkey = pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
@@ -71,6 +72,13 @@ fn swap_data(dex: Dex, a_to_b: bool, amount_in: u64) -> Result<Vec<u8>, Executor
             d.push(1);
             d.push(a_to_b as u8);
         }
+        Dex::Dlmm => {
+            // swap2(amount_in, min_amount_out, RemainingAccountsInfo { slices: [] }).
+            d.extend_from_slice(&[65, 75, 63, 76, 235, 91, 91, 136]);
+            d.extend_from_slice(&amount_in.to_le_bytes());
+            d.extend_from_slice(&0u64.to_le_bytes());
+            d.extend_from_slice(&0u32.to_le_bytes());
+        }
         Dex::Cpmm => {
             // swap_base_input(amount_in, minimum_amount_out = 0)
             d.extend_from_slice(&CPMM_SWAP_BASE_INPUT_DISC);
@@ -98,7 +106,7 @@ fn swap_data(dex: Dex, a_to_b: bool, amount_in: u64) -> Result<Vec<u8>, Executor
                 d.extend_from_slice(&1u64.to_le_bytes());
             }
         }
-        _ => return Err(ExecutorError::UnsupportedDex),
+
     }
     Ok(d)
 }
@@ -118,7 +126,7 @@ fn run_leg<'a>(leg: &LegSpec, legs_accounts: &[AccountInfo<'a>], amount_in: u64)
         Dex::Cpmm => RAYDIUM_CPMM,
         Dex::PumpSwap => PUMPSWAP,
         Dex::Clmm => RAYDIUM_CLMM,
-        _ => return Err(ExecutorError::UnsupportedDex.into()),
+        Dex::Dlmm => METEORA_DLMM,
     };
     if *program.key != expected {
         return Err(ExecutorError::WrongDexProgram.into());

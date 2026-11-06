@@ -134,6 +134,8 @@ int main(int argc, char** argv) {
   for (auto& d : pf.pools) {
     for (const Pubkey& k : {d.address, d.vault_a, d.vault_b, d.mint_a, d.mint_b}) keys.insert(k);
     for (auto& [s, k] : d.tick_arrays) keys.insert(k);
+    for (auto& [index, k] : d.bin_arrays) keys.insert(k);
+    if (d.kind == DexKind::Dlmm) { keys.insert(d.bitmap_extension); keys.insert(state::DLMM_CLOCK); }
   }
   for (auto& r : pf.reserves) keys.insert(r);
 

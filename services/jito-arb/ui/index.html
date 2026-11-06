@@ -247,6 +247,7 @@ async function refreshState() {
       tile("Bundles (dry run)", fmt(m.arb_bundles_dry_run), `${fmt(m.arb_bundles_signed)} signed`),
       tile("Simulated OK", fmt(m.arb_sim_ok), `${fmt(m.arb_sim_profitable)} still profitable · ${fmt(m.arb_sim_failed)} failed`,
            m.arb_sim_failed > m.arb_sim_ok ? "warnv" : ""),
+      tile("Skip logs sampled", fmt(m.arb_decision_skip_logs_dropped), "all signed candidates and outcomes retained"),
       tile("Simulation jobs", fmt(m.arb_sim_submitted), `${fmt(m.arb_sim_terminal)} finished · ${fmt(m.arb_sim_queued)} queued · ${fmt(m.arb_sim_in_flight)} in progress`),
       tile("Not simulated", fmt((m.arb_sim_dropped || 0) + (m.arb_sim_no_holder || 0) + (m.arb_sim_too_large || 0) + (m.arb_sim_rpc_error || 0) + (m.arb_sim_setup_error || 0) + (m.arb_sim_funding_changed || 0) + (m.arb_sim_intermediate_balance || 0)),
            `${fmt(m.arb_sim_rpc_error)} RPC · ${fmt(m.arb_sim_setup_error)} setup · ${fmt(m.arb_sim_no_holder)} no holder · ${fmt(m.arb_sim_funding_changed)} holder moved · ${fmt(m.arb_sim_dropped)} capped`),
@@ -333,7 +334,7 @@ async function refreshDecisions() {
     const d = await getJSON("/api/decisions?hours=" + hours);
     const days = Object.entries(d.by_day);
     // Sums of gross, tip, net and EV cover dispatched (dry-run) candidates only.
-    $("days").innerHTML = days.length ? `<tr><th>Day (UTC)</th><th class="num">Candidates</th><th class="num">Dry-run</th><th class="num">Skipped</th><th class="num">Gross SOL</th><th class="num">Tip SOL</th><th class="num">Net SOL</th><th class="num">EV SOL</th><th class="num">Net / bundle</th><th class="num">Sim OK</th><th class="num">Sim failed</th><th class="num">Sim profitable</th><th class="num">Sim net SOL</th></tr>` +
+    $("days").innerHTML = days.length ? `<tr><th>Day (UTC)</th><th class="num">Logged candidates</th><th class="num">Dry-run</th><th class="num">Skipped</th><th class="num">Gross SOL</th><th class="num">Tip SOL</th><th class="num">Net SOL</th><th class="num">EV SOL</th><th class="num">Net / bundle</th><th class="num">Sim OK</th><th class="num">Sim failed</th><th class="num">Sim profitable</th><th class="num">Sim net SOL</th></tr>` +
       days.map(([k, v]) => `<tr><td>${esc(k)}</td><td class="num">${fmt(v.candidates)}</td><td class="num">${fmt(v.dispatched)}</td><td class="num">${fmt(v.candidates - v.dispatched)}</td><td class="num">${fmt(v.gross_lamports / 1e9, 4)}</td><td class="num">${fmt(v.tip_lamports / 1e9, 4)}</td><td class="num">${fmt(v.net_lamports / 1e9, 4)}</td><td class="num">${fmt(v.ev_lamports / 1e9, 5)}</td><td class="num">${v.dispatched ? fmt(v.net_lamports / 1e9 / v.dispatched, 5) : "–"}</td><td class="num">${fmt(v.sim_ok || 0)}</td><td class="num">${fmt(v.sim_failed || 0)}</td><td class="num">${fmt(v.sim_profitable || 0)}</td><td class="num">${fmt((v.sim_net_lamports || 0) / 1e9, 5)}</td></tr>`).join("")
       : `<tr><td class="empty">No candidates in this window. A candidate is a sized cycle; most mainnet gaps close before they clear fees and the tip.</td></tr>`;
     const rs = Object.entries(d.skipped_by_reason);

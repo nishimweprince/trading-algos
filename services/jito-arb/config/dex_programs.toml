@@ -72,3 +72,13 @@ tick_array_len = 10240
 bitmap_extension_len = 1832
 swap_instruction = "swap_v2 (13 fixed accounts, optional bitmap extension and directional tick arrays)"
 token_extensions = "unsupported (all Token-2022 mint extensions, including zero-rate transfer fees)"
+[dlmm]
+program_id = "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo"
+source = "https://github.com/MeteoraAg/dlmm-sdk"
+commit = "1532e540db41ac405dbf4c5bb2ddfceaa1f98ff1"
+sdk_version = "1.9.15"
+account_len = 904
+bin_array_len = 10136
+bitmap_extension_len = 1576
+swap_instruction = "swap2 (classic SPL Token only, empty remaining-account slices)"
+parity_gate = "INCOMPLETE: disabled; >=200 reviewed exact coherent-state samples required"

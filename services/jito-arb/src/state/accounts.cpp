@@ -264,6 +264,98 @@ Pubkey clmm_tick_array_pda(const Pubkey& pool, int32_t start) {
   return pda({std::string_view("tick_array"), pool, Seed(be, 4)}, prog::RAYDIUM_CLMM);
 }
 
+// DLMM LbPair (repr C): parameters 8 (base_factor 8, filter_period 10, decay_period 12, reduction_factor 14,
+// variable_fee_control 16, max_volatility_accumulator 20, min_bin_id 24, max_bin_id 28, protocol_share 32,
+// base_fee_power_factor 34, function_type 35, collect_fee_mode 36), v_parameters 40 (volatility_accumulator 40,
+// volatility_reference 44, index_reference 48, last_update_timestamp 56), pair_type 75, active_id 76, bin_step 80,
+// status 82, activation_type 86, token_x_mint 88, token_y_mint 120, reserve_x 152, reserve_y 184,
+// reward_infos 264 (2 x 144, mint first), oracle 552, bin_array_bitmap 584 (16 x u64), activation_point 816,
+// token_mint_x/y_program_flag 880/881 (904 bytes).
+Result<DlmmPair> decode_dlmm_pair(const uint8_t* d, size_t n, const Pubkey& owner) {
+  if (owner != prog::METEORA_DLMM) return fail(Errc::bad_owner, "dlmm owner");
+  if (n != DLMM_PAIR_LEN) return fail(Errc::bad_length, "dlmm pair length");
+  if (std::memcmp(d, DISC_DLMM_PAIR, 8) != 0) return fail(Errc::bad_discriminator, "dlmm pair discriminator");
+  DlmmPair p;
+  p.base_factor = rd_u16(d + 8);
+  p.filter_period = rd_u16(d + 10);
+  p.decay_period = rd_u16(d + 12);
+  p.reduction_factor = rd_u16(d + 14);
+  p.variable_fee_control = rd_u32(d + 16);
+  p.max_volatility_accumulator = rd_u32(d + 20);
+  p.min_bin_id = rd_i32(d + 24);
+  p.max_bin_id = rd_i32(d + 28);
+  p.protocol_share = rd_u16(d + 32);
+  p.base_fee_power_factor = d[34];
+  p.function_type = d[35];
+  p.collect_fee_mode = d[36];
+  p.volatility_accumulator = rd_u32(d + 40);
+  p.volatility_reference = rd_u32(d + 44);
+  p.index_reference = rd_i32(d + 48);
+  p.last_update_timestamp = int64_t(rd_u64(d + 56));
+  p.pair_type = d[75];
+  p.active_id = rd_i32(d + 76);
+  p.bin_step = rd_u16(d + 80);
+  p.status = d[82];
+  p.activation_type = d[86];
+  p.token_x_mint = pk(d + 88);
+  p.token_y_mint = pk(d + 120);
+  p.reserve_x = pk(d + 152);
+  p.reserve_y = pk(d + 184);
+  p.has_rewards = !is_zero(pk(d + 264)) || !is_zero(pk(d + 264 + 144));
+  p.oracle = pk(d + 552);
+  for (int i = 0; i < 16; ++i) p.bin_array_bitmap[i] = rd_u64(d + 584 + 8 * i);
+  p.activation_point = rd_u64(d + 816);
+  p.token_x_program_flag = d[880];
+  p.token_y_program_flag = d[881];
+  if (p.bin_step == 0) return fail(Errc::bad_data, "dlmm bin step 0");
+  return p;
+}
+
+// DLMM BinArray: index 8 (i64), version 16, lb_pair 24, bins 56 (70 x 144: amount_x 0, amount_y 8, price 16,
+// liquidity_supply 32, ..., open_order_amount 112, total_processing_order_amount 120,
+// processed_order_remaining_amount 128, order_age 136, limit_order_ask_side 140).
+Result<DlmmBinArray> decode_dlmm_bin_array(const uint8_t* d, size_t n, const Pubkey& owner) {
+  if (owner != prog::METEORA_DLMM) return fail(Errc::bad_owner, "dlmm owner");
+  if (n != DLMM_BIN_ARRAY_LEN) return fail(Errc::bad_length, "dlmm bin array length");
+  if (std::memcmp(d, DISC_DLMM_BIN_ARRAY, 8) != 0) return fail(Errc::bad_discriminator, "dlmm bin array discriminator");
+  DlmmBinArray a;
+  a.index = int64_t(rd_u64(d + 8));
+  a.pair = pk(d + 24);
+  for (int i = 0; i < DLMM_BINS_PER_ARRAY; ++i) {
+    const uint8_t* b = d + 56 + 144 * size_t(i);
+    DlmmBin& x = a.bins[size_t(i)];
+    x.amount_x = rd_u64(b);
+    x.amount_y = rd_u64(b + 8);
+    x.price = rd_u128(b + 16);
+    x.open_order_amount = rd_u64(b + 112);
+    x.processed_order_remaining = rd_u64(b + 128);
+    x.limit_order_ask_side = b[140] != 0;
+  }
+  return a;
+}
+
+Result<DlmmBitmapExtension> decode_dlmm_bitmap(const uint8_t* d, size_t n, const Pubkey& owner) {
+  if (owner != prog::METEORA_DLMM) return fail(Errc::bad_owner, "dlmm bitmap owner");
+  if (n != DLMM_BITMAP_LEN) return fail(Errc::bad_length, "dlmm bitmap length");
+  if (std::memcmp(d, DISC_DLMM_BITMAP, 8)) return fail(Errc::bad_discriminator, "dlmm bitmap discriminator");
+  DlmmBitmapExtension b;
+  b.pair = pk(d + 8);
+  for (size_t i = 0; i < 96; ++i) {
+    b.positive[i] = rd_u64(d + 40 + i * 8);
+    b.negative[i] = rd_u64(d + 808 + i * 8);
+  }
+  return b;
+}
+Pubkey dlmm_bitmap_pda(const Pubkey& pair) {
+  return pda({std::string_view("bitmap"), pair}, prog::METEORA_DLMM);
+}
+
+Pubkey dlmm_bin_array_pda(const Pubkey& pair, int64_t index) {
+  uint8_t le[8];
+  std::memcpy(le, &index, 8);
+  return pda({std::string_view("bin_array"), pair, Seed(le, 8)}, prog::METEORA_DLMM);
+}
+
 // PumpSwap Pool (borsh, after the discriminator): pool_bump 8, index 9, creator 11, base_mint 43, quote_mint 75,
 // lp_mint 107, pool_base_token_account 139, pool_quote_token_account 171, lp_supply 203, coin_creator 211,
 // is_mayhem_mode 243, is_cashback_coin 244, virtual_quote_reserves 245 (i128), creator_fee_bps 261,

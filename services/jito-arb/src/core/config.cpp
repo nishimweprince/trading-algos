@@ -134,10 +134,12 @@ Config load_config(const std::string& path) {
   G(engine, cu_price_micro_lamports);
   G(dex, raydium_v4_enabled); G(dex, whirlpool_enabled); G(dex, raydium_v4_cu); G(dex, whirlpool_cu);
   G(dex, cpmm_enabled); G(dex, cpmm_cu); G(dex, pumpswap_enabled); G(dex, pumpswap_cu);
+  G(dex, dlmm_enabled); G(dex, dlmm_cu);
   G(dex, clmm_enabled); G(dex, clmm_cu);
   G(discovery, min_pool_tvl_sol); G(discovery, max_tracked_pools); G(discovery, interval_s);
   G(discovery, track_whirlpool); G(discovery, raydium_fetch_cap);
-  G(discovery, track_cpmm); G(discovery, cpmm_fetch_cap); G(discovery, track_pumpswap); G(discovery, track_clmm);
+  G(discovery, track_dlmm);
+  G(discovery, track_cpmm); G(discovery, cpmm_fetch_cap); G(discovery, dlmm_fetch_cap); G(discovery, track_pumpswap); G(discovery, track_clmm);
   G(flash, provider); G(flash, lending_market); G(flash, reserves);
   G(risk, max_daily_fee_spend_sol); G(risk, min_sol_float); G(risk, max_sol_float);
   G(risk, max_consecutive_rejects); G(risk, reject_pause_s); G(risk, max_feed_lag_ms);
@@ -145,7 +147,7 @@ Config load_config(const std::string& path) {
   G(risk, freeze_allowlist); G(risk, denylist_path); G(risk, denylist_ttl_s);
   G(keys, hot_wallet_path); G(keys, cold_wallet_pubkey); G(keys, executor_program_id);
   G(obs, metrics_addr); G(obs, metrics_port); G(obs, log_level); G(obs, log_path); G(obs, decision_log_dir);
-  G(obs, decision_log_rotate_s);
+  G(obs, decision_log_rotate_s); G(obs, skip_log_max_per_s);
   G(recorder, dir); G(recorder, rotate_s);
   G(sim, enabled); G(sim, max_per_s); G(sim, holder_refresh_s); G(sim, min_payer_lamports); G(sim, holder_seed_path);
 #undef G
