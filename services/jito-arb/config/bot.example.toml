@@ -35,9 +35,9 @@ max_bundles_per_slot = 3
 raydium_v4_enabled = true       # 313/313 exact (tests/fixtures/parity_raydium_v4.json)
 whirlpool_enabled = true        # 204/204 exact (tests/fixtures/parity_whirlpool.json)
 cpmm_enabled = true             # Raydium CPMM: 260/260 exact (tests/fixtures/parity_cpmm.json)
-dlmm_enabled = false            # blocked until >=200 reviewed exact parity samples
+dlmm_enabled = false            # explicit opt-in: 246 exact swaps; see docs/DLMM-ACCEPTANCE.md
 dlmm_cu = 140000
-clmm_enabled = false            # Raydium CLMM: until tests/fixtures/parity_clmm.json has >= 200 exact samples
+clmm_enabled = false            # explicit opt-in: 256 exact swaps (tests/fixtures/parity_clmm.json)
 pumpswap_enabled = true         # PumpSwap: 530/530 exact, sells and buys (tests/fixtures/parity_pumpswap.json)
 
 [discovery]
