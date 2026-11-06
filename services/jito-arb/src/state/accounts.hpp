@@ -238,6 +238,58 @@ Result<ClmmTickArray> decode_clmm_tick_array(const uint8_t* d, size_t n, const P
 /** Tick-array PDA ["tick_array", pool, start_index (i32 big-endian)]. */
 Pubkey clmm_tick_array_pda(const Pubkey& pool, int32_t start);
 
+// --- Meteora DLMM (MeteoraAg/dlmm-sdk@1532e54 idls/dlmm.json, commons/src) ---------------------------------
+
+constexpr size_t DLMM_PAIR_LEN = 904;
+constexpr size_t DLMM_BIN_ARRAY_LEN = 10136;
+constexpr int32_t DLMM_BINS_PER_ARRAY = 70;
+inline constexpr uint8_t DISC_DLMM_PAIR[8] = {33, 11, 49, 98, 181, 101, 177, 13};
+inline constexpr uint8_t DISC_DLMM_BIN_ARRAY[8] = {92, 142, 92, 220, 5, 148, 70, 181};
+
+struct DlmmPair {
+  // StaticParameters
+  uint16_t base_factor = 0, filter_period = 0, decay_period = 0, reduction_factor = 0;
+  uint32_t variable_fee_control = 0, max_volatility_accumulator = 0;
+  int32_t min_bin_id = 0, max_bin_id = 0;
+  uint16_t protocol_share = 0;
+  uint8_t base_fee_power_factor = 0, function_type = 0, collect_fee_mode = 0;
+  // VariableParameters
+  uint32_t volatility_accumulator = 0, volatility_reference = 0;
+  int32_t index_reference = 0;
+  int64_t last_update_timestamp = 0;
+  uint8_t pair_type = 0, status = 0, activation_type = 0;
+  int32_t active_id = 0;
+  uint16_t bin_step = 0;
+  Pubkey token_x_mint{}, token_y_mint{}, reserve_x{}, reserve_y{}, oracle{};
+  bool has_rewards = false;  // a reward mint is set
+  uint64_t bin_array_bitmap[16]{};
+  uint64_t activation_point = 0;
+  uint8_t token_x_program_flag = 0, token_y_program_flag = 0;  // 0 SPL Token, 1 Token-2022
+
+  /** FunctionType: LimitOrder (2) yes, LiquidityMining (1) no, Undetermined (0) when no reward is set. */
+  bool supports_limit_orders() const { return function_type == 2 || (function_type == 0 && !has_rewards); }
+  /** CollectFeeMode: InputOnly (0) always on input; OnlyY (1) on input only when Y goes in. */
+  bool fee_on_input(bool swap_for_y) const { return collect_fee_mode == 1 ? !swap_for_y : true; }
+};
+
+struct DlmmBin {
+  uint64_t amount_x = 0, amount_y = 0;
+  u128 price = 0;  // Q64.64 price of X in Y
+  uint64_t open_order_amount = 0, processed_order_remaining = 0;
+  bool limit_order_ask_side = false;
+};
+
+struct DlmmBinArray {
+  int64_t index = 0;
+  Pubkey pair{};
+  std::array<DlmmBin, DLMM_BINS_PER_ARRAY> bins{};
+};
+
+Result<DlmmPair> decode_dlmm_pair(const uint8_t* d, size_t n, const Pubkey& owner);
+Result<DlmmBinArray> decode_dlmm_bin_array(const uint8_t* d, size_t n, const Pubkey& owner);
+/** Bin-array PDA ["bin_array", pair, index (i64 little-endian)]. */
+Pubkey dlmm_bin_array_pda(const Pubkey& pair, int64_t index);
+
 // --- PumpSwap (pump-fun/pump-public-docs@639b87f idl/pump_amm.json, idl/pump_fees.json) -----------------------
 // Accounts grew by appended fields; a shorter (older) account reads the missing trailing fields as 0 / false.
 

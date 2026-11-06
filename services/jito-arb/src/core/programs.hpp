@@ -20,6 +20,7 @@ inline constexpr Pubkey WHIRLPOOL = PK("whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uct
 inline constexpr Pubkey RAYDIUM_CPMM = PK("CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C");
 inline constexpr Pubkey RAYDIUM_CLMM = PK("CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK");
 inline constexpr Pubkey MEMO = PK("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
+inline constexpr Pubkey METEORA_DLMM = PK("LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo");
 inline constexpr Pubkey PUMPSWAP = PK("pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA");
 inline constexpr Pubkey PUMP = PK("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P");      // bonding curve (pool-authority PDAs)
 inline constexpr Pubkey PUMP_FEES = PK("pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ");
