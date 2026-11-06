@@ -40,8 +40,15 @@ int main(int argc, char** argv) {
   Pubkey intermediate=tx::wallet_ata(owner,other,*p),base=tx::wallet_ata(owner,mint::WSOL,*p);
   auto tp=other==p->mint_a?p->mint_a_info:p->mint_b_info;
   ixs.add(prog::ATA).acc(owner,true,true).rw(intermediate).ro(owner).ro(other).ro(prog::SYSTEM).ro(tp?tp->token_program:prog::TOKEN).u8(1);
-  if (p->kind==DexKind::PumpSwap && !rpc.account(tx::dexix::pump_user_volume_accumulator(owner),"processed"))
-    tx::dexix::pump_init_user_volume(ixs,owner);
+  if (p->kind==DexKind::PumpSwap) {
+    auto volume=rpc.account(tx::dexix::pump_user_volume_accumulator(owner),"processed");
+    if (!volume) tx::dexix::pump_init_user_volume(ixs,owner);
+    else {
+      auto body=rpc.call("getMinimumBalanceForRentExemption","["+std::to_string(volume->data.size())+"]");
+      simdjson::dom::parser parser;uint64_t minimum=parser.parse(body)["result"];
+      if (minimum>volume->lamports)tx::dexix::pump_fund_user_volume(ixs,owner,minimum-volume->lamports);
+    }
+  }
   auto encoded=tx::execute_route_ix(ixs,exec,owner,cycle,legs,amount,minimum);
   if(!encoded)throw std::runtime_error(encoded.error().what);
   auto wire=app::unsigned_tx_b64(owner,ixs);
