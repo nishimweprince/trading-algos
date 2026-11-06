@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <unordered_map>
 
 #include "core/config.hpp"
 #include "engine/costs.hpp"
@@ -38,7 +39,8 @@ struct SizerDiag {
   uint64_t partial_fill = 0;  // a leg could not take its whole input (Whirlpool price limit)
   uint64_t quote_error = 0;   // a quoter returned an error at every size
   uint64_t zero_out = 0;
-  uint64_t boundary = 0;      // every size needed a tick array outside the cache
+  uint64_t boundary = 0;      // every size needed a tick array outside the cache or the 3-array window
+  uint64_t boundary_cache = 0;  // ... of which at least one size hit an array the bot does not hold
   uint64_t other = 0;
   uint64_t zero_liquidity_leg = 0;  // a Whirlpool leg with zero active liquidity (spot price is not tradable)
   uint64_t quote_error_by_code[32]{};
@@ -53,11 +55,32 @@ struct SizerExample {
   uint64_t x_max = 0, best_x = 0;
   int64_t best_profit = 0;   // base units, <= 0
   Reason reason = Reason::none;
+  uint64_t min_trade = 0;
+  Errc err = Errc::bad_data;  // last quote error (sizer_quote_error)
+  int8_t fail_leg = -1;
 };
 
 struct EngineCounters {
+  uint64_t untradable = 0;  // a leg whose pool the program rejects in that direction (until its state changes)
   uint64_t updates = 0, cycles_seen = 0, stale = 0, unsupported = 0, cooling = 0, prefilter_pass = 0, sized = 0, candidates = 0,
            sent = 0, skipped = 0;
+  // `stale` by cause (first failing leg): a component not yet seen, a resync read awaiting its push, the pool
+  // account and vaults written more than max_state_age_slots apart, or the snapshot behind the slot clock.
+  uint64_t stale_incomplete = 0, stale_resync = 0, stale_spread = 0, stale_lag = 0;
+  // Shadow pricing of cycles stale only by spread (never sent): how many cleared the spot-edge prefilter, how
+  // many sized and priced as a candidate, and the sum of their gross. Measures what the spread rule hides.
+  uint64_t spread_edge = 0, spread_priced = 0, spread_gross_lamports = 0;
+};
+
+/** Why a cycle's legs are not fresh (EngineCounters::stale_*). */
+enum class StaleCause : uint8_t { fresh = 0, incomplete, resync, spread, lag };
+
+/** A pool whose spread-only staleness hid priced candidates, for the log: the worst offenders since the last take. */
+struct SpreadExample {
+  uint32_t pool = 0;
+  uint64_t edge_hits = 0, priced = 0;  // spread-stale evaluations with this pool that cleared the prefilter / priced
+  int64_t best_net = 0;               // lamports, best priced candidate it blocked
+  uint32_t best_cycle = 0;
 };
 
 class Engine {
@@ -89,10 +112,13 @@ class Engine {
   obs::LatencyWindow& sized_edge_ppm() { return edge_ppm_; }
   /** Best realized profit / size of cycles that sized to no profit, ppm (<= 0; 60 s window). */
   obs::LatencyWindow& failed_profit_ppm() { return failed_profit_ppm_; }
-  SizerExample take_example() {
-    SizerExample e = example_;
-    example_ = {};
-    return e;
+  /** One example per failure reason (the largest predicted edge since the last take), then cleared. */
+  std::vector<SizerExample> take_examples() {
+    std::vector<SizerExample> out;
+    for (auto& e : examples_)
+      if (e.set) out.push_back(e);
+    for (auto& e : examples_) e = {};
+    return out;
   }
   const CycleIndex& cycles() const { return idx_; }
   const BasePrice* base_price(const Pubkey& mint) const;
@@ -101,9 +127,14 @@ class Engine {
     return it == reserves_.end() ? nullptr : &it->second;
   }
   bool flash_mode() const { return cfg_.flash; }
+  /** Pools that blocked the most priced candidates by spread since the last call (at most `n`), then cleared. */
+  std::vector<SpreadExample> take_spread_examples(size_t n);
 
  private:
-  bool load(const Cycle& c, Snapshots& s, uint64_t slot) const;
+  StaleCause load(const Cycle& c, Snapshots& s, uint64_t slot, uint64_t* spread_mask) const;
+  /** x_max for a cycle (depth fraction, max_trade, flash reserve or own balance); false with `why` when none. */
+  bool x_max_for(const Cycle& c, const Snapshots& s, const BasePrice& bp, uint64_t& x_max, Reason& why) const;
+  void shadow_spread(uint32_t cycle, const Cycle& c, const Snapshots& s, uint64_t spread_mask);
   const StateStore& store_;
   const CycleIndex& idx_;
   Quoters q_;
@@ -119,7 +150,11 @@ class Engine {
   EngineCounters n_;
   SizerDiag diag_;
   obs::LatencyWindow edge_ppm_, failed_profit_ppm_;
-  SizerExample example_;
+  SizerExample examples_[32];  // by Reason
+  // (pool id << 1 | a_to_b) -> snapshot seq at which every size failed with a program error (e.g. Whirlpool
+  // LiquidityUnderflow, which the chain returns too). Skipped until the pool's state changes.
+  std::unordered_map<uint64_t, uint64_t> untradable_;
+  std::unordered_map<uint32_t, SpreadExample> spread_by_pool_;
 };
 
 }  // namespace arb::engine

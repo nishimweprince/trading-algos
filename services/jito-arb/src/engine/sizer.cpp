@@ -75,6 +75,7 @@ ChainQuote quote_chain(const Cycle& c, const Snapshots& s, const Quoters& q, uin
     }
     if (r->crosses_boundary) {
       out.boundary = true;
+      out.cache_gap = r->cache_gap;
       return failed(ChainQuote::boundary_fail);
     }
     // A leg that stops short of its input (Whirlpool price limit) leaves tokens mid-route: not a clean cycle.
@@ -158,7 +159,10 @@ SizeResult size_cycle(const Cycle& c, const Snapshots& s, const Quoters& q, cons
     if (ch.boundary && (boundary_at == 0 || x < boundary_at)) boundary_at = x;
     switch (ch.fail) {
       case ChainQuote::quote_error: ++best.n_quote_error; best.last_err = ch.err; break;
-      case ChainQuote::boundary_fail: ++best.n_boundary; break;
+      case ChainQuote::boundary_fail:
+        ++best.n_boundary;
+        if (ch.cache_gap) ++best.n_boundary_cache;
+        break;
       case ChainQuote::partial_fill: ++best.n_partial; break;
       case ChainQuote::zero_out: ++best.n_zero_out; break;
       case ChainQuote::no_quoter: ++best.n_no_quoter; break;
@@ -194,9 +198,34 @@ SizeResult size_cycle(const Cycle& c, const Snapshots& s, const Quoters& q, cons
     hi = seed > cfg.x_max / 2 ? cfg.x_max : seed * 2;
     eval(seed);
   } else {
+    // No closed form (3-hop or a Whirlpool leg): the useful size can sit anywhere between min_trade and x_max,
+    // often orders of magnitude apart, so scan geometrically first (x min_trade * f^k, at most half the
+    // budget), then refine with golden-section between the best probe's neighbours. Integers only.
     lo = cfg.min_trade;
     hi = cfg.x_max;
-    eval(cfg.x_max / 4);
+    int max_probes = std::max(2, cfg.max_evals / 2);
+    u128 f = 4;
+    auto probes_for = [&](u128 step) {
+      int n = 1;
+      for (u128 x = cfg.min_trade; x < cfg.x_max && n < 1000; x *= step) ++n;
+      return n;
+    };
+    while (probes_for(f) > max_probes && f < (u128(1) << 32)) f *= 2;
+    uint64_t best_probe = 0;
+    int64_t best_v = INVALID;
+    for (u128 x = cfg.min_trade;; x *= f) {
+      uint64_t xx = x >= cfg.x_max ? cfg.x_max : uint64_t(x);
+      int64_t v = eval(xx);
+      if (v != INVALID && (best_probe == 0 || v > best_v)) {
+        best_v = v;
+        best_probe = xx;
+      }
+      if (xx == cfg.x_max) break;
+    }
+    if (best_probe) {
+      lo = std::max<uint64_t>(cfg.min_trade, uint64_t(best_probe / f));
+      hi = u128(best_probe) * f >= cfg.x_max ? cfg.x_max : uint64_t(u128(best_probe) * f);
+    }
   }
   // Golden-section on integers: 0.381966 / 0.618034 interior points, one new evaluation per step.
   auto at = [](uint64_t a, uint64_t b, uint64_t ppm) { return a + uint64_t(u128(b - a) * ppm / 1'000'000); };

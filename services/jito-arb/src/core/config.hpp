@@ -9,6 +9,12 @@
 namespace arb {
 
 struct Config {
+  struct Chain {
+    // Slot duration the time-based limits are converted with. Solana cut slots from 400 ms to 200 ms in four
+    // stages that completed in October 2026 (216.6 ms measured on the Frankfurt feed, 2026-11-05).
+    int slot_ms = 200;
+  } chain;
+
   struct Mode {
     bool dry_run = true;
     std::string funding_mode = "flash";  // flash | own
@@ -22,7 +28,7 @@ struct Config {
     std::string api_key_env = "HELIUS_API_KEY";
     int max_grpc_connections = 4;  // pool shards; plus one wallet/reserve connection
     int shard_size = 300;
-    int resync_lag_slots = 150;
+    int resync_lag_ms = 60000;  // resync a pool whose snapshot lags the slot clock by this long (was 150 x 400 ms slots)
     int reconnect_min_ms = 1000;
     int reconnect_max_ms = 30000;
     int ping_interval_ms = 10000;
@@ -58,9 +64,9 @@ struct Config {
     double target_land_rate = 0.30;
     int max_bundles_per_slot = 3;
     int max_cycles_per_pool = 64;
-    int max_send_lag_slots = 1;
+    int max_send_lag_ms = 400;  // drop a candidate whose triggering update is this old at dispatch
     int max_state_age_slots = 2;
-    int cooldown_slots = 2;
+    int cooldown_ms = 800;      // a dispatched cycle is not re-sent for this long
     int sizer_max_evals = 24;
     double alpha_init = 0.5;
     double alpha_min = 0.2, alpha_max = 0.95, alpha_step = 0.05;
@@ -136,6 +142,12 @@ struct Config {
 
   std::string pools_path = "data/pools.json";  // discovery output the feed subscribes to
 };
+
+/** Slots covering `ms` at the configured slot duration (rounded up, at least 1). */
+inline uint64_t ms_to_slots(const Config& c, int ms) {
+  int s = c.chain.slot_ms > 0 ? c.chain.slot_ms : 400;
+  return uint64_t(ms <= 0 ? 1 : (ms + s - 1) / s);
+}
 
 /** Load a TOML-subset file over the defaults. Throws on a malformed file or an unknown key. */
 Config load_config(const std::string& path);

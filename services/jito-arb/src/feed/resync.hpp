@@ -1,6 +1,6 @@
 #pragma once
 // Resync (spec §4): on reconnect, or when a pool lags the slot clock by more than
-// resync_lag_slots, re-read its accounts with getMultipleAccounts in batches of 100.
+// resync_lag_ms, re-read its accounts with getMultipleAccounts in batches of 100.
 #include <vector>
 
 #include "core/rpc.hpp"
