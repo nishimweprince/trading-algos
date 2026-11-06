@@ -19,6 +19,7 @@ std::string to_json(const PoolsFile& f) {
     std::snprintf(buf, sizeof buf, ",\"tvl_sol\":%.3f", i < f.tvl_sol.size() ? f.tvl_sol[i] : 0.0);
     s += buf;
     if (!is_zero(d.config)) s += ",\"config\":\"" + b58(d.config) + "\"";
+    if (!is_zero(d.fee_config)) s += ",\"fee_config\":\"" + b58(d.fee_config) + "\"";
     s += ",\"tick_arrays\":[";
     for (size_t j = 0; j < d.tick_arrays.size(); ++j) {
       if (j) s += ",";
@@ -59,6 +60,10 @@ bool from_json(const std::string& body, PoolsFile& out, std::string* err) {
       }
       if (std::string_view cs; e["config"].get(cs) == simdjson::SUCCESS && !b58_decode32(cs, d.config)) {
         if (err) *err = "pools file: bad config key";
+        return false;
+      }
+      if (std::string_view fs; e["fee_config"].get(fs) == simdjson::SUCCESS && !b58_decode32(fs, d.fee_config)) {
+        if (err) *err = "pools file: bad fee_config key";
         return false;
       }
       simdjson::dom::array ta;

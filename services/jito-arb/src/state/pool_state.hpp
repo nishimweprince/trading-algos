@@ -83,6 +83,10 @@ struct PoolState {
   state::Whirlpool wp;
   state::CpmmPool cpmm;
   state::CpmmConfig cpmm_cfg;
+  state::PumpPool pump;
+  state::PumpGlobalConfig pump_cfg;
+  std::shared_ptr<const state::PumpFeeConfig> pump_fees;
+  bool pump_canonical = false;  // a pump-migrated pool: the market-cap fee tiers apply
   std::array<TickArraySlot, MAX_TICK_ARRAYS> ticks{};
   uint8_t n_ticks = 0;
   // Freshness: slots of the pool account and of the vaults, newest component slot, store sequence.

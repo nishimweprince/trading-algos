@@ -84,8 +84,8 @@ struct Config {
     bool whirlpool_enabled = true;   // sim-parity 204/204 exact (2026-11-04, Helius-funded); adaptive-fee pools stay refused
     uint32_t raydium_v4_cu = 40000;  // measured on a local validator (VM step); placeholder until then
     uint32_t whirlpool_cu = 80000;
-    bool cpmm_enabled = false;       // until sim-parity proves the quoter (tests/fixtures/parity_cpmm.json)
-    uint32_t cpmm_cu = 50000;
+    bool cpmm_enabled = true;        // sim-parity 260/260 exact (tests/fixtures/parity_cpmm.json, 2026-11-06)
+    uint32_t cpmm_cu = 50000;        // simulated swap_base_input: mean 36.8k, max 46.1k CU
   } dex;
 
   struct Discovery {
