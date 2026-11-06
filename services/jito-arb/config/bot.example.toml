@@ -57,3 +57,10 @@ executor_program_id = "VERIFY"
 metrics_addr = "127.0.0.1"
 metrics_port = 9100
 log_level = "info"
+
+[sim]
+# Read-only simulateTransaction of every dry-run bundle's swap legs, paid by a public holder of the base token.
+enabled = true
+max_per_s = 5
+holder_refresh_s = 600
+min_payer_lamports = 20000000
