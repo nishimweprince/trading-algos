@@ -139,7 +139,7 @@ Config load_config(const std::string& path) {
   G(discovery, min_pool_tvl_sol); G(discovery, max_tracked_pools); G(discovery, interval_s);
   G(discovery, track_whirlpool); G(discovery, raydium_fetch_cap);
   G(discovery, track_dlmm);
-  G(discovery, track_cpmm); G(discovery, cpmm_fetch_cap); G(discovery, track_pumpswap); G(discovery, track_clmm);
+  G(discovery, track_cpmm); G(discovery, cpmm_fetch_cap); G(discovery, dlmm_fetch_cap); G(discovery, track_pumpswap); G(discovery, track_clmm);
   G(flash, provider); G(flash, lending_market); G(flash, reserves);
   G(risk, max_daily_fee_spend_sol); G(risk, min_sol_float); G(risk, max_sol_float);
   G(risk, max_consecutive_rejects); G(risk, reject_pause_s); G(risk, max_feed_lag_ms);

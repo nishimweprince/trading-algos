@@ -108,6 +108,7 @@ struct Config {
     // vault-floor path as Raydium v4, deepest first, up to cpmm_fetch_cap.
     bool track_cpmm = false;
     int cpmm_fetch_cap = 4000;
+    int dlmm_fetch_cap = 4000;  // recently updated eligible pairs before dependent-account reads
     // PumpSwap has no shared vault authority to read balances from, and over a million pools. Discovery instead
     // derives each candidate token's canonical (pump-migrated) wSOL pool and reads those that exist.
     bool track_pumpswap = false;
