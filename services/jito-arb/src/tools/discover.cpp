@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <csignal>
 #include <cstring>
 #include <fstream>
 #include <map>
@@ -303,6 +304,8 @@ int run(int argc, char** argv) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  // A stale TLS keep-alive must reach Rpc retry handling instead of terminating discovery.
+  std::signal(SIGPIPE, SIG_IGN);
   try {
     return run(argc, argv);
   } catch (const std::exception& e) {
