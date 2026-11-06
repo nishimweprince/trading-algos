@@ -28,7 +28,7 @@ const state::PumpFees* tier_fees(const std::vector<state::PumpFeeTier>& tiers, u
 }
 
 bool charges_transfer_fee(const std::shared_ptr<const state::Mint>& m) {
-  return m && m->has_transfer_fee && (m->older_fee.basis_points != 0 || m->newer_fee.basis_points != 0);
+  return m && m->has_transfer_fee;
 }
 
 }  // namespace

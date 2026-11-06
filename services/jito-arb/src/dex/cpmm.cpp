@@ -4,7 +4,7 @@
 //   programs/cp-swap/src/curve/calculator.rs CurveCalculator::swap_base_input
 //   programs/cp-swap/src/curve/fees.rs  trading_fee (ceil), creator_fee (ceil), split_creator_fee (floor)
 //   programs/cp-swap/src/curve/constant_product.rs swap_base_input_without_fees (floor)
-// Token-2022 transfer fees are not modelled: supports() refuses pools whose mints charge one.
+// Token-2022 transfer fees are not modelled: supports() refuses pools whose mints have the extension (even zero rates).
 #include "dex/quoter.hpp"
 
 namespace arb::dex {
@@ -16,7 +16,7 @@ constexpr u128 FEE_DEN = 1'000'000;
 u128 ceil_div(u128 amount, u128 num, u128 den) { return (amount * num + den - 1) / den; }
 
 bool charges_transfer_fee(const std::shared_ptr<const state::Mint>& m) {
-  return m && m->has_transfer_fee && (m->older_fee.basis_points != 0 || m->newer_fee.basis_points != 0);
+  return m && m->has_transfer_fee;
 }
 
 }  // namespace
