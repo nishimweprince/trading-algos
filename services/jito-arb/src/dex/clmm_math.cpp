@@ -218,8 +218,8 @@ bool current_array_initialized(const uint64_t bitmap[16], int32_t tick_current, 
   int32_t mult = int32_t(tick_spacing) * TICK_ARRAY_SIZE;
   int32_t c = compressed_of(tick_current, tick_spacing);
   start = (c - 512) * mult;
-  int32_t pos = std::abs(c);
-  return pos < 1024 && bit_set(bitmap, pos);
+  int32_t pos = c;
+  return pos >= 0 && pos < 1024 && bit_set(bitmap, pos);
 }
 
 bool next_initialized_array(const uint64_t bitmap[16], int32_t last_start, uint16_t tick_spacing, bool zero_for_one, int32_t& out) {
@@ -247,6 +247,45 @@ bool next_initialized_array(const uint64_t bitmap[16], int32_t last_start, uint1
     }
   out = boundary - tick_count(tick_spacing);
   return false;
+}
+
+Result<int32_t> initialized_array(const state::ClmmPool& pool, const state::ClmmBitmapExtension* extension,
+                                  int32_t last_start, bool zero_for_one, bool include_current) {
+  if (!pool.tick_spacing) return fail(Errc::bad_data, "zero tick spacing");
+  const int32_t width = tick_count(pool.tick_spacing);
+  const int32_t lo = array_start_index(MIN_TICK, pool.tick_spacing);
+  const int32_t hi = array_start_index(MAX_TICK, pool.tick_spacing);
+  if (last_start % width || last_start < lo || last_start > hi)
+    return fail(Errc::bad_data, "invalid array start");
+  const int32_t step = zero_for_one ? -width : width;
+  for (int32_t start = last_start + (include_current ? 0 : step); start >= lo && start <= hi;) {
+    const int32_t index = start / width;
+    const uint64_t* words;
+    int32_t bit;
+    if (index >= -512 && index < 512) {
+      words = pool.tick_array_bitmap;
+      bit = index + 512;
+    } else {
+      if (!extension) return fail(Errc::not_quotable, "missing bitmap extension");
+      // Negative blocks cover [-1024,-513], [-1536,-1025], ...;
+      // within each block the bit increases with the array start.
+      const int32_t block = index >= 512 ? index / 512 - 1 : (-index - 1) / 512 - 1;
+      if (block < 0 || block >= 14) return fail(Errc::bad_data, "bitmap extension range");
+      words = index >= 512 ? extension->positive[block] : extension->negative[block];
+      bit = (index % 512 + 512) % 512;
+    }
+    const int offset = bit % 64;
+    const uint64_t mask = zero_for_one ? (~uint64_t(0) >> (63 - offset)) : (~uint64_t(0) << offset);
+    const uint64_t word = words[bit / 64] & mask;
+    if (word) {
+      const int found = zero_for_one ? 63 - __builtin_clzll(word) : __builtin_ctzll(word);
+      const int32_t candidate = start + (found - offset) * width;
+      if (candidate >= lo && candidate <= hi) return candidate;
+      break;
+    }
+    start += (zero_for_one ? -offset - 1 : 64 - offset) * width;
+  }
+  return fail(Errc::insufficient_liquidity, "no initialized array in direction");
 }
 
 // ---- amounts and prices ----

@@ -71,6 +71,7 @@ void seed_virtual_tables(tx::AltManager& alts, const StateStore& store, const Pu
       case DexKind::Clmm:
         add(a, p->clmm.amm_config);
         add(a, p->clmm.observation_key);
+        add(a, state::clmm_bitmap_extension_pda(p->address));
         add(a, p->mint_a);
         add(a, p->mint_b);
         for (uint8_t t = 0; t < p->n_ticks; ++t) add(a, p->ticks[t].key);

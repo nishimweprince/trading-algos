@@ -10,13 +10,10 @@ namespace arb::dex {
 
 namespace {
 
-bool charges_transfer_fee(const std::shared_ptr<const state::Mint>& m) {
-  return m && m->has_transfer_fee && (m->older_fee.basis_points != 0 || m->newer_fee.basis_points != 0);
-}
-
 const state::ClmmTickArray* cached(const PoolState& p, int32_t start) {
   for (uint8_t i = 0; i < p.n_ticks; ++i)
-    if (p.ticks[i].start == start) return p.ticks[i].clmm.get();
+    if (p.ticks[i].start == start && p.ticks[i].state == TickArraySlot::Loaded &&
+        p.ticks[i].clmm && p.ticks[i].clmm->pool == p.address) return p.ticks[i].clmm.get();
   return nullptr;
 }
 
@@ -57,17 +54,15 @@ Result<Quote> boundary(uint64_t amount_in, bool gap) {
 
 bool ClmmQuoter::supports(const PoolState& p) const {
   if (p.kind != DexKind::Clmm || p.clmm.dynamic_fee) return false;
-  if (charges_transfer_fee(p.mint_a_info) || charges_transfer_fee(p.mint_b_info)) return false;
-  int32_t lo = 0, hi = 0;
-  clmm::bitmap_start_range(p.clmm.tick_spacing, lo, hi);
-  int32_t start = clmm::array_start_index(p.clmm.tick_current, p.clmm.tick_spacing);
-  return start >= lo && start < hi;  // else the swap needs the bitmap extension account
+  if (!p.clmm.tick_spacing || !p.mint_a_info || !p.mint_b_info) return false;
+  return state::clmm_mint_supported(*p.mint_a_info) && state::clmm_mint_supported(*p.mint_b_info) &&
+         (!p.clmm_bitmap || p.clmm_bitmap->pool == p.address);
 }
 
 Result<Quote> ClmmQuoter::quote_exact_in(const PoolState& p, bool a_to_b, uint64_t amount_in) const {
   if (p.kind != DexKind::Clmm) return fail(Errc::unsupported, "not a clmm pool");
   if (!p.complete) return fail(Errc::not_quotable, "incomplete state");
-  if (!supports(p)) return fail(Errc::unsupported, "dynamic fee, transfer fee or bitmap extension");
+  if (!supports(p)) return fail(Errc::unsupported, "dynamic fee or unsupported mint extensions");
   if (!p.clmm.swap_enabled()) return fail(Errc::unsupported, "NotApproved");
   if (amount_in == 0) return fail(Errc::zero_amount, "ZeroAmountSpecified");
   const state::ClmmPool& pool = p.clmm;
@@ -76,17 +71,13 @@ Result<Quote> ClmmQuoter::quote_exact_in(const PoolState& p, bool a_to_b, uint64
   const u128 limit = zfo ? clmm::MIN_SQRT_PRICE_X64 + 1 : clmm::MAX_SQRT_PRICE_X64 - 1;
   if (zfo ? !(limit < pool.sqrt_price_x64) : !(limit > pool.sqrt_price_x64)) return fail(Errc::overflow, "SqrtPriceLimitOverflow");
 
-  // first_tick_array_index_with_extension_info (default bitmap only).
-  int32_t cur_start = 0;
-  bool first_contains = clmm::current_array_initialized(pool.tick_array_bitmap, pool.tick_current, spacing, cur_start);
-  if (!first_contains) {
-    int32_t next = 0;
-    if (!clmm::next_initialized_array(pool.tick_array_bitmap, clmm::array_start_index(pool.tick_current, spacing), spacing, zfo, next)) {
-      if (spacing < 15) return boundary(amount_in, false);  // the program would continue in the extension
-      return fail(Errc::insufficient_liquidity, "InsufficientLiquidityForDirection");
-    }
-    cur_start = next;
+  auto first = clmm::initialized_array(pool, p.clmm_bitmap.get(), clmm::array_start_index(pool.tick_current, spacing), zfo, true);
+  if (!first) {
+    if (first.error().code == Errc::not_quotable) return boundary(amount_in, true);
+    return fail(first.error().code, first.error().what);
   }
+  int32_t cur_start = *first;
+  bool first_contains = cur_start == clmm::array_start_index(pool.tick_current, spacing);
   const state::ClmmTickArray* cur = cached(p, cur_start);
   if (!cur) return boundary(amount_in, true);
 
@@ -103,12 +94,12 @@ Result<Quote> ClmmQuoter::quote_exact_in(const PoolState& p, bool a_to_b, uint64
         next = first_in_array(*cur, zfo);
         if (!next) return fail(Errc::bad_data, "InvalidTickArray");
       } else {
-        int32_t ns = 0;
-        if (!clmm::next_initialized_array(pool.tick_array_bitmap, cur_start, spacing, zfo, ns)) {
-          if (spacing < 15) return boundary(amount_in, false);
-          return fail(Errc::insufficient_liquidity, "LiquidityInsufficient");
+        auto ns = clmm::initialized_array(pool, p.clmm_bitmap.get(), cur_start, zfo);
+        if (!ns) {
+          if (ns.error().code == Errc::not_quotable) return boundary(amount_in, true);
+          return fail(ns.error().code, ns.error().what);
         }
-        cur_start = ns;
+        cur_start = *ns;
         cur = cached(p, cur_start);
         if (!cur) return boundary(amount_in, true);
         next = first_in_array(*cur, zfo);

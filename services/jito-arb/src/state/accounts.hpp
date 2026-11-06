@@ -14,6 +14,7 @@
 #include "core/bytes.hpp"
 #include "core/error.hpp"
 #include "core/types.hpp"
+#include "core/programs.hpp"
 
 namespace arb::state {
 
@@ -231,6 +232,20 @@ struct ClmmTickArray {
   int32_t start_tick_index = 0;
   std::array<ClmmTick, CLMM_TICK_ARRAY_SIZE> ticks{};
 };
+
+constexpr size_t CLMM_BITMAP_EXTENSION_LEN = 1832;
+inline constexpr uint8_t DISC_CLMM_BITMAP_EXTENSION[8] = {60, 150, 36, 219, 97, 128, 139, 153};
+struct ClmmBitmapExtension {
+  Pubkey pool{};
+  uint64_t positive[14][8]{}, negative[14][8]{};
+};
+Result<ClmmBitmapExtension> decode_clmm_bitmap_extension(const uint8_t* d, size_t n, const Pubkey& owner);
+Pubkey clmm_bitmap_extension_pda(const Pubkey& pool);
+/** CLMM currently supports extension-free mints only, including zero-rate transfer-fee refusal. */
+inline bool clmm_mint_supported(const Mint& m) {
+  return m.token_program == prog::TOKEN ||
+         (m.token_program == prog::TOKEN_2022 && m.n_ext == 0 && m.ext_mask == 0 && !m.has_transfer_fee);
+}
 
 Result<ClmmPool> decode_clmm_pool(const uint8_t* d, size_t n, const Pubkey& owner);
 Result<ClmmConfig> decode_clmm_config(const uint8_t* d, size_t n, const Pubkey& owner);

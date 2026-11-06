@@ -88,20 +88,26 @@ std::vector<AccountMeta> swap_accounts(const PoolState& p, bool a_to_b, const Us
     v.push_back({prog::MEMO, false, false});
     v.push_back({a_to_b ? p.mint_a : p.mint_b, false, false});
     v.push_back({a_to_b ? p.mint_b : p.mint_a, false, false});
-    const uint16_t sp = p.clmm.tick_spacing;
-    int32_t start = 0;
-    if (!dex::clmm::current_array_initialized(p.clmm.tick_array_bitmap, p.clmm.tick_current, sp, start))
-      dex::clmm::next_initialized_array(p.clmm.tick_array_bitmap, dex::clmm::array_start_index(p.clmm.tick_current, sp), sp, a_to_b,
-                                        start);
-    for (int k = 0; k < 3; ++k) {
-      const TickArraySlot* slot = nullptr;
-      for (uint8_t i = 0; i < p.n_ticks; ++i)
-        if (p.ticks[i].start == start && p.ticks[i].state == TickArraySlot::Loaded) slot = &p.ticks[i];
-      if (!slot) break;
+    if (!p.clmm.tick_spacing || !p.mint_a_info || !p.mint_b_info || !state::clmm_mint_supported(*p.mint_a_info) ||
+        !state::clmm_mint_supported(*p.mint_b_info) || p.clmm.dynamic_fee)
+      throw std::invalid_argument("CLMM unsupported mint extensions or dynamic fee");
+    if (p.clmm_bitmap) {
+      if (p.clmm_bitmap->pool != p.address) throw std::invalid_argument("CLMM bitmap pool mismatch");
+      v.push_back({state::clmm_bitmap_extension_pda(p.address), false, true});
+    }
+    auto start = dex::clmm::initialized_array(p.clmm, p.clmm_bitmap.get(),
+        dex::clmm::array_start_index(p.clmm.tick_current, p.clmm.tick_spacing), a_to_b, true);
+    if (!start) throw std::invalid_argument("CLMM first initialized array unavailable");
+    for (int k = 0; k < MAX_TICK_ARRAYS; ++k) {
+      const TickArraySlot* slot = p.tick_slot(*start);
+      if (!slot || slot->state != TickArraySlot::Loaded || !slot->clmm || slot->clmm->pool != p.address ||
+          slot->key != state::clmm_tick_array_pda(p.address, *start)) {
+        if (!k) throw std::invalid_argument("CLMM first array not loaded");
+        break;
+      }
       v.push_back({slot->key, false, true});
-      int32_t next = 0;
-      if (!dex::clmm::next_initialized_array(p.clmm.tick_array_bitmap, start, sp, a_to_b, next)) break;
-      start = next;
+      start = dex::clmm::initialized_array(p.clmm, p.clmm_bitmap.get(), *start, a_to_b);
+      if (!start) break;
     }
     return v;
   }

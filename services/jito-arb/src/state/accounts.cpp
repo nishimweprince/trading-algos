@@ -198,6 +198,9 @@ Result<ClmmPool> decode_clmm_pool(const uint8_t* d, size_t n, const Pubkey& owne
   p.open_time = rd_u64(d + 1080);
   for (size_t i = 1096; i < 1176 && !p.dynamic_fee; ++i) p.dynamic_fee = d[i] != 0;
   if (p.tick_spacing == 0) return fail(Errc::bad_data, "clmm tick spacing 0");
+  if (p.tick_current < -443636 || p.tick_current > 443636 || p.sqrt_price_x64 < u128(4295048016ULL) ||
+      p.sqrt_price_x64 >= ((u128(0xfffec4b1ULL) << 64) | u128(0x845c1aa94e69579bULL)))
+    return fail(Errc::bad_data, "clmm price bounds");
   if (p.fee_on > 2) return fail(Errc::bad_data, "clmm fee_on");
   return p;
 }
@@ -236,6 +239,24 @@ Result<ClmmTickArray> decode_clmm_tick_array(const uint8_t* d, size_t n, const P
     k.limit_orders = rd_u64(t + 124) != 0 || rd_u64(t + 132) != 0;
   }
   return a;
+}
+
+Result<ClmmBitmapExtension> decode_clmm_bitmap_extension(const uint8_t* d, size_t n, const Pubkey& owner) {
+  if (owner != prog::RAYDIUM_CLMM) return fail(Errc::bad_owner, "clmm bitmap owner");
+  if (n != CLMM_BITMAP_EXTENSION_LEN) return fail(Errc::bad_length, "clmm bitmap length");
+  if (std::memcmp(d, DISC_CLMM_BITMAP_EXTENSION, 8)) return fail(Errc::bad_discriminator, "clmm bitmap discriminator");
+  ClmmBitmapExtension e;
+  std::memcpy(e.pool.data(), d + 8, 32);
+  for (size_t i = 0; i < 14; ++i)
+    for (size_t j = 0; j < 8; ++j) {
+      e.positive[i][j] = rd_u64(d + 40 + (i * 8 + j) * 8);
+      e.negative[i][j] = rd_u64(d + 936 + (i * 8 + j) * 8);
+    }
+  return e;
+}
+
+Pubkey clmm_bitmap_extension_pda(const Pubkey& pool) {
+  return pda({std::string_view("pool_tick_array_bitmap_extension"), pool}, prog::RAYDIUM_CLMM);
 }
 
 Pubkey clmm_tick_array_pda(const Pubkey& pool, int32_t start) {

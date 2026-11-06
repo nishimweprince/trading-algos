@@ -86,6 +86,7 @@ struct PoolState {
   state::CpmmConfig cpmm_cfg;
   state::ClmmPool clmm;
   state::ClmmConfig clmm_cfg;
+  std::shared_ptr<const state::ClmmBitmapExtension> clmm_bitmap;
   state::PumpPool pump;
   state::PumpGlobalConfig pump_cfg;
   std::shared_ptr<const state::PumpFeeConfig> pump_fees;

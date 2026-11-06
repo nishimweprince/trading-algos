@@ -51,7 +51,7 @@ struct PubkeyHash {
 
 /** What a subscribed account is, decided at registration. */
 enum class AccountKind : uint8_t { RaydiumPool, Whirlpool, TickArray, Vault, Mint, KaminoReserve, Wallet, CpmmPool, CpmmConfig, PumpPool, PumpGlobalConfig,
-                                    PumpFeeConfig, ClmmPool, ClmmConfig, ClmmTickArray };
+                                    PumpFeeConfig, ClmmPool, ClmmConfig, ClmmTickArray, ClmmBitmapExtension };
 
 /** A pool to track and the accounts it is built from. */
 struct PoolDef {
@@ -114,6 +114,7 @@ class StateStore {
         pool_data;
     std::shared_ptr<const state::PumpFeeConfig> pump_fees;
     std::shared_ptr<const state::ClmmTickArray> clmm_tick_array;
+    std::shared_ptr<const state::ClmmBitmapExtension> clmm_bitmap;
     std::shared_ptr<const state::TickArray> tick_array;
     std::shared_ptr<const state::Mint> mint;
     std::shared_ptr<const state::KaminoReserve> reserve;
