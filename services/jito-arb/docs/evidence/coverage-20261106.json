@@ -1,0 +1,486 @@
+{
+  "phase": 5,
+  "revision": "2ca34f5b1aa15ac19e6a7f597d1a3654c4bb124a",
+  "binary_sha256": "e082167dd47c31717ef8c72d9e2b86b2d1f8477dc4ca12d6677b7fcd1198e723",
+  "capacity": {
+    "pools": 1500,
+    "required_pool_keys": 8707,
+    "pool_streams": 6,
+    "total_streams_with_wallet": 7,
+    "overflow": 0,
+    "by_dex": {
+      "clmm": 102,
+      "cpmm": 114,
+      "dlmm": 212,
+      "pumpswap": 178,
+      "raydium_v4": 791,
+      "whirlpool": 103
+    }
+  },
+  "services": {
+    "jito-arb.service": "active",
+    "jito-arb-ui.service": "active",
+    "jito-arb-recorder.service": "inactive"
+  },
+  "by_dex": {
+    "whirlpool": 103,
+    "raydium_v4": 791,
+    "clmm": 102,
+    "dlmm": 212,
+    "cpmm": 114,
+    "pumpswap": 178
+  },
+  "archive": "/var/lib/jito-arb/archive/20261106T113514Z.L86iUf",
+  "acceptance": "installed; representative new-DEX candidate outcomes remain an observation gate",
+  "observed_utc": "2026-11-06T11:36:10Z",
+  "metrics": {
+    "arb_kill_switch": 0.0,
+    "arb_feed_reconnects": 0.0,
+    "arb_bundles_dry_run": 0.0,
+    "arb_decision_skip_logs_dropped": 543616.0,
+    "arb_pools": 1500.0,
+    "arb_cycles": 44085.0,
+    "arb_pools_quotable": 1499.0,
+    "arb_pools_tracked_raydium_v4": 791.0,
+    "arb_pools_complete_raydium_v4": 791.0,
+    "arb_pools_ready_raydium_v4": 791.0,
+    "arb_pools_supported_raydium_v4": 791.0,
+    "arb_pools_unsupported_raydium_v4": 0.0,
+    "arb_dex_enabled_raydium_v4": 1.0,
+    "arb_pools_tracked_whirlpool": 103.0,
+    "arb_pools_complete_whirlpool": 103.0,
+    "arb_pools_ready_whirlpool": 103.0,
+    "arb_pools_supported_whirlpool": 103.0,
+    "arb_pools_unsupported_whirlpool": 0.0,
+    "arb_dex_enabled_whirlpool": 1.0,
+    "arb_pools_tracked_cpmm": 114.0,
+    "arb_pools_complete_cpmm": 114.0,
+    "arb_pools_ready_cpmm": 114.0,
+    "arb_pools_supported_cpmm": 114.0,
+    "arb_pools_unsupported_cpmm": 0.0,
+    "arb_dex_enabled_cpmm": 1.0,
+    "arb_pools_tracked_dlmm": 212.0,
+    "arb_pools_complete_dlmm": 212.0,
+    "arb_pools_ready_dlmm": 211.0,
+    "arb_pools_supported_dlmm": 212.0,
+    "arb_pools_unsupported_dlmm": 0.0,
+    "arb_dex_enabled_dlmm": 1.0,
+    "arb_pools_tracked_clmm": 102.0,
+    "arb_pools_complete_clmm": 102.0,
+    "arb_pools_ready_clmm": 102.0,
+    "arb_pools_supported_clmm": 102.0,
+    "arb_pools_unsupported_clmm": 0.0,
+    "arb_dex_enabled_clmm": 1.0,
+    "arb_pools_tracked_pumpswap": 178.0,
+    "arb_pools_complete_pumpswap": 178.0,
+    "arb_pools_ready_pumpswap": 178.0,
+    "arb_pools_supported_pumpswap": 178.0,
+    "arb_pools_unsupported_pumpswap": 0.0,
+    "arb_dex_enabled_pumpswap": 1.0,
+    "arb_sim_submitted": 0.0,
+    "arb_sim_queued": 0.0,
+    "arb_sim_in_flight": 0.0,
+    "arb_sim_terminal": 0.0,
+    "arb_sim_funding_changed": 0.0,
+    "arb_sim_intermediate_balance": 0.0,
+    "arb_sim_ok": 0.0,
+    "arb_sim_failed": 0.0,
+    "arb_sim_profitable": 0.0,
+    "arb_sim_dropped": 0.0,
+    "arb_sim_no_holder": 0.0,
+    "arb_sim_too_large": 0.0,
+    "arb_sim_context_retries": 0.0,
+    "arb_sim_setup_error": 0.0,
+    "arb_sim_rpc_error": 0.0,
+    "arb_feed_shards_up": 7.0,
+    "arb_sim_mismatch_ppm_p50": -1.0,
+    "arb_sim_mismatch_ppm_p99": -1.0,
+    "arb_sim_mismatch_ppm_max": -1.0,
+    "arb_sim_mismatch_ppm_samples": 0.0,
+    "arb_sim_lag_slots_p50": -1.0,
+    "arb_sim_lag_slots_p99": -1.0,
+    "arb_sim_lag_slots_max": -1.0,
+    "arb_sim_lag_slots_samples": 0.0
+  },
+  "running_binary_verified": true,
+  "dry_run_cli_verified": true,
+  "protected_files_preserved_on_install_reset": true,
+  "dashboard_http_verified": true,
+  "dashboard_by_day": {
+    "2026-11-06": {
+      "candidates": 1013,
+      "dispatched": 0,
+      "gross_lamports": 0,
+      "tip_lamports": 0,
+      "net_lamports": 0,
+      "ev_lamports": 0,
+      "sim_ok": 0,
+      "sim_failed": 0,
+      "sim_unsimulated": 0,
+      "sim_profitable": 0,
+      "sim_net_lamports": 0
+    }
+  },
+  "ui_port": 8088,
+  "skip_log_max_per_s": 20,
+  "discovery_timer": "active",
+  "live_observation": {
+    "start_utc": "Fri 2026-11-06 10:14:56 UTC",
+    "observed_seconds": 3632,
+    "counts": {
+      "arb_bundles_dry_run": 3.0,
+      "arb_sim_submitted": 3.0,
+      "arb_sim_queued": 0.0,
+      "arb_sim_in_flight": 0.0,
+      "arb_sim_terminal": 3.0,
+      "arb_sim_funding_changed": 0.0,
+      "arb_sim_intermediate_balance": 0.0,
+      "arb_sim_ok": 0.0,
+      "arb_sim_failed": 2.0,
+      "arb_sim_profitable": 0.0,
+      "arb_sim_dropped": 0.0,
+      "arb_sim_no_holder": 0.0,
+      "arb_sim_too_large": 0.0,
+      "arb_sim_rpc_error": 1.0,
+      "arb_sim_mismatch_ppm_p50": -1.0,
+      "arb_sim_mismatch_ppm_p99": -1.0,
+      "arb_sim_mismatch_ppm_max": -1.0,
+      "arb_sim_mismatch_ppm_samples": 0.0,
+      "arb_sim_lag_slots_p50": 4.0,
+      "arb_sim_lag_slots_p99": 4.0,
+      "arb_sim_lag_slots_max": 4.0,
+      "arb_sim_lag_slots_samples": 2.0
+    },
+    "reconciled": true,
+    "fresh_live_success_gate_passed": false,
+    "separate_current_state_replay_evidence": {
+      "ok": 2,
+      "failed": 1,
+      "note": "archived quoted inputs simulated against current chain state; not historical validation or fresh candidate successes"
+    },
+    "failed_logs_inspected": "fresh Whirlpool routes failed at leg 2 / leg 3 with token insufficient funds; fixed quoted inputs exceeded preceding realized output"
+  },
+  "successful_fresh_candidate": {
+    "captured_utc": "2026-11-06T11:18:08Z",
+    "outcomes": [
+      {
+        "signature": "51NboCgkGaJLTt2XW6SinMYXDjeJpvqW5u6HFPCb69CYSTJbtHxBsifd1ddvgo9uAzXWkzmfYfrQMsWD9HhCKkeX",
+        "ok": true,
+        "reason": 0,
+        "net_lamports": -821930,
+        "leg_units": [
+          15404,
+          43952,
+          0
+        ],
+        "route": [
+          "raydium_v4",
+          "whirlpool"
+        ]
+      }
+    ]
+  },
+  "expanded_after_logcap": {
+    "signed": 10,
+    "terminal": 10,
+    "outcomes": [
+      {
+        "signature": "4DU5mGxP5NJjbQppkiaG9kCZGk7KfdvAKgs2XLv3iAegrHGHXUDLaK3Q5xtWa1sFBAHiLVRNK2v9qUaeQZcazH33",
+        "ok": false,
+        "reason": "leg 2",
+        "route": [
+          "raydium_v4",
+          "clmm"
+        ]
+      },
+      {
+        "signature": "42sFEXjrCz3tJJ1wCcAAduaqu74siVwdjVQWYyf3thU8SJWu1HkUAWwmz8PxZo9Y7wZqqr63dtUyBcyjmYrGqZWh",
+        "ok": false,
+        "reason": "leg 2",
+        "route": [
+          "clmm",
+          "raydium_v4"
+        ]
+      },
+      {
+        "signature": "4yXgYYqaVGc9EmF47m2FD9JoLPeHszBDigAdXKsVyK8eZzZ4ZeMmohzhSnHRkoscbX65NiypAuKrcFy9X5hxvrwr",
+        "ok": false,
+        "reason": "too large",
+        "route": [
+          "raydium_v4",
+          "dlmm",
+          "clmm"
+        ]
+      },
+      {
+        "signature": "62a4RHSJVyNE2Zcv8x5NNf2gWMw8FT6kuCkFs2FWcevS88cfBRemktjLSmB4SLc8CB75uygvtuKxvYD2sFUpovY9",
+        "ok": false,
+        "reason": "too large",
+        "route": [
+          "raydium_v4",
+          "dlmm",
+          "dlmm"
+        ]
+      },
+      {
+        "signature": "3F6ZEJgnqwGLXB83CC4hcJ3prHs8VuHVHijEK7no8iv32NcJAEJTRxTDoCLds4HBnSxrN324Tijm5sBa3epm6T6L",
+        "ok": false,
+        "reason": "too large",
+        "route": [
+          "dlmm",
+          "clmm",
+          "dlmm"
+        ]
+      },
+      {
+        "signature": "4Qh6gbYZwbQx9vkpeBjZzYixJCwcVCkD8Q5M4gqwbgkHWfUBQfE3ETNpBtYwqEADLHanB19FNRGQ9PdGvhtM1N33",
+        "ok": false,
+        "reason": "too large",
+        "route": [
+          "raydium_v4",
+          "dlmm",
+          "clmm"
+        ]
+      },
+      {
+        "signature": "4eFxznAKN9Kp71pVVGLymdiCYKYvBd5bBw5HrANyu24BnSyWgvCDCF3rUeHahVAow8mUzDxUH1Huw8UfTPT8dwRk",
+        "ok": false,
+        "reason": "too large",
+        "route": [
+          "dlmm",
+          "clmm",
+          "raydium_v4"
+        ]
+      },
+      {
+        "signature": "5JpSbHqYgLDWy7U7zVPzetfMoHBB8aXzqhBnEsSpXGjJLkhj2gFQofAtAbv9p8oSkermV9ka4kTSFKpSFqa4HavL",
+        "ok": false,
+        "reason": "too large",
+        "route": [
+          "dlmm",
+          "clmm",
+          "dlmm"
+        ]
+      },
+      {
+        "signature": "3so7NQGpzkGtsuSM2DqHnDuzPi88dzVFjetTMkVDz4KNNrdAa4hVtp78XUzNR9jCEwNsXUcDKMrvThWuc5vM8z5j",
+        "ok": false,
+        "reason": "rpc",
+        "route": [
+          "raydium_v4",
+          "clmm"
+        ]
+      },
+      {
+        "signature": "3pmARmQjrygWbKbyQG1Me5SVcoMaG7MKMM2d5c6pGpuZpz7Kd4hmBFGW9Lw5zrUU4Ey21BWoz8Zagfv82yDmHkts",
+        "ok": false,
+        "reason": "rpc",
+        "route": [
+          "raydium_v4",
+          "clmm"
+        ]
+      }
+    ]
+  },
+  "expanded_observation": {
+    "signed": 17,
+    "terminal": 17,
+    "outcomes": [
+      {
+        "signature": "5yS5Yck9r3pTZDFRCAuXuKY34k1Zz5s7E9NwvtTeybHYQNqL47GLJTXmKkgYjUULmP5P5fxRDEz6QS1nMg8tUei3",
+        "ok": false,
+        "reason": "too large",
+        "route": [
+          "clmm",
+          "dlmm",
+          "whirlpool"
+        ]
+      },
+      {
+        "signature": "2YG6Zdj3sqVPr95bHBhhxqUrGH4dHxdSXT3YQdtrEda6XYP8U5gW718T8ey1dq6kswmoyQ3QZ1XZy5YQF9SvoLn7",
+        "ok": false,
+        "reason": "too large",
+        "route": [
+          "whirlpool",
+          "clmm",
+          "dlmm"
+        ]
+      },
+      {
+        "signature": "dbrKvWw7DN8gNonACzqNiuf35jw4SveLSYKyjhCSJWzfnFFZpqyH5HZmNSTtFc5YcB5SpJCm1cYn5AamNq4SV8j",
+        "ok": false,
+        "reason": "too large",
+        "route": [
+          "clmm",
+          "clmm",
+          "dlmm"
+        ]
+      },
+      {
+        "signature": "jETWeHfgkXmPbDia8XYoD3mRZhPheFGQhZUEAjU9iUU1jg8DHPVzCduzdoUqsakCWPmvtSWAPXnjzi2v9n5p65q",
+        "ok": false,
+        "reason": "too large",
+        "route": [
+          "clmm",
+          "dlmm",
+          "clmm"
+        ]
+      },
+      {
+        "signature": "23DyyT6ohANKZbkkA5JsCjreDghLMdj27DTQvPzvFyGTTfNETpjTLz5Bp3PuZGBVdeCDrSMsiJQnCWda4Nz6xk41",
+        "ok": false,
+        "reason": "too large",
+        "route": [
+          "clmm",
+          "dlmm"
+        ]
+      },
+      {
+        "signature": "FzTdyTdA6mWRZDYN5ifGEBP5fLSs2u7atyjeHkTLQqVVho3VdaYDPKbnJQ6bHRwzVuczyzWysV3EgDMqpDGLiTw",
+        "ok": false,
+        "reason": "rpc",
+        "route": [
+          "dlmm",
+          "dlmm"
+        ]
+      },
+      {
+        "signature": "2kXui4egDFEFMntfhsksgC6yw2Ua8ejijs7gNaBMmD87QUjzzbg67qpDWqh9KjtRy9otq9BYGUr2NcEbcT7wCzUK",
+        "ok": false,
+        "reason": "too large",
+        "route": [
+          "dlmm",
+          "dlmm",
+          "dlmm"
+        ]
+      },
+      {
+        "signature": "Riq7qBVifZoVzUSBj7owipJ4nntK4JT2c4ZCzSwRFhbgmUNaXn8mCLXD3XD4EFC8kzQXfU6F6hpHFn6Mx35UNjQ",
+        "ok": false,
+        "reason": "rpc",
+        "route": [
+          "dlmm",
+          "raydium_v4"
+        ]
+      },
+      {
+        "signature": "4iaD8WNTedzxE4Ld6MaoMURZUDVuC8HxTCoeea1XRHPaEWw6aryYJrAry2HBDr47dgBfpz3YyB4TEvEXRM1vRWDk",
+        "ok": false,
+        "reason": "too large",
+        "route": [
+          "clmm",
+          "clmm",
+          "dlmm"
+        ]
+      },
+      {
+        "signature": "3XvDLDxznq53RptYJwwqV9E3dxyJqf9ckzLUYJSj93ULd3K75kcnguYnfdZDzQw37mYgm7a1c2xGDvbMiHJ1NgvW",
+        "ok": false,
+        "reason": "rpc",
+        "route": [
+          "raydium_v4",
+          "whirlpool",
+          "whirlpool"
+        ]
+      },
+      {
+        "signature": "2vrQaiEfFsD3pbZL8ryQn8aHqp5o3HqTVCnAbcyXQKodN87CS4hxxXUzzQQ6MfQDDnyUgc3SkLcUPk9P8q49Q1Gq",
+        "ok": false,
+        "reason": "rpc",
+        "route": [
+          "dlmm",
+          "dlmm"
+        ]
+      },
+      {
+        "signature": "mGXn4HBB4MG79jD8LwSN2ZvyCrjvyzrPHfnS8i4tbGLGXK6akhu8fUvQ6wCXLudt9AEeNt8ZkEGJMY2XZB98svj",
+        "ok": false,
+        "reason": "too large",
+        "route": [
+          "raydium_v4",
+          "dlmm",
+          "whirlpool"
+        ]
+      },
+      {
+        "signature": "2pMopxdx5fr6ScxMoNE75s1Cq84NvBc87cAsT5p3V2T6JaRyPjH9hUhGidJJ75oc31xVLYJLNAs4LMreXKHbC9ek",
+        "ok": false,
+        "reason": "too large",
+        "route": [
+          "dlmm",
+          "dlmm",
+          "dlmm"
+        ]
+      },
+      {
+        "signature": "3a3JMdmLJwFY8hocLdPP4nt3c4teTPTn9iugrYkRZNq2TDBagub2gajfMZUBNePVhRLCJKaKC6MTfAMS3j1eSUGb",
+        "ok": false,
+        "reason": "too large",
+        "route": [
+          "dlmm",
+          "dlmm",
+          "dlmm"
+        ]
+      },
+      {
+        "signature": "4ivibo6Ng5JRr8iZvQBGznmNQj1qBCuFxE1rA4KHqwgLEenNzPWR6sfQx63cBdEoyWUHR69M9JLcQk6KEk5eWKyw",
+        "ok": false,
+        "reason": "rpc",
+        "route": [
+          "dlmm",
+          "dlmm"
+        ]
+      },
+      {
+        "signature": "3TXnoLDw2wcsncrtvQdT13AQhKDYV3TW2pKNWGUodkK2H6wcVgKpVMAeNyUGJKBEWjyXCXpqS4Zwqzrr3bm3QTxs",
+        "ok": false,
+        "reason": "rpc",
+        "route": [
+          "dlmm",
+          "dlmm"
+        ]
+      },
+      {
+        "signature": "5aBkefQHNziEA2ZJrTk8juhcvBAEiDBdS9iR85c79PmxQmvBUkfQNGheT2LzxTVryRp4zro13FQrcD1x2DE6Y1Ax",
+        "ok": false,
+        "reason": "rpc",
+        "route": [
+          "dlmm",
+          "dlmm"
+        ]
+      }
+    ]
+  },
+  "preprocessed_gate": {
+    "grpc_code": 12,
+    "status": "UNIMPLEMENTED",
+    "tracked_filter_accounts": 1047,
+    "phase_stopped": true
+  },
+  "parity_exact": {
+    "cpmm": 260,
+    "pumpswap": 530,
+    "clmm": 256,
+    "dlmm": 246
+  },
+  "local_validator_executor_passed": [
+    "cpmm",
+    "pumpswap",
+    "clmm",
+    "dlmm"
+  ],
+  "tests": {
+    "integration_laptop": 104,
+    "integration_vm": 104,
+    "deploy": 7,
+    "ui": 5,
+    "phase_laptop": [
+      57,
+      66,
+      72,
+      78,
+      91,
+      104
+    ]
+  }
+}
