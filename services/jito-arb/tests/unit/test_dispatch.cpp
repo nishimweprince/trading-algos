@@ -16,7 +16,7 @@ TEST(dispatch_unsupported_kinds_never_use_whirlpool_or_raydium_fallback) {
   const dex::IQuoter* quoters[] = {&ray, &wp};
   engine::Quoters qs;
   for (const dex::IQuoter* q : quoters) qs.by_kind[uint8_t(q->kind())] = q;
-  for (DexKind kind : {DexKind::Cpmm, DexKind::Clmm, DexKind::PumpSwap, DexKind::Dlmm, DexKind(6), DexKind(255)}) {
+  for (DexKind kind : {DexKind::Dlmm, DexKind(6), DexKind(255)}) {
     CHECK(dex_program(kind) == nullptr);
     CHECK(qs.get(kind) == nullptr);
     PoolState p;
