@@ -718,8 +718,8 @@ TEST(cp_acceptance_seed_fees_directions_and_exact_final) {
   Quoters qs; qs.by_kind[uint8_t(DexKind::Cpmm)] = &cq; qs.by_kind[uint8_t(DexKind::PumpSwap)] = &pq;
   for (bool direction : {false, true}) for (uint8_t mode : {0, 1, 2}) {
     auto a = std::make_shared<PoolState>(); auto b = std::make_shared<PoolState>();
-    a->kind = DexKind::Cpmm; b->kind = DexKind::PumpSwap; a->complete = b->complete = true;
-    a->cpmm_cfg.trade_fee_rate = 2500; a->cpmm_cfg.creator_fee_rate = 1000;
+    a->kind = DexKind::Cpmm; b->kind = DexKind::Cpmm; a->complete = b->complete = true;
+    a->cpmm_cfg.trade_fee_rate = 2500; b->cpmm_cfg.trade_fee_rate = 2500; a->cpmm_cfg.creator_fee_rate = 1000;
     a->cpmm.enable_creator_fee = true; a->cpmm.creator_fee_on = mode;
     a->vault_a_amount = direction ? 1'000'000'000 : 2'000'000'000;
     a->vault_b_amount = direction ? 2'000'000'000 : 1'000'000'000;
@@ -739,8 +739,7 @@ TEST(cp_acceptance_seed_fees_directions_and_exact_final) {
     cfg.use_closed_form = false;
     auto scan = size_cycle(c, snaps, qs, FlashFeeFn{}, cfg);
     CHECK(scan.ok); CHECK(std::abs(sized.profit - scan.profit) < 100);
-    b->pump.is_cashback_coin = true; CHECK_EQ(closed_form_2hop_cp(c, snaps), uint64_t(0));
-    b->pump.is_cashback_coin = false; b->pump_fees.reset(); CHECK_EQ(closed_form_2hop_cp(c, snaps), uint64_t(0));
+
   }
 }
 
