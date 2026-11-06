@@ -1,7 +1,6 @@
 #include "engine/sizer.hpp"
 
 #include <algorithm>
-#include <cmath>
 
 #include "core/u256.hpp"
 #include "flash/kamino.hpp"
@@ -17,11 +16,11 @@ u128 mul_shr64_sat(u128 a, u128 b) {
   return p.fits_u128() ? p.lo128() : ~u128(0);
 }
 
-// Raydium v4 effective reserves (vault - need_take_pnl) and fee keep-fraction n/d, as the quoter uses them.
+// Effective CP reserves and input keep-fraction n/d. Output fees scale ro
+// down with integer arithmetic for seeding only; final quotes stay exact.
 struct CpLeg {
   u128 ri = 0, ro = 0;
   u128 n = 0, d = 0;
-  long double output_keep = 1;
 };
 
 bool cp_leg(const PoolState& p, bool a_to_b, CpLeg& out) {
@@ -38,7 +37,7 @@ bool cp_leg(const PoolState& p, bool a_to_b, CpLeg& out) {
       if (rate >= 1'000'000 || creator >= 1'000'000 || (input && rate == 0)) return false;
       out.d = 1'000'000;
       out.n = out.d - rate;
-      if (!input) out.output_keep = 1 - static_cast<long double>(creator) / 1'000'000;
+      if (!input) out.ro = out.ro * (1'000'000 - creator) / 1'000'000;
     } else {
       if (!dex::PumpSwapQuoter{}.supports(p) || (p.pump_cfg.disable_flags & (1u << (a_to_b ? 4 : 3)))) return false;
       if (p.pump_canonical && !p.mint_a_info) return false;
@@ -48,13 +47,13 @@ bool cp_leg(const PoolState& p, bool a_to_b, CpLeg& out) {
       if (rate >= 10'000) return false;
       if (a_to_b) {
         out.n = out.d = 10'000;
-        out.output_keep = 1 - static_cast<long double>(rate) / 10'000;
+        out.ro = out.ro * (10'000 - rate) / 10'000;
       } else {
         out.n = 10'000;
         out.d = 10'000 + rate;
       }
     }
-    return true;
+    return out.ro > 0;
   }
   if (p.kind != DexKind::RaydiumV4 || p.ray.swap_fee_denominator == 0) return false;
   if (p.vault_a_amount < p.ray.need_take_pnl_coin || p.vault_b_amount < p.ray.need_take_pnl_pc) return false;
@@ -136,24 +135,16 @@ uint64_t closed_form_2hop_cp(const Cycle& c, const Snapshots& s) {
   if (c.n != 2) return 0;
   CpLeg l1, l2;
   if (!cp_leg(*s[0], c.legs[0].a_to_b, l1) || !cp_leg(*s[1], c.legs[1].a_to_b, l2)) return 0;
-  if (s[0]->kind != DexKind::RaydiumV4 || s[1]->kind != DexKind::RaydiumV4) {
-    // Continuous CP approximation only seeds the search. Every candidate and the final
-    // result still run through quote_chain with exact integer fees and rounding.
-    const long double k1 = static_cast<long double>(l1.n) / static_cast<long double>(l1.d);
-    const long double k2 = static_cast<long double>(l2.n) / static_cast<long double>(l2.d);
-    const long double a1 = k1 * l1.output_keep * static_cast<long double>(l1.ro);
-    const long double a2 = k2 * l2.output_keep * static_cast<long double>(l2.ro);
-    const long double b = static_cast<long double>(l1.ri) * static_cast<long double>(l2.ri);
-    const long double den = k1 * static_cast<long double>(l2.ri) + k2 * a1;
-    const long double x = (std::sqrt(a1 * a2 * b) - b) / den;
-    if (!std::isfinite(x) || x <= 0) return 0;
-    return x >= static_cast<long double>(UINT64_MAX) ? UINT64_MAX : uint64_t(x);
-  }
   // S = sqrt(n1 n2 ro1 ro2 ri1 ri2) * 2^16, from integer roots of the reserve products.
+  // Q16 root scaling must fit before shifting; unsupported bit extremes
+  // return no seed so size_cycle uses its geometric search instead of truncating.
+  constexpr u128 ROOT_LIMIT = (~u128(0)) >> 32;
+  const u128 nn = l1.n * l2.n, dd = l1.d * l2.d;
+  if (nn > ROOT_LIMIT || dd > ROOT_LIMIT) return 0;
   u128 ab = isqrt_u128(l1.ro * l2.ro) * isqrt_u128(l1.ri * l2.ri);
   U256 s_scaled = U256::mul(ab, isqrt_u128((l1.n * l2.n) << 32));             // * 2^16
-  U256 num = U256::mul(s_scaled.shr(16).lo128(), isqrt_u128((l1.d * l2.d) << 32));  // S * sqrt(d1 d2) * 2^16
   if (!s_scaled.shr(16).fits_u128()) return 0;
+  U256 num = U256::mul(s_scaled.shr(16).lo128(), isqrt_u128(dd << 32));  // S * sqrt(d1 d2) * 2^16
   num = num.shr(16);
   U256 a_dd = U256::mul(l1.ri * l2.ri, l1.d * l2.d);
   if (num.lte(a_dd)) return 0;  // no profitable size
