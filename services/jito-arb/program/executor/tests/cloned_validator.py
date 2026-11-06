@@ -37,16 +37,25 @@ def main():
           '--bind-address','127.0.0.1','--bpf-program',m['executor'],a.program]
     for k,v in fetched.items():
         if not v:continue
+        # Fresh local slots precede mainnet program deployments; rebase ProgramData metadata.
+        if v['owner']==loader:
+            data=bytearray(base64.b64decode(v['data'][0]))
+            if int.from_bytes(data[:4],'little')==3:
+                data[4:12]=bytes(8)
+                v=dict(v,data=[base64.b64encode(data).decode(),'base64'])
         f=root/(k+'.json');f.write_text(json.dumps({'pubkey':k,'account':v}));args+=['--account',k,str(f)]
-    # Test funding is local-validator lamports only; the owner still uses its cloned wSOL for the route.
-    args+=['--account-dir',str(root/'empty') ] if False else []
     log=open(root/'validator.log','w');proc=subprocess.Popen(args,stdout=log,stderr=subprocess.STDOUT)
     try:
         for _ in range(120):
             if proc.poll()is not None:raise RuntimeError('validator exited; inspect '+str(root/'validator.log'))
-            try:rpc(local,'getSlot',[]);break
-            except Exception:time.sleep(.5)
+            try:
+                if rpc(local,'getSlot',[{'commitment':'processed'}])>=2:break
+            except Exception:pass
+            time.sleep(.5)
         else:raise RuntimeError('validator startup timed out')
+        holder=rpc(local,'getAccountInfo',[m['holder'],{'encoding':'base64','commitment':'processed'}])['value']
+        if not holder or holder['lamports']<20000000:
+            raise RuntimeError('cloned payer missing or underfunded')
         base=[a.probe,'--pool',m['pool'],'--holder',m['holder'],'--executor',m['executor'],'--rpc',local,'--amount','1000000']
         def run(minimum):
             r=subprocess.run(base+['--min-out',str(minimum)],capture_output=True,text=True)
