@@ -72,6 +72,12 @@ Runtime::Runtime(const Config& cfg, const PoolsFile& pools)
   engine_ = std::make_unique<engine::Engine>(store_, idx_, make_quoters(cfg, ray_q_, wp_q_, cpmm_q_, pump_q_, clmm_q_, dlmm_q_), engine::engine_config(cfg), tips_);
   engine_->on_skip([this](const engine::Opportunity& o, engine::Reason why) {
     if (!log_) return;
+    if (cfg_.obs.skip_log_max_per_s) {
+      const int64_t second = wall_ms_ / 1000;
+      if (second != skip_log_second_) { skip_log_second_ = second; skip_logs_this_second_ = 0; }
+      if (skip_logs_this_second_ >= cfg_.obs.skip_log_max_per_s) { ++stats_.skip_logs_dropped; return; }
+      ++skip_logs_this_second_;
+    }
     obs::DecisionRecord r = make_record(store_, idx_.cycle(o.cycle), o, wall_ms_);
     r.action = uint8_t(obs::Action::Skipped);
     r.reason = uint8_t(why);
