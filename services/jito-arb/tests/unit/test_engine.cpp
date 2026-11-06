@@ -765,3 +765,25 @@ TEST(cp_acceptance_seed_pump_tiers_and_fallback) {
   CHECK(closed_form_2hop_cp(c, s) > 0);
   a->pump_cfg.disable_flags = 16; CHECK_EQ(closed_form_2hop_cp(c, s), uint64_t(0));
 }
+
+TEST(cp_acceptance_seed_bit_extremes_fall_back_without_truncation) {
+  Cycle c; c.n = 2; c.legs[0].a_to_b = true; c.legs[1].a_to_b = false;
+  auto a = std::make_shared<PoolState>(); auto b = std::make_shared<PoolState>();
+  a->kind = b->kind = DexKind::RaydiumV4;
+  a->complete = b->complete = true;
+  a->vault_a_amount = b->vault_b_amount = UINT64_MAX / 2;
+  a->vault_b_amount = b->vault_a_amount = UINT64_MAX;
+  a->ray.swap_fee_denominator = b->ray.swap_fee_denominator = UINT64_MAX;
+  a->ray.swap_fee_numerator = b->ray.swap_fee_numerator = 1;
+  Snapshots s{}; s[0] = a; s[1] = b;
+  CHECK_EQ(closed_form_2hop_cp(c, s), uint64_t(0));  // n*n and d*d cannot be Q16 scaled
+  a->kind = b->kind = DexKind::Cpmm;
+  a->cpmm_cfg.trade_fee_rate = b->cpmm_cfg.trade_fee_rate = 2500;
+  CHECK_EQ(closed_form_2hop_cp(c, s), uint64_t(0));  // S>>16 exceeds u128
+  a->vault_a_amount = b->vault_b_amount = 1'000'000;
+  a->vault_b_amount = b->vault_a_amount = 2'000'000;
+  CHECK(closed_form_2hop_cp(c, s) > 0);
+  a->cpmm.creator_fee_on = 2; a->cpmm.enable_creator_fee = true;
+  a->cpmm_cfg.creator_fee_rate = 999999; a->vault_b_amount = 1;
+  CHECK_EQ(closed_form_2hop_cp(c, s), uint64_t(0));  // output reserve scales to zero
+}
