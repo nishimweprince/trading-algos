@@ -169,6 +169,79 @@ Result<CpmmConfig> decode_cpmm_config(const uint8_t* d, size_t n, const Pubkey& 
   return c;
 }
 
+// PumpSwap Pool (borsh, after the discriminator): pool_bump 8, index 9, creator 11, base_mint 43, quote_mint 75,
+// lp_mint 107, pool_base_token_account 139, pool_quote_token_account 171, lp_supply 203, coin_creator 211,
+// is_mayhem_mode 243, is_cashback_coin 244, virtual_quote_reserves 245 (i128), creator_fee_bps 261,
+// can_edit_creator_fee 269, is_holder_reward 270, protocol_fees 271, creator_fees 279 (287 bytes in full).
+Result<PumpPool> decode_pump_pool(const uint8_t* d, size_t n, const Pubkey& owner) {
+  if (owner != prog::PUMPSWAP) return fail(Errc::bad_owner, "pumpswap owner");
+  if (n < PUMP_POOL_MIN_LEN) return fail(Errc::bad_length, "pumpswap pool length");
+  if (std::memcmp(d, DISC_PUMP_POOL, 8) != 0) return fail(Errc::bad_discriminator, "pumpswap pool discriminator");
+  PumpPool p;
+  p.index = rd_u16(d + 9);
+  p.creator = pk(d + 11);
+  p.base_mint = pk(d + 43);
+  p.quote_mint = pk(d + 75);
+  p.pool_base_token_account = pk(d + 139);
+  p.pool_quote_token_account = pk(d + 171);
+  if (n >= 243) p.coin_creator = pk(d + 211);
+  if (n >= 244) p.is_mayhem_mode = d[243] != 0;
+  if (n >= 245) p.is_cashback_coin = d[244] != 0;
+  if (n >= 261) p.virtual_quote_reserves = i128(rd_u128(d + 245));
+  if (n >= 269) p.creator_fee_bps = rd_u64(d + 261);
+  if (n >= 279) p.protocol_fees = rd_u64(d + 271);
+  if (n >= 287) p.creator_fees = rd_u64(d + 279);
+  return p;
+}
+
+// PumpSwap GlobalConfig: admin 8, lp_fee_basis_points 40, protocol_fee_basis_points 48, disable_flags 56,
+// protocol_fee_recipients 57 (8x32), coin_creator_fee_basis_points 313, admin_set_coin_creator_authority 321,
+// whitelist_pda 353, reserved_fee_recipient 385, mayhem_mode_enabled 417, reserved_fee_recipients 418 (7x32),
+// is_cashback_enabled 642, buyback_fee_recipients 643 (8x32), buyback_basis_points 899, boost_authority 907,
+// boost_enabled 939, creator_fee_configurable 940, max_configurable_creator_fee_bps 941 (949 bytes).
+Result<PumpGlobalConfig> decode_pump_global_config(const uint8_t* d, size_t n, const Pubkey& owner) {
+  if (owner != prog::PUMPSWAP) return fail(Errc::bad_owner, "pumpswap owner");
+  if (n < 899) return fail(Errc::bad_length, "pumpswap global config length");
+  if (std::memcmp(d, DISC_PUMP_GLOBAL_CONFIG, 8) != 0) return fail(Errc::bad_discriminator, "pumpswap global config discriminator");
+  PumpGlobalConfig g;
+  g.disable_flags = d[56];
+  for (int i = 0; i < 8; ++i) g.buyback_fee_recipients[i] = pk(d + 643 + 32 * i);
+  if (n > 940) g.creator_fee_configurable = d[940] != 0;
+  return g;
+}
+
+// Pump Fees FeeConfig (borsh): bump 8, admin 9, flat_fees 41 (3 x u64), fee_tiers (u32 len + len x (u128, 3 x u64)),
+// stable_fee_tiers (same), exotic_flat_fees (3 x u64; zeros when the account predates it).
+Result<PumpFeeConfig> decode_pump_fee_config(const uint8_t* d, size_t n, const Pubkey& owner) {
+  if (owner != prog::PUMP_FEES) return fail(Errc::bad_owner, "pump fees owner");
+  if (n < 65 + 8) return fail(Errc::bad_length, "pump fee config length");
+  if (std::memcmp(d, DISC_PUMP_FEE_CONFIG, 8) != 0) return fail(Errc::bad_discriminator, "pump fee config discriminator");
+  PumpFeeConfig c;
+  size_t o = 41;
+  auto fees = [&](PumpFees& f) {
+    f.lp_fee_bps = rd_u64(d + o);
+    f.protocol_fee_bps = rd_u64(d + o + 8);
+    f.creator_fee_bps = rd_u64(d + o + 16);
+    o += 24;
+  };
+  fees(c.flat_fees);
+  for (auto* tiers : {&c.fee_tiers, &c.stable_fee_tiers}) {
+    if (o + 4 > n) return fail(Errc::bad_length, "pump fee config tiers");
+    uint32_t len = rd_u32(d + o);
+    o += 4;
+    if (len > 64 || o + size_t(len) * 40 > n) return fail(Errc::bad_data, "pump fee config tier count");
+    for (uint32_t i = 0; i < len; ++i) {
+      PumpFeeTier t;
+      t.market_cap_lamports_threshold = rd_u128(d + o);
+      o += 16;
+      fees(t.fees);
+      tiers->push_back(t);
+    }
+  }
+  if (o + 24 <= n) fees(c.exotic_flat_fees);
+  return c;
+}
+
 // Whirlpool (after the 8-byte discriminator): whirlpools_config 8, bump 40, tick_spacing 41, fee_tier_index_seed 43,
 // fee_rate 45, protocol_fee_rate 47, liquidity 49, sqrt_price 65, tick_current_index 81, protocol_fee_owed_a 85,
 // protocol_fee_owed_b 93, token_mint_a 101, token_vault_a 133, fee_growth_global_a 165, token_mint_b 181,

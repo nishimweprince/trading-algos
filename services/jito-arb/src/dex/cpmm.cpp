@@ -77,6 +77,14 @@ bool cp_reserves(const PoolState& p, bool a_to_b, uint64_t& rin, uint64_t& rout)
       owed_a = p.cpmm.fees_owed_0();
       owed_b = p.cpmm.fees_owed_1();
       break;
+    case DexKind::PumpSwap: {
+      // Effective quote reserves = quote vault + virtual_quote_reserves (signed); base is the raw vault.
+      i128 q = i128(b) + p.pump.virtual_quote_reserves;
+      if (q < 0 || q > i128(UINT64_MAX)) return false;
+      rin = a_to_b ? a : uint64_t(q);
+      rout = a_to_b ? uint64_t(q) : a;
+      return true;
+    }
     default:
       return false;
   }

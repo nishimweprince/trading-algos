@@ -34,7 +34,7 @@ max_bundles_per_slot = 3
 # A DEX is enabled only after its quoter matches the chain exactly on >= 200 sim-parity samples.
 raydium_v4_enabled = true       # 313/313 exact (tests/fixtures/parity_raydium_v4.json)
 whirlpool_enabled = true        # 204/204 exact (tests/fixtures/parity_whirlpool.json)
-cpmm_enabled = false            # Raydium CPMM: until tests/fixtures/parity_cpmm.json has >= 200 exact samples
+cpmm_enabled = true             # Raydium CPMM: 260/260 exact (tests/fixtures/parity_cpmm.json)
 
 [discovery]
 min_pool_tvl_sol = 50

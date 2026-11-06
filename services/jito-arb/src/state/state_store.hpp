@@ -50,7 +50,8 @@ struct PubkeyHash {
 };
 
 /** What a subscribed account is, decided at registration. */
-enum class AccountKind : uint8_t { RaydiumPool, Whirlpool, TickArray, Vault, Mint, KaminoReserve, Wallet, CpmmPool, CpmmConfig };
+enum class AccountKind : uint8_t { RaydiumPool, Whirlpool, TickArray, Vault, Mint, KaminoReserve, Wallet, CpmmPool, CpmmConfig, PumpPool, PumpGlobalConfig,
+                                    PumpFeeConfig };
 
 /** A pool to track and the accounts it is built from. */
 struct PoolDef {
@@ -58,7 +59,8 @@ struct PoolDef {
   Pubkey address{};
   Pubkey mint_a{}, mint_b{}, vault_a{}, vault_b{};
   std::vector<std::pair<int32_t, Pubkey>> tick_arrays;  // Whirlpool: (start index, PDA)
-  Pubkey config{};  // CPMM: the AmmConfig holding the fee rates (shared by many pools)
+  Pubkey config{};      // CPMM: the AmmConfig holding the fee rates; PumpSwap: the GlobalConfig (shared by many pools)
+  Pubkey fee_config{};  // PumpSwap: the Pump Fees FeeConfig (market-cap fee tiers)
 };
 
 struct AccountUpdate {
@@ -107,7 +109,10 @@ class StateStore {
     uint64_t slot = 0, write_version = 0;
     bool seen = false, missing = false;
     bool awaiting_push = false;  // last applied value came from a resync
-    std::variant<std::monostate, state::RaydiumV4, state::Whirlpool, state::TokenAccount, state::CpmmPool, state::CpmmConfig> pool_data;
+    std::variant<std::monostate, state::RaydiumV4, state::Whirlpool, state::TokenAccount, state::CpmmPool, state::CpmmConfig,
+                 state::PumpPool, state::PumpGlobalConfig>
+        pool_data;
+    std::shared_ptr<const state::PumpFeeConfig> pump_fees;
     std::shared_ptr<const state::TickArray> tick_array;
     std::shared_ptr<const state::Mint> mint;
     std::shared_ptr<const state::KaminoReserve> reserve;
@@ -116,6 +121,7 @@ class StateStore {
   struct PoolSlot {
     PoolDef def;
     RcuPtr<PoolState> snap;
+    int8_t pump_canonical = -1;  // PumpSwap: pool.creator is the base mint's pump pool-authority PDA (-1 = not yet known)
   };
   AccountEntry& entry(const Pubkey& k, AccountKind kind);
   void rebuild(uint32_t id);
