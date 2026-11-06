@@ -153,6 +153,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   auto& g_dry = reg.gauge("arb_bundles_dry_run", "bundles built and signed in dry run");
   auto& g_rec = reg.gauge("arb_recorder_bytes", "bytes written by the recorder");
   auto& g_kill = reg.gauge("arb_kill_switch", "1 while the KILL file is present");
+  auto& g_skip_logs = reg.gauge("arb_decision_skip_logs_dropped", "skipped decision records sampled out; signed candidates and outcomes are never sampled here");
   auto& g_pools = reg.gauge("arb_pools", "tracked pools");
   auto& g_cycles = reg.gauge("arb_cycles", "indexed cycles");
   auto& g_quotable = reg.gauge("arb_pools_quotable", "pools whose snapshot is quotable now");
@@ -362,6 +363,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
           if (p->complete) ++coverage_counts[d][coverage_quoters[d]->supports(*p)?3:4];
         }
       }
+      g_skip_logs.set(int64_t(rt.stats().skip_logs_dropped));
       g_quotable.set(q);
       for (uint8_t d=0; d<6; ++d) for (size_t f=0; f<5; ++f) coverage_gauges[d][f]->set(coverage_counts[d][f]);
       uint64_t tnow = mono_ns();
