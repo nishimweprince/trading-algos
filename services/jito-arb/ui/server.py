@@ -44,7 +44,7 @@ REASONS = ["none", "base_price_unknown", "no_profit", "cu_over_budget", "below_m
            "sizer_no_profit", "sizer_partial_fill", "sizer_quote_error", "sizer_zero_out"]
 ACTIONS = {0: "skipped", 1: "sent", 2: "dry_run"}
 # Outcome records (kind 2) of a dry-run bundle's simulation: reason byte = the failing piece (obs::SimFail).
-SIM_FAIL = {0: "", 1: "leg 1", 2: "leg 2", 3: "leg 3", 0x10: "ata setup", 0x20: "too large", 0x21: "no holder", 0x22: "rpc",
+SIM_FAIL = {0: "", 1: "leg 1", 2: "leg 2", 3: "leg 3", 0x10: "setup", 0x20: "too large", 0x21: "no holder", 0x22: "rpc",
             0x23: "holder moved", 0x24: "consumed inventory", 0x25: "shutdown", 0x2f: "other"}
 DEXES = {0: "raydium_v4", 1: "whirlpool", 2: "cpmm", 3: "dlmm", 4: "clmm", 5: "pumpswap"}
 B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
@@ -174,7 +174,7 @@ def sim_label(s):
     if s[5] == 5:
         return "ok"
     why = SIM_FAIL.get(s[3], str(s[3]))
-    return ("not simulated: " if s[3] >= 0x20 else "failed: ") + why
+    return ("not simulated: " if s[3] >= 0x10 else "failed: ") + why
 
 
 def read_decisions(data_dir, hours):
@@ -226,7 +226,7 @@ def read_decisions(data_dir, hours):
                 d["sim_net_lamports"] += s[19]
                 if s[19] > 0:
                     d["sim_profitable"] += 1
-            elif s[3] >= 0x20:  # not a route failure: too large, no holder, rpc
+            elif s[3] >= 0x10:  # not a route failure: too large, no holder, rpc
                 d["sim_unsimulated"] += 1
             else:
                 d["sim_failed"] += 1
