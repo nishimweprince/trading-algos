@@ -229,3 +229,14 @@ TEST(dlmm_store_roundtrip_dependencies_and_poisoned_update) {
     CHECK(apply(d->mint_a,{}, {},101,true));CHECK(!store.pool(id)->complete);
   }
 }
+
+TEST(dlmm_volatility_reduction_checks_scaled_value) {
+  auto p = pool();
+  p.dlmm.filter_period = 1; p.dlmm.decay_period = 100;
+  p.dlmm.last_update_timestamp = p.dlmm_clock.unix_timestamp - 2;
+  p.dlmm.volatility_accumulator = 2'000'000;
+  p.dlmm.reduction_factor = 5000;
+  auto ctx = dex::dlmm::fee_context(p);
+  CHECK(ctx.has_value());
+  if (ctx) CHECK_EQ(ctx->volatility_reference, uint32_t(1'000'000));
+}
