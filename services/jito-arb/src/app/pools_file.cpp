@@ -49,9 +49,15 @@ bool from_json(const std::string& body, PoolsFile& out, std::string* err) {
     for (auto e : pools) {
       PoolDef d;
       std::string_view kind;
-      if (e["kind"].get(kind) != simdjson::SUCCESS) continue;
+      if (e["kind"].get(kind) != simdjson::SUCCESS) {
+        if (err) *err = "pools file: missing or invalid kind";
+        return false;
+      }
       auto k = dex_kind_from_name(kind);
-      if (!k || !dex_program(*k)) continue;  // a kind this build does not support
+      if (!k || !dex_program(*k)) {
+        if (err) *err = "pools file: unsupported kind " + std::string(kind);
+        return false;
+      }
       d.kind = *k;
       if (!key(e, "address", d.address) || !key(e, "mint_a", d.mint_a) || !key(e, "mint_b", d.mint_b) ||
           !key(e, "vault_a", d.vault_a) || !key(e, "vault_b", d.vault_b)) {

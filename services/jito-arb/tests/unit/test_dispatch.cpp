@@ -6,6 +6,7 @@
 #include "engine/sizer.hpp"
 #include "state/state_store.hpp"
 #include "test.hpp"
+#include "app/pools_file.hpp"
 #include "tx/dex_ix.hpp"
 
 using namespace arb;
@@ -63,4 +64,12 @@ TEST(dispatch_current_supported_swap_encodings_still_select_their_program) {
       CHECK_EQ(minimum, uint64_t(789));
     }
   }
+}
+
+TEST(pools_file_rejects_unknown_and_missing_dex_kinds) {
+  app::PoolsFile pools;std::string error;
+  CHECK(!app::from_json(R"({"pools":[{"kind":"future-dex"}]})",pools,&error));
+  CHECK(error.find("unsupported kind future-dex")!=std::string::npos);
+  CHECK(!app::from_json(R"({"pools":[{}]})",pools,&error));
+  CHECK(error.find("invalid kind")!=std::string::npos);
 }
