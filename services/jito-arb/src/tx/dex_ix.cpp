@@ -1,6 +1,8 @@
 #include "tx/dex_ix.hpp"
 
 #include <cstring>
+#include <stdexcept>
+#include <string>
 
 #include "core/programs.hpp"
 #include "state/discovery.hpp"
@@ -33,10 +35,16 @@ std::array<Pubkey, 3> whirlpool_tick_arrays(const state::Whirlpool& w, const Pub
   return out;
 }
 
-const Pubkey& program_of(DexKind kind) { return kind == DexKind::Whirlpool ? prog::WHIRLPOOL : prog::RAYDIUM_V4; }
+const Pubkey& program_of(DexKind kind) {
+  const Pubkey* p = dex_program(kind);
+  if (!p) throw std::invalid_argument(std::string("swap: unsupported dex ") + dex_name(kind));
+  return *p;
+}
 
 std::vector<AccountMeta> swap_accounts(const PoolState& p, bool a_to_b, const UserAccounts& u) {
   std::vector<AccountMeta> v;
+  if (p.kind != DexKind::RaydiumV4 && p.kind != DexKind::Whirlpool)
+    throw std::invalid_argument(std::string("swap accounts: unsupported dex ") + dex_name(p.kind));
   if (p.kind == DexKind::RaydiumV4) {
     // 0 token program, 1 amm (w), 2 authority, 3 coin vault (w), 4 pc vault (w), 5 user source (w),
     // 6 user destination (w), 7 user owner (signer)
@@ -73,6 +81,8 @@ std::vector<uint8_t> swap_data(DexKind kind, bool a_to_b, uint64_t amount_in, ui
     std::memcpy(d + n, p, len);
     n += len;
   };
+  if (kind != DexKind::RaydiumV4 && kind != DexKind::Whirlpool)
+    throw std::invalid_argument(std::string("swap data: unsupported dex ") + dex_name(kind));
   if (kind == DexKind::RaydiumV4) {
     d[n++] = RAYDIUM_SWAP_BASE_IN_V2;
     put(&amount_in, 8);

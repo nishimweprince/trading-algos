@@ -48,9 +48,9 @@ bool from_json(const std::string& body, PoolsFile& out, std::string* err) {
       PoolDef d;
       std::string_view kind;
       if (e["kind"].get(kind) != simdjson::SUCCESS) continue;
-      if (kind == "raydium_v4") d.kind = DexKind::RaydiumV4;
-      else if (kind == "whirlpool") d.kind = DexKind::Whirlpool;
-      else continue;
+      auto k = dex_kind_from_name(kind);
+      if (!k || !dex_program(*k)) continue;  // a kind this build does not support
+      d.kind = *k;
       if (!key(e, "address", d.address) || !key(e, "mint_a", d.mint_a) || !key(e, "mint_b", d.mint_b) ||
           !key(e, "vault_a", d.vault_a) || !key(e, "vault_b", d.vault_b)) {
         if (err) *err = "pools file: bad pool entry";

@@ -1,6 +1,10 @@
 #include "state/state_store.hpp"
 
 #include <algorithm>
+#include <stdexcept>
+#include <string>
+
+#include "core/programs.hpp"
 
 namespace arb {
 
@@ -15,6 +19,33 @@ const char* dex_name(DexKind k) {
   }
   return "?";
 }
+
+std::optional<DexKind> dex_kind_from_name(std::string_view name) {
+  for (DexKind k : {DexKind::RaydiumV4, DexKind::Whirlpool, DexKind::Cpmm, DexKind::Dlmm, DexKind::Clmm, DexKind::PumpSwap})
+    if (name == dex_name(k)) return k;
+  return std::nullopt;
+}
+
+const Pubkey* dex_program(DexKind k) {
+  switch (k) {
+    case DexKind::RaydiumV4: return &prog::RAYDIUM_V4;
+    case DexKind::Whirlpool: return &prog::WHIRLPOOL;
+    default: return nullptr;
+  }
+}
+
+namespace {
+
+/** The account kind a pool's own account decodes as. */
+AccountKind pool_account_kind(DexKind k) {
+  switch (k) {
+    case DexKind::RaydiumV4: return AccountKind::RaydiumPool;
+    case DexKind::Whirlpool: return AccountKind::Whirlpool;
+    default: throw std::invalid_argument(std::string("state store: unsupported dex ") + dex_name(k));
+  }
+}
+
+}  // namespace
 
 bool PoolState::quotable(uint64_t max_age) const {
   if (!complete || awaiting_push) return false;
@@ -33,12 +64,13 @@ StateStore::AccountEntry& StateStore::entry(const Pubkey& k, AccountKind kind) {
 
 uint32_t StateStore::add_pool(const PoolDef& def) {
   if (auto it = pool_index_.find(def.address); it != pool_index_.end()) return it->second;
+  pool_account_kind(def.kind);  // throws for a kind this build cannot decode, before anything is registered
   uint32_t id = uint32_t(pools_.size());
   auto slot = std::make_unique<PoolSlot>();
   slot->def = def;
   pools_.push_back(std::move(slot));
   pool_index_[def.address] = id;
-  entry(def.address, def.kind == DexKind::Whirlpool ? AccountKind::Whirlpool : AccountKind::RaydiumPool).pools.push_back(id);
+  entry(def.address, pool_account_kind(def.kind)).pools.push_back(id);
   entry(def.vault_a, AccountKind::Vault).pools.push_back(id);
   entry(def.vault_b, AccountKind::Vault).pools.push_back(id);
   entry(def.mint_a, AccountKind::Mint).pools.push_back(id);
@@ -168,12 +200,15 @@ void StateStore::rebuild(uint32_t id) {
   };
   const AccountEntry* pool = find(d.address);
   if (pool && pool->seen && !pool->missing) {
-    if (d.kind == DexKind::RaydiumV4) {
-      if (auto* r = std::get_if<state::RaydiumV4>(&pool->pool_data)) s->ray = *r; else complete = false;
-    } else if (auto* w = std::get_if<state::Whirlpool>(&pool->pool_data)) {
-      s->wp = *w;
-    } else {
-      complete = false;
+    switch (d.kind) {
+      case DexKind::RaydiumV4:
+        if (auto* r = std::get_if<state::RaydiumV4>(&pool->pool_data)) s->ray = *r; else complete = false;
+        break;
+      case DexKind::Whirlpool:
+        if (auto* w = std::get_if<state::Whirlpool>(&pool->pool_data)) s->wp = *w; else complete = false;
+        break;
+      default:
+        complete = false;
     }
     s->pool_slot = pool->slot;
     if (pool->awaiting_push) s->awaiting_push = true;

@@ -6,6 +6,8 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <string_view>
 
 #include "core/types.hpp"
 #include "state/accounts.hpp"
@@ -15,6 +17,12 @@ namespace arb {
 /** DEX enum; the values are the executor's LegSpec.dex encoding (spec §8). */
 enum class DexKind : uint8_t { RaydiumV4 = 0, Whirlpool = 1, Cpmm = 2, Dlmm = 3, Clmm = 4, PumpSwap = 5 };
 const char* dex_name(DexKind k);
+/** The kind named by dex_name, or nullopt. */
+std::optional<DexKind> dex_kind_from_name(std::string_view name);
+/** The DEX's program ID, or nullptr for a kind this build does not support yet. */
+const Pubkey* dex_program(DexKind k);
+/** Constant-product pools: the vault balances (less any fees owed) are the reserves. */
+constexpr bool is_constant_product(DexKind k) { return k == DexKind::RaydiumV4 || k == DexKind::Cpmm || k == DexKind::PumpSwap; }
 
 /** RCU pointer: std::atomic<std::shared_ptr> where the library has it (libstdc++), else a spinlocked copy (libc++). */
 template <class T>

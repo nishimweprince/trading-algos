@@ -16,7 +16,7 @@ uint32_t ppm(double v) { return uint32_t(std::llround(std::max(0.0, v) * 1e6)); 
 /** Mid price of `p` as Q64.64 units of `to` per unit of `from` (no fee): reserves or sqrt price. */
 bool mid_x64(const PoolState& p, const Pubkey& from, u128& out) {
   bool a_to_b = p.mint_a == from;
-  if (p.kind == DexKind::RaydiumV4) {
+  if (is_constant_product(p.kind)) {
     u128 rin = a_to_b ? p.vault_a_amount : p.vault_b_amount, rout = a_to_b ? p.vault_b_amount : p.vault_a_amount;
     if (rin == 0) return false;
     out = (rout << 64) / rin;
@@ -103,8 +103,9 @@ bool Engine::refresh_base_price_from_pools(const Pubkey& base) {
     bool pair = (p->mint_a == base && p->mint_b == mint::WSOL) || (p->mint_b == base && p->mint_a == mint::WSOL);
     if (!pair) continue;
     bool sol_is_a = p->mint_a == mint::WSOL;
-    std::pair<int, uint64_t> rank{p->kind == DexKind::RaydiumV4 ? 1 : 0,
-                                  p->kind == DexKind::RaydiumV4 ? (sol_is_a ? p->vault_a_amount : p->vault_b_amount)
+    bool cp = is_constant_product(p->kind);
+    std::pair<int, uint64_t> rank{cp ? 1 : 0,
+                                  cp ? (sol_is_a ? p->vault_a_amount : p->vault_b_amount)
                                                                 : dex::input_depth(*p, sol_is_a)};
     if (rank > best_rank) {
       best_rank = rank;

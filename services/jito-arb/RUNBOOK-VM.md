@@ -42,7 +42,7 @@ first. On the laptop the stub stands in for it.
 
 - `export HELIUS_API_KEY=...` (environment only, never in a file in git).
 - Copy `config/bot.example.toml` to `/etc/jito-arb/bot.toml`. Set `laserstream_endpoint` (Frankfurt, from
-  the Helius dashboard) and `pools_path = "/data/jito-arb/pools.json"`, and point the `obs` and
+  the Helius dashboard) and `pools_path = "/var/lib/jito-arb/pools.json"`, and point the `obs` and
   `recorder` dirs at the data disk.
 - VERIFY in the Helius docs and dashboard: the LaserStream endpoint, the Business-plan connection limit
   (expect 10), and whether `from_slot` replay is available. Set `replay_from_slot = true` only if it is.
@@ -73,11 +73,24 @@ Any mismatch blocks that DEX: leave it disabled and investigate. Never loosen th
 ## 5. Discovery
 
 ```bash
-./build/vm/discover --config /etc/jito-arb/bot.toml --out /data/jito-arb/pools.json
+./build/vm/discover --config /etc/jito-arb/bot.toml --out /var/lib/jito-arb/pools.json
 ```
 
 This checks the tracked set (≤ 1,500 pools, TVL ≥ 50 SOL, token-safety gate) and the size of the graph.
 Re-run it every 10 minutes from cron. It prints the subscription diff each time.
+
+## 5a. Redeploy and reset the stats
+
+After `git pull` and a vm build:
+
+```bash
+sudo services/jito-arb/deploy/install.sh
+sudo services/jito-arb/deploy/reset-stats.sh
+```
+
+`reset-stats.sh` stops the bot, dashboard and recorder, moves the decision logs and frames to
+`/var/lib/jito-arb/archive/<UTC time>/`, and restarts them, so the dashboard starts from zero. It leaves `pools.json`,
+`config/denylist.json`, any `KILL` file and `/etc/jito-arb` alone.
 
 ## 6. LaserStream: 24-hour subscription hold
 
@@ -93,7 +106,7 @@ under 800, and decode failures stay flat. Also confirm `bytes` × 20 credits/MB 
 
 ```bash
 ./build/vm/jito-arb --config /etc/jito-arb/bot.toml --mode recorder   # hourly files under recorder.dir
-./build/vm/recorder stat /data/jito-arb/frames/frames-YYYYMMDD-HHMM.bin
+./build/vm/recorder stat /var/lib/jito-arb/frames/frames-YYYYMMDD-HHMM.bin
 ```
 
 Record on the VM's data disk, never on the laptop. Watch disk usage, and keep a pools-file snapshot
@@ -102,11 +115,11 @@ from the start of the recording: replay needs the same tracked set.
 ## 8. The phase-2 replay gate
 
 ```bash
-for f in /data/jito-arb/frames/frames-*.bin; do
+for f in /var/lib/jito-arb/frames/frames-*.bin; do
   ./build/vm/jito-arb --config /etc/jito-arb/bot.toml --mode replay --replay "$f" \
-      --pools /data/jito-arb/pools-at-recording.json --decisions /data/jito-arb/dec/$(basename "$f" .bin).dec
+      --pools /var/lib/jito-arb/pools-at-recording.json --decisions /var/lib/jito-arb/replay-decisions/$(basename "$f" .bin).dec
 done
-./build/vm/replay-report --config /etc/jito-arb/bot.toml /data/jito-arb/dec/*.dec > /data/jito-arb/replay-report.txt
+./build/vm/replay-report --config /etc/jito-arb/bot.toml /var/lib/jito-arb/replay-decisions/*.dec > /var/lib/jito-arb/replay-report.txt
 ```
 
 **Gate (spec §13):** about 20 or more detections per day whose net after the policy tip clears
