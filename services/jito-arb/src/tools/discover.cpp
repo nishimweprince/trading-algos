@@ -193,6 +193,15 @@ int run(int argc, char** argv) {
     std::fprintf(stderr, "clmm: %zu read, %zu live static-fee pools%s\n", seen_cl, kept_cl,
                  cfg.dex.clmm_enabled ? "" : " (tracked only: quoting disabled)");
   }
+    auto mints_of = [](const state::RawAccount& a) -> std::pair<Pubkey, Pubkey> {
+      if (auto r = state::decode_raydium_v4(a.data.data(), a.data.size(), a.owner)) return {r->coin_mint, r->pc_mint};
+      if (auto w = state::decode_whirlpool(a.data.data(), a.data.size(), a.owner)) return {w->token_mint_a, w->token_mint_b};
+      if (auto c = state::decode_cpmm_pool(a.data.data(), a.data.size(), a.owner)) return {c->token_0_mint, c->token_1_mint};
+      if (auto pp = state::decode_pump_pool(a.data.data(), a.data.size(), a.owner)) return {pp->base_mint, pp->quote_mint};
+      if (auto dl = state::decode_dlmm_pair(a.data.data(), a.data.size(), a.owner)) return {dl->token_x_mint, dl->token_y_mint};
+      if (auto cl = state::decode_clmm_pool(a.data.data(), a.data.size(), a.owner)) return {cl->token_mint_0, cl->token_mint_1};
+      return {Pubkey{}, Pubkey{}};
+    };
   if (cfg.dex.pumpswap_enabled || cfg.discovery.track_pumpswap) {
     // Canonical PumpSwap pools (created by pump migration): PDA ["pool", u16 0, pool_authority(mint), mint, wSOL]
     // with pool_authority = pump PDA ["pool-authority", mint]. Derived for every token the other DEXes found
@@ -200,9 +209,11 @@ int run(int argc, char** argv) {
     std::set<Pubkey> bases(dc.base_mints.begin(), dc.base_mints.end());
     std::set<Pubkey> tokens;
     for (auto& a : pools) {
-      auto d = state::pool_def_from_account(a, dc);
-      if (!d) continue;
-      for (const Pubkey& m : {d->mint_a, d->mint_b})
+      // Extract mints without deriving tick/bin PDAs for every candidate (hundreds of thousands of expensive
+      // curve checks otherwise, before the TVL/cycle filter has discarded unneeded pools).
+      auto [mint_a, mint_b] = mints_of(a);
+      if (is_zero(mint_a) || is_zero(mint_b)) continue;
+      for (const Pubkey& m : {mint_a, mint_b})
         if (!bases.count(m)) tokens.insert(m);
     }
     std::vector<Pubkey> keys;
@@ -230,15 +241,6 @@ int run(int argc, char** argv) {
   // vault/mint lookups (discover() applies the same rule exactly after the TVL filter).
   {
     std::set<Pubkey> bases(dc.base_mints.begin(), dc.base_mints.end());
-    auto mints_of = [](const state::RawAccount& a) -> std::pair<Pubkey, Pubkey> {
-      if (auto r = state::decode_raydium_v4(a.data.data(), a.data.size(), a.owner)) return {r->coin_mint, r->pc_mint};
-      if (auto w = state::decode_whirlpool(a.data.data(), a.data.size(), a.owner)) return {w->token_mint_a, w->token_mint_b};
-      if (auto c = state::decode_cpmm_pool(a.data.data(), a.data.size(), a.owner)) return {c->token_0_mint, c->token_1_mint};
-      if (auto pp = state::decode_pump_pool(a.data.data(), a.data.size(), a.owner)) return {pp->base_mint, pp->quote_mint};
-      if (auto dl = state::decode_dlmm_pair(a.data.data(), a.data.size(), a.owner)) return {dl->token_x_mint, dl->token_y_mint};
-      if (auto cl = state::decode_clmm_pool(a.data.data(), a.data.size(), a.owner)) return {cl->token_mint_0, cl->token_mint_1};
-      return {Pubkey{}, Pubkey{}};
-    };
     std::map<Pubkey, int> count;
     for (auto& a : pools) {
       auto [x, y] = mints_of(a);
