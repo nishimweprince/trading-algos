@@ -37,6 +37,12 @@ Pubkey pump_user_volume_accumulator(const Pubkey& user) {
   return pda({std::string_view("user_volume_accumulator"), user}, prog::PUMPSWAP);
 }
 
+void pump_init_user_volume(tx::IxList& ixs, const Pubkey& user) {
+  static constexpr uint8_t disc[8] = {94,6,202,115,255,96,232,183};
+  ixs.add(prog::PUMPSWAP).acc(user,true,true).ro(user).rw(pump_user_volume_accumulator(user))
+      .ro(prog::SYSTEM).ro(pump_event_authority()).ro(prog::PUMPSWAP).bytes(disc,8);
+}
+
 Pubkey whirlpool_oracle(const Pubkey& whirlpool) { return pda({std::string_view("oracle"), whirlpool}, prog::WHIRLPOOL); }
 
 std::array<Pubkey, 3> whirlpool_tick_arrays(const state::Whirlpool& w, const Pubkey& pool, bool a_to_b) {

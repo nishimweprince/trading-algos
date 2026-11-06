@@ -63,7 +63,7 @@ SimLayout sim_accounts(const engine::Cycle& c, std::span<const std::shared_ptr<c
  * later leg the previous leg's quoted output; min_out is 0 (the outcome is measured, not guarded).
  */
 Result<SimLayout> build_sim_ixs(tx::IxList& l, const engine::Cycle& c, std::span<const std::shared_ptr<const PoolState>> legs,
-                                const engine::Opportunity& o, const Pubkey& holder, const std::vector<bool>& need_ata);
+                                const engine::Opportunity& o, const Pubkey& holder, const std::vector<bool>& need_ata, bool need_pump_volume = false);
 
 std::array<uint64_t, 3> sim_leg_units(const std::vector<std::string>& logs,
                                      std::span<const std::shared_ptr<const PoolState>> legs);

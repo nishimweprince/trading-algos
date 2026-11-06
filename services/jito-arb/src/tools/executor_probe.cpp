@@ -40,6 +40,8 @@ int main(int argc, char** argv) {
   Pubkey intermediate=tx::wallet_ata(owner,other,*p),base=tx::wallet_ata(owner,mint::WSOL,*p);
   auto tp=other==p->mint_a?p->mint_a_info:p->mint_b_info;
   ixs.add(prog::ATA).acc(owner,true,true).rw(intermediate).ro(owner).ro(other).ro(prog::SYSTEM).ro(tp?tp->token_program:prog::TOKEN).u8(1);
+  if (p->kind==DexKind::PumpSwap && !rpc.account(tx::dexix::pump_user_volume_accumulator(owner),"processed"))
+    tx::dexix::pump_init_user_volume(ixs,owner);
   auto encoded=tx::execute_route_ix(ixs,exec,owner,cycle,legs,amount,minimum);
   if(!encoded)throw std::runtime_error(encoded.error().what);
   auto wire=app::unsigned_tx_b64(owner,ixs);
@@ -48,7 +50,7 @@ int main(int argc, char** argv) {
    std::set<Pubkey> keys;for(uint8_t i=0;i<ixs.n;i++){keys.insert(ixs.ixs[i].program);for(uint8_t j=0;j<ixs.ixs[i].n_accounts;j++)keys.insert(ixs.ixs[i].accounts[j].key);}
    for(auto k:store.subscribed_keys())keys.insert(k);
    std::ofstream f(manifest);f<<"{\"pool\":\""<<pool_s<<"\",\"holder\":\""<<holder_s<<"\",\"executor\":\""<<executor_s<<"\",\"base_account\":\""<<b58(base)<<"\",\"kind\":\""<<dex_name(p->kind)<<"\",\"accounts\":[";
-   bool first=true;for(auto k:keys){f<<(first?"":",")<<"\""<<b58(k)<<"\"";first=false;}f<<"]}\n";
+   bool first=true;for(auto k:keys){f<<(first?"":",")<<"\""<<b58(k)<<"\"";first=false;}f<<"],\"transaction\":\""<<wire<<"\"}\n";
    std::printf("manifest captured %zu public accounts; kind=%s\n",keys.size(),dex_name(p->kind));return 0;
   }
   if(url.rfind("http://127.0.0.1:",0)!=0&&url.rfind("http://localhost:",0)!=0)throw std::runtime_error("executor simulations restricted to localhost");
