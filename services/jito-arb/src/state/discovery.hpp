@@ -50,7 +50,7 @@ struct DiscoveryResult {
 using AccountLookup = std::unordered_map<Pubkey, RawAccount, PubkeyHash>;
 
 /** Build a candidate PoolDef from a raw pool account; nullopt if it does not decode. */
-std::optional<PoolDef> pool_def_from_account(const RawAccount& a, const DiscoveryConfig& cfg);
+std::optional<PoolDef> pool_def_from_account(const RawAccount& a, const DiscoveryConfig& cfg, bool include_arrays = true);
 
 /** The vault and mint keys `pools` need (for one getMultipleAccounts round). */
 std::vector<Pubkey> dependent_keys(const std::vector<RawAccount>& pools, const DiscoveryConfig& cfg);

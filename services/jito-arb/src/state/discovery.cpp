@@ -57,7 +57,7 @@ bool is_base(const Pubkey& m, const DiscoveryConfig& c) {
 
 }  // namespace
 
-std::optional<PoolDef> pool_def_from_account(const RawAccount& a, const DiscoveryConfig& cfg) {
+std::optional<PoolDef> pool_def_from_account(const RawAccount& a, const DiscoveryConfig& cfg, bool include_arrays) {
   PoolDef d;
   d.address = a.key;
   if (a.owner == prog::METEORA_DLMM) {
@@ -67,6 +67,7 @@ std::optional<PoolDef> pool_def_from_account(const RawAccount& a, const Discover
     d.mint_a = p->token_x_mint; d.mint_b = p->token_y_mint;
     d.vault_a = p->reserve_x; d.vault_b = p->reserve_y;
     d.bitmap_extension = dlmm_bitmap_pda(a.key);
+    if (!include_arrays) return d;
     int32_t cur = dex::dlmm::array_index(p->active_id);
     // Subscribe a bounded contiguous window, plus initialized internal arrays in either direction.
     // Extension-based pools outside this window fail closed until rediscovery refreshes the cache.
@@ -110,6 +111,7 @@ std::optional<PoolDef> pool_def_from_account(const RawAccount& a, const Discover
     d.vault_a = c->token_vault_0;
     d.vault_b = c->token_vault_1;
     d.config = c->amm_config;
+    if (!include_arrays) return d;
     // The current tick's array, then up to three initialized arrays each way along the pool's bitmap.
     const uint16_t sp = c->tick_spacing;
     int32_t cur = dex::clmm::array_start_index(c->tick_current, sp);
@@ -145,6 +147,7 @@ std::optional<PoolDef> pool_def_from_account(const RawAccount& a, const Discover
     d.mint_b = w->token_mint_b;
     d.vault_a = w->token_vault_a;
     d.vault_b = w->token_vault_b;
+    if (!include_arrays) return d;
     int32_t base = tick_array_start(w->tick_current_index, w->tick_spacing);
     int32_t span = TICK_ARRAY_SIZE * int32_t(w->tick_spacing);
     for (int o = -cfg.tick_arrays_below; o <= cfg.tick_arrays_above; ++o) {
@@ -160,7 +163,7 @@ std::optional<PoolDef> pool_def_from_account(const RawAccount& a, const Discover
 std::vector<Pubkey> dependent_keys(const std::vector<RawAccount>& pools, const DiscoveryConfig& cfg) {
   std::set<Pubkey> keys;
   for (auto& a : pools) {
-    auto d = pool_def_from_account(a, cfg);
+    auto d = pool_def_from_account(a, cfg, false);
     if (!d) continue;
     keys.insert(d->vault_a);
     keys.insert(d->vault_b);
