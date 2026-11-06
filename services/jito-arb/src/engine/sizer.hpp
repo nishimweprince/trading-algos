@@ -16,7 +16,7 @@ using Snapshots = std::array<std::shared_ptr<const PoolState>, MAX_LEGS>;
 /** Quoter per DexKind; null = that DEX is disabled (parity not proven, or switched off). */
 struct Quoters {
   const dex::IQuoter* by_kind[8]{};
-  const dex::IQuoter* get(DexKind k) const { return by_kind[uint8_t(k)]; }
+  const dex::IQuoter* get(DexKind k) const { return uint8_t(k) < std::size(by_kind) ? by_kind[uint8_t(k)] : nullptr; }
 };
 
 /** Product of per-leg spot rates after fee, Q64.64 (1.0 = 2^64). */

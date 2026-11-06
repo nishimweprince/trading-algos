@@ -43,8 +43,6 @@ const Pubkey& program_of(DexKind kind) {
 
 std::vector<AccountMeta> swap_accounts(const PoolState& p, bool a_to_b, const UserAccounts& u) {
   std::vector<AccountMeta> v;
-  if (p.kind != DexKind::RaydiumV4 && p.kind != DexKind::Whirlpool)
-    throw std::invalid_argument(std::string("swap accounts: unsupported dex ") + dex_name(p.kind));
   if (p.kind == DexKind::RaydiumV4) {
     // 0 token program, 1 amm (w), 2 authority, 3 coin vault (w), 4 pc vault (w), 5 user source (w),
     // 6 user destination (w), 7 user owner (signer)
@@ -58,6 +56,9 @@ std::vector<AccountMeta> swap_accounts(const PoolState& p, bool a_to_b, const Us
     v.push_back({u.authority, true, false});
     return v;
   }
+  // New kinds must never fall through to Whirlpool.
+  if (p.kind != DexKind::Whirlpool)
+    throw std::invalid_argument(std::string("swap accounts: unsupported dex ") + dex_name(p.kind));
   // token_program, token_authority (signer), whirlpool (w), token_owner_account_a (w), token_vault_a (w),
   // token_owner_account_b (w), token_vault_b (w), tick_array_0..2 (w), oracle
   auto ta = whirlpool_tick_arrays(p.wp, p.address, a_to_b);
@@ -81,14 +82,14 @@ std::vector<uint8_t> swap_data(DexKind kind, bool a_to_b, uint64_t amount_in, ui
     std::memcpy(d + n, p, len);
     n += len;
   };
-  if (kind != DexKind::RaydiumV4 && kind != DexKind::Whirlpool)
-    throw std::invalid_argument(std::string("swap data: unsupported dex ") + dex_name(kind));
   if (kind == DexKind::RaydiumV4) {
     d[n++] = RAYDIUM_SWAP_BASE_IN_V2;
     put(&amount_in, 8);
     put(&min_out, 8);
     return std::vector<uint8_t>(d, d + n);
   }
+  if (kind != DexKind::Whirlpool)
+    throw std::invalid_argument(std::string("swap data: unsupported dex ") + dex_name(kind));
   // swap(amount, other_amount_threshold, sqrt_price_limit, amount_specified_is_input, a_to_b)
   put(WHIRLPOOL_SWAP_DISC, 8);
   put(&amount_in, 8);

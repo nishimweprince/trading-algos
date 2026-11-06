@@ -1,5 +1,8 @@
 # jito-arb VM runbook
 
+Revision: 2026-11-06, Phase 0 deploy safeguards; independent baseline `087624e7`.
+Record `git rev-parse HEAD` with each build and rollout; do not assume an old binary matches the checkout.
+
 These are the steps the laptop build could not do: no grpc++, Rust, Solana CLI or DEX SDKs, and no bulk
 downloads on the laptop. Run them in order on a Frankfurt VM. Every step is read-only or dry run.
 **No mainnet send happens in this runbook.** Phase 4 (own-capital live) starts only after the owner has
@@ -31,7 +34,8 @@ sh -c "$(curl -sSfL https://release.anza.xyz/v2.1.0/install)"
 ```bash
 cd services/jito-arb
 cmake --preset vm && cmake --build --preset vm      # ARB_WITH_GRPC=ON: the real LaserStream client
-ctest --test-dir build/vm --output-on-failure        # the same 45 tests as the laptop
+ctest --test-dir build/vm --output-on-failure
+python3 deploy/tests/test_deploy.py                 # fake systemctl, temporary directories; no root
 ./build/vm/arb_bench                                 # production latency numbers for the PR/report
 ```
 
@@ -55,15 +59,15 @@ are rate-limited. It observed 10 samples on one pool, all exact, far under the 2
 config keeps `whirlpool_enabled = false`.
 
 ```bash
-./build/vm/sim-parity --dex whirlpool --seed-holders harness/holders_seed.json --min-samples 300
+./build/vm/sim-parity --dex whirlpool --seed-holders /opt/jito-arb/share/holders_seed.json --min-samples 300
 ./build/vm/arb_tests parity                     # must stay 0 mismatches; >= 200 samples enables Whirlpool
 # Spec §5: 1,000 snapshots x 20 sizes per DEX, against the official SDKs
-./build/vm/sim-parity --dex all --seed-holders harness/holders_seed.json --min-samples 20000 --max-pools 1500
+./build/vm/sim-parity --dex all --seed-holders /opt/jito-arb/share/holders_seed.json --min-samples 20000 --max-pools 1500
 cd harness/parity-node && npm ci          # first confirm the pinned versions exist (npm view), then commit the lockfile
-node quote.mjs ../../tests/fixtures/parity_whirlpool.json > /data/sdk_whirlpool.json
-node compare.mjs ../../tests/fixtures/parity_whirlpool.json /data/sdk_whirlpool.json
-node quote.mjs ../../tests/fixtures/parity_raydium_v4.json > /data/sdk_raydium.json
-node compare.mjs ../../tests/fixtures/parity_raydium_v4.json /data/sdk_raydium.json
+node quote.mjs ../../tests/fixtures/parity_whirlpool.json > /var/lib/jito-arb/parity/sdk_whirlpool.json
+node compare.mjs ../../tests/fixtures/parity_whirlpool.json /var/lib/jito-arb/parity/sdk_whirlpool.json
+node quote.mjs ../../tests/fixtures/parity_raydium_v4.json > /var/lib/jito-arb/parity/sdk_raydium.json
+node compare.mjs ../../tests/fixtures/parity_raydium_v4.json /var/lib/jito-arb/parity/sdk_raydium.json
 ```
 
 Any mismatch blocks that DEX: leave it disabled and investigate. Never loosen the test. Keep the
@@ -81,16 +85,52 @@ Re-run it every 10 minutes from cron. It prints the subscription diff each time.
 
 ## 5a. Redeploy and reset the stats
 
-After `git pull` and a vm build:
+Use the reviewed revision and a successful VM build (step 2). Before rollout, save the revision,
+CTest and deploy-test output with the deployment evidence under `/var/lib/jito-arb/rollouts/<revision>/`.
+Installing files and stopping services are VM mutations: the commands below are operator rollout
+instructions, not actions performed by the local regression suite.
+
+From the repository root:
 
 ```bash
+git rev-parse HEAD
 sudo services/jito-arb/deploy/install.sh
+# Inspect preserved /etc/jito-arb/bot.toml: dry_run must remain true; verify all output paths.
+# Install does not restart services. Reset is the restart boundary for the new binaries.
 sudo services/jito-arb/deploy/reset-stats.sh
+sudo systemctl is-active jito-arb.service jito-arb-ui.service
+sudo systemctl status jito-arb-recorder.service --no-pager  # running only if running before reset
 ```
 
-`reset-stats.sh` stops the bot, dashboard and recorder, moves the decision logs and frames to
-`/var/lib/jito-arb/archive/<UTC time>/`, and restarts them, so the dashboard starts from zero. It leaves `pools.json`,
-`config/denylist.json`, any `KILL` file and `/etc/jito-arb` alone.
+Both scripts require root before any side effects. `install.sh` installs binaries (including
+`quote-probe`) under `/opt/jito-arb/bin`, the holder seed at
+`/opt/jito-arb/share/holders_seed.json`, and systemd units under `/etc/systemd/system`.
+It preserves existing `/etc/jito-arb/bot.toml`, `/etc/jito-arb/jito-arb.env`,
+`/var/lib/jito-arb/config/denylist.json` and `/opt/jito-arb/share/denylist.json`.
+New denylist defaults are provisioned only when absent; review operator changes separately.
+
+`reset-stats.sh` stops the bot, dashboard and recorder individually and verifies each has
+`ActiveState=inactive` or `failed`. Any stop failure or unknown/still-active state aborts before
+creating an archive or moving files. Previously stopped units may remain stopped on failure:
+inspect `systemctl status` and the journal, resolve the writer, and retry; do not move open logs.
+On a successful stop it creates an atomic, unique UTC archive directory:
+`/var/lib/jito-arb/archive/YYYYMMDDTHHMMSSZ.<random>/`. It moves only regular, non-symlink
+`decisions/*.bin`, `decisions/*.jsonl` (including sim diagnostics and preproc shadow evidence),
+and `frames/*.bin` (including preproc frames), preserving their relative directories.
+Use those deployed paths for all writers; custom paths require a separate reviewed procedure.
+
+The bot and dashboard always restart; the recorder restarts only if it was active before reset.
+In-memory counters reset. `pools.json`, `config/denylist.json`, all KILL files, unrelated files,
+previous archives and `/etc/jito-arb` remain untouched. If archiving or restart fails, the script
+exits nonzero; preserve the printed archive and inspect service state before recovery.
+
+Phase 0 local evidence: `python3 services/jito-arb/deploy/tests/test_deploy.py` exercises root
+refusal, failure of each writer stop, a writer remaining active, state-query failure, same-second
+unique archives, exact evidence bytes, recorder restoration, restart failure, install idempotence,
+probe/seed installation and meaningful operator-file preservation. The offline C++ suite includes
+unsupported DLMM/unknown dispatch and current supported swap-encoding regression tests.
+DLMM remains disabled/unwired. Local tests do not establish gRPC build, VM permissions or live parity;
+retain the VM CTest output, revision, archive path and before/after unit states as rollout evidence.
 
 ## 6. LaserStream: 24-hour subscription hold
 
