@@ -48,6 +48,44 @@ class WhirlpoolQuoter final : public IQuoter {
   uint32_t cu_;
 };
 
+class CpmmQuoter final : public IQuoter {
+ public:
+  explicit CpmmQuoter(uint32_t cu = 50000) : cu_(cu) {}
+  Result<Quote> quote_exact_in(const PoolState& p, bool a_to_b, uint64_t amount_in) const override;
+  DexKind kind() const override { return DexKind::Cpmm; }
+  /** Token-2022 transfer fees change the amounts the program sees: not ported, so such pools are refused. */
+  bool supports(const PoolState& p) const override;
+
+ private:
+  uint32_t cu_;
+};
+
+class PumpSwapQuoter final : public IQuoter {
+ public:
+  explicit PumpSwapQuoter(uint32_t cu = 120000) : cu_(cu) {}
+  /** a_to_b = sell (exact base in, sell_v2); b_to_a = buy with exact quote in (buy_exact_quote_in_v2). */
+  Result<Quote> quote_exact_in(const PoolState& p, bool a_to_b, uint64_t amount_in) const override;
+  DexKind kind() const override { return DexKind::PumpSwap; }
+  /** v2 trades refuse cashback and mayhem pools; transfer-fee mints are not modelled. */
+  bool supports(const PoolState& p) const override;
+
+ private:
+  uint32_t cu_;
+};
+
+/** PumpSwap fee rates (bps) for the pool's current reserves: market-cap tier, quote-mint schedule, creator override. */
+struct PumpFeeBps {
+  uint64_t lp = 0, protocol = 0, creator = 0;
+};
+Result<PumpFeeBps> pump_fee_bps(const PoolState& p, uint64_t base_reserve, uint64_t quote_reserve);
+
+/**
+ * A constant-product pool's reserves for a swap direction: vault balances less what the program does not count
+ * (Raydium v4 need_take_pnl; CPMM protocol, fund and creator fees owed). False when not constant product or
+ * the fees exceed the vault.
+ */
+bool cp_reserves(const PoolState& p, bool a_to_b, uint64_t& rin, uint64_t& rout);
+
 /** Marginal output per unit input at size zero, after fee, as a Q64.64 ratio (spot-edge prefilter). */
 u128 spot_rate_x64(const PoolState& p, bool a_to_b);
 

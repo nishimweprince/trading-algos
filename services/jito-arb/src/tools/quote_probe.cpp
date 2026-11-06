@@ -42,6 +42,7 @@ int main(int argc, char** argv) {
   uint32_t id = store.add_pool(*def);
   std::vector<Pubkey> keys = {def->address, def->vault_a, def->vault_b, def->mint_a, def->mint_b};
   for (auto& [s, k] : def->tick_arrays) keys.push_back(k);
+  if (!is_zero(def->config)) keys.push_back(def->config);
   uint64_t slot = 0;
   auto accs = rpc.multiple_accounts_at(keys, slot);
   for (size_t i = 0; i < keys.size(); ++i) {
@@ -55,6 +56,12 @@ int main(int argc, char** argv) {
   auto p = store.pool(id);
   std::printf("%s %s slot %llu complete=%d vaults a=%llu b=%llu\n", dex_name(p->kind), argv[1], (unsigned long long)slot, int(p->complete),
               (unsigned long long)p->vault_a_amount, (unsigned long long)p->vault_b_amount);
+  if (p->kind == DexKind::Cpmm)
+    std::printf("  cpmm status=%u fees owed %llu/%llu trade=%llu creator=%llu (%s, on %u) protocol=%llu fund=%llu\n", unsigned(p->cpmm.status),
+                (unsigned long long)p->cpmm.fees_owed_0(), (unsigned long long)p->cpmm.fees_owed_1(),
+                (unsigned long long)p->cpmm_cfg.trade_fee_rate, (unsigned long long)p->cpmm_cfg.creator_fee_rate,
+                p->cpmm.enable_creator_fee ? "enabled" : "off", unsigned(p->cpmm.creator_fee_on),
+                (unsigned long long)p->cpmm_cfg.protocol_fee_rate, (unsigned long long)p->cpmm_cfg.fund_fee_rate);
   if (p->kind == DexKind::Whirlpool) {
     std::printf("  liquidity=%s tick=%d spacing=%u fee=%u adaptive=%d\n", std::to_string(uint64_t(p->wp.liquidity)).c_str(),
                 p->wp.tick_current_index, unsigned(p->wp.tick_spacing), unsigned(p->wp.fee_rate), int(p->wp.adaptive_fee()));
@@ -69,7 +76,8 @@ int main(int argc, char** argv) {
   }
   dex::RaydiumV4Quoter rq;
   dex::WhirlpoolQuoter wq;
-  const dex::IQuoter* quoters[] = {&rq, &wq};
+  dex::CpmmQuoter cq;
+  const dex::IQuoter* quoters[] = {&rq, &wq, &cq};
   const dex::IQuoter* qp = nullptr;
   for (const dex::IQuoter* c : quoters)
     if (c->kind() == p->kind) qp = c;

@@ -26,6 +26,7 @@
 #include "core/rpc.hpp"
 #include "feed/subscription.hpp"
 #include "state/discovery.hpp"
+#include "tx/dex_ix.hpp"
 
 using namespace arb;
 
@@ -49,7 +50,7 @@ int run(int argc, char** argv) {
   dc.max_tracked_pools = size_t(cfg.discovery.max_tracked_pools);
 
   // Confirm the program IDs before anything else.
-  for (const Pubkey& p : {prog::RAYDIUM_V4, prog::WHIRLPOOL, prog::KLEND}) {
+  for (const Pubkey& p : {prog::RAYDIUM_V4, prog::WHIRLPOOL, prog::RAYDIUM_CPMM, prog::KLEND}) {
     auto pi = rpc.program_info(p);
     if (!pi.found || !pi.executable) {
       std::fprintf(stderr, "program %s is not an executable account\n", b58(p).c_str());
@@ -58,12 +59,14 @@ int run(int argc, char** argv) {
   }
   std::vector<state::RawAccount> pools;
   std::set<Pubkey> seen;
-  if (cfg.dex.raydium_v4_enabled) {
-    // About 690k Raydium v4 pools pair wSOL (Nov 2026): their full accounts (~700 MB) do not come back in one
-    // getProgramAccounts. Instead: (1) the 8-byte amount of every vault the AMM authority holds for each base
-    // mint, (2) each pool's 128-byte vault/mint slice, (3) full accounts only for pools whose base-side vault
-    // could clear min_pool_tvl_sol (TVL >= 2 x base side), deepest first.
-    const Pubkey authority = PK("5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1");  // PDA ["amm authority"]
+  // Constant-product pools with one authority PDA holding every vault (Raydium v4, CPMM). Hundreds of thousands
+  // pair wSOL (about 690k Raydium v4 in Nov 2026, ~700 MB): their full accounts do not come back in one
+  // getProgramAccounts. Instead: (1) the 8-byte amount of every vault the authority holds for each base mint,
+  // (2) each pool's vault/mint slice, (3) full accounts only for pools whose base-side vault could clear
+  // min_pool_tvl_sol (TVL >= 2 x base side), deepest first, up to `cap`.
+  //   slice: [vault_0, vault_1] at slice offsets 0 and 32; mint_off_0/1 are the account offsets of mint 0/1.
+  auto vault_floor_fetch = [&](const char* name, const Pubkey& program, const Pubkey& authority, size_t data_size, uint64_t slice_off,
+                               uint64_t slice_len, uint64_t mint_off_0, uint64_t mint_off_1, int cap_cfg) {
     std::map<Pubkey, uint64_t> vault_amount;
     std::map<Pubkey, uint64_t> threshold;  // base mint -> minimum base-side vault amount
     for (auto& base : dc.base_mints) {
@@ -90,12 +93,12 @@ int run(int argc, char** argv) {
     }
     std::vector<std::pair<uint64_t, Pubkey>> cand;  // (base-side vault amount, pool)
     for (auto& base : dc.base_mints) {
-      for (uint64_t off : {uint64_t(400), uint64_t(432)}) {
+      for (uint64_t off : {mint_off_0, mint_off_1}) {
         std::string body = rpc.call("getProgramAccounts",
-                                    "[\"" + b58(prog::RAYDIUM_V4) + "\",{\"encoding\":\"base64\",\"commitment\":\"confirmed\","
-                                    "\"dataSlice\":{\"offset\":336,\"length\":128},\"filters\":[{\"dataSize\":" +
-                                        std::to_string(state::RAYDIUM_V4_LEN) + "},{\"memcmp\":{\"offset\":" + std::to_string(off) +
-                                        ",\"bytes\":\"" + b58(base) + "\"}}]}]");
+                                    "[\"" + b58(program) + "\",{\"encoding\":\"base64\",\"commitment\":\"confirmed\","
+                                    "\"dataSlice\":{\"offset\":" + std::to_string(slice_off) + ",\"length\":" + std::to_string(slice_len) +
+                                        "},\"filters\":[{\"dataSize\":" + std::to_string(data_size) + "},{\"memcmp\":{\"offset\":" +
+                                        std::to_string(off) + ",\"bytes\":\"" + b58(base) + "\"}}]}]");
         simdjson::dom::parser p;
         simdjson::padded_string ps(body);
         for (auto e : simdjson::dom::array(p.parse(ps)["result"])) {
@@ -103,10 +106,9 @@ int run(int argc, char** argv) {
           std::vector<uint8_t> d;
           if (!b58_decode32(std::string_view(e["pubkey"]), k)) continue;
           b64_decode(std::string_view(simdjson::dom::array(e["account"]["data"]).at(0)), d);
-          if (d.size() != 128) continue;
-          // slice offsets: coin_vault 0, pc_vault 32, coin_mint 64, pc_mint 96 (account offsets 336..463)
-          bool base_is_coin = off == 400;
-          auto it = vault_amount.find(key_from(d.data() + (base_is_coin ? 0 : 32)));
+          if (d.size() != slice_len) continue;
+          bool base_is_0 = off == mint_off_0;
+          auto it = vault_amount.find(key_from(d.data() + (base_is_0 ? 0 : 32)));
           if (it == vault_amount.end() || it->second < threshold[base]) continue;
           cand.emplace_back(it->second, k);
         }
@@ -114,11 +116,11 @@ int run(int argc, char** argv) {
       }
     }
     std::sort(cand.begin(), cand.end(), [](auto& a, auto& b) { return a.first > b.first; });
-    size_t cap = size_t(std::max(1, cfg.discovery.raydium_fetch_cap));
+    size_t cap = size_t(std::max(1, cap_cfg));
     std::vector<Pubkey> keys;
     for (auto& [amt, k] : cand)
       if (keys.size() < cap && seen.insert(k).second) keys.push_back(k);
-    std::fprintf(stderr, "raydium_v4: %zu base vaults read, %zu pools above the vault floor, fetching %zu\n", vault_amount.size(),
+    std::fprintf(stderr, "%s: %zu base vaults read, %zu pools above the vault floor, fetching %zu\n", name, vault_amount.size(),
                  cand.size(), keys.size());
     for (size_t i = 0; i < keys.size(); i += 100) {
       std::vector<Pubkey> batch(keys.begin() + long(i), keys.begin() + long(std::min(keys.size(), i + 100)));
@@ -127,7 +129,15 @@ int run(int argc, char** argv) {
         if (accs[j]) pools.push_back(state::RawAccount{batch[j], accs[j]->owner, accs[j]->data});
       std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
-  }
+  };
+  if (cfg.dex.raydium_v4_enabled)
+    // slice 336..463: coin_vault, pc_vault, coin_mint (400), pc_mint (432)
+    vault_floor_fetch("raydium_v4", prog::RAYDIUM_V4, tx::dexix::raydium_authority(), state::RAYDIUM_V4_LEN, 336, 128, 400, 432,
+                      cfg.discovery.raydium_fetch_cap);
+  if (cfg.dex.cpmm_enabled || cfg.discovery.track_cpmm)
+    // slice 72..231: token_0_vault, token_1_vault, lp_mint, token_0_mint (168), token_1_mint (200)
+    vault_floor_fetch("cpmm", prog::RAYDIUM_CPMM, tx::dexix::cpmm_authority(), state::CPMM_POOL_LEN, 72, 160, 168, 200,
+                      cfg.discovery.cpmm_fetch_cap);
   if (cfg.dex.whirlpool_enabled || cfg.discovery.track_whirlpool) {
     // ~143k Whirlpools pair wSOL or USDC (157 MB, Nov 2026). Keep live, static-fee pools only: zero
     // liquidity cannot trade, and adaptive-fee pools are refused by the quoter.
@@ -157,6 +167,7 @@ int run(int argc, char** argv) {
     auto mints_of = [](const state::RawAccount& a) -> std::pair<Pubkey, Pubkey> {
       if (auto r = state::decode_raydium_v4(a.data.data(), a.data.size(), a.owner)) return {r->coin_mint, r->pc_mint};
       if (auto w = state::decode_whirlpool(a.data.data(), a.data.size(), a.owner)) return {w->token_mint_a, w->token_mint_b};
+      if (auto c = state::decode_cpmm_pool(a.data.data(), a.data.size(), a.owner)) return {c->token_0_mint, c->token_1_mint};
       return {Pubkey{}, Pubkey{}};
     };
     std::map<Pubkey, int> count;

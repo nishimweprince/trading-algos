@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <ctime>
 #include <set>
 
 #include "core/base58.hpp"
@@ -67,6 +68,17 @@ std::optional<PoolDef> pool_def_from_account(const RawAccount& a, const Discover
     d.vault_b = r->pc_vault;
     return d;
   }
+  if (a.owner == prog::RAYDIUM_CPMM) {
+    auto c = decode_cpmm_pool(a.data.data(), a.data.size(), a.owner);
+    if (!c) return std::nullopt;
+    d.kind = DexKind::Cpmm;
+    d.mint_a = c->token_0_mint;
+    d.mint_b = c->token_1_mint;
+    d.vault_a = c->token_0_vault;
+    d.vault_b = c->token_1_vault;
+    d.config = c->amm_config;
+    return d;
+  }
   if (a.owner == prog::WHIRLPOOL) {
     auto w = decode_whirlpool(a.data.data(), a.data.size(), a.owner);
     if (!w) return std::nullopt;
@@ -96,6 +108,7 @@ std::vector<Pubkey> dependent_keys(const std::vector<RawAccount>& pools, const D
     keys.insert(d->vault_b);
     keys.insert(d->mint_a);
     keys.insert(d->mint_b);
+    if (!is_zero(d->config)) keys.insert(d->config);
   }
   return {keys.begin(), keys.end()};
 }
@@ -152,6 +165,24 @@ DiscoveryResult discover(const std::vector<RawAccount>& pool_accounts, const Acc
         if (w->adaptive_fee()) { reject(c, "adaptive_fee_unsupported"); gate_ok = false; break; }
         // The legacy `swap` instruction (the one the executor CPIs) takes the SPL token program only.
         if (va->second.owner != prog::TOKEN || vb->second.owner != prog::TOKEN) { reject(c, "token2022_whirlpool"); gate_ok = false; }
+        break;
+      }
+      case DexKind::Cpmm: {
+        auto cp = decode_cpmm_pool(a.data.data(), a.data.size(), a.owner);
+        auto cfg_it = accounts.find(d->config);
+        if (cfg_it == accounts.end() ||
+            !decode_cpmm_config(cfg_it->second.data.data(), cfg_it->second.data.size(), cfg_it->second.owner)) {
+          reject(c, "cpmm_config");
+          gate_ok = false;
+          break;
+        }
+        if (!cp->swap_enabled()) { reject(c, "pool_status"); gate_ok = false; break; }
+        if (cp->open_time > uint64_t(std::time(nullptr))) { reject(c, "not_open"); gate_ok = false; break; }
+        // The vaults' token programs must be the ones the pool records (the swap passes them).
+        if (va->second.owner != cp->token_0_program || vb->second.owner != cp->token_1_program) {
+          reject(c, "vault_program");
+          gate_ok = false;
+        }
         break;
       }
       default:

@@ -9,6 +9,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 #include "core/bytes.hpp"
 #include "core/error.hpp"
@@ -148,6 +149,82 @@ struct TickArray {
 
 Result<Whirlpool> decode_whirlpool(const uint8_t* d, size_t n, const Pubkey& owner);
 Result<TickArray> decode_tick_array(const uint8_t* d, size_t n, const Pubkey& owner);
+
+// --- Raydium CPMM (raydium-cp-swap, programs/cp-swap/src/states/{pool,config}.rs) ---------
+
+constexpr size_t CPMM_POOL_LEN = 637;
+constexpr size_t CPMM_CONFIG_LEN = 236;
+inline constexpr uint8_t DISC_CPMM_POOL[8] = {247, 237, 227, 245, 215, 195, 222, 70};    // account:PoolState
+inline constexpr uint8_t DISC_CPMM_CONFIG[8] = {218, 244, 33, 104, 203, 203, 43, 111};  // account:AmmConfig
+
+struct CpmmPool {
+  Pubkey amm_config{}, token_0_vault{}, token_1_vault{}, token_0_mint{}, token_1_mint{};
+  Pubkey token_0_program{}, token_1_program{}, observation_key{};
+  uint8_t auth_bump = 0, status = 0;
+  uint64_t protocol_fees_0 = 0, protocol_fees_1 = 0, fund_fees_0 = 0, fund_fees_1 = 0;
+  uint64_t open_time = 0;
+  uint8_t creator_fee_on = 0;  // 0 both (on input), 1 only token 0, 2 only token 1
+  bool enable_creator_fee = false;
+  uint64_t creator_fees_0 = 0, creator_fees_1 = 0;
+
+  /** status bit 2 set = swap disabled. */
+  bool swap_enabled() const { return (status & 4) == 0; }
+  /** Fees owed to protocol, fund and creator sit in the vaults but are not reserves. */
+  uint64_t fees_owed_0() const { return protocol_fees_0 + fund_fees_0 + creator_fees_0; }
+  uint64_t fees_owed_1() const { return protocol_fees_1 + fund_fees_1 + creator_fees_1; }
+  /** PoolState::is_creator_fee_on_input. */
+  bool creator_fee_on_input(bool zero_for_one) const {
+    return creator_fee_on == 0 || (creator_fee_on == 1 && zero_for_one) || (creator_fee_on == 2 && !zero_for_one);
+  }
+};
+
+/** Fee rates in hundredths of a bp (1e-6). */
+struct CpmmConfig {
+  uint64_t trade_fee_rate = 0, protocol_fee_rate = 0, fund_fee_rate = 0, creator_fee_rate = 0;
+};
+
+Result<CpmmPool> decode_cpmm_pool(const uint8_t* d, size_t n, const Pubkey& owner);
+Result<CpmmConfig> decode_cpmm_config(const uint8_t* d, size_t n, const Pubkey& owner);
+
+// --- PumpSwap (pump-fun/pump-public-docs@639b87f idl/pump_amm.json, idl/pump_fees.json) -----------------------
+// Accounts grew by appended fields; a shorter (older) account reads the missing trailing fields as 0 / false.
+
+constexpr size_t PUMP_POOL_MIN_LEN = 211;  // through lp_supply
+inline constexpr uint8_t DISC_PUMP_POOL[8] = {241, 154, 109, 4, 17, 177, 109, 188};
+inline constexpr uint8_t DISC_PUMP_GLOBAL_CONFIG[8] = {149, 8, 156, 202, 160, 252, 176, 217};
+inline constexpr uint8_t DISC_PUMP_FEE_CONFIG[8] = {143, 52, 146, 187, 219, 123, 76, 155};
+
+struct PumpPool {
+  uint16_t index = 0;
+  Pubkey creator{}, base_mint{}, quote_mint{}, pool_base_token_account{}, pool_quote_token_account{};
+  Pubkey coin_creator{};
+  bool is_mayhem_mode = false, is_cashback_coin = false;
+  i128 virtual_quote_reserves = 0;  // added to the quote vault for pricing; may be negative
+  uint64_t creator_fee_bps = 0;     // the pool's own creator fee (custom quote pairs); 0 = the schedule's
+  uint64_t protocol_fees = 0, creator_fees = 0;  // v2 fee buckets kept in the quote vault
+};
+
+struct PumpGlobalConfig {
+  uint8_t disable_flags = 0;           // bit 3 buy, bit 4 sell
+  bool creator_fee_configurable = false;
+  Pubkey buyback_fee_recipients[8]{};  // wallets; the v2 trade takes one's quote-mint ATA
+};
+
+struct PumpFees {
+  uint64_t lp_fee_bps = 0, protocol_fee_bps = 0, creator_fee_bps = 0;
+};
+struct PumpFeeTier {
+  u128 market_cap_lamports_threshold = 0;
+  PumpFees fees;
+};
+struct PumpFeeConfig {
+  PumpFees flat_fees, exotic_flat_fees;
+  std::vector<PumpFeeTier> fee_tiers, stable_fee_tiers;
+};
+
+Result<PumpPool> decode_pump_pool(const uint8_t* d, size_t n, const Pubkey& owner);
+Result<PumpGlobalConfig> decode_pump_global_config(const uint8_t* d, size_t n, const Pubkey& owner);
+Result<PumpFeeConfig> decode_pump_fee_config(const uint8_t* d, size_t n, const Pubkey& owner);
 
 // --- Kamino Lend reserve -----------------------------------------------------------
 

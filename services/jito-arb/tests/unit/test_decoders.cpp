@@ -276,3 +276,79 @@ TEST(decode_kamino_reserves_and_program_ids) {
   }
   CHECK_EQ(n, 2);
 }
+
+TEST(cp_decoders_match_independent_pinned_idls) {
+  simdjson::dom::parser parser;
+  auto body = simdjson::padded_string(read_file(fixture_path("cp_decode.json")));
+  simdjson::dom::array records = parser.parse(body)["records"];
+  int counts[5]{};
+  for (auto r : records) {
+    std::vector<uint8_t> bytes;
+    CHECK(b64_decode(str(r["data"]), bytes));
+    const auto owner = parse_pubkey(str(r["owner"]));
+    const auto e = r["expected"];
+    const std::string kind = str(r["account"]);
+#define KEY(field, name) CHECK_EQ(b58(d->field), str(e[name]))
+#define NUM(field, name) CHECK_EQ(uint64_t(d->field), num(e[name]))
+    if (kind == "PoolState") {
+      auto d = state::decode_cpmm_pool(bytes.data(), bytes.size(), owner);
+      CHECK(d.has_value()); if (!d) continue;
+      ++counts[0];
+      KEY(amm_config, "amm_config"); KEY(token_0_vault, "token_0_vault"); KEY(token_1_vault, "token_1_vault");
+      KEY(token_0_mint, "token_0_mint"); KEY(token_1_mint, "token_1_mint");
+      KEY(token_0_program, "token_0_program"); KEY(token_1_program, "token_1_program"); KEY(observation_key, "observation_key");
+      NUM(auth_bump, "auth_bump"); NUM(status, "status"); NUM(open_time, "open_time"); NUM(creator_fee_on, "creator_fee_on");
+      NUM(protocol_fees_0, "protocol_fees_token_0"); NUM(protocol_fees_1, "protocol_fees_token_1");
+      NUM(fund_fees_0, "fund_fees_token_0"); NUM(fund_fees_1, "fund_fees_token_1");
+      NUM(creator_fees_0, "creator_fees_token_0"); NUM(creator_fees_1, "creator_fees_token_1");
+      CHECK_EQ(d->enable_creator_fee, bool(e["enable_creator_fee"]));
+      CHECK(!state::decode_cpmm_pool(bytes.data(), bytes.size(), prog::SYSTEM));
+      CHECK(!state::decode_cpmm_pool(bytes.data(), 8, owner));
+    } else if (kind == "AmmConfig") {
+      auto d = state::decode_cpmm_config(bytes.data(), bytes.size(), owner);
+      CHECK(d.has_value()); if (!d) continue;
+      ++counts[1];
+      NUM(trade_fee_rate, "trade_fee_rate"); NUM(protocol_fee_rate, "protocol_fee_rate");
+      NUM(fund_fee_rate, "fund_fee_rate"); NUM(creator_fee_rate, "creator_fee_rate");
+    } else if (kind == "Pool") {
+      auto d = state::decode_pump_pool(bytes.data(), bytes.size(), owner);
+      CHECK(d.has_value()); if (!d) continue;
+      ++counts[2];
+      NUM(index, "index"); KEY(creator, "creator"); KEY(base_mint, "base_mint"); KEY(quote_mint, "quote_mint");
+      KEY(pool_base_token_account, "pool_base_token_account"); KEY(pool_quote_token_account, "pool_quote_token_account");
+      KEY(coin_creator, "coin_creator"); NUM(creator_fee_bps, "creator_fee_bps");
+      NUM(protocol_fees, "protocol_fees"); NUM(creator_fees, "creator_fees");
+      CHECK_EQ(i128s(d->virtual_quote_reserves), str(e["virtual_quote_reserves"]));
+      CHECK_EQ(d->is_mayhem_mode, bool(e["is_mayhem_mode"])); CHECK_EQ(d->is_cashback_coin, bool(e["is_cashback_coin"]));
+      CHECK(!state::decode_pump_pool(bytes.data(), bytes.size(), prog::SYSTEM));
+      CHECK(!state::decode_pump_pool(bytes.data(), 8, owner));
+    } else if (kind == "GlobalConfig") {
+      auto d = state::decode_pump_global_config(bytes.data(), bytes.size(), owner);
+      CHECK(d.has_value()); if (!d) continue;
+      ++counts[3]; NUM(disable_flags, "disable_flags");
+      CHECK_EQ(d->creator_fee_configurable, bool(e["creator_fee_configurable"]));
+      int i = 0; for (auto k : simdjson::dom::array(e["buyback_fee_recipients"])) CHECK_EQ(b58(d->buyback_fee_recipients[i++]), str(k));
+      CHECK_EQ(i, 8);
+    } else if (kind == "FeeConfig") {
+      auto d = state::decode_pump_fee_config(bytes.data(), bytes.size(), owner);
+      CHECK(d.has_value()); if (!d) continue;
+      ++counts[4];
+      auto fees = [&](const state::PumpFees& f, simdjson::dom::element x) {
+        CHECK_EQ(f.lp_fee_bps, num(x["lp_fee_bps"])); CHECK_EQ(f.protocol_fee_bps, num(x["protocol_fee_bps"]));
+        CHECK_EQ(f.creator_fee_bps, num(x["creator_fee_bps"]));
+      };
+      fees(d->flat_fees, e["flat_fees"]); fees(d->exotic_flat_fees, e["exotic_flat_fees"]);
+      auto tiers = [&](const std::vector<state::PumpFeeTier>& ts, simdjson::dom::array xs) {
+        CHECK_EQ(ts.size(), xs.size()); size_t i = 0;
+        for (auto x : xs) { if (i >= ts.size()) break;
+          CHECK_EQ(u128s(ts[i].market_cap_lamports_threshold), str(x["market_cap_lamports_threshold"]));
+          fees(ts[i++].fees, x["fees"]);
+        }
+      };
+      tiers(d->fee_tiers, e["fee_tiers"]); tiers(d->stable_fee_tiers, e["stable_fee_tiers"]);
+    } else CHECK(false);
+#undef KEY
+#undef NUM
+  }
+  for (int n : counts) CHECK(n > 0);
+}

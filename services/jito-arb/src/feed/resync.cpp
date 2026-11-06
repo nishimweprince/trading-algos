@@ -47,6 +47,8 @@ std::vector<Pubkey> pool_ordered_keys(const StateStore& store, const std::vector
     add(d.mint_a);
     add(d.mint_b);
     for (auto& [start, k] : d.tick_arrays) add(k);
+    if (!is_zero(d.config)) add(d.config);
+    if (!is_zero(d.fee_config)) add(d.fee_config);
   }
   return out;
 }

@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "core/crypto.hpp"
 #include "core/programs.hpp"
 
 namespace arb {
@@ -30,6 +31,8 @@ const Pubkey* dex_program(DexKind k) {
   switch (k) {
     case DexKind::RaydiumV4: return &prog::RAYDIUM_V4;
     case DexKind::Whirlpool: return &prog::WHIRLPOOL;
+    case DexKind::Cpmm: return &prog::RAYDIUM_CPMM;
+    case DexKind::PumpSwap: return &prog::PUMPSWAP;
     default: return nullptr;
   }
 }
@@ -41,6 +44,8 @@ AccountKind pool_account_kind(DexKind k) {
   switch (k) {
     case DexKind::RaydiumV4: return AccountKind::RaydiumPool;
     case DexKind::Whirlpool: return AccountKind::Whirlpool;
+    case DexKind::Cpmm: return AccountKind::CpmmPool;
+    case DexKind::PumpSwap: return AccountKind::PumpPool;
     default: throw std::invalid_argument(std::string("state store: unsupported dex ") + dex_name(k));
   }
 }
@@ -75,6 +80,9 @@ uint32_t StateStore::add_pool(const PoolDef& def) {
   entry(def.vault_b, AccountKind::Vault).pools.push_back(id);
   entry(def.mint_a, AccountKind::Mint).pools.push_back(id);
   entry(def.mint_b, AccountKind::Mint).pools.push_back(id);
+  if (!is_zero(def.config))
+    entry(def.config, def.kind == DexKind::PumpSwap ? AccountKind::PumpGlobalConfig : AccountKind::CpmmConfig).pools.push_back(id);
+  if (!is_zero(def.fee_config)) entry(def.fee_config, AccountKind::PumpFeeConfig).pools.push_back(id);
   for (auto& [start, key] : def.tick_arrays) {
     AccountEntry& e = entry(key, AccountKind::TickArray);
     e.tick_start = start;
@@ -139,6 +147,31 @@ bool StateStore::apply(const AccountUpdate& u) {
       case AccountKind::Whirlpool: {
         auto r = state::decode_whirlpool(u.data, u.len, u.owner);
         if (r) e.pool_data = *r; else ok = false;
+        break;
+      }
+      case AccountKind::CpmmPool: {
+        auto r = state::decode_cpmm_pool(u.data, u.len, u.owner);
+        if (r) e.pool_data = *r; else ok = false;
+        break;
+      }
+      case AccountKind::CpmmConfig: {
+        auto r = state::decode_cpmm_config(u.data, u.len, u.owner);
+        if (r) e.pool_data = *r; else ok = false;
+        break;
+      }
+      case AccountKind::PumpPool: {
+        auto r = state::decode_pump_pool(u.data, u.len, u.owner);
+        if (r) e.pool_data = *r; else ok = false;
+        break;
+      }
+      case AccountKind::PumpGlobalConfig: {
+        auto r = state::decode_pump_global_config(u.data, u.len, u.owner);
+        if (r) e.pool_data = *r; else ok = false;
+        break;
+      }
+      case AccountKind::PumpFeeConfig: {
+        auto r = state::decode_pump_fee_config(u.data, u.len, u.owner);
+        if (r) e.pump_fees = std::make_shared<const state::PumpFeeConfig>(std::move(*r)); else ok = false;
         break;
       }
       case AccountKind::Vault: {
@@ -207,6 +240,31 @@ void StateStore::rebuild(uint32_t id) {
       case DexKind::Whirlpool:
         if (auto* w = std::get_if<state::Whirlpool>(&pool->pool_data)) s->wp = *w; else complete = false;
         break;
+      case DexKind::Cpmm: {
+        if (auto* c = std::get_if<state::CpmmPool>(&pool->pool_data)) s->cpmm = *c; else complete = false;
+        const AccountEntry* cfg = find(d.config);
+        const state::CpmmConfig* cc = cfg && cfg->seen && !cfg->missing ? std::get_if<state::CpmmConfig>(&cfg->pool_data) : nullptr;
+        if (cc) s->cpmm_cfg = *cc; else complete = false;
+        break;
+      }
+      case DexKind::PumpSwap: {
+        if (auto* pp = std::get_if<state::PumpPool>(&pool->pool_data)) {
+          s->pump = *pp;
+          PoolSlot& ps = *pools_[id];
+          if (ps.pump_canonical < 0)  // fixed for the pool's life: its creator and base mint never change
+            ps.pump_canonical = pp->creator == pda({std::string_view("pool-authority"), pp->base_mint}, prog::PUMP) ? 1 : 0;
+          s->pump_canonical = ps.pump_canonical == 1;
+        } else {
+          complete = false;
+        }
+        const AccountEntry* gc = find(d.config);
+        const state::PumpGlobalConfig* g = gc && gc->seen && !gc->missing ? std::get_if<state::PumpGlobalConfig>(&gc->pool_data) : nullptr;
+        if (g) s->pump_cfg = *g; else complete = false;
+        const AccountEntry* fc = find(d.fee_config);
+        s->pump_fees = fc && fc->seen && !fc->missing ? fc->pump_fees : nullptr;
+        if (!s->pump_fees) complete = false;
+        break;
+      }
       default:
         complete = false;
     }

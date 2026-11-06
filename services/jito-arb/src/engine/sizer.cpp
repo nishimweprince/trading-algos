@@ -16,13 +16,45 @@ u128 mul_shr64_sat(u128 a, u128 b) {
   return p.fits_u128() ? p.lo128() : ~u128(0);
 }
 
-// Raydium v4 effective reserves (vault - need_take_pnl) and fee keep-fraction n/d, as the quoter uses them.
+// Effective CP reserves and input keep-fraction n/d. Output fees scale ro
+// down with integer arithmetic for seeding only; final quotes stay exact.
 struct CpLeg {
   u128 ri = 0, ro = 0;
   u128 n = 0, d = 0;
 };
 
 bool cp_leg(const PoolState& p, bool a_to_b, CpLeg& out) {
+  if (p.kind == DexKind::Cpmm || p.kind == DexKind::PumpSwap) {
+    uint64_t ri = 0, ro = 0;
+    if (!p.complete || !dex::cp_reserves(p, a_to_b, ri, ro) || !ri || !ro) return false;
+    out.ri = ri;
+    out.ro = ro;
+    if (p.kind == DexKind::Cpmm) {
+      if (!dex::CpmmQuoter{}.supports(p) || !p.cpmm.swap_enabled()) return false;
+      const u128 creator = p.cpmm.enable_creator_fee ? p.cpmm_cfg.creator_fee_rate : 0;
+      const bool input = p.cpmm.creator_fee_on_input(a_to_b);
+      const u128 rate = u128(p.cpmm_cfg.trade_fee_rate) + (input ? creator : 0);
+      if (rate >= 1'000'000 || creator >= 1'000'000 || (input && rate == 0)) return false;
+      out.d = 1'000'000;
+      out.n = out.d - rate;
+      if (!input) out.ro = out.ro * (1'000'000 - creator) / 1'000'000;
+    } else {
+      if (!dex::PumpSwapQuoter{}.supports(p) || (p.pump_cfg.disable_flags & (1u << (a_to_b ? 4 : 3)))) return false;
+      if (p.pump_canonical && !p.mint_a_info) return false;
+      auto fees = dex::pump_fee_bps(p, p.vault_a_amount, a_to_b ? ro : ri);
+      if (!fees) return false;
+      const u128 rate = u128(fees->lp) + fees->protocol + (is_zero(p.pump.coin_creator) ? 0 : fees->creator);
+      if (rate >= 10'000) return false;
+      if (a_to_b) {
+        out.n = out.d = 10'000;
+        out.ro = out.ro * (10'000 - rate) / 10'000;
+      } else {
+        out.n = 10'000;
+        out.d = 10'000 + rate;
+      }
+    }
+    return out.ro > 0;
+  }
   if (p.kind != DexKind::RaydiumV4 || p.ray.swap_fee_denominator == 0) return false;
   if (p.vault_a_amount < p.ray.need_take_pnl_coin || p.vault_b_amount < p.ray.need_take_pnl_pc) return false;
   u128 coin = p.vault_a_amount - p.ray.need_take_pnl_coin, pc = p.vault_b_amount - p.ray.need_take_pnl_pc;
@@ -104,10 +136,15 @@ uint64_t closed_form_2hop_cp(const Cycle& c, const Snapshots& s) {
   CpLeg l1, l2;
   if (!cp_leg(*s[0], c.legs[0].a_to_b, l1) || !cp_leg(*s[1], c.legs[1].a_to_b, l2)) return 0;
   // S = sqrt(n1 n2 ro1 ro2 ri1 ri2) * 2^16, from integer roots of the reserve products.
+  // Q16 root scaling must fit before shifting; unsupported bit extremes
+  // return no seed so size_cycle uses its geometric search instead of truncating.
+  constexpr u128 ROOT_LIMIT = (~u128(0)) >> 32;
+  const u128 nn = l1.n * l2.n, dd = l1.d * l2.d;
+  if (nn > ROOT_LIMIT || dd > ROOT_LIMIT) return 0;
   u128 ab = isqrt_u128(l1.ro * l2.ro) * isqrt_u128(l1.ri * l2.ri);
   U256 s_scaled = U256::mul(ab, isqrt_u128((l1.n * l2.n) << 32));             // * 2^16
-  U256 num = U256::mul(s_scaled.shr(16).lo128(), isqrt_u128((l1.d * l2.d) << 32));  // S * sqrt(d1 d2) * 2^16
   if (!s_scaled.shr(16).fits_u128()) return 0;
+  U256 num = U256::mul(s_scaled.shr(16).lo128(), isqrt_u128(dd << 32));  // S * sqrt(d1 d2) * 2^16
   num = num.shr(16);
   U256 a_dd = U256::mul(l1.ri * l2.ri, l1.d * l2.d);
   if (num.lte(a_dd)) return 0;  // no profitable size
