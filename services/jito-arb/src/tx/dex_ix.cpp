@@ -37,6 +37,10 @@ Pubkey pump_user_volume_accumulator(const Pubkey& user) {
   return pda({std::string_view("user_volume_accumulator"), user}, prog::PUMPSWAP);
 }
 
+void pump_fund_user_volume(tx::IxList& ixs, const Pubkey& user, uint64_t lamports) {
+  ixs.add(prog::SYSTEM).acc(user,true,true).rw(pump_user_volume_accumulator(user)).u32(2).u64(lamports);
+}
+
 void pump_init_user_volume(tx::IxList& ixs, const Pubkey& user) {
   static constexpr uint8_t disc[8] = {94,6,202,115,255,96,232,183};
   ixs.add(prog::PUMPSWAP).acc(user,true,true).ro(user).rw(pump_user_volume_accumulator(user))

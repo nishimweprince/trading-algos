@@ -27,6 +27,7 @@ const Pubkey& pump_fee_config();     // Pump Fees PDA ["fee_config", PumpSwap pr
 const Pubkey& pump_event_authority();
 Pubkey pump_user_volume_accumulator(const Pubkey& user);
 void pump_init_user_volume(tx::IxList& ixs, const Pubkey& user);
+void pump_fund_user_volume(tx::IxList& ixs, const Pubkey& user, uint64_t lamports);
 
 /** The three tick-array PDAs a swap in this direction walks (sparse_swap.rs get_start_tick_indexes). */
 std::array<Pubkey, 3> whirlpool_tick_arrays(const state::Whirlpool& w, const Pubkey& pool, bool a_to_b);
