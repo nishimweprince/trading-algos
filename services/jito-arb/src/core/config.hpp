@@ -152,6 +152,7 @@ struct Config {
     std::string log_path;
     std::string decision_log_dir = "data/decisions";
     int decision_log_rotate_s = 3600;
+    uint32_t skip_log_max_per_s = 0;  // 0 keeps every skip; never limits signed candidates/outcomes
   } obs;
 
   // Read-only simulation of every dry-run bundle's swap legs (spec §9), paid by a public holder of the base token.

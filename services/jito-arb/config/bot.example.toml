@@ -64,6 +64,7 @@ cold_wallet_pubkey = "VERIFY"
 executor_program_id = "VERIFY"
 
 [obs]
+skip_log_max_per_s = 0           # optional skip-only log cap; signed candidates/outcomes are always kept
 metrics_addr = "127.0.0.1"
 metrics_port = 9100
 log_level = "info"

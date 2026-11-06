@@ -147,7 +147,7 @@ Config load_config(const std::string& path) {
   G(risk, freeze_allowlist); G(risk, denylist_path); G(risk, denylist_ttl_s);
   G(keys, hot_wallet_path); G(keys, cold_wallet_pubkey); G(keys, executor_program_id);
   G(obs, metrics_addr); G(obs, metrics_port); G(obs, log_level); G(obs, log_path); G(obs, decision_log_dir);
-  G(obs, decision_log_rotate_s);
+  G(obs, decision_log_rotate_s); G(obs, skip_log_max_per_s);
   G(recorder, dir); G(recorder, rotate_s);
   G(sim, enabled); G(sim, max_per_s); G(sim, holder_refresh_s); G(sim, min_payer_lamports); G(sim, holder_seed_path);
 #undef G
