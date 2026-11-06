@@ -1,0 +1,417 @@
+{
+ "oracle": "pinned upstream IDLs; Anchor BorshInstructionCoder; web3.js PDA and spl-token ATA",
+ "programs": {
+  "cpmm": "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C",
+  "pumpswap": "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",
+  "pump_fees": "pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ"
+ },
+ "inputs": {
+  "pool": "4uQeVj5tqViQh7yWWGStvkEG1Zmhx6uasJtWCJziofM",
+  "user": "8opHzTAnfzRpPEx21XtnrVTX28YQuCpAjcn1PczScKh",
+  "mint_a": "CiDwVBFgWV9E5MvXWoLgnEgn2hK7rJikbvfWavzAQz3",
+  "mint_b": "GcdayuLaLyrdmUu324nahyv33G5poQdLUEZ1nEytDeP",
+  "user_a": "LX3EUdRUBUa3TbsYXLEUdj9J3prXkWXvLYSWyYyc2Jj",
+  "user_b": "QRSsyMWN1yHT9ir42bgNZUNZ4PdEhcSWCrL2AryKpy5",
+  "vault_a": "UKrXU5bFrTzrqqpZXs8GVDbp4xPweiM65ADXNAy3ddR",
+  "vault_b": "YEGAxog9gxiGXxo538aAQxq55XAebpFfwU72ZUxmSHm",
+  "config": "c8fpTXm3XTRgE5maYQ24Li4L65wMYvAFomzXknxVEx7",
+  "observation": "g35TxFqwMx95vCk63fTxGTHb6ei4W24qg5t2x6xD3cT",
+  "recipient": "jwV7SyvqCSrVcKibYvurCCWr7DUmT7yRYPmY9QwvrGo",
+  "token_a": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+  "token_b": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+ },
+ "cases": [
+  {
+   "dex": "cpmm",
+   "a_to_b": true,
+   "program": "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C",
+   "accounts": [
+    {
+     "name": "payer",
+     "key": "8opHzTAnfzRpPEx21XtnrVTX28YQuCpAjcn1PczScKh",
+     "signer": true,
+     "writable": false
+    },
+    {
+     "name": "authority",
+     "key": "GpMZbSM2GgvTKHJirzeGfMFoaZ8UR2X7F4v8vHTvxFbL",
+     "signer": false,
+     "writable": false
+    },
+    {
+     "name": "amm_config",
+     "key": "c8fpTXm3XTRgE5maYQ24Li4L65wMYvAFomzXknxVEx7",
+     "signer": false,
+     "writable": false
+    },
+    {
+     "name": "pool_state",
+     "key": "4uQeVj5tqViQh7yWWGStvkEG1Zmhx6uasJtWCJziofM",
+     "signer": false,
+     "writable": true
+    },
+    {
+     "name": "input_token_account",
+     "key": "LX3EUdRUBUa3TbsYXLEUdj9J3prXkWXvLYSWyYyc2Jj",
+     "signer": false,
+     "writable": true
+    },
+    {
+     "name": "output_token_account",
+     "key": "QRSsyMWN1yHT9ir42bgNZUNZ4PdEhcSWCrL2AryKpy5",
+     "signer": false,
+     "writable": true
+    },
+    {
+     "name": "input_vault",
+     "key": "UKrXU5bFrTzrqqpZXs8GVDbp4xPweiM65ADXNAy3ddR",
+     "signer": false,
+     "writable": true
+    },
+    {
+     "name": "output_vault",
+     "key": "YEGAxog9gxiGXxo538aAQxq55XAebpFfwU72ZUxmSHm",
+     "signer": false,
+     "writable": true
+    },
+    {
+     "name": "input_token_program",
+     "key": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+     "signer": false,
+     "writable": false
+    },
+    {
+     "name": "output_token_program",
+     "key": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+     "signer": false,
+     "writable": false
+    },
+    {
+     "name": "input_token_mint",
+     "key": "CiDwVBFgWV9E5MvXWoLgnEgn2hK7rJikbvfWavzAQz3",
+     "signer": false,
+     "writable": false
+    },
+    {
+     "name": "output_token_mint",
+     "key": "GcdayuLaLyrdmUu324nahyv33G5poQdLUEZ1nEytDeP",
+     "signer": false,
+     "writable": false
+    },
+    {
+     "name": "observation_state",
+     "key": "g35TxFqwMx95vCk63fTxGTHb6ei4W24qg5t2x6xD3cT",
+     "signer": false,
+     "writable": true
+    }
+   ],
+   "data": "j75a2sQeM94VzVsHAAAAAM2BAQAAAAAA"
+  },
+  {
+   "dex": "cpmm",
+   "a_to_b": false,
+   "program": "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C",
+   "accounts": [
+    {
+     "name": "payer",
+     "key": "8opHzTAnfzRpPEx21XtnrVTX28YQuCpAjcn1PczScKh",
+     "signer": true,
+     "writable": false
+    },
+    {
+     "name": "authority",
+     "key": "GpMZbSM2GgvTKHJirzeGfMFoaZ8UR2X7F4v8vHTvxFbL",
+     "signer": false,
+     "writable": false
+    },
+    {
+     "name": "amm_config",
+     "key": "c8fpTXm3XTRgE5maYQ24Li4L65wMYvAFomzXknxVEx7",
+     "signer": false,
+     "writable": false
+    },
+    {
+     "name": "pool_state",
+     "key": "4uQeVj5tqViQh7yWWGStvkEG1Zmhx6uasJtWCJziofM",
+     "signer": false,
+     "writable": true
+    },
+    {
+     "name": "input_token_account",
+     "key": "QRSsyMWN1yHT9ir42bgNZUNZ4PdEhcSWCrL2AryKpy5",
+     "signer": false,
+     "writable": true
+    },
+    {
+     "name": "output_token_account",
+     "key": "LX3EUdRUBUa3TbsYXLEUdj9J3prXkWXvLYSWyYyc2Jj",
+     "signer": false,
+     "writable": true
+    },
+    {
+     "name": "input_vault",
+     "key": "YEGAxog9gxiGXxo538aAQxq55XAebpFfwU72ZUxmSHm",
+     "signer": false,
+     "writable": true
+    },
+    {
+     "name": "output_vault",
+     "key": "UKrXU5bFrTzrqqpZXs8GVDbp4xPweiM65ADXNAy3ddR",
+     "signer": false,
+     "writable": true
+    },
+    {
+     "name": "input_token_program",
+     "key": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+     "signer": false,
+     "writable": false
+    },
+    {
+     "name": "output_token_program",
+     "key": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+     "signer": false,
+     "writable": false
+    },
+    {
+     "name": "input_token_mint",
+     "key": "GcdayuLaLyrdmUu324nahyv33G5poQdLUEZ1nEytDeP",
+     "signer": false,
+     "writable": false
+    },
+    {
+     "name": "output_token_mint",
+     "key": "CiDwVBFgWV9E5MvXWoLgnEgn2hK7rJikbvfWavzAQz3",
+     "signer": false,
+     "writable": false
+    },
+    {
+     "name": "observation_state",
+     "key": "g35TxFqwMx95vCk63fTxGTHb6ei4W24qg5t2x6xD3cT",
+     "signer": false,
+     "writable": true
+    }
+   ],
+   "data": "j75a2sQeM94VzVsHAAAAAM2BAQAAAAAA"
+  },
+  {
+   "dex": "pumpswap",
+   "a_to_b": true,
+   "program": "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",
+   "accounts": [
+    {
+     "name": "pool",
+     "key": "4uQeVj5tqViQh7yWWGStvkEG1Zmhx6uasJtWCJziofM",
+     "signer": false,
+     "writable": true
+    },
+    {
+     "name": "user",
+     "key": "8opHzTAnfzRpPEx21XtnrVTX28YQuCpAjcn1PczScKh",
+     "signer": true,
+     "writable": true
+    },
+    {
+     "name": "global_config",
+     "key": "ADyA8hdefvWN2dbGGWFotbzWxrAvLW83WG6QCVXvJKqw",
+     "signer": false,
+     "writable": false
+    },
+    {
+     "name": "base_mint",
+     "key": "CiDwVBFgWV9E5MvXWoLgnEgn2hK7rJikbvfWavzAQz3",
+     "signer": false,
+     "writable": false
+    },
+    {
+     "name": "quote_mint",
+     "key": "GcdayuLaLyrdmUu324nahyv33G5poQdLUEZ1nEytDeP",
+     "signer": false,
+     "writable": false
+    },
+    {
+     "name": "user_base_token_account",
+     "key": "LX3EUdRUBUa3TbsYXLEUdj9J3prXkWXvLYSWyYyc2Jj",
+     "signer": false,
+     "writable": true
+    },
+    {
+     "name": "user_quote_token_account",
+     "key": "QRSsyMWN1yHT9ir42bgNZUNZ4PdEhcSWCrL2AryKpy5",
+     "signer": false,
+     "writable": true
+    },
+    {
+     "name": "pool_base_token_account",
+     "key": "UKrXU5bFrTzrqqpZXs8GVDbp4xPweiM65ADXNAy3ddR",
+     "signer": false,
+     "writable": true
+    },
+    {
+     "name": "pool_quote_token_account",
+     "key": "YEGAxog9gxiGXxo538aAQxq55XAebpFfwU72ZUxmSHm",
+     "signer": false,
+     "writable": true
+    },
+    {
+     "name": "base_token_program",
+     "key": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+     "signer": false,
+     "writable": false
+    },
+    {
+     "name": "quote_token_program",
+     "key": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+     "signer": false,
+     "writable": false
+    },
+    {
+     "name": "system_program",
+     "key": "11111111111111111111111111111111",
+     "signer": false,
+     "writable": false
+    },
+    {
+     "name": "user_volume_accumulator",
+     "key": "5FgJwQyFzkpjbJ6EUofbxZXpfu87oEq9z8kbxnQhbaWK",
+     "signer": false,
+     "writable": true
+    },
+    {
+     "name": "fee_config",
+     "key": "5PHirr8joyTMp9JMm6nW7hNDVyEYdkzDqazxPD7RaTjx",
+     "signer": false,
+     "writable": false
+    },
+    {
+     "name": "buyback_fee_recipient",
+     "key": "H9WdCuw3u7EeRnZZTfv13vXQ8QhTocwCQUXtND2MfKkj",
+     "signer": false,
+     "writable": true
+    },
+    {
+     "name": "event_authority",
+     "key": "GS4CU59F31iL7aR2Q8zVS8DRrcRnXX1yjQ66TqNVQnaR",
+     "signer": false,
+     "writable": false
+    },
+    {
+     "name": "program",
+     "key": "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",
+     "signer": false,
+     "writable": false
+    }
+   ],
+   "data": "XfaCPOfpQLIVzVsHAAAAAM2BAQAAAAAA"
+  },
+  {
+   "dex": "pumpswap",
+   "a_to_b": false,
+   "program": "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",
+   "accounts": [
+    {
+     "name": "pool",
+     "key": "4uQeVj5tqViQh7yWWGStvkEG1Zmhx6uasJtWCJziofM",
+     "signer": false,
+     "writable": true
+    },
+    {
+     "name": "user",
+     "key": "8opHzTAnfzRpPEx21XtnrVTX28YQuCpAjcn1PczScKh",
+     "signer": true,
+     "writable": true
+    },
+    {
+     "name": "global_config",
+     "key": "ADyA8hdefvWN2dbGGWFotbzWxrAvLW83WG6QCVXvJKqw",
+     "signer": false,
+     "writable": false
+    },
+    {
+     "name": "base_mint",
+     "key": "CiDwVBFgWV9E5MvXWoLgnEgn2hK7rJikbvfWavzAQz3",
+     "signer": false,
+     "writable": false
+    },
+    {
+     "name": "quote_mint",
+     "key": "GcdayuLaLyrdmUu324nahyv33G5poQdLUEZ1nEytDeP",
+     "signer": false,
+     "writable": false
+    },
+    {
+     "name": "user_base_token_account",
+     "key": "LX3EUdRUBUa3TbsYXLEUdj9J3prXkWXvLYSWyYyc2Jj",
+     "signer": false,
+     "writable": true
+    },
+    {
+     "name": "user_quote_token_account",
+     "key": "QRSsyMWN1yHT9ir42bgNZUNZ4PdEhcSWCrL2AryKpy5",
+     "signer": false,
+     "writable": true
+    },
+    {
+     "name": "pool_base_token_account",
+     "key": "UKrXU5bFrTzrqqpZXs8GVDbp4xPweiM65ADXNAy3ddR",
+     "signer": false,
+     "writable": true
+    },
+    {
+     "name": "pool_quote_token_account",
+     "key": "YEGAxog9gxiGXxo538aAQxq55XAebpFfwU72ZUxmSHm",
+     "signer": false,
+     "writable": true
+    },
+    {
+     "name": "base_token_program",
+     "key": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+     "signer": false,
+     "writable": false
+    },
+    {
+     "name": "quote_token_program",
+     "key": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+     "signer": false,
+     "writable": false
+    },
+    {
+     "name": "system_program",
+     "key": "11111111111111111111111111111111",
+     "signer": false,
+     "writable": false
+    },
+    {
+     "name": "user_volume_accumulator",
+     "key": "5FgJwQyFzkpjbJ6EUofbxZXpfu87oEq9z8kbxnQhbaWK",
+     "signer": false,
+     "writable": true
+    },
+    {
+     "name": "fee_config",
+     "key": "5PHirr8joyTMp9JMm6nW7hNDVyEYdkzDqazxPD7RaTjx",
+     "signer": false,
+     "writable": false
+    },
+    {
+     "name": "buyback_fee_recipient",
+     "key": "H9WdCuw3u7EeRnZZTfv13vXQ8QhTocwCQUXtND2MfKkj",
+     "signer": false,
+     "writable": true
+    },
+    {
+     "name": "event_authority",
+     "key": "GS4CU59F31iL7aR2Q8zVS8DRrcRnXX1yjQ66TqNVQnaR",
+     "signer": false,
+     "writable": false
+    },
+    {
+     "name": "program",
+     "key": "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",
+     "signer": false,
+     "writable": false
+    }
+   ],
+   "data": "wqscRmhNWy8VzVsHAAAAAM2BAQAAAAAA"
+  }
+ ]
+}

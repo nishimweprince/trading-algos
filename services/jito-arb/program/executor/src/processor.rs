@@ -166,3 +166,7 @@ pub fn process_instruction(_program_id: &Pubkey, accounts: &[AccountInfo], data:
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "cp_acceptance_tests.rs"]
+mod cp_acceptance_tests;

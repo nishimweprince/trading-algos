@@ -450,3 +450,40 @@ TEST(http_parser_incremental_chunked_and_pipelined) {
   std::printf("    64 MB chunked body parsed in %.3f s\n", secs);
   CHECK(secs < 2.0);
 }
+
+TEST(cp_executor_route_ranges_directions_and_token_programs) {
+  for (bool forward : {false, true}) for (bool pump_first : {false, true}) {
+    auto cp = std::make_shared<PoolState>(); auto pump = std::make_shared<PoolState>();
+    cp->kind = DexKind::Cpmm; pump->kind = DexKind::PumpSwap;
+    cp->mint_a = pump->mint_a = mint::WSOL; cp->mint_b = pump->mint_b = mint::USDC;
+    cp->cpmm.token_0_program = prog::TOKEN; cp->cpmm.token_1_program = prog::TOKEN_2022;
+    auto mint_info = std::make_shared<state::Mint>(); mint_info->token_program = prog::TOKEN_2022;
+    cp->mint_b_info = pump->mint_b_info = mint_info;
+    engine::Cycle c; c.n = 2; c.base = forward ? mint::WSOL : mint::USDC;
+    c.legs[0].a_to_b = forward; c.legs[1].a_to_b = !forward;
+    c.legs[0].mint_out = forward ? mint::USDC : mint::WSOL;
+    c.legs[1].mint_out = c.base;
+    std::shared_ptr<const PoolState> legs[2] = {pump_first ? pump : cp, pump_first ? cp : pump};
+    auto wallet = app::dry_run_keypair().pubkey();
+    tx::IxList list;
+    auto args = tx::execute_route_ix(list, app::dry_run_executor(), wallet, c, legs, 123456789, 123456790);
+    CHECK(args.has_value()); if (!args) continue;
+    CHECK_EQ(list.n, uint8_t(1)); const auto& ix = list.ixs[0];
+    CHECK_EQ(ix.n_accounts, uint8_t(35)); CHECK_EQ(args->num_legs, uint8_t(2));
+    CHECK_EQ(args->amount_in, uint64_t(123456789)); CHECK_EQ(args->min_out, uint64_t(123456790));
+    CHECK(ix.accounts[0].key == wallet && ix.accounts[0].signer);
+    CHECK(ix.accounts[1].key == ata(wallet, c.base, forward ? prog::TOKEN : prog::TOKEN_2022));
+    CHECK(ix.accounts[2].key == ata(wallet, c.legs[0].mint_out, forward ? prog::TOKEN_2022 : prog::TOKEN));
+    size_t offset = 3;
+    for (int i = 0; i < 2; ++i) {
+      const auto& spec = args->legs[i];
+      CHECK_EQ(spec.dex, uint8_t(legs[i]->kind)); CHECK_EQ(spec.a_to_b, uint8_t(c.legs[i].a_to_b));
+      CHECK_EQ(size_t(spec.acct_start), offset - 3);
+      CHECK_EQ(spec.acct_len, uint8_t(legs[i]->kind == DexKind::Cpmm ? 14 : 18));
+      CHECK(ix.accounts[offset].key == (legs[i]->kind == DexKind::Cpmm ? prog::RAYDIUM_CPMM : prog::PUMPSWAP));
+      offset += spec.acct_len;
+    }
+    CHECK_EQ(offset, size_t(ix.n_accounts));
+    CHECK_EQ(ix.data[18], args->legs[0].dex); CHECK_EQ(ix.data[22], args->legs[1].dex);
+  }
+}
