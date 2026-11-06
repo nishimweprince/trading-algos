@@ -334,6 +334,22 @@ Result<DlmmBinArray> decode_dlmm_bin_array(const uint8_t* d, size_t n, const Pub
   return a;
 }
 
+Result<DlmmBitmapExtension> decode_dlmm_bitmap(const uint8_t* d, size_t n, const Pubkey& owner) {
+  if (owner != prog::METEORA_DLMM) return fail(Errc::bad_owner, "dlmm bitmap owner");
+  if (n != DLMM_BITMAP_LEN) return fail(Errc::bad_length, "dlmm bitmap length");
+  if (std::memcmp(d, DISC_DLMM_BITMAP, 8)) return fail(Errc::bad_discriminator, "dlmm bitmap discriminator");
+  DlmmBitmapExtension b;
+  b.pair = pk(d + 8);
+  for (size_t i = 0; i < 96; ++i) {
+    b.positive[i] = rd_u64(d + 40 + i * 8);
+    b.negative[i] = rd_u64(d + 808 + i * 8);
+  }
+  return b;
+}
+Pubkey dlmm_bitmap_pda(const Pubkey& pair) {
+  return pda({std::string_view("bitmap"), pair}, prog::METEORA_DLMM);
+}
+
 Pubkey dlmm_bin_array_pda(const Pubkey& pair, int64_t index) {
   uint8_t le[8];
   std::memcpy(le, &index, 8);

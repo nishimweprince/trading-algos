@@ -51,7 +51,7 @@ struct PubkeyHash {
 
 /** What a subscribed account is, decided at registration. */
 enum class AccountKind : uint8_t { RaydiumPool, Whirlpool, TickArray, Vault, Mint, KaminoReserve, Wallet, CpmmPool, CpmmConfig, PumpPool, PumpGlobalConfig,
-                                    PumpFeeConfig, ClmmPool, ClmmConfig, ClmmTickArray, ClmmBitmapExtension };
+                                    PumpFeeConfig, ClmmPool, ClmmConfig, ClmmTickArray, ClmmBitmapExtension, DlmmPair, DlmmArray, DlmmBitmap, DlmmClock };
 
 /** A pool to track and the accounts it is built from. */
 struct PoolDef {
@@ -59,6 +59,8 @@ struct PoolDef {
   Pubkey address{};
   Pubkey mint_a{}, mint_b{}, vault_a{}, vault_b{};
   std::vector<std::pair<int32_t, Pubkey>> tick_arrays;  // Whirlpool: (start index, PDA)
+  std::vector<std::pair<int32_t, Pubkey>> bin_arrays;
+  Pubkey bitmap_extension{};
   Pubkey config{};      // CPMM: the AmmConfig holding the fee rates; PumpSwap: the GlobalConfig (shared by many pools)
   Pubkey fee_config{};  // PumpSwap: the Pump Fees FeeConfig (market-cap fee tiers)
 };
@@ -110,8 +112,10 @@ class StateStore {
     bool seen = false, missing = false;
     bool awaiting_push = false;  // last applied value came from a resync
     std::variant<std::monostate, state::RaydiumV4, state::Whirlpool, state::TokenAccount, state::CpmmPool, state::CpmmConfig,
-                 state::PumpPool, state::PumpGlobalConfig, state::ClmmPool, state::ClmmConfig>
+                 state::DlmmPair, state::DlmmClock, state::PumpPool, state::PumpGlobalConfig, state::ClmmPool, state::ClmmConfig>
         pool_data;
+    std::shared_ptr<const state::DlmmBinArray> dlmm_array;
+    std::shared_ptr<const state::DlmmBitmapExtension> dlmm_bitmap;
     std::shared_ptr<const state::PumpFeeConfig> pump_fees;
     std::shared_ptr<const state::ClmmTickArray> clmm_tick_array;
     std::shared_ptr<const state::ClmmBitmapExtension> clmm_bitmap;

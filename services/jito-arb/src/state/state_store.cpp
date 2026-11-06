@@ -31,6 +31,7 @@ const Pubkey* dex_program(DexKind k) {
   switch (k) {
     case DexKind::RaydiumV4: return &prog::RAYDIUM_V4;
     case DexKind::Whirlpool: return &prog::WHIRLPOOL;
+    case DexKind::Dlmm: return &prog::METEORA_DLMM;
     case DexKind::Cpmm: return &prog::RAYDIUM_CPMM;
     case DexKind::PumpSwap: return &prog::PUMPSWAP;
     case DexKind::Clmm: return &prog::RAYDIUM_CLMM;
@@ -45,6 +46,7 @@ AccountKind pool_account_kind(DexKind k) {
   switch (k) {
     case DexKind::RaydiumV4: return AccountKind::RaydiumPool;
     case DexKind::Whirlpool: return AccountKind::Whirlpool;
+    case DexKind::Dlmm: return AccountKind::DlmmPair;
     case DexKind::Cpmm: return AccountKind::CpmmPool;
     case DexKind::PumpSwap: return AccountKind::PumpPool;
     case DexKind::Clmm: return AccountKind::ClmmPool;
@@ -56,6 +58,7 @@ AccountKind pool_account_kind(DexKind k) {
 
 bool PoolState::quotable(uint64_t max_age) const {
   if (!complete || awaiting_push) return false;
+  if (kind == DexKind::Dlmm && (dlmm_clock_slot < pool_slot || dlmm_clock_slot - pool_slot > max_age)) return false;
   uint64_t lo = std::min({pool_slot, vault_a_slot, vault_b_slot});
   uint64_t hi = std::max({pool_slot, vault_a_slot, vault_b_slot});
   return hi - lo <= max_age;
@@ -71,6 +74,13 @@ StateStore::AccountEntry& StateStore::entry(const Pubkey& k, AccountKind kind) {
 
 uint32_t StateStore::add_pool(const PoolDef& def) {
   if (auto it = pool_index_.find(def.address); it != pool_index_.end()) return it->second;
+  if (def.kind == DexKind::Dlmm) {
+    if (def.bitmap_extension != state::dlmm_bitmap_pda(def.address) || def.bin_arrays.empty() || def.bin_arrays.size() > 64)
+      throw std::invalid_argument("DLMM invalid bitmap/cache definition");
+    for (auto& [index, key] : def.bin_arrays)
+      if (index < -6656 || index >= 6656 || key != state::dlmm_bin_array_pda(def.address, index))
+        throw std::invalid_argument("DLMM invalid bin-array PDA/index");
+  }
   pool_account_kind(def.kind);  // throws for a kind this build cannot decode, before anything is registered
   uint32_t id = uint32_t(pools_.size());
   auto slot = std::make_unique<PoolSlot>();
@@ -82,6 +92,15 @@ uint32_t StateStore::add_pool(const PoolDef& def) {
   entry(def.vault_b, AccountKind::Vault).pools.push_back(id);
   entry(def.mint_a, AccountKind::Mint).pools.push_back(id);
   entry(def.mint_b, AccountKind::Mint).pools.push_back(id);
+  if (def.kind == DexKind::Dlmm) {
+    entry(state::DLMM_CLOCK, AccountKind::DlmmClock).pools.push_back(id);
+    entry(def.bitmap_extension, AccountKind::DlmmBitmap).pools.push_back(id);
+    for (auto& [index, key] : def.bin_arrays) {
+      auto& e = entry(key, AccountKind::DlmmArray);
+      e.tick_start = index;
+      e.pools.push_back(id);
+    }
+  }
   if (!is_zero(def.config))
     entry(def.config, def.kind == DexKind::PumpSwap ? AccountKind::PumpGlobalConfig
                       : def.kind == DexKind::Clmm   ? AccountKind::ClmmConfig
@@ -146,6 +165,29 @@ bool StateStore::apply(const AccountUpdate& u) {
     e.seen = true;
   } else {
     switch (e.kind) {
+      case AccountKind::DlmmPair: {
+        auto r = state::decode_dlmm_pair(u.data, u.len, u.owner);
+        if (r) e.pool_data = *r; else ok = false;
+        break;
+      }
+      case AccountKind::DlmmArray: {
+        auto r = state::decode_dlmm_bin_array(u.data, u.len, u.owner);
+        if (r && r->index == e.tick_start && state::dlmm_bin_array_pda(r->pair, r->index) == u.key)
+          e.dlmm_array = std::make_shared<const state::DlmmBinArray>(*r);
+        else ok = false;
+        break;
+      }
+      case AccountKind::DlmmBitmap: {
+        auto r = state::decode_dlmm_bitmap(u.data, u.len, u.owner);
+        if (r && state::dlmm_bitmap_pda(r->pair) == u.key) e.dlmm_bitmap = std::make_shared<const state::DlmmBitmapExtension>(*r);
+        else ok = false;
+        break;
+      }
+      case AccountKind::DlmmClock: {
+        if (u.len != 40 || u.owner != PK("Sysvar1111111111111111111111111111111111111")) ok = false;
+        else e.pool_data = state::DlmmClock{rd_u64(u.data), int64_t(rd_u64(u.data + 32))};
+        break;
+      }
       case AccountKind::RaydiumPool: {
         auto r = state::decode_raydium_v4(u.data, u.len, u.owner);
         if (r) e.pool_data = *r; else ok = false;
@@ -243,6 +285,12 @@ bool StateStore::apply(const AccountUpdate& u) {
       for (uint32_t id : e.pools) { rebuild(id); changed_.push(id); }
     }
     decode_failures_.fetch_add(1, std::memory_order_relaxed);
+    // Never keep quoting a DLMM snapshot after a newer undecodable dependency arrives.
+    for (uint32_t id : e.pools) if (pools_[id]->def.kind == DexKind::Dlmm) {
+      e.awaiting_push = true;
+      rebuild(id);
+      changed_.push(id);
+    }
     return false;
   }
   e.slot = u.slot;
@@ -273,6 +321,34 @@ void StateStore::rebuild(uint32_t id) {
   const AccountEntry* pool = find(d.address);
   if (pool && pool->seen && !pool->missing) {
     switch (d.kind) {
+      case DexKind::Dlmm: {
+        if (auto* r = std::get_if<state::DlmmPair>(&pool->pool_data)) {
+          s->dlmm = *r;
+          if (r->token_x_mint != d.mint_a || r->token_y_mint != d.mint_b || r->reserve_x != d.vault_a || r->reserve_y != d.vault_b)
+            complete = false;
+        } else complete = false;
+        auto* c = find(state::DLMM_CLOCK);
+        if (c && c->seen && !c->missing) {
+          if (auto* v = std::get_if<state::DlmmClock>(&c->pool_data)) { s->dlmm_clock = *v; s->dlmm_clock_slot = c->slot; }
+          else complete = false;
+          s->awaiting_push |= c->awaiting_push;
+        } else complete = false;
+        auto* b = find(d.bitmap_extension);
+        if (b && b->seen) {
+          s->dlmm_bitmap_known = b->missing || (b->dlmm_bitmap && b->dlmm_bitmap->pair == d.address);
+          if (!b->missing) s->dlmm_bitmap = b->dlmm_bitmap;
+          s->awaiting_push |= b->awaiting_push;
+        }
+        if (!s->dlmm_bitmap_known) complete = false;
+        for (auto& [index, key] : d.bin_arrays) {
+          auto* e = find(key);
+          DlmmArraySlot a{index, key, nullptr};
+          if (e && e->seen && !e->missing && e->dlmm_array && e->dlmm_array->pair == d.address) a.array = e->dlmm_array;
+          if (e) s->awaiting_push |= e->awaiting_push;
+          s->dlmm_arrays.push_back(std::move(a));
+        }
+        break;
+      }
       case DexKind::RaydiumV4:
         if (auto* r = std::get_if<state::RaydiumV4>(&pool->pool_data)) s->ray = *r; else complete = false;
         break;
@@ -352,6 +428,7 @@ void StateStore::rebuild(uint32_t id) {
     if ((ma && ma->awaiting_push) || (mb && mb->awaiting_push)) s->awaiting_push = true;
   }
   if (!s->mint_a_info || !s->mint_b_info) complete = false;
+  if (d.kind == DexKind::Dlmm && (!ma || !mb || !ma->seen || !mb->seen || ma->missing || mb->missing)) complete = false;
   for (auto& [start, key] : d.tick_arrays) {
     if (s->n_ticks >= MAX_TICK_ARRAYS) break;
     TickArraySlot& t = s->ticks[s->n_ticks++];

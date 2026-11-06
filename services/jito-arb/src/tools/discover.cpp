@@ -160,6 +160,19 @@ int run(int argc, char** argv) {
     std::fprintf(stderr, "whirlpool: %zu read, %zu live static-fee pools%s\n", seen_wp, kept_wp,
                  cfg.dex.whirlpool_enabled ? "" : " (tracked only: quoting disabled)");
   }
+  if (cfg.dex.dlmm_enabled || cfg.discovery.track_dlmm) {
+    for (uint64_t off : {uint64_t(88), uint64_t(120)}) {
+      for (auto& base : dc.base_mints) {
+        auto body = rpc.program_accounts_raw(prog::METEORA_DLMM, state::DLMM_PAIR_LEN, {{off, b58(base)}});
+        for (auto& a : state::parse_gpa_response(body)) {
+          auto pair = state::decode_dlmm_pair(a.data.data(), a.data.size(), a.owner);
+          if (pair && pair->status == 0 && !pair->token_x_program_flag && !pair->token_y_program_flag && seen.insert(a.key).second)
+            pools.push_back(std::move(a));
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+      }
+    }
+  }
   if (cfg.dex.clmm_enabled || cfg.discovery.track_clmm) {
     size_t seen_cl = 0, kept_cl = 0;
     for (uint64_t off : {uint64_t(73), uint64_t(105)}) {  // token_mint_0, token_mint_1
@@ -222,6 +235,7 @@ int run(int argc, char** argv) {
       if (auto w = state::decode_whirlpool(a.data.data(), a.data.size(), a.owner)) return {w->token_mint_a, w->token_mint_b};
       if (auto c = state::decode_cpmm_pool(a.data.data(), a.data.size(), a.owner)) return {c->token_0_mint, c->token_1_mint};
       if (auto pp = state::decode_pump_pool(a.data.data(), a.data.size(), a.owner)) return {pp->base_mint, pp->quote_mint};
+      if (auto dl = state::decode_dlmm_pair(a.data.data(), a.data.size(), a.owner)) return {dl->token_x_mint, dl->token_y_mint};
       if (auto cl = state::decode_clmm_pool(a.data.data(), a.data.size(), a.owner)) return {cl->token_mint_0, cl->token_mint_1};
       return {Pubkey{}, Pubkey{}};
     };

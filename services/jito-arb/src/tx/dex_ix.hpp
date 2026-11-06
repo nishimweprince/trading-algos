@@ -16,6 +16,7 @@ namespace arb::tx::dexix {
 
 inline constexpr uint8_t WHIRLPOOL_SWAP_DISC[8] = {248, 198, 158, 145, 225, 117, 135, 200};  // sha256("global:swap")[..8]
 constexpr uint8_t RAYDIUM_SWAP_BASE_IN_V2 = 16;
+inline constexpr uint8_t DLMM_SWAP2_DISC[8] = {65,75,63,76,235,91,91,136};
 inline constexpr uint8_t CLMM_SWAP_V2_DISC[8] = {43, 4, 237, 11, 26, 201, 30, 98};  // global:swap_v2
 inline constexpr uint8_t PUMP_SELL_V2_DISC[8] = {93, 246, 130, 60, 231, 233, 64, 178};
 inline constexpr uint8_t PUMP_BUY_EXACT_QUOTE_IN_V2_DISC[8] = {194, 171, 28, 70, 104, 77, 91, 47};

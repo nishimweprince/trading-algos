@@ -56,6 +56,9 @@ ParityResult replay(const char* file, const dex::IQuoter& q) {
       AccountUpdate u;
       u.key = k;
       u.slot = 1;
+      if (q.kind() == DexKind::Dlmm) {
+        for (auto& [ck, ca] : list) if (ck == state::DLMM_CLOCK && ca && ca->data.size() == 40) u.slot = rd_u64(ca->data.data());
+      }
       if (!a) u.missing = true;
       else { u.owner = a->owner; u.data = a->data.data(); u.len = a->data.size(); }
       store.apply(u);
@@ -68,7 +71,14 @@ ParityResult replay(const char* file, const dex::IQuoter& q) {
       bool a_to_b = bool(s["a_to_b"]);
       uint64_t amount = uint64_t(s["amount_in"]);
       bool sim_ok = bool(s["sim_ok"]);
-      auto quote = q.quote_exact_in(*st, a_to_b, amount);
+      PoolState timed = *st;
+      if (q.kind() == DexKind::Dlmm) {
+        uint64_t slot = uint64_t(s["sim_slot"]);
+        timed.dlmm_clock = {slot, int64_t(s["dlmm_timestamp"])};
+        timed.dlmm_clock_slot = timed.pool_slot = slot;
+        CHECK(slot != 0 && timed.dlmm_clock.unix_timestamp > 0);
+      }
+      auto quote = q.quote_exact_in(timed, a_to_b, amount);
       if (sim_ok) {
         ++r.ok_samples;
         uint64_t sim_out = uint64_t(s["sim_out"]), sim_in = uint64_t(s["sim_in"]);
@@ -141,4 +151,10 @@ TEST(parity_clmm_exact) {
   std::printf("    clmm parity: %zu batches, %zu exact-compare samples, %zu failed sims, %zu mismatches\n", r.batches,
               r.ok_samples, r.failed_sims, r.mismatches);
   require_parity_or_disabled("clmm", r, Config{}.dex.clmm_enabled, "clmm_enabled");
+}
+
+TEST(parity_dlmm_exact_or_disabled) {
+  dex::DlmmQuoter q;
+  auto r = replay("parity_dlmm.json", q);
+  require_parity_or_disabled("dlmm", r, Config{}.dex.dlmm_enabled, "dlmm_enabled");
 }
