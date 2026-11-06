@@ -12,6 +12,7 @@
 #include "flash/kamino.hpp"
 #include "test.hpp"
 #include "tx/builders.hpp"
+#include "tx/dex_ix.hpp"
 
 using namespace arb;
 using namespace arbtest;
@@ -217,4 +218,47 @@ TEST(lookup_table_account_decode) {
   CHECK(a->addresses.size() == 2 && a->addresses[0][0] == 0x11 && a->addresses[1][0] == 0x22);
   CHECK(!tx::decode_lookup_table(d.data(), d.size(), prog::SYSTEM).has_value());
   CHECK(!tx::decode_lookup_table(d.data(), 57, prog::ALT).has_value());
+}
+
+TEST(cp_swap_goldens_both_directions_from_upstream_idls) {
+  simdjson::dom::parser parser;
+  simdjson::padded_string body(read_file(std::string(ARB_GOLDEN_DIR) + "/cp_swaps.json"));
+  auto root = parser.parse(body).value();
+  const auto in = root["inputs"];
+  auto key = [&](const char* n) { return pk(in[n]); };
+  CHECK(prog::RAYDIUM_CPMM == pk(root["programs"]["cpmm"]));
+  CHECK(prog::PUMPSWAP == pk(root["programs"]["pumpswap"]));
+  CHECK(prog::PUMP_FEES == pk(root["programs"]["pump_fees"]));
+  size_t count = 0;
+  for (auto c : simdjson::dom::array(root["cases"])) {
+    PoolState p;
+    p.kind = std::string_view(c["dex"]) == "cpmm" ? DexKind::Cpmm : DexKind::PumpSwap;
+    p.address = key("pool"); p.mint_a = key("mint_a"); p.mint_b = key("mint_b");
+    p.vault_a = key("vault_a"); p.vault_b = key("vault_b");
+    p.cpmm.amm_config = key("config"); p.cpmm.observation_key = key("observation");
+    p.cpmm.token_0_program = key("token_a"); p.cpmm.token_1_program = key("token_b");
+    auto m = std::make_shared<state::Mint>(); m->token_program = key("token_a"); p.mint_a_info = m;
+    m = std::make_shared<state::Mint>(); m->token_program = key("token_b"); p.mint_b_info = m;
+    p.pump_cfg.buyback_fee_recipients[0] = key("recipient");
+    const bool dir = bool(c["a_to_b"]);
+    tx::dexix::UserAccounts user{key("user"), key("user_a"), key("user_b")};
+    const auto got = tx::dexix::swap_accounts(p, dir, user);
+    simdjson::dom::array expected = c["accounts"];
+    CHECK_EQ(got.size(), expected.size());
+    size_t i = 0;
+    for (auto e : expected) {
+      if (i >= got.size()) break;
+      CHECK(got[i].key == pk(e["key"]));
+      CHECK_EQ(got[i].signer, bool(e["signer"])); CHECK_EQ(got[i].writable, bool(e["writable"])); ++i;
+    }
+    CHECK(tx::dexix::program_of(p.kind) == pk(c["program"]));
+    std::vector<uint8_t> bytes;
+    CHECK(b64_decode(std::string_view(c["data"]), bytes));
+    CHECK(tx::dexix::swap_data(p.kind, dir, 123456789, 98765) == bytes);
+    tx::IxList list; tx::dexix::swap(list, p, dir, user, 123456789, 98765);
+    CHECK_EQ(list.n, uint8_t(1)); CHECK(list.ixs[0].program == pk(c["program"]));
+    CHECK_EQ(list.ixs[0].n_accounts, got.size());
+    ++count;
+  }
+  CHECK_EQ(count, size_t(4));
 }

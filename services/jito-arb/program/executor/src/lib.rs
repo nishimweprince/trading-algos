@@ -8,4 +8,6 @@ pub mod guard;
 pub mod processor;
 
 #[cfg(not(feature = "no-entrypoint"))]
-solana_program::entrypoint!(processor::process_instruction);
+use processor::process_instruction;
+#[cfg(not(feature = "no-entrypoint"))]
+solana_program::entrypoint!(process_instruction);
