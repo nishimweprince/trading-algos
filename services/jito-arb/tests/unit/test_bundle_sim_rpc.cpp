@@ -193,7 +193,7 @@ app::SimJob fixture_job(const Keypair& signer) {
   return j;
 }
 
-enum class Scenario { funded, wrong_mint, pda, insufficient, fallback, sim_failure, rpc_failure, moved, inventory, loss };
+enum class Scenario { funded, wrong_mint, pda, insufficient, fallback, sim_failure, setup_failure, rpc_failure, moved, inventory, loss };
 
 struct Case {
   TempDir dir;
@@ -263,7 +263,7 @@ struct Case {
       auto watched = simdjson::dom::array(options["accounts"]["addresses"]);
       if (watched.size() != 2 || std::string_view(watched.at(0)) != b58(base_ata) || std::string_view(watched.at(1)) != b58(middle_ata))
         throw std::runtime_error("wrong watched account order");
-      std::string err = scenario == Scenario::sim_failure ? "{\"InstructionError\":[2,{\"Custom\":30}]}" : "null";
+      std::string err = scenario == Scenario::sim_failure ? "{\"InstructionError\":[2,{\"Custom\":30}]}" : scenario == Scenario::setup_failure ? "{\"InstructionError\":[0,{\"Custom\":30}]}" : "null";
       return "{\"result\":{\"context\":{\"slot\":101},\"value\":{\"err\":" + err +
              ",\"unitsConsumed\":60000,\"logs\":[],\"accounts\":[" +
              token_json(job.c.base, owner, scenario == Scenario::loss ? 9900 : 10200) + "," +
@@ -291,6 +291,10 @@ struct Case {
     CHECK_EQ(sim.counters().in_flight.load(), uint64_t(0));
     CHECK_EQ(sim.counters().dropped.load(), uint64_t(0));
     CHECK(sim.drain().empty());
+    if (scenario == Scenario::setup_failure) {
+      CHECK_EQ(sim.counters().setup_error.load(),uint64_t(1));
+      CHECK_EQ(sim.counters().failed.load(),uint64_t(0));
+    }
     rpc.check();
     if (done.empty()) return {};
     CHECK(std::memcmp(done[0].signature, job.cand.signature, 64) == 0);
@@ -364,4 +368,10 @@ TEST(bundle_sim_rpc_successful_execution_can_have_negative_profit) {
   CHECK_EQ(r.final_out, uint64_t(900));
   CHECK_EQ(r.profit_base, int64_t(-100));
   CHECK_EQ(r.net_lamports, int64_t(-115));
+}
+
+TEST(bundle_sim_rpc_setup_failures_are_not_route_failures) {
+  Case c(Scenario::setup_failure);auto r=c.run();
+  CHECK(r.outcome==uint8_t(obs::Outcome::SimulationFailed));
+  CHECK(r.reason==uint8_t(obs::SimFail::setup));
 }
