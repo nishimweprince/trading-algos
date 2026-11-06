@@ -84,7 +84,7 @@ std::string unsigned_tx_b64(const Pubkey& payer, const tx::IxList& ixs);
 class BundleSim {
  public:
   struct Counters {
-    std::atomic<uint64_t> submitted{0}, dropped{0}, ok{0}, failed{0}, profitable{0}, no_holder{0}, too_large{0}, rpc_error{0};
+    std::atomic<uint64_t> submitted{0}, dropped{0}, ok{0}, failed{0}, profitable{0}, no_holder{0}, too_large{0}, rpc_error{0}, setup_error{0};
     std::atomic<uint64_t> queued{0}, in_flight{0}, terminal{0}, funding_changed{0}, intermediate_balance{0};
   };
   BundleSim(const Config& cfg, std::atomic<bool>& stop);

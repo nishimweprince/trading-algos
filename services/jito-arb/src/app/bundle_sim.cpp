@@ -411,8 +411,8 @@ void BundleSim::process(SimJob& j, Rpc& rpc) {
     tx::IxList l;
     auto lay = build_sim_ixs(l, j.c, legs, j.o, holder->owner, need);
     if (!lay) {
-      ++n_.failed;
-      return failed(obs::SimFail::other, pre_slot, 0);
+      ++n_.setup_error;
+      return failed(obs::SimFail::setup, pre_slot, 0);
     }
     std::string txb = unsigned_tx_b64(holder->owner, l);
     if (txb.empty()) {
@@ -434,8 +434,9 @@ void BundleSim::process(SimJob& j, Rpc& rpc) {
       return failed(obs::SimFail::funding_changed, sim.slot, sim.units);
     }
     if (!sim.ok) {
-      ++n_.failed;
       auto why = classify_sim_error(sim.err, lay->first_swap, j.c.n);
+      if (uint8_t(why) >= 0x10) ++n_.setup_error;
+      else ++n_.failed;
       LOG_INFO("bundle sim failed: cycle %u leg %u err %s", j.c.id, unsigned(why), sim.err.substr(0, 120).c_str());
       return failed(why, sim.slot, sim.units);
     }
