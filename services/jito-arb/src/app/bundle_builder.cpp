@@ -6,6 +6,7 @@
 
 #include <cstring>
 #include <set>
+#include <stdexcept>
 
 #include "core/base58.hpp"
 #include "core/programs.hpp"
@@ -84,8 +85,10 @@ void seed_virtual_tables(tx::AltManager& alts, const StateStore& store, const Pu
         add(a, p->mint_a);
         add(a, p->mint_b);
         break;
-      default:
+      case DexKind::RaydiumV4:
         break;
+      default:
+        throw std::invalid_argument(std::string("virtual ALT: unsupported dex ") + dex_name(p->kind));
     }
     alts.upsert(table_key(i + 1), a);
   }
