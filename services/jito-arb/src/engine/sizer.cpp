@@ -1,6 +1,7 @@
 #include "engine/sizer.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 #include "core/u256.hpp"
 #include "flash/kamino.hpp"
@@ -20,9 +21,41 @@ u128 mul_shr64_sat(u128 a, u128 b) {
 struct CpLeg {
   u128 ri = 0, ro = 0;
   u128 n = 0, d = 0;
+  long double output_keep = 1;
 };
 
 bool cp_leg(const PoolState& p, bool a_to_b, CpLeg& out) {
+  if (p.kind == DexKind::Cpmm || p.kind == DexKind::PumpSwap) {
+    uint64_t ri = 0, ro = 0;
+    if (!p.complete || !dex::cp_reserves(p, a_to_b, ri, ro) || !ri || !ro) return false;
+    out.ri = ri;
+    out.ro = ro;
+    if (p.kind == DexKind::Cpmm) {
+      if (!dex::CpmmQuoter{}.supports(p) || !p.cpmm.swap_enabled()) return false;
+      const u128 creator = p.cpmm.enable_creator_fee ? p.cpmm_cfg.creator_fee_rate : 0;
+      const bool input = p.cpmm.creator_fee_on_input(a_to_b);
+      const u128 rate = u128(p.cpmm_cfg.trade_fee_rate) + (input ? creator : 0);
+      if (rate >= 1'000'000 || creator >= 1'000'000 || (input && rate == 0)) return false;
+      out.d = 1'000'000;
+      out.n = out.d - rate;
+      if (!input) out.output_keep = 1 - static_cast<long double>(creator) / 1'000'000;
+    } else {
+      if (!dex::PumpSwapQuoter{}.supports(p) || (p.pump_cfg.disable_flags & (1u << (a_to_b ? 4 : 3)))) return false;
+      if (p.pump_canonical && !p.mint_a_info) return false;
+      auto fees = dex::pump_fee_bps(p, p.vault_a_amount, a_to_b ? ro : ri);
+      if (!fees) return false;
+      const u128 rate = u128(fees->lp) + fees->protocol + (is_zero(p.pump.coin_creator) ? 0 : fees->creator);
+      if (rate >= 10'000) return false;
+      if (a_to_b) {
+        out.n = out.d = 10'000;
+        out.output_keep = 1 - static_cast<long double>(rate) / 10'000;
+      } else {
+        out.n = 10'000;
+        out.d = 10'000 + rate;
+      }
+    }
+    return true;
+  }
   if (p.kind != DexKind::RaydiumV4 || p.ray.swap_fee_denominator == 0) return false;
   if (p.vault_a_amount < p.ray.need_take_pnl_coin || p.vault_b_amount < p.ray.need_take_pnl_pc) return false;
   u128 coin = p.vault_a_amount - p.ray.need_take_pnl_coin, pc = p.vault_b_amount - p.ray.need_take_pnl_pc;
@@ -103,6 +136,19 @@ uint64_t closed_form_2hop_cp(const Cycle& c, const Snapshots& s) {
   if (c.n != 2) return 0;
   CpLeg l1, l2;
   if (!cp_leg(*s[0], c.legs[0].a_to_b, l1) || !cp_leg(*s[1], c.legs[1].a_to_b, l2)) return 0;
+  if (s[0]->kind != DexKind::RaydiumV4 || s[1]->kind != DexKind::RaydiumV4) {
+    // Continuous CP approximation only seeds the search. Every candidate and the final
+    // result still run through quote_chain with exact integer fees and rounding.
+    const long double k1 = static_cast<long double>(l1.n) / static_cast<long double>(l1.d);
+    const long double k2 = static_cast<long double>(l2.n) / static_cast<long double>(l2.d);
+    const long double a1 = k1 * l1.output_keep * static_cast<long double>(l1.ro);
+    const long double a2 = k2 * l2.output_keep * static_cast<long double>(l2.ro);
+    const long double b = static_cast<long double>(l1.ri) * static_cast<long double>(l2.ri);
+    const long double den = k1 * static_cast<long double>(l2.ri) + k2 * a1;
+    const long double x = (std::sqrt(a1 * a2 * b) - b) / den;
+    if (!std::isfinite(x) || x <= 0) return 0;
+    return x >= static_cast<long double>(UINT64_MAX) ? UINT64_MAX : uint64_t(x);
+  }
   // S = sqrt(n1 n2 ro1 ro2 ri1 ri2) * 2^16, from integer roots of the reserve products.
   u128 ab = isqrt_u128(l1.ro * l2.ro) * isqrt_u128(l1.ri * l2.ri);
   U256 s_scaled = U256::mul(ab, isqrt_u128((l1.n * l2.n) << 32));             // * 2^16
