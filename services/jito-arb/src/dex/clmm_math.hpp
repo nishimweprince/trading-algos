@@ -9,6 +9,7 @@
 #include <cstdint>
 
 #include "core/bytes.hpp"
+#include "state/accounts.hpp"
 #include "core/error.hpp"
 
 namespace arb::dex::clmm {
@@ -34,6 +35,11 @@ void bitmap_start_range(uint16_t tick_spacing, int32_t& min_start, int32_t& max_
 bool current_array_initialized(const uint64_t bitmap[16], int32_t tick_current, uint16_t tick_spacing, int32_t& start);
 /** next_initialized_tick_array_start_index (default bitmap only): found, and the next start or the boundary. */
 bool next_initialized_array(const uint64_t bitmap[16], int32_t last_start, uint16_t tick_spacing, bool zero_for_one, int32_t& out);
+
+/** Search initialized arrays over the entire legal tick range. Missing extension is a cache gap.
+ * include_current is used for the first array; subsequent searches exclude last_start. */
+Result<int32_t> initialized_array(const state::ClmmPool& pool, const state::ClmmBitmapExtension* extension,
+                                  int32_t last_start, bool zero_for_one, bool include_current = false);
 
 struct StepResult {
   u128 sqrt_price_next_x64 = 0;

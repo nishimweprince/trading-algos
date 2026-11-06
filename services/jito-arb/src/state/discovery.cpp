@@ -145,6 +145,7 @@ std::vector<Pubkey> dependent_keys(const std::vector<RawAccount>& pools, const D
     keys.insert(d->vault_b);
     keys.insert(d->mint_a);
     keys.insert(d->mint_b);
+    if (d->kind == DexKind::Clmm) keys.insert(clmm_bitmap_extension_pda(d->address));
     if (!is_zero(d->config)) keys.insert(d->config);
     if (!is_zero(d->fee_config)) keys.insert(d->fee_config);
   }
@@ -236,10 +237,32 @@ DiscoveryResult discover(const std::vector<RawAccount>& pool_accounts, const Acc
         if (cl->dynamic_fee) { reject(c, "dynamic_fee_unsupported"); gate_ok = false; break; }
         if (cl->liquidity == 0) { reject(c, "zero_liquidity"); gate_ok = false; break; }
         if (cl->open_time >= uint64_t(std::time(nullptr))) { reject(c, "not_open"); gate_ok = false; break; }
-        int32_t lo = 0, hi = 0;
-        dex::clmm::bitmap_start_range(cl->tick_spacing, lo, hi);
-        int32_t st = dex::clmm::array_start_index(cl->tick_current, cl->tick_spacing);
-        if (st < lo || st >= hi) { reject(c, "bitmap_extension"); gate_ok = false; }
+        if (!clmm_mint_supported(*mia) || !clmm_mint_supported(*mib)) {
+          reject(c, "clmm_mint_extensions"); gate_ok = false; break;
+        }
+        auto config = decode_clmm_config(cfg_it->second.data.data(), cfg_it->second.data.size(), cfg_it->second.owner);
+        if (config->tick_spacing != cl->tick_spacing) { reject(c, "clmm_config_spacing"); gate_ok = false; break; }
+        std::optional<ClmmBitmapExtension> bitmap;
+        auto bm = accounts.find(clmm_bitmap_extension_pda(a.key));
+        if (bm != accounts.end()) {
+          auto decoded = decode_clmm_bitmap_extension(bm->second.data.data(), bm->second.data.size(), bm->second.owner);
+          if (!decoded || decoded->pool != a.key) { reject(c, "clmm_bitmap_invalid"); gate_ok = false; break; }
+          bitmap = *decoded;
+        }
+        // Small spacing can reach the extension; require it rather than treating unknown bits as empty.
+        if (cl->tick_spacing < 15 && !bitmap) { reject(c, "clmm_bitmap_missing"); gate_ok = false; break; }
+        c.def.tick_arrays.clear();
+        const int32_t current = dex::clmm::array_start_index(cl->tick_current, cl->tick_spacing);
+        c.def.tick_arrays.emplace_back(current, clmm_tick_array_pda(a.key, current));
+        for (bool zfo : {true, false}) {
+          int32_t last = current;
+          for (int k = 0; k < 3; ++k) {
+            auto next = dex::clmm::initialized_array(*cl, bitmap ? &*bitmap : nullptr, last, zfo);
+            if (!next) break;
+            c.def.tick_arrays.emplace_back(*next, clmm_tick_array_pda(a.key, *next));
+            last = *next;
+          }
+        }
         break;
       }
       case DexKind::PumpSwap: {
