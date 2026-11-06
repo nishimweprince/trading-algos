@@ -276,13 +276,18 @@ bool run_pool(DexKind kind, const Pubkey& pool, std::vector<Batch>& out, Stats& 
   };
   const Holder* hA = pick(def->mint_a);
   const Holder* hB = pick(def->mint_b);
-  // Destinations: each funding wallet's own ATA for the output mint (a->b pays into hA's mint-b ATA).
-  Pubkey dB = hA ? ata(hA->owner, def->mint_b, prog::TOKEN) : def->vault_a;
-  Pubkey dA = hB ? ata(hB->owner, def->mint_a, prog::TOKEN) : def->vault_b;
+  // Destinations: each funding wallet's own ATA for the output mint (a->b pays into hA's mint-b ATA), under the
+  // mint's own token program (Token-2022 mints get Token-2022 ATAs).
+  auto mint_prog = rpc_call([&](Rpc& r) { return r.multiple_accounts({def->mint_a, def->mint_b}); });
+  Pubkey tp_a = mint_prog.size() == 2 && mint_prog[0] ? mint_prog[0]->owner : prog::TOKEN;
+  Pubkey tp_b = mint_prog.size() == 2 && mint_prog[1] ? mint_prog[1]->owner : prog::TOKEN;
+  Pubkey dB = hA ? ata(hA->owner, def->mint_b, tp_b) : def->vault_a;
+  Pubkey dA = hB ? ata(hB->owner, def->mint_a, tp_a) : def->vault_b;
   std::vector<Pubkey> keys = {pool, def->vault_a, def->vault_b, def->mint_a, def->mint_b, dA, dB,
                               hA ? hA->account : dA, hB ? hB->account : dB};
   for (auto& [start, k] : def->tick_arrays) keys.push_back(k);
-  if (!is_zero(def->config)) keys.push_back(def->config);  // CPMM fee rates
+  if (!is_zero(def->config)) keys.push_back(def->config);  // CPMM fee rates, PumpSwap global config
+  if (!is_zero(def->fee_config)) keys.push_back(def->fee_config);  // PumpSwap fee tiers
   uint64_t s1 = 0, s2 = 0;
   auto before = rpc_call([&](Rpc& r) { return r.multiple_accounts_at(keys, s1); });
   if (before.size() != keys.size() || !before[0] || !before[1] || !before[2]) return false;
@@ -310,7 +315,8 @@ bool run_pool(DexKind kind, const Pubkey& pool, std::vector<Batch>& out, Stats& 
   dex::RaydiumV4Quoter rq;
   dex::WhirlpoolQuoter wq;
   dex::CpmmQuoter cq;
-  const dex::IQuoter* qs[] = {&rq, &wq, &cq};
+  dex::PumpSwapQuoter pq;
+  const dex::IQuoter* qs[] = {&rq, &wq, &cq, &pq};
   const dex::IQuoter* qp = nullptr;
   for (const dex::IQuoter* c : qs)
     if (c->kind() == kind) qp = c;
@@ -342,7 +348,7 @@ bool run_pool(DexKind kind, const Pubkey& pool, std::vector<Batch>& out, Stats& 
       // create_associated_token_account_idempotent(payer, ata, owner, mint, system, token)
       const Pubkey& wallet = src_h->owner;
       ixs.add(prog::ATA).acc(wallet, true, true).rw(dst).ro(wallet).ro(a_to_b ? def->mint_b : def->mint_a)
-          .ro(prog::SYSTEM).ro(prog::TOKEN).u8(1);
+          .ro(prog::SYSTEM).ro(a_to_b ? tp_b : tp_a).u8(1);
       tx::dexix::UserAccounts ua{src_h->owner, a_to_b ? src_h->account : dA, a_to_b ? dB : src_h->account};
       tx::dexix::swap(ixs, *ps, a_to_b, ua, amount, 0);
       std::string txb = unsigned_tx_b64(wallet, ixs);
@@ -366,6 +372,11 @@ bool run_pool(DexKind kind, const Pubkey& pool, std::vector<Batch>& out, Stats& 
           uint64_t vout_pre = a_to_b ? ps->vault_b_amount : ps->vault_a_amount;
           uint64_t vin_post = a_to_b ? va->amount : vb->amount, vout_post = a_to_b ? vb->amount : va->amount;
           s.verified = vin_post - vin_pre == s.sim_in && vout_pre - vout_post == s.sim_out;
+          if (kind == DexKind::PumpSwap) {
+            // v2 trades keep the protocol and creator fees in the quote vault and pay a buyback fee out of it, so
+            // only the base vault (token a) conserves exactly against the user's side.
+            s.verified = a_to_b ? vin_post - vin_pre == s.sim_in : vout_pre - vout_post == s.sim_out;
+          }
         }
       } else if (!sim.ok) {
         s.err = sim.err;
@@ -418,8 +429,17 @@ bool run_pool(DexKind kind, const Pubkey& pool, std::vector<Batch>& out, Stats& 
   }
   size_t unverified = 0;
   std::vector<Sample> kept;
+  bool told = false;
   for (auto& s : b.samples) {
-    if ((s.sim_ok && !s.verified) || funding_moved(s) || pre_swap_failure(s)) { ++unverified; continue; }
+    if ((s.sim_ok && !s.verified) || funding_moved(s) || pre_swap_failure(s)) {
+      if (!told) {
+        told = true;
+        std::fprintf(stderr, "    dropped: sim_ok=%d verified=%d funding_moved=%d pre_swap=%d err=%s\n", int(s.sim_ok), int(s.verified),
+                     int(funding_moved(s)), int(pre_swap_failure(s)), s.err.substr(0, 240).c_str());
+      }
+      ++unverified;
+      continue;
+    }
     kept.push_back(s);
   }
   b.samples = std::move(kept);
@@ -474,7 +494,8 @@ int main(int argc, char** argv) {
   int rc = 0;
   for (auto [kind, list, name] : {std::tuple{DexKind::RaydiumV4, "raydium_v4", "raydium_v4"},
                                   std::tuple{DexKind::Whirlpool, "whirlpool", "whirlpool"},
-                                  std::tuple{DexKind::Cpmm, "cpmm", "cpmm"}}) {
+                                  std::tuple{DexKind::Cpmm, "cpmm", "cpmm"},
+                                  std::tuple{DexKind::PumpSwap, "pumpswap", "pumpswap"}}) {
     if (dex != "all" && dex != name) continue;
     std::vector<Batch> batches;
     Stats st;

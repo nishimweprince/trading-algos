@@ -241,6 +241,19 @@ u128 spot_rate_x64(const PoolState& p, bool a_to_b) {
     U256::mul(rate, keep).divmod(U256::from_u128(den), qq, rr);
     return qq.fits_u128() ? qq.lo128() : ~u128(0);
   }
+  if (p.kind == DexKind::PumpSwap) {
+    uint64_t rin = 0, rout = 0;
+    if (!cp_reserves(p, a_to_b, rin, rout) || rin == 0) return 0;
+    uint64_t base = a_to_b ? rin : rout, quote = a_to_b ? rout : rin;
+    auto bps = pump_fee_bps(p, base, quote);
+    if (!bps) return 0;
+    u128 total = u128(bps->lp) + bps->protocol + (is_zero(p.pump.coin_creator) ? 0 : bps->creator);
+    u128 keep = 10'000 - std::min<u128>(10'000, total);
+    u128 rate = (u128(rout) << 64) / rin;
+    U256 qq, rr;
+    U256::mul(rate, keep).divmod(U256::from_u128(10'000), qq, rr);
+    return qq.fits_u128() ? qq.lo128() : ~u128(0);
+  }
   if (p.kind != DexKind::RaydiumV4 && p.kind != DexKind::Whirlpool) return 0;  // no spot: the prefilter skips the cycle
   if (p.kind == DexKind::RaydiumV4) {
     u128 rin = a_to_b ? p.vault_a_amount - std::min(p.vault_a_amount, p.ray.need_take_pnl_coin)

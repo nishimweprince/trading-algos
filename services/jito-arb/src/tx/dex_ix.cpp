@@ -1,9 +1,11 @@
 #include "tx/dex_ix.hpp"
 
+#include <algorithm>
 #include <cstring>
 #include <stdexcept>
 #include <string>
 
+#include "core/crypto.hpp"
 #include "core/programs.hpp"
 #include "state/discovery.hpp"
 
@@ -17,6 +19,32 @@ const Pubkey& raydium_authority() {
 const Pubkey& cpmm_authority() {
   static const Pubkey k = pda({std::string_view("vault_and_lp_mint_auth_seed")}, prog::RAYDIUM_CPMM);
   return k;
+}
+
+const Pubkey& pump_global_config() {
+  static const Pubkey k = pda({std::string_view("global_config")}, prog::PUMPSWAP);
+  return k;
+}
+const Pubkey& pump_fee_config() {
+  static const Pubkey k = pda({std::string_view("fee_config"), prog::PUMPSWAP}, prog::PUMP_FEES);
+  return k;
+}
+const Pubkey& pump_event_authority() {
+  static const Pubkey k = pda({std::string_view("__event_authority")}, prog::PUMPSWAP);
+  return k;
+}
+Pubkey pump_user_volume_accumulator(const Pubkey& user) {
+  return pda({std::string_view("user_volume_accumulator"), user}, prog::PUMPSWAP);
+}
+
+void pump_fund_user_volume(tx::IxList& ixs, const Pubkey& user, uint64_t lamports) {
+  ixs.add(prog::SYSTEM).acc(user,true,true).rw(pump_user_volume_accumulator(user)).u32(2).u64(lamports);
+}
+
+void pump_init_user_volume(tx::IxList& ixs, const Pubkey& user) {
+  static constexpr uint8_t disc[8] = {94,6,202,115,255,96,232,183};
+  ixs.add(prog::PUMPSWAP).acc(user,true,true).ro(user).rw(pump_user_volume_accumulator(user))
+      .ro(prog::SYSTEM).ro(pump_event_authority()).ro(prog::PUMPSWAP).bytes(disc,8);
 }
 
 Pubkey whirlpool_oracle(const Pubkey& whirlpool) { return pda({std::string_view("oracle"), whirlpool}, prog::WHIRLPOOL); }
@@ -48,8 +76,35 @@ const Pubkey& program_of(DexKind kind) {
 
 std::vector<AccountMeta> swap_accounts(const PoolState& p, bool a_to_b, const UserAccounts& u) {
   std::vector<AccountMeta> v;
-  if (p.kind != DexKind::RaydiumV4 && p.kind != DexKind::Whirlpool && p.kind != DexKind::Cpmm)
+  if (p.kind != DexKind::RaydiumV4 && p.kind != DexKind::Whirlpool && p.kind != DexKind::Cpmm && p.kind != DexKind::PumpSwap)
     throw std::invalid_argument(std::string("swap accounts: unsupported dex ") + dex_name(p.kind));
+  if (p.kind == DexKind::PumpSwap) {
+    // sell_v2 / buy_exact_quote_in_v2 (PUMP_SWAP_TRADE_V2.md): 17 accounts, the same for both. Token "a" is base.
+    auto tp = [](const std::shared_ptr<const state::Mint>& m) {
+      return m && m->token_program == prog::TOKEN_2022 ? prog::TOKEN_2022 : prog::TOKEN;
+    };
+    const Pubkey base_tp = tp(p.mint_a_info), quote_tp = tp(p.mint_b_info);
+    v.push_back({p.address, false, true});
+    v.push_back({u.authority, true, true});
+    v.push_back({pump_global_config(), false, false});
+    v.push_back({p.mint_a, false, false});
+    v.push_back({p.mint_b, false, false});
+    v.push_back({u.token_a, false, true});
+    v.push_back({u.token_b, false, true});
+    v.push_back({p.vault_a, false, true});
+    v.push_back({p.vault_b, false, true});
+    v.push_back({base_tp, false, false});
+    v.push_back({quote_tp, false, false});
+    v.push_back({prog::SYSTEM, false, false});
+    v.push_back({pump_user_volume_accumulator(u.authority), false, true});
+    v.push_back({pump_fee_config(), false, false});
+    // One of the 8 buyback fee recipients' quote-mint ATAs (must exist; it does for wSOL and USDC).
+    v.push_back({ata(p.pump_cfg.buyback_fee_recipients[0], p.mint_b, quote_tp), false, true});
+    v.push_back({pump_event_authority(), false, false});
+    v.push_back({prog::PUMPSWAP, false, false});
+    (void)a_to_b;  // same accounts both ways; the instruction (sell vs buy) carries the direction
+    return v;
+  }
   if (p.kind == DexKind::Cpmm) {
     // payer (signer), authority, amm_config, pool_state (w), input token account (w), output token account (w),
     // input vault (w), output vault (w), input token program, output token program, input mint, output mint,
@@ -112,8 +167,17 @@ std::vector<uint8_t> swap_data(DexKind kind, bool a_to_b, uint64_t amount_in, ui
     std::memcpy(d + n, p, len);
     n += len;
   };
-  if (kind != DexKind::RaydiumV4 && kind != DexKind::Whirlpool && kind != DexKind::Cpmm)
+  if (kind != DexKind::RaydiumV4 && kind != DexKind::Whirlpool && kind != DexKind::Cpmm && kind != DexKind::PumpSwap)
     throw std::invalid_argument(std::string("swap data: unsupported dex ") + dex_name(kind));
+  if (kind == DexKind::PumpSwap) {
+    // a_to_b: sell_v2(base_amount_in, min_quote_amount_out); b_to_a: buy_exact_quote_in_v2(spendable_quote_in,
+    // min_base_amount_out), whose minimum must be > 0.
+    put(a_to_b ? PUMP_SELL_V2_DISC : PUMP_BUY_EXACT_QUOTE_IN_V2_DISC, 8);
+    uint64_t floor_out = a_to_b ? min_out : std::max<uint64_t>(min_out, 1);
+    put(&amount_in, 8);
+    put(&floor_out, 8);
+    return std::vector<uint8_t>(d, d + n);
+  }
   if (kind == DexKind::Cpmm) {  // swap_base_input(amount_in, minimum_amount_out)
     put(CPMM_SWAP_BASE_INPUT_DISC, 8);
     put(&amount_in, 8);

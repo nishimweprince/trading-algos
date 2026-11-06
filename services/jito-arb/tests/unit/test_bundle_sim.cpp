@@ -2,6 +2,8 @@
 #include "core/base58.hpp"
 #include "core/programs.hpp"
 #include "test.hpp"
+#include "tx/dex_ix.hpp"
+#include "core/crypto.hpp"
 using namespace arb;
 
 TEST(bundle_sim_outstanding_capacity_and_shutdown_reconciliation) {
@@ -37,4 +39,35 @@ TEST(bundle_sim_top_level_cu_excludes_nested_same_program) {
     "Program " + w + " success"}, legs);
   CHECK_EQ(units[0], uint64_t(30000));
   CHECK_EQ(units[1], uint64_t(50000));
+}
+
+TEST(pumpswap_sim_setup_matches_pinned_idl) {
+  crypto_init();
+  Pubkey user = parse_pubkey("2yik7ZsLfFKAmmr9cCHhL1dTabiECnFKDeSVyTbxeETU");
+  tx::IxList ixs;
+  tx::dexix::pump_init_user_volume(ixs, user);
+  auto& ix = ixs.ixs[0];
+  const uint8_t disc[8] = {94,6,202,115,255,96,232,183};
+  CHECK_EQ(ix.n_accounts, uint8_t(6));
+  CHECK_EQ(ix.data_len, uint16_t(8));
+  CHECK(std::memcmp(ix.data, disc, 8) == 0);
+  CHECK(ix.program == prog::PUMPSWAP);
+  CHECK(ix.accounts[0].key == user && ix.accounts[0].signer && ix.accounts[0].writable);
+  CHECK(ix.accounts[1].key == user && !ix.accounts[1].signer);
+  CHECK(ix.accounts[2].key == tx::dexix::pump_user_volume_accumulator(user) && ix.accounts[2].writable);
+  CHECK(ix.accounts[3].key == prog::SYSTEM);
+  CHECK(ix.accounts[4].key == tx::dexix::pump_event_authority());
+  CHECK(ix.accounts[5].key == prog::PUMPSWAP);
+}
+
+TEST(pumpswap_sim_rent_topup_is_holder_funded_system_transfer) {
+  crypto_init();
+  Pubkey user = parse_pubkey("2yik7ZsLfFKAmmr9cCHhL1dTabiECnFKDeSVyTbxeETU");
+  tx::IxList ixs; tx::dexix::pump_fund_user_volume(ixs,user,166155);
+  auto& ix=ixs.ixs[0];
+  CHECK(ix.program==prog::SYSTEM && ix.n_accounts==2 && ix.data_len==12);
+  CHECK(ix.accounts[0].key==user && ix.accounts[0].signer && ix.accounts[0].writable);
+  CHECK(ix.accounts[1].key==tx::dexix::pump_user_volume_accumulator(user) && ix.accounts[1].writable);
+  uint32_t tag=0; uint64_t amount=0;std::memcpy(&tag,ix.data,4);std::memcpy(&amount,ix.data+4,8);
+  CHECK_EQ(tag,uint32_t(2));CHECK_EQ(amount,uint64_t(166155));
 }

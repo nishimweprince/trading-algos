@@ -7,3 +7,4 @@ compile_commands.json
 .cache/
 # Anthropic Sans is proprietary: never commit the font files (this repo is public). Copy them to the host directly.
 ui/fonts/
+program/executor/target/

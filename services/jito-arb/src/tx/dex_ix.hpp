@@ -15,11 +15,19 @@ namespace arb::tx::dexix {
 
 inline constexpr uint8_t WHIRLPOOL_SWAP_DISC[8] = {248, 198, 158, 145, 225, 117, 135, 200};  // sha256("global:swap")[..8]
 constexpr uint8_t RAYDIUM_SWAP_BASE_IN_V2 = 16;
+inline constexpr uint8_t PUMP_SELL_V2_DISC[8] = {93, 246, 130, 60, 231, 233, 64, 178};
+inline constexpr uint8_t PUMP_BUY_EXACT_QUOTE_IN_V2_DISC[8] = {194, 171, 28, 70, 104, 77, 91, 47};
 inline constexpr uint8_t CPMM_SWAP_BASE_INPUT_DISC[8] = {143, 190, 90, 218, 196, 30, 51, 222};  // global:swap_base_input
 
 const Pubkey& raydium_authority();  // PDA ["amm authority"] of the v4 program
 Pubkey whirlpool_oracle(const Pubkey& whirlpool);
 const Pubkey& cpmm_authority();  // PDA ["vault_and_lp_mint_auth_seed"] of the CPMM program
+const Pubkey& pump_global_config();  // PumpSwap PDA ["global_config"]
+const Pubkey& pump_fee_config();     // Pump Fees PDA ["fee_config", PumpSwap program]
+const Pubkey& pump_event_authority();
+Pubkey pump_user_volume_accumulator(const Pubkey& user);
+void pump_init_user_volume(tx::IxList& ixs, const Pubkey& user);
+void pump_fund_user_volume(tx::IxList& ixs, const Pubkey& user, uint64_t lamports);
 
 /** The three tick-array PDAs a swap in this direction walks (sparse_swap.rs get_start_tick_indexes). */
 std::array<Pubkey, 3> whirlpool_tick_arrays(const state::Whirlpool& w, const Pubkey& pool, bool a_to_b);
