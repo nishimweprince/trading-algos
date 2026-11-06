@@ -56,7 +56,7 @@ bool is_base(const Pubkey& m, const DiscoveryConfig& c) {
 
 }  // namespace
 
-std::optional<PoolDef> pool_def_from_account(const RawAccount& a, const DiscoveryConfig& cfg) {
+std::optional<PoolDef> pool_def_from_account(const RawAccount& a, const DiscoveryConfig& cfg, bool include_arrays) {
   PoolDef d;
   d.address = a.key;
   if (a.owner == prog::RAYDIUM_V4) {
@@ -124,6 +124,7 @@ std::optional<PoolDef> pool_def_from_account(const RawAccount& a, const Discover
     d.mint_b = w->token_mint_b;
     d.vault_a = w->token_vault_a;
     d.vault_b = w->token_vault_b;
+    if (!include_arrays) return d;
     int32_t base = tick_array_start(w->tick_current_index, w->tick_spacing);
     int32_t span = TICK_ARRAY_SIZE * int32_t(w->tick_spacing);
     for (int o = -cfg.tick_arrays_below; o <= cfg.tick_arrays_above; ++o) {
@@ -139,7 +140,7 @@ std::optional<PoolDef> pool_def_from_account(const RawAccount& a, const Discover
 std::vector<Pubkey> dependent_keys(const std::vector<RawAccount>& pools, const DiscoveryConfig& cfg) {
   std::set<Pubkey> keys;
   for (auto& a : pools) {
-    auto d = pool_def_from_account(a, cfg);
+    auto d = pool_def_from_account(a, cfg, false);
     if (!d) continue;
     keys.insert(d->vault_a);
     keys.insert(d->vault_b);

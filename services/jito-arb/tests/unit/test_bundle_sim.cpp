@@ -59,3 +59,15 @@ TEST(pumpswap_sim_setup_matches_pinned_idl) {
   CHECK(ix.accounts[4].key == tx::dexix::pump_event_authority());
   CHECK(ix.accounts[5].key == prog::PUMPSWAP);
 }
+
+TEST(pumpswap_sim_rent_topup_is_holder_funded_system_transfer) {
+  crypto_init();
+  Pubkey user = parse_pubkey("2yik7ZsLfFKAmmr9cCHhL1dTabiECnFKDeSVyTbxeETU");
+  tx::IxList ixs; tx::dexix::pump_fund_user_volume(ixs,user,166155);
+  auto& ix=ixs.ixs[0];
+  CHECK(ix.program==prog::SYSTEM && ix.n_accounts==2 && ix.data_len==12);
+  CHECK(ix.accounts[0].key==user && ix.accounts[0].signer && ix.accounts[0].writable);
+  CHECK(ix.accounts[1].key==tx::dexix::pump_user_volume_accumulator(user) && ix.accounts[1].writable);
+  uint32_t tag=0; uint64_t amount=0;std::memcpy(&tag,ix.data,4);std::memcpy(&amount,ix.data+4,8);
+  CHECK_EQ(tag,uint32_t(2));CHECK_EQ(amount,uint64_t(166155));
+}
