@@ -29,6 +29,9 @@ enum class SimFail : uint8_t {
   too_large = 0x20,   // the static message does not fit 1,232 bytes
   no_holder = 0x21,   // no public holder with the trade size in its account
   rpc = 0x22,         // the RPC call failed (timeout, min context slot)
+  funding_changed = 0x23,  // wallet moved while the diagnostic ran
+  intermediate_balance = 0x24, // quoted inputs consumed pre-existing intermediate inventory
+  shutdown = 0x25,    // queued job cancelled on shutdown
   other = 0x2f,
 };
 
@@ -52,7 +55,7 @@ struct DecisionRecord {
   int64_t net_lamports = 0, ev_lamports = 0;
   uint64_t min_out = 0;
   uint32_t cu_limit = 0, p_land_ppm = 0;
-  uint64_t leg_out[3]{};
+  uint64_t leg_out[3]{};  // Outcome: per-leg compute units; Candidate: quoted outputs
   uint64_t state_slot[3]{};
   uint64_t state_seq[3]{};
   uint8_t pools[3][32]{};

@@ -172,6 +172,12 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   auto& g_sp_edge = reg.gauge("arb_engine_spread_edge", "spread-stale cycles past the spot-edge prefilter (shadow, never sent)");
   auto& g_sp_priced = reg.gauge("arb_engine_spread_priced", "spread-stale cycles that sized and priced as a candidate (shadow)");
   auto& g_sp_gross = reg.gauge("arb_engine_spread_gross_lamports", "gross of spread-stale priced cycles (shadow), lamports");
+  auto& g_sim_submitted = reg.gauge("arb_sim_submitted", "dry-run simulation jobs submitted since start");
+  auto& g_sim_queued = reg.gauge("arb_sim_queued", "simulation jobs waiting for RPC");
+  auto& g_sim_inflight = reg.gauge("arb_sim_in_flight", "simulation jobs doing RPC");
+  auto& g_sim_terminal = reg.gauge("arb_sim_terminal", "simulation terminal outcomes (all categories)");
+  auto& g_sim_funding = reg.gauge("arb_sim_funding_changed", "holder account movement invalidated diagnostic");
+  auto& g_sim_inventory = reg.gauge("arb_sim_intermediate_balance", "fixed-input route consumed holder inventory");
   auto& g_sim_ok = reg.gauge("arb_sim_ok", "dry-run bundles whose legs simulated without error");
   auto& g_sim_failed = reg.gauge("arb_sim_failed", "dry-run bundles whose legs failed in simulation");
   auto& g_sim_profitable = reg.gauge("arb_sim_profitable", "simulated bundles still profitable after tip and fee");
@@ -281,15 +287,18 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       g_untradable.set(int64_t(n.untradable));
       // Simulation outcomes: into the decision log, the quote-mismatch feed (record-only in dry run) and gauges.
       for (const obs::DecisionRecord& r : sim.drain()) {
-        dlog.write(r);
+        if (!dlog.write(r)) LOG_ERROR("cannot persist simulation outcome");
         if (r.outcome == uint8_t(obs::Outcome::SimulatedOk) && r.min_out) {
           int64_t mis = int64_t((__int128(r.final_out) - __int128(r.min_out)) * 1'000'000 / __int128(r.min_out));
           sim_mismatch.add(mono_ns(), mis);
-          for (int i = 0; i < r.hops; ++i) sim_limits.record_sim(r.dex[i], std::abs(mis) > 1000);
+          // Exact parity uses coherent snapshots. These delayed diagnostics include state drift, so record
+          // per-DEX mismatch policy only on same-slot single-DEX routes; never attribute a route delta to all legs.
+          bool same_dex = true;
+          for (int i = 1; i < r.hops; ++i) same_dex &= r.dex[i] == r.dex[0];
+          if (r.slot == r.state_slot[0] && same_dex) sim_limits.record_sim(r.dex[0], std::abs(mis) > 1000);
         }
         if (r.slot && r.state_slot[0]) sim_lag.add(mono_ns(), int64_t(r.slot) - int64_t(r.state_slot[0]));
-        if (r.outcome == uint8_t(obs::Outcome::SimulationFailed) && r.reason >= 1 && r.reason <= 3)
-          sim_limits.record_sim(r.dex[r.reason - 1], true);
+        // Runtime errors are classified in the outcome/sidecar; they are not proof of an amount-out mismatch.
       }
       // Record-only: a separate Limits instance, so a mismatch rate (which here includes state drift between
       // the candidate and its simulation) never blocks dry-run bundles; logged once when a DEX would trip.
@@ -299,6 +308,12 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
           LOG_WARN("bundle sim: %s would be disabled by the quote-mismatch rate (record-only in dry run)", dex_name(DexKind(d)));
         }
       const auto& sc = sim.counters();
+      g_sim_submitted.set(int64_t(sc.submitted.load()));
+      g_sim_queued.set(int64_t(sc.queued.load()));
+      g_sim_inflight.set(int64_t(sc.in_flight.load()));
+      g_sim_terminal.set(int64_t(sc.terminal.load()));
+      g_sim_funding.set(int64_t(sc.funding_changed.load()));
+      g_sim_inventory.set(int64_t(sc.intermediate_balance.load()));
       g_sim_ok.set(int64_t(sc.ok.load()));
       g_sim_failed.set(int64_t(sc.failed.load()));
       g_sim_profitable.set(int64_t(sc.profitable.load()));
@@ -444,6 +459,9 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
     if (!any) std::this_thread::sleep_for(std::chrono::microseconds(50));
   }
   for (auto& s : shards) s.thread.join();
+  sim.shutdown();
+  for (const auto& r : sim.drain())
+    if (!dlog.write(r)) LOG_ERROR("cannot persist final simulation outcome");
   LOG_INFO("%s stopped: frames=%llu candidates=%llu dry_run_bundles=%llu recorder_bytes=%llu", recorder ? "recorder" : "live",
            (unsigned long long)rt.stats().frames, (unsigned long long)rt.engine().counters().candidates,
            (unsigned long long)builder.stats().dry_run, (unsigned long long)frames.bytes_written());

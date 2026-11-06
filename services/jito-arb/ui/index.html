@@ -247,8 +247,9 @@ async function refreshState() {
       tile("Bundles (dry run)", fmt(m.arb_bundles_dry_run), `${fmt(m.arb_bundles_signed)} signed`),
       tile("Simulated OK", fmt(m.arb_sim_ok), `${fmt(m.arb_sim_profitable)} still profitable · ${fmt(m.arb_sim_failed)} failed`,
            m.arb_sim_failed > m.arb_sim_ok ? "warnv" : ""),
-      tile("Not simulated", fmt((m.arb_sim_dropped || 0) + (m.arb_sim_no_holder || 0) + (m.arb_sim_too_large || 0) + (m.arb_sim_rpc_error || 0)),
-           `${fmt(m.arb_sim_too_large)} too large · ${fmt(m.arb_sim_no_holder)} no holder · ${fmt(m.arb_sim_dropped)} capped`),
+      tile("Simulation jobs", fmt(m.arb_sim_submitted), `${fmt(m.arb_sim_terminal)} finished · ${fmt(m.arb_sim_queued)} queued · ${fmt(m.arb_sim_in_flight)} in progress`),
+      tile("Not simulated", fmt((m.arb_sim_dropped || 0) + (m.arb_sim_no_holder || 0) + (m.arb_sim_too_large || 0) + (m.arb_sim_rpc_error || 0) + (m.arb_sim_funding_changed || 0) + (m.arb_sim_intermediate_balance || 0)),
+           `${fmt(m.arb_sim_rpc_error)} RPC · ${fmt(m.arb_sim_no_holder)} no holder · ${fmt(m.arb_sim_funding_changed)} holder moved · ${fmt(m.arb_sim_dropped)} capped`),
     ].join("");
     const ms = (us) => us == null || us < 0 ? null : us / 1000;
     const judge = (v, ok, warn) => v == null ? "" : v <= ok ? "goodv" : v <= warn ? "warnv" : "badv";

@@ -49,3 +49,8 @@ decision_log_dir = "/var/lib/jito-arb/decisions"
 
 [recorder]
 dir = "/var/lib/jito-arb/frames"
+
+[sim]
+enabled = true
+max_per_s = 5
+holder_seed_path = "/opt/jito-arb/share/holders_seed.json"

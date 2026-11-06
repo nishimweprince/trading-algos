@@ -154,6 +154,7 @@ struct Config {
   struct Sim {
     bool enabled = true;
     double max_per_s = 5;              // above this, bundles are sampled (dropped), never queued without bound
+    std::string holder_seed_path = "harness/holders_seed.json";
     int holder_refresh_s = 600;        // re-read the base tokens' largest holders
     uint64_t min_payer_lamports = 20'000'000;  // holder wallet SOL for fees and intermediate ATA rent
   } sim;
