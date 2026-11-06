@@ -2,7 +2,7 @@
 
 ## Running deployment
 
-Frankfurt runs `2ca34f5b1aa15ac19e6a7f597d1a3654c4bb124a`, verified against the running process's executable hash. The command line still forces `--dry-run`. No mainnet transaction was submitted and no executor was deployed to mainnet.
+Frankfurt runs `67bd7c0ba452aeb2f0ea4179bce41932a730fd8d`, verified against the running process's executable hash. The command line still forces `--dry-run`. No mainnet transaction was submitted and no executor was deployed to mainnet.
 
 All four added DEXes are explicitly enabled in `/etc/jito-arb/bot.toml`. The final discovery contains 1,500 pools and 44,085 cycles:
 
@@ -24,7 +24,7 @@ The machine-readable receipt is [evidence/coverage-20261106.json](evidence/cover
 - Integration: 104 C++ tests pass on the laptop and VM.
 - Standalone phase branches: 57 / 66 / 72 / 78 / 91 / 104 tests for phases 0–5.
 - Seven deployment tests verify archive uniqueness, protected files, writer-stop failures, recorder restoration and installation preservation.
-- Five dashboard tests verify incremental reads, outcome joins, setup/route distinctions, partial writes, resets, time windows and bounded memory with 50,000 skip records.
+- Six dashboard tests verify incremental reads, outcome joins, setup/route distinctions, partial writes, resets, repeated signatures, time windows and bounded memory with 50,000 skip records.
 - Exact chain parity: CPMM 260, PumpSwap 530, CLMM 256 and DLMM 246, with zero mismatches. Moving or unverified samples are excluded.
 - All four executor arms pass opposing-leg swaps on an isolated Agave 4.4.1 validator, measured-output chaining, equal `min_out` success and `min_out + 1` rejection. See [EXECUTOR-VALIDATION.md](EXECUTOR-VALIDATION.md).
 - Live quote ladders exercised three pools per added DEX. A transient DLMM clock-coherence rejection passed on retry; very large sizes can still report liquidity/cache boundaries.
@@ -37,7 +37,7 @@ The initial repaired worker was observed for 3,632 seconds: three signed jobs, t
 
 A subsequent fresh production candidate simulated successfully: Raydium v4 → Whirlpool, signature `51NboCgkGaJLTt2XW6SinMYXDjeJpvqW5u6HFPCb69CYSTJbtHxBsifd1ddvgo9uAzXWkzmfYfrQMsWD9HhCKkeX`, net **−821,930 lamports**, leg CU 15,404 / 43,952. Success means the legs ran; it does not mean the route would profit. Two separate archived-input/current-state replay successes are retained as diagnostic evidence, not historical validation.
 
-Expanded coverage generated natural CLMM/DLMM candidate routes. Before log-rate protection, 17 signed jobs reconciled to 17 terminal outcomes: ten oversized static messages and seven RPC errors. In the next run, ten signed jobs reconciled to ten outcomes, including two CLMM route failures that reached chain simulation. These are preserved separately in the receipt. Representative successful live routes for every added DEX remain an observation gate; parity and validator tests do not replace it.
+Expanded coverage generated natural CLMM/DLMM candidate routes. Before log-rate protection, 17 signed jobs reconciled to 17 terminal outcomes: ten oversized static messages and seven RPC errors. In the next run, ten signed jobs reconciled to ten outcomes, including two CLMM route failures that reached chain simulation. These are preserved separately in the receipt. After bounded context retries were installed, another seven signed jobs reconciled to seven terminal outcomes: six oversized static messages and one CLMM/Raydium route failure that reached chain simulation. Representative successful live routes for every added DEX remain an observation gate; parity and validator tests do not replace it.
 
 The expanded feed also exposed unbounded dashboard allocation and excessive skipped-decision logging. The dashboard now reads only appended records, retains second-resolution aggregates and 60 recent rows, and joins signed outcomes separately. Explicit production `obs.skip_log_max_per_s = 20` bounds only skipped-record logging. **Every signed candidate and outcome is still retained.** The UI labels logged candidates and exposes the sampling counter. Observed UI RSS fell from several GB to about 30 MB; `/api/decisions` returned HTTP 200 in about 6 ms. Visual browser QA was unavailable because local browser use is disabled in app settings; HTTP and unit checks passed.
 
@@ -52,6 +52,7 @@ Relevant unique UTC archives under `/var/lib/jito-arb/archive/`:
 - Initial phase 5: `20261106T111850Z.JbXX3T`.
 - Log-volume/dashboard repair: `20261106T113037Z.EyiDph` (including the 1.2 GB unsampled log).
 - Bounded context-retry deployment: `20261106T113514Z.L86iUf`.
+- Final dashboard accounting deployment: `20261106T114113Z.dCi4Cj`.
 
 Receipts and metric snapshots are stored inside deployment archives. Independent observation files remain under `/var/lib/jito-arb/sim-validation/`.
 

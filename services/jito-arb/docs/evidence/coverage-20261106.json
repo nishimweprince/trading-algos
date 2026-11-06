@@ -1,6 +1,6 @@
 {
   "phase": 5,
-  "revision": "2ca34f5b1aa15ac19e6a7f597d1a3654c4bb124a",
+  "revision": "67bd7c0ba452aeb2f0ea4179bce41932a730fd8d",
   "binary_sha256": "e082167dd47c31717ef8c72d9e2b86b2d1f8477dc4ca12d6677b7fcd1198e723",
   "capacity": {
     "pools": 1500,
@@ -30,17 +30,17 @@
     "cpmm": 114,
     "pumpswap": 178
   },
-  "archive": "/var/lib/jito-arb/archive/20261106T113514Z.L86iUf",
+  "archive": "/var/lib/jito-arb/archive/20261106T114113Z.dCi4Cj",
   "acceptance": "installed; representative new-DEX candidate outcomes remain an observation gate",
-  "observed_utc": "2026-11-06T11:36:10Z",
+  "observed_utc": "2026-11-06T11:41:54Z",
   "metrics": {
     "arb_kill_switch": 0.0,
     "arb_feed_reconnects": 0.0,
     "arb_bundles_dry_run": 0.0,
-    "arb_decision_skip_logs_dropped": 543616.0,
+    "arb_decision_skip_logs_dropped": 351733.0,
     "arb_pools": 1500.0,
     "arb_cycles": 44085.0,
-    "arb_pools_quotable": 1499.0,
+    "arb_pools_quotable": 1498.0,
     "arb_pools_tracked_raydium_v4": 791.0,
     "arb_pools_complete_raydium_v4": 791.0,
     "arb_pools_ready_raydium_v4": 791.0,
@@ -67,7 +67,7 @@
     "arb_dex_enabled_dlmm": 1.0,
     "arb_pools_tracked_clmm": 102.0,
     "arb_pools_complete_clmm": 102.0,
-    "arb_pools_ready_clmm": 102.0,
+    "arb_pools_ready_clmm": 101.0,
     "arb_pools_supported_clmm": 102.0,
     "arb_pools_unsupported_clmm": 0.0,
     "arb_dex_enabled_clmm": 1.0,
@@ -108,7 +108,7 @@
   "dashboard_http_verified": true,
   "dashboard_by_day": {
     "2026-11-06": {
-      "candidates": 1013,
+      "candidates": 710,
       "dispatched": 0,
       "gross_lamports": 0,
       "tip_lamports": 0,
@@ -176,6 +176,81 @@
         "route": [
           "raydium_v4",
           "whirlpool"
+        ]
+      }
+    ]
+  },
+  "expanded_after_context_retry": {
+    "signed": 7,
+    "terminal": 7,
+    "outcomes": [
+      {
+        "signature": "4tyd6ppijgtdvgZgNoeuVo24sMgsBL8Q3tmjLDccQCfQ5Cxc2BxLo9HfUDkx5XcSm29kURp9PJcYgZ4hULEuG3k7",
+        "ok": false,
+        "reason": "too large",
+        "route": [
+          "dlmm",
+          "whirlpool",
+          "dlmm"
+        ]
+      },
+      {
+        "signature": "Py6mMnH6prx5CNLVNratJrQSuMV7yQEvLKVCKNqzrMkosE6KbmbSSXrwpX2dPWyE4JeusrgTtgSuYuSdnb2A4xi",
+        "ok": false,
+        "reason": "too large",
+        "route": [
+          "clmm",
+          "whirlpool",
+          "dlmm"
+        ]
+      },
+      {
+        "signature": "2eFMmXJfy6rkBLLMBcAmggaerPav2nD9tP2ji2F4kCaoxP944nBjTZmXQ4fw98eEgAhFPjeGRT2wyUrwpZKSa4mm",
+        "ok": false,
+        "reason": "too large",
+        "route": [
+          "dlmm",
+          "clmm",
+          "dlmm"
+        ]
+      },
+      {
+        "signature": "4Njp99Zg7b4YJxzft1uE8GeZ2dRv3QBUYh84v5ixx8N3XGyjxy54cbRXrgADpf5DXJuJNp5hBjShrbFGVPsokKPd",
+        "ok": false,
+        "reason": "too large",
+        "route": [
+          "dlmm",
+          "whirlpool",
+          "dlmm"
+        ]
+      },
+      {
+        "signature": "eCjUxxC6Ls3tFCFekQkF4ge8dQKuN5HoF2mGuo4fP4gwH3c7zPMasWSqqtonE6gJzGrfdQ9uNXRqPDZMwSojg5P",
+        "ok": false,
+        "reason": "too large",
+        "route": [
+          "dlmm",
+          "whirlpool",
+          "raydium_v4"
+        ]
+      },
+      {
+        "signature": "tqkhxm8hsoGCJRaiqaqipCH159Gb9cMZ6N37P3eLe4mphRS5RDoLwafWYQhkPEu1GeEmAsjxcjGFJssJTDKm41T",
+        "ok": false,
+        "reason": "too large",
+        "route": [
+          "dlmm",
+          "clmm",
+          "dlmm"
+        ]
+      },
+      {
+        "signature": "3YsAjwmpjjVG4ShZhqYktjxnXRRrkHaN51PJca33kbKMbw5fGNakzz8R8HLHm7Gks2jfxe8Zy4LKWvGThjjiCTQe",
+        "ok": false,
+        "reason": "leg 2",
+        "route": [
+          "clmm",
+          "raydium_v4"
         ]
       }
     ]
@@ -473,7 +548,7 @@
     "integration_laptop": 104,
     "integration_vm": 104,
     "deploy": 7,
-    "ui": 5,
+    "ui": 6,
     "phase_laptop": [
       57,
       66,
