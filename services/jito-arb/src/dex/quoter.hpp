@@ -60,6 +60,22 @@ class CpmmQuoter final : public IQuoter {
   uint32_t cu_;
 };
 
+class ClmmQuoter final : public IQuoter {
+ public:
+  explicit ClmmQuoter(uint32_t cu = 120000) : cu_(cu) {}
+  Result<Quote> quote_exact_in(const PoolState& p, bool a_to_b, uint64_t amount_in) const override;
+  DexKind kind() const override { return DexKind::Clmm; }
+  /**
+   * Static-fee pools inside the pool's own tick-array bitmap, without Token-2022 transfer fees. Dynamic fees move
+   * with the block time and limit orders change what a crossed tick pays: neither is modelled (a swap that would
+   * reach a tick with orders quotes as a boundary).
+   */
+  bool supports(const PoolState& p) const override;
+
+ private:
+  uint32_t cu_;
+};
+
 class PumpSwapQuoter final : public IQuoter {
  public:
   explicit PumpSwapQuoter(uint32_t cu = 120000) : cu_(cu) {}

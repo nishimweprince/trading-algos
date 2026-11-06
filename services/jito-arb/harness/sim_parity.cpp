@@ -286,6 +286,7 @@ bool run_pool(DexKind kind, const Pubkey& pool, std::vector<Batch>& out, Stats& 
   std::vector<Pubkey> keys = {pool, def->vault_a, def->vault_b, def->mint_a, def->mint_b, dA, dB,
                               hA ? hA->account : dA, hB ? hB->account : dB};
   for (auto& [start, k] : def->tick_arrays) keys.push_back(k);
+  if (def->kind == DexKind::Clmm) keys.push_back(state::clmm_bitmap_extension_pda(def->address));
   if (!is_zero(def->config)) keys.push_back(def->config);  // CPMM fee rates, PumpSwap global config
   if (!is_zero(def->fee_config)) keys.push_back(def->fee_config);  // PumpSwap fee tiers
   uint64_t s1 = 0, s2 = 0;
@@ -316,7 +317,8 @@ bool run_pool(DexKind kind, const Pubkey& pool, std::vector<Batch>& out, Stats& 
   dex::WhirlpoolQuoter wq;
   dex::CpmmQuoter cq;
   dex::PumpSwapQuoter pq;
-  const dex::IQuoter* qs[] = {&rq, &wq, &cq, &pq};
+  dex::ClmmQuoter lq;
+  const dex::IQuoter* qs[] = {&rq, &wq, &cq, &pq, &lq};
   const dex::IQuoter* qp = nullptr;
   for (const dex::IQuoter* c : qs)
     if (c->kind() == kind) qp = c;
@@ -495,7 +497,8 @@ int main(int argc, char** argv) {
   for (auto [kind, list, name] : {std::tuple{DexKind::RaydiumV4, "raydium_v4", "raydium_v4"},
                                   std::tuple{DexKind::Whirlpool, "whirlpool", "whirlpool"},
                                   std::tuple{DexKind::Cpmm, "cpmm", "cpmm"},
-                                  std::tuple{DexKind::PumpSwap, "pumpswap", "pumpswap"}}) {
+                                  std::tuple{DexKind::PumpSwap, "pumpswap", "pumpswap"},
+                                  std::tuple{DexKind::Clmm, "clmm", "clmm"}}) {
     if (dex != "all" && dex != name) continue;
     std::vector<Batch> batches;
     Stats st;
