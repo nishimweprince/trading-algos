@@ -15,6 +15,8 @@
 
 namespace arb::app {
 
+class BundleSim;
+
 /** Stand-in executor id for dry runs before the program is deployed (never on chain). */
 Pubkey dry_run_executor();
 /** Dry-run signer when no hot-wallet file is configured: a fixed, publicly known test seed (holds nothing). */
@@ -41,6 +43,8 @@ class BundleBuilder {
   void set_wallet_lamports(uint64_t l) { wallet_lamports_ = l; }
   /** Seed the virtual lookup tables on first use (until discovery has created the real ones). */
   void set_virtual_tables(bool on) { virtual_tables_ = on; }
+  /** Simulate every dry-run bundle's legs (read-only, background thread). Null: off. */
+  void set_simulator(BundleSim* s) { sim_ = s; }
   /**
    * Replay without RPC: virtual tables, and sign over a placeholder blockhash (all zeros) stamped at the
    * current slot. Never on a send path: the Submitter is dry run whenever this is used.
@@ -54,6 +58,7 @@ class BundleBuilder {
   obs::LatencyWindow& detect_to_signed_us() { return detect_us_; }
 
  private:
+  BundleSim* sim_ = nullptr;
   const Config& cfg_;
   Runtime& rt_;
   Keypair wallet_;

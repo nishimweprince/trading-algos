@@ -144,6 +144,7 @@ Config load_config(const std::string& path) {
   G(obs, metrics_addr); G(obs, metrics_port); G(obs, log_level); G(obs, log_path); G(obs, decision_log_dir);
   G(obs, decision_log_rotate_s);
   G(recorder, dir); G(recorder, rotate_s);
+  G(sim, enabled); G(sim, max_per_s); G(sim, holder_refresh_s); G(sim, min_payer_lamports);
 #undef G
   r.get("pools_path", c.pools_path);
   for (auto& [k, v] : kv)

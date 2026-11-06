@@ -88,7 +88,8 @@ class Rpc {
     std::vector<std::string> logs;
     std::vector<std::optional<RpcAccount>> accounts;
   };
-  SimResult simulate_full(const std::string& tx_b64, const std::vector<Pubkey>& accounts, uint64_t min_context_slot = 0);
+  SimResult simulate_full(const std::string& tx_b64, const std::vector<Pubkey>& accounts, uint64_t min_context_slot = 0,
+                          const char* commitment = "confirmed");
   /** getMultipleAccounts that also reports the context slot. */
   std::vector<std::optional<RpcAccount>> multiple_accounts_at(const std::vector<Pubkey>& keys, uint64_t& slot,
                                                               const char* commitment = "confirmed");

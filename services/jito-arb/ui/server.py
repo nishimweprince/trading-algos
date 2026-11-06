@@ -43,6 +43,9 @@ REASONS = ["none", "base_price_unknown", "no_profit", "cu_over_budget", "below_m
            "boundary", "flash_disabled", "risk_block", "tx_build_failed", "sign_guard", "sizer_no_room",
            "sizer_no_profit", "sizer_partial_fill", "sizer_quote_error", "sizer_zero_out"]
 ACTIONS = {0: "skipped", 1: "sent", 2: "dry_run"}
+# Outcome records (kind 2) of a dry-run bundle's simulation: reason byte = the failing piece (obs::SimFail).
+SIM_FAIL = {0: "", 1: "leg 1", 2: "leg 2", 3: "leg 3", 0x10: "ata setup", 0x20: "too large", 0x21: "no holder", 0x22: "rpc",
+            0x2f: "other"}
 DEXES = {0: "raydium_v4", 1: "whirlpool", 2: "cpmm", 3: "dlmm", 4: "clmm", 5: "pumpswap"}
 B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 WSOL = "So11111111111111111111111111111111111111112"
@@ -164,10 +167,21 @@ def pools_summary(data_dir):
     }
 
 
+def sim_label(s):
+    """A dry-run bundle's simulation result for the table: ok / failed at a leg / not simulated (and why)."""
+    if s is None:
+        return "not simulated"
+    if s[5] == 5:
+        return "ok"
+    why = SIM_FAIL.get(s[3], str(s[3]))
+    return ("not simulated: " if s[3] >= 0x20 else "failed: ") + why
+
+
 def read_decisions(data_dir, hours):
     files = sorted(glob.glob(os.path.join(data_dir, "decisions", "decisions-*.bin")), key=os.path.getmtime)[-72:]
     cutoff_ms = (time.time() - hours * 3600) * 1000
     recs = []
+    sims = {}
     for path in files:
         try:
             with open(path, "rb") as f:
@@ -178,14 +192,18 @@ def read_decisions(data_dir, hours):
                     if len(b) < REC.size:
                         break
                     v = REC.unpack(b)
-                    if v[0] != 1 or v[10] < cutoff_ms:  # kind = candidate; wall_ms
+                    if v[10] < cutoff_ms:  # wall_ms
                         continue
-                    recs.append(v)
+                    if v[0] == 2:  # simulation outcome, keyed by the bundle's signature
+                        sims[v[-1]] = v
+                    elif v[0] == 1:
+                        recs.append(v)
         except OSError:
             continue
     by_reason = collections.Counter()
     by_day = collections.defaultdict(lambda: {"candidates": 0, "dispatched": 0, "gross_lamports": 0, "tip_lamports": 0,
-                                              "net_lamports": 0, "ev_lamports": 0})
+                                              "net_lamports": 0, "ev_lamports": 0, "sim_ok": 0, "sim_failed": 0,
+                                              "sim_unsimulated": 0, "sim_profitable": 0, "sim_net_lamports": 0})
     rows = []
     for v in recs:
         (kind, hops, action, reason, route_class, outcome, dex, mask, cycle_id, _pad, wall_ms, slot, x, final_out,
@@ -200,6 +218,18 @@ def read_decisions(data_dir, hours):
             d["tip_lamports"] += tip
             d["net_lamports"] += net
             d["ev_lamports"] += ev
+            s = sims.get(v[-1])
+            if s is None:
+                d["sim_unsimulated"] += 1
+            elif s[5] == 5:  # outcome = SimulatedOk
+                d["sim_ok"] += 1
+                d["sim_net_lamports"] += s[19]
+                if s[19] > 0:
+                    d["sim_profitable"] += 1
+            elif s[3] >= 0x20:  # not a route failure: too large, no holder, rpc
+                d["sim_unsimulated"] += 1
+            else:
+                d["sim_failed"] += 1
         else:
             by_reason[REASONS[reason] if reason < len(REASONS) else str(reason)] += 1
         dec = BASE_DECIMALS.get(base, 9)
@@ -209,6 +239,8 @@ def read_decisions(data_dir, hours):
             "base": BASE_NAMES.get(base, base[:4]), "size": x / 10 ** dec, "gross_sol": gross / 1e9, "tip_sol": tip / 1e9,
             "net_sol": net / 1e9, "ev_sol": ev / 1e9, "action": ACTIONS.get(action, str(action)),
             "reason": REASONS[reason] if action == 0 and reason < len(REASONS) else "",
+            "sim": sim_label(sims.get(v[-1])) if action != 0 else "",
+            "sim_net_sol": sims[v[-1]][19] / 1e9 if action != 0 and v[-1] in sims and sims[v[-1]][5] == 5 else None,
         })
     rows.sort(key=lambda r: -r["t"])
     return {"hours": hours, "records": len(recs), "files": len(files), "by_day": dict(sorted(by_day.items())),
