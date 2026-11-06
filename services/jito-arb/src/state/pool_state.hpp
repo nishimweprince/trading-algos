@@ -65,6 +65,7 @@ struct TickArraySlot {
   int32_t start = 0;
   enum : uint8_t { Unknown = 0, Loaded = 1, Missing = 2 } state = Unknown;  // Missing: PDA has no account
   std::shared_ptr<const state::TickArray> array;
+  std::shared_ptr<const state::ClmmTickArray> clmm;  // Raydium CLMM pools
   Pubkey key{};
 };
 
@@ -83,6 +84,8 @@ struct PoolState {
   state::Whirlpool wp;
   state::CpmmPool cpmm;
   state::CpmmConfig cpmm_cfg;
+  state::ClmmPool clmm;
+  state::ClmmConfig clmm_cfg;
   state::PumpPool pump;
   state::PumpGlobalConfig pump_cfg;
   std::shared_ptr<const state::PumpFeeConfig> pump_fees;

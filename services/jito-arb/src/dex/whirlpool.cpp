@@ -241,6 +241,24 @@ u128 spot_rate_x64(const PoolState& p, bool a_to_b) {
     U256::mul(rate, keep).divmod(U256::from_u128(den), qq, rr);
     return qq.fits_u128() ? qq.lo128() : ~u128(0);
   }
+  if (p.kind == DexKind::Clmm) {
+    // price token1 per token0 = sqrt^2 / 2^128; fee rate in 1e-6 (fee on input or output: same marginal effect).
+    u128 s = p.clmm.sqrt_price_x64;
+    if (s == 0 || p.clmm.liquidity == 0) return 0;
+    U256 sq = U256::mul(s, s);
+    u128 rate;
+    if (a_to_b) {
+      rate = sq.shr(64).fits_u128() ? sq.shr(64).lo128() : ~u128(0);
+    } else {
+      U256 qq, rr;
+      U256::from_words(0, 1, 0, 0).shl64().shl64().divmod(sq, qq, rr);
+      rate = qq.fits_u128() ? qq.lo128() : ~u128(0);
+    }
+    u128 keep = 1'000'000 - std::min<u128>(1'000'000, p.clmm_cfg.trade_fee_rate);
+    U256 qq, rr;
+    U256::mul(rate, keep).divmod(U256::from_u128(1'000'000), qq, rr);
+    return qq.fits_u128() ? qq.lo128() : ~u128(0);
+  }
   if (p.kind == DexKind::PumpSwap) {
     uint64_t rin = 0, rout = 0;
     if (!cp_reserves(p, a_to_b, rin, rout) || rin == 0) return 0;
@@ -295,14 +313,15 @@ uint64_t input_depth(const PoolState& p, bool a_to_b) {
     if (cp_reserves(p, a_to_b, rin, rout)) return rin;
     return a_to_b ? p.vault_a_amount : p.vault_b_amount;
   }
-  if (p.kind != DexKind::Whirlpool) return 0;
+  if (p.kind != DexKind::Whirlpool && p.kind != DexKind::Clmm) return 0;
   // Concentrated liquidity: the vaults also hold positions far from the current price, so their balances
   // overstate what a swap can use. Depth is the input that moves sqrt-price 5% (about 10% in price) inside the
   // active liquidity L, from the CLMM identities (sqrt-price s in Q64.64):
   //   a in (s falls to s(1 - d)):  da = L * 2^64 * d / (s * (1 - d))   d = 5%: L * 2^64 / s / 19
   //   b in (s rises to s(1 + d)):  db = L * s * d / 2^64                       L * s / 2^64 / 20
   // A stranded pool (little L near a far-off price) gets a small depth and so a small x_max.
-  const u128 L = p.wp.liquidity, sq = p.wp.sqrt_price;
+  const u128 L = p.kind == DexKind::Clmm ? p.clmm.liquidity : p.wp.liquidity;
+  const u128 sq = p.kind == DexKind::Clmm ? p.clmm.sqrt_price_x64 : p.wp.sqrt_price;
   if (L == 0 || sq == 0) return 0;
   U256 v, t, r;
   if (a_to_b) {

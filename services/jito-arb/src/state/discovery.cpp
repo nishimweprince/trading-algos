@@ -10,6 +10,7 @@
 #include "core/base58.hpp"
 #include "core/base64.hpp"
 #include "core/crypto.hpp"
+#include "dex/clmm_math.hpp"
 #include "core/programs.hpp"
 
 namespace arb::state {
@@ -77,6 +78,30 @@ std::optional<PoolDef> pool_def_from_account(const RawAccount& a, const Discover
     d.vault_a = c->token_0_vault;
     d.vault_b = c->token_1_vault;
     d.config = c->amm_config;
+    return d;
+  }
+  if (a.owner == prog::RAYDIUM_CLMM) {
+    auto c = decode_clmm_pool(a.data.data(), a.data.size(), a.owner);
+    if (!c) return std::nullopt;
+    d.kind = DexKind::Clmm;
+    d.mint_a = c->token_mint_0;
+    d.mint_b = c->token_mint_1;
+    d.vault_a = c->token_vault_0;
+    d.vault_b = c->token_vault_1;
+    d.config = c->amm_config;
+    // The current tick's array, then up to three initialized arrays each way along the pool's bitmap.
+    const uint16_t sp = c->tick_spacing;
+    int32_t cur = dex::clmm::array_start_index(c->tick_current, sp);
+    d.tick_arrays.emplace_back(cur, clmm_tick_array_pda(a.key, cur));
+    for (bool zfo : {true, false}) {
+      int32_t last = cur;
+      for (int k = 0; k < 3; ++k) {
+        int32_t next = 0;
+        if (!dex::clmm::next_initialized_array(c->tick_array_bitmap, last, sp, zfo, next)) break;
+        d.tick_arrays.emplace_back(next, clmm_tick_array_pda(a.key, next));
+        last = next;
+      }
+    }
     return d;
   }
   if (a.owner == prog::PUMPSWAP) {
@@ -196,6 +221,25 @@ DiscoveryResult discover(const std::vector<RawAccount>& pool_accounts, const Acc
           reject(c, "vault_program");
           gate_ok = false;
         }
+        break;
+      }
+      case DexKind::Clmm: {
+        auto cl = decode_clmm_pool(a.data.data(), a.data.size(), a.owner);
+        auto cfg_it = accounts.find(d->config);
+        if (cfg_it == accounts.end() ||
+            !decode_clmm_config(cfg_it->second.data.data(), cfg_it->second.data.size(), cfg_it->second.owner)) {
+          reject(c, "clmm_config");
+          gate_ok = false;
+          break;
+        }
+        if (!cl->swap_enabled()) { reject(c, "pool_status"); gate_ok = false; break; }
+        if (cl->dynamic_fee) { reject(c, "dynamic_fee_unsupported"); gate_ok = false; break; }
+        if (cl->liquidity == 0) { reject(c, "zero_liquidity"); gate_ok = false; break; }
+        if (cl->open_time >= uint64_t(std::time(nullptr))) { reject(c, "not_open"); gate_ok = false; break; }
+        int32_t lo = 0, hi = 0;
+        dex::clmm::bitmap_start_range(cl->tick_spacing, lo, hi);
+        int32_t st = dex::clmm::array_start_index(cl->tick_current, cl->tick_spacing);
+        if (st < lo || st >= hi) { reject(c, "bitmap_extension"); gate_ok = false; }
         break;
       }
       case DexKind::PumpSwap: {

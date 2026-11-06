@@ -42,19 +42,20 @@ obs::DecisionRecord make_record(const StateStore& store, const engine::Cycle& c,
 namespace {
 
 engine::Quoters make_quoters(const Config& cfg, const dex::IQuoter& ray, const dex::IQuoter& wp, const dex::IQuoter& cpmm,
-                             const dex::IQuoter& pump) {
+                             const dex::IQuoter& pump, const dex::IQuoter& clmm) {
   engine::Quoters q;
   if (cfg.dex.raydium_v4_enabled) q.by_kind[uint8_t(DexKind::RaydiumV4)] = &ray;
   if (cfg.dex.whirlpool_enabled) q.by_kind[uint8_t(DexKind::Whirlpool)] = &wp;
   if (cfg.dex.cpmm_enabled) q.by_kind[uint8_t(DexKind::Cpmm)] = &cpmm;
   if (cfg.dex.pumpswap_enabled) q.by_kind[uint8_t(DexKind::PumpSwap)] = &pump;
+  if (cfg.dex.clmm_enabled) q.by_kind[uint8_t(DexKind::Clmm)] = &clmm;
   return q;
 }
 
 }  // namespace
 
 Runtime::Runtime(const Config& cfg, const PoolsFile& pools)
-    : cfg_(cfg), tips_(engine::tip_params(cfg)), ray_q_(cfg.dex.raydium_v4_cu), wp_q_(cfg.dex.whirlpool_cu), cpmm_q_(cfg.dex.cpmm_cu), pump_q_(cfg.dex.pumpswap_cu),
+    : cfg_(cfg), tips_(engine::tip_params(cfg)), ray_q_(cfg.dex.raydium_v4_cu), wp_q_(cfg.dex.whirlpool_cu), cpmm_q_(cfg.dex.cpmm_cu), pump_q_(cfg.dex.pumpswap_cu), clmm_q_(cfg.dex.clmm_cu),
       handler_(store_, clock_) {
   for (const PoolDef& d : pools.pools) store_.add_pool(d);
   reserves_ = pools.reserves;
@@ -67,7 +68,7 @@ Runtime::Runtime(const Config& cfg, const PoolsFile& pools)
   std::vector<PoolDef> defs;
   for (uint32_t i = 0; i < store_.pool_count(); ++i) defs.push_back(store_.def(i));
   idx_.build(defs, pools.tvl_sol, g);
-  engine_ = std::make_unique<engine::Engine>(store_, idx_, make_quoters(cfg, ray_q_, wp_q_, cpmm_q_, pump_q_), engine::engine_config(cfg), tips_);
+  engine_ = std::make_unique<engine::Engine>(store_, idx_, make_quoters(cfg, ray_q_, wp_q_, cpmm_q_, pump_q_, clmm_q_), engine::engine_config(cfg), tips_);
   engine_->on_skip([this](const engine::Opportunity& o, engine::Reason why) {
     if (!log_) return;
     obs::DecisionRecord r = make_record(store_, idx_.cycle(o.cycle), o, wall_ms_);

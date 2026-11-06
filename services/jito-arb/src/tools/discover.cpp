@@ -50,7 +50,7 @@ int run(int argc, char** argv) {
   dc.max_tracked_pools = size_t(cfg.discovery.max_tracked_pools);
 
   // Confirm the program IDs before anything else.
-  for (const Pubkey& p : {prog::RAYDIUM_V4, prog::WHIRLPOOL, prog::RAYDIUM_CPMM, prog::PUMPSWAP, prog::KLEND}) {
+  for (const Pubkey& p : {prog::RAYDIUM_V4, prog::WHIRLPOOL, prog::RAYDIUM_CPMM, prog::PUMPSWAP, prog::RAYDIUM_CLMM, prog::KLEND}) {
     auto pi = rpc.program_info(p);
     if (!pi.found || !pi.executable) {
       std::fprintf(stderr, "program %s is not an executable account\n", b58(p).c_str());
@@ -160,6 +160,26 @@ int run(int argc, char** argv) {
     std::fprintf(stderr, "whirlpool: %zu read, %zu live static-fee pools%s\n", seen_wp, kept_wp,
                  cfg.dex.whirlpool_enabled ? "" : " (tracked only: quoting disabled)");
   }
+  if (cfg.dex.clmm_enabled || cfg.discovery.track_clmm) {
+    size_t seen_cl = 0, kept_cl = 0;
+    for (uint64_t off : {uint64_t(73), uint64_t(105)}) {  // token_mint_0, token_mint_1
+      for (auto& base : dc.base_mints) {
+        std::string body = rpc.program_accounts_raw(prog::RAYDIUM_CLMM, state::CLMM_POOL_LEN, {{off, b58(base)}});
+        for (auto& a : state::parse_gpa_response(body)) {
+          ++seen_cl;
+          auto c = state::decode_clmm_pool(a.data.data(), a.data.size(), a.owner);
+          if (!c || c->liquidity == 0 || c->dynamic_fee || !c->swap_enabled()) continue;
+          if (seen.insert(a.key).second) {
+            pools.push_back(std::move(a));
+            ++kept_cl;
+          }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+      }
+    }
+    std::fprintf(stderr, "clmm: %zu read, %zu live static-fee pools%s\n", seen_cl, kept_cl,
+                 cfg.dex.clmm_enabled ? "" : " (tracked only: quoting disabled)");
+  }
   if (cfg.dex.pumpswap_enabled || cfg.discovery.track_pumpswap) {
     // Canonical PumpSwap pools (created by pump migration): PDA ["pool", u16 0, pool_authority(mint), mint, wSOL]
     // with pool_authority = pump PDA ["pool-authority", mint]. Derived for every token the other DEXes found
@@ -202,6 +222,7 @@ int run(int argc, char** argv) {
       if (auto w = state::decode_whirlpool(a.data.data(), a.data.size(), a.owner)) return {w->token_mint_a, w->token_mint_b};
       if (auto c = state::decode_cpmm_pool(a.data.data(), a.data.size(), a.owner)) return {c->token_0_mint, c->token_1_mint};
       if (auto pp = state::decode_pump_pool(a.data.data(), a.data.size(), a.owner)) return {pp->base_mint, pp->quote_mint};
+      if (auto cl = state::decode_clmm_pool(a.data.data(), a.data.size(), a.owner)) return {cl->token_mint_0, cl->token_mint_1};
       return {Pubkey{}, Pubkey{}};
     };
     std::map<Pubkey, int> count;

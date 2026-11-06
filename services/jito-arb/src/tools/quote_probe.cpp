@@ -79,7 +79,8 @@ int main(int argc, char** argv) {
   dex::WhirlpoolQuoter wq;
   dex::CpmmQuoter cq;
   dex::PumpSwapQuoter pq;
-  const dex::IQuoter* quoters[] = {&rq, &wq, &cq, &pq};
+  dex::ClmmQuoter lq;
+  const dex::IQuoter* quoters[] = {&rq, &wq, &cq, &pq, &lq};
   const dex::IQuoter* qp = nullptr;
   for (const dex::IQuoter* c : quoters)
     if (c->kind() == p->kind) qp = c;

@@ -1,5 +1,7 @@
 #include "state/accounts.hpp"
 
+#include "core/crypto.hpp"
+
 #include <cstring>
 
 #include "core/programs.hpp"
@@ -167,6 +169,78 @@ Result<CpmmConfig> decode_cpmm_config(const uint8_t* d, size_t n, const Pubkey& 
   c.creator_fee_rate = rd_u64(d + 108);
   if (c.trade_fee_rate + c.creator_fee_rate >= 1'000'000) return fail(Errc::bad_data, "cpmm fee rate");
   return c;
+}
+
+// CLMM PoolState (repr(C, packed), after the discriminator): bump 8, amm_config 9, owner 41, token_mint_0 73,
+// token_mint_1 105, token_vault_0 137, token_vault_1 169, observation_key 201, mint decimals 233/234,
+// tick_spacing 235, liquidity 237, sqrt_price_x64 253, tick_current 269, padding 273, fee_growth 277/293,
+// protocol_fees 309/317, padding5 325, status 389, fee_on 390, seed_index 391, padding 393, reward_infos 397
+// (3 x 169), tick_array_bitmap 904 (16 x u64), padding6 1032, fund_fees 1064/1072, open_time 1080,
+// recent_epoch 1088, dynamic_fee_info 1096 (80), padding1 1176, padding2 1288..1544.
+Result<ClmmPool> decode_clmm_pool(const uint8_t* d, size_t n, const Pubkey& owner) {
+  if (owner != prog::RAYDIUM_CLMM) return fail(Errc::bad_owner, "clmm owner");
+  if (n != CLMM_POOL_LEN) return fail(Errc::bad_length, "clmm pool length");
+  if (std::memcmp(d, DISC_CLMM_POOL, 8) != 0) return fail(Errc::bad_discriminator, "clmm pool discriminator");
+  ClmmPool p;
+  p.amm_config = pk(d + 9);
+  p.token_mint_0 = pk(d + 73);
+  p.token_mint_1 = pk(d + 105);
+  p.token_vault_0 = pk(d + 137);
+  p.token_vault_1 = pk(d + 169);
+  p.observation_key = pk(d + 201);
+  p.tick_spacing = rd_u16(d + 235);
+  p.liquidity = rd_u128(d + 237);
+  p.sqrt_price_x64 = rd_u128(d + 253);
+  p.tick_current = rd_i32(d + 269);
+  p.status = d[389];
+  p.fee_on = d[390];
+  for (int i = 0; i < 16; ++i) p.tick_array_bitmap[i] = rd_u64(d + 904 + 8 * i);
+  p.open_time = rd_u64(d + 1080);
+  for (size_t i = 1096; i < 1176 && !p.dynamic_fee; ++i) p.dynamic_fee = d[i] != 0;
+  if (p.tick_spacing == 0) return fail(Errc::bad_data, "clmm tick spacing 0");
+  if (p.fee_on > 2) return fail(Errc::bad_data, "clmm fee_on");
+  return p;
+}
+
+// CLMM AmmConfig (borsh): bump 8, index 9, owner 11, protocol_fee_rate 43, trade_fee_rate 47, tick_spacing 51,
+// fund_fee_rate 53, padding_u32 57, fund_owner 61, padding 93..117.
+Result<ClmmConfig> decode_clmm_config(const uint8_t* d, size_t n, const Pubkey& owner) {
+  if (owner != prog::RAYDIUM_CLMM) return fail(Errc::bad_owner, "clmm owner");
+  if (n != CLMM_CONFIG_LEN) return fail(Errc::bad_length, "clmm config length");
+  if (std::memcmp(d, DISC_CLMM_CONFIG, 8) != 0) return fail(Errc::bad_discriminator, "clmm config discriminator");
+  ClmmConfig c;
+  c.protocol_fee_rate = rd_u32(d + 43);
+  c.trade_fee_rate = rd_u32(d + 47);
+  c.tick_spacing = rd_u16(d + 51);
+  c.fund_fee_rate = rd_u32(d + 53);
+  if (c.trade_fee_rate >= 1'000'000) return fail(Errc::bad_data, "clmm fee rate");
+  return c;
+}
+
+// CLMM TickArrayState: pool_id 8, start_tick_index 40, ticks 44 (60 x 168: tick 0, liquidity_net 4,
+// liquidity_gross 20, fee growth 36/52, rewards 68, order_phase 116, orders_amount 124,
+// part_filled_orders_remaining 132, unfilled_ratio 140, padding 156), initialized_tick_count 10124.
+Result<ClmmTickArray> decode_clmm_tick_array(const uint8_t* d, size_t n, const Pubkey& owner) {
+  if (owner != prog::RAYDIUM_CLMM) return fail(Errc::bad_owner, "clmm owner");
+  if (n != CLMM_TICK_ARRAY_LEN) return fail(Errc::bad_length, "clmm tick array length");
+  if (std::memcmp(d, DISC_CLMM_TICK_ARRAY, 8) != 0) return fail(Errc::bad_discriminator, "clmm tick array discriminator");
+  ClmmTickArray a;
+  a.pool = pk(d + 8);
+  a.start_tick_index = rd_i32(d + 40);
+  for (int i = 0; i < CLMM_TICK_ARRAY_SIZE; ++i) {
+    const uint8_t* t = d + 44 + 168 * size_t(i);
+    ClmmTick& k = a.ticks[size_t(i)];
+    k.tick = rd_i32(t);
+    k.liquidity_net = rd_i128(t + 4);
+    k.liquidity_gross = rd_u128(t + 20);
+    k.limit_orders = rd_u64(t + 124) != 0 || rd_u64(t + 132) != 0;
+  }
+  return a;
+}
+
+Pubkey clmm_tick_array_pda(const Pubkey& pool, int32_t start) {
+  uint8_t be[4] = {uint8_t(uint32_t(start) >> 24), uint8_t(uint32_t(start) >> 16), uint8_t(uint32_t(start) >> 8), uint8_t(uint32_t(start))};
+  return pda({std::string_view("tick_array"), pool, Seed(be, 4)}, prog::RAYDIUM_CLMM);
 }
 
 // PumpSwap Pool (borsh, after the discriminator): pool_bump 8, index 9, creator 11, base_mint 43, quote_mint 75,
