@@ -50,7 +50,7 @@ int run(int argc, char** argv) {
   dc.max_tracked_pools = size_t(cfg.discovery.max_tracked_pools);
 
   // Confirm the program IDs before anything else.
-  for (const Pubkey& p : {prog::RAYDIUM_V4, prog::WHIRLPOOL, prog::RAYDIUM_CPMM, prog::KLEND}) {
+  for (const Pubkey& p : {prog::RAYDIUM_V4, prog::WHIRLPOOL, prog::RAYDIUM_CPMM, prog::PUMPSWAP, prog::KLEND}) {
     auto pi = rpc.program_info(p);
     if (!pi.found || !pi.executable) {
       std::fprintf(stderr, "program %s is not an executable account\n", b58(p).c_str());
@@ -160,6 +160,39 @@ int run(int argc, char** argv) {
     std::fprintf(stderr, "whirlpool: %zu read, %zu live static-fee pools%s\n", seen_wp, kept_wp,
                  cfg.dex.whirlpool_enabled ? "" : " (tracked only: quoting disabled)");
   }
+  if (cfg.dex.pumpswap_enabled || cfg.discovery.track_pumpswap) {
+    // Canonical PumpSwap pools (created by pump migration): PDA ["pool", u16 0, pool_authority(mint), mint, wSOL]
+    // with pool_authority = pump PDA ["pool-authority", mint]. Derived for every token the other DEXes found
+    // (a cycle needs a second pool for the token anyway), then read; those that exist join the candidates.
+    std::set<Pubkey> bases(dc.base_mints.begin(), dc.base_mints.end());
+    std::set<Pubkey> tokens;
+    for (auto& a : pools) {
+      auto d = state::pool_def_from_account(a, dc);
+      if (!d) continue;
+      for (const Pubkey& m : {d->mint_a, d->mint_b})
+        if (!bases.count(m)) tokens.insert(m);
+    }
+    std::vector<Pubkey> keys;
+    const uint8_t index0[2] = {0, 0};
+    for (const Pubkey& m : tokens) {
+      Pubkey authority = pda({std::string_view("pool-authority"), m}, prog::PUMP);
+      Pubkey pool = pda({std::string_view("pool"), Seed(index0, 2), authority, m, mint::WSOL}, prog::PUMPSWAP);
+      if (seen.insert(pool).second) keys.push_back(pool);
+    }
+    size_t found = 0;
+    for (size_t i = 0; i < keys.size(); i += 100) {
+      std::vector<Pubkey> batch(keys.begin() + long(i), keys.begin() + long(std::min(keys.size(), i + 100)));
+      auto accs = rpc.multiple_accounts(batch);
+      for (size_t j = 0; j < batch.size() && j < accs.size(); ++j)
+        if (accs[j] && accs[j]->owner == prog::PUMPSWAP) {
+          pools.push_back(state::RawAccount{batch[j], accs[j]->owner, accs[j]->data});
+          ++found;
+        }
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    std::fprintf(stderr, "pumpswap: %zu canonical pools derived from %zu tokens, %zu exist%s\n", keys.size(), tokens.size(), found,
+                 cfg.dex.pumpswap_enabled ? "" : " (tracked only: quoting disabled)");
+  }
   // A pool can sit on a cycle only if its non-base token has a second pool: drop the rest before the
   // vault/mint lookups (discover() applies the same rule exactly after the TVL filter).
   {
@@ -168,6 +201,7 @@ int run(int argc, char** argv) {
       if (auto r = state::decode_raydium_v4(a.data.data(), a.data.size(), a.owner)) return {r->coin_mint, r->pc_mint};
       if (auto w = state::decode_whirlpool(a.data.data(), a.data.size(), a.owner)) return {w->token_mint_a, w->token_mint_b};
       if (auto c = state::decode_cpmm_pool(a.data.data(), a.data.size(), a.owner)) return {c->token_0_mint, c->token_1_mint};
+      if (auto pp = state::decode_pump_pool(a.data.data(), a.data.size(), a.owner)) return {pp->base_mint, pp->quote_mint};
       return {Pubkey{}, Pubkey{}};
     };
     std::map<Pubkey, int> count;

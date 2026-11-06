@@ -79,6 +79,18 @@ std::optional<PoolDef> pool_def_from_account(const RawAccount& a, const Discover
     d.config = c->amm_config;
     return d;
   }
+  if (a.owner == prog::PUMPSWAP) {
+    auto pp = decode_pump_pool(a.data.data(), a.data.size(), a.owner);
+    if (!pp) return std::nullopt;
+    d.kind = DexKind::PumpSwap;
+    d.mint_a = pp->base_mint;
+    d.mint_b = pp->quote_mint;
+    d.vault_a = pp->pool_base_token_account;
+    d.vault_b = pp->pool_quote_token_account;
+    d.config = pda({std::string_view("global_config")}, prog::PUMPSWAP);
+    d.fee_config = pda({std::string_view("fee_config"), prog::PUMPSWAP}, prog::PUMP_FEES);
+    return d;
+  }
   if (a.owner == prog::WHIRLPOOL) {
     auto w = decode_whirlpool(a.data.data(), a.data.size(), a.owner);
     if (!w) return std::nullopt;
@@ -109,6 +121,7 @@ std::vector<Pubkey> dependent_keys(const std::vector<RawAccount>& pools, const D
     keys.insert(d->mint_a);
     keys.insert(d->mint_b);
     if (!is_zero(d->config)) keys.insert(d->config);
+    if (!is_zero(d->fee_config)) keys.insert(d->fee_config);
   }
   return {keys.begin(), keys.end()};
 }
@@ -181,6 +194,20 @@ DiscoveryResult discover(const std::vector<RawAccount>& pool_accounts, const Acc
         // The vaults' token programs must be the ones the pool records (the swap passes them).
         if (va->second.owner != cp->token_0_program || vb->second.owner != cp->token_1_program) {
           reject(c, "vault_program");
+          gate_ok = false;
+        }
+        break;
+      }
+      case DexKind::PumpSwap: {
+        auto pp = decode_pump_pool(a.data.data(), a.data.size(), a.owner);
+        // v2 trades refuse cashback and mayhem pools (errors 6079 / 6080).
+        if (pp->is_cashback_coin) { reject(c, "pump_cashback"); gate_ok = false; break; }
+        if (pp->is_mayhem_mode) { reject(c, "pump_mayhem"); gate_ok = false; break; }
+        auto gc = accounts.find(d->config);
+        auto fc = accounts.find(d->fee_config);
+        if (gc == accounts.end() || !decode_pump_global_config(gc->second.data.data(), gc->second.data.size(), gc->second.owner) ||
+            fc == accounts.end() || !decode_pump_fee_config(fc->second.data.data(), fc->second.data.size(), fc->second.owner)) {
+          reject(c, "pump_config");
           gate_ok = false;
         }
         break;
