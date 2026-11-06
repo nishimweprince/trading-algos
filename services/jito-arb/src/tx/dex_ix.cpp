@@ -8,6 +8,7 @@
 #include "core/crypto.hpp"
 #include "core/programs.hpp"
 #include "dex/clmm_math.hpp"
+#include "dex/dlmm.hpp"
 #include "state/discovery.hpp"
 
 namespace arb::tx::dexix {
@@ -68,8 +69,29 @@ const Pubkey& program_of(DexKind kind) {
 std::vector<AccountMeta> swap_accounts(const PoolState& p, bool a_to_b, const UserAccounts& u) {
   std::vector<AccountMeta> v;
   if (p.kind != DexKind::RaydiumV4 && p.kind != DexKind::Whirlpool && p.kind != DexKind::Cpmm && p.kind != DexKind::PumpSwap &&
-      p.kind != DexKind::Clmm)
+      p.kind != DexKind::Dlmm && p.kind != DexKind::Clmm)
     throw std::invalid_argument(std::string("swap accounts: unsupported dex ") + dex_name(p.kind));
+  if (p.kind == DexKind::Dlmm) {
+    if (!dex::DlmmQuoter{}.supports(p) || !p.dlmm_bitmap_known) throw std::invalid_argument("unsupported/incomplete DLMM swap");
+    v = {{p.address, false, true},
+         {p.dlmm_bitmap ? state::dlmm_bitmap_pda(p.address) : prog::METEORA_DLMM, false, bool(p.dlmm_bitmap)},
+         {p.vault_a, false, true}, {p.vault_b, false, true},
+         {a_to_b ? u.token_a : u.token_b, false, true}, {a_to_b ? u.token_b : u.token_a, false, true},
+         {p.mint_a, false, false}, {p.mint_b, false, false}, {p.dlmm.oracle, false, true},
+         {prog::METEORA_DLMM, false, false}, // Anchor optional host_fee_in = None
+         {u.authority, true, false}, {prog::TOKEN, false, false}, {prog::TOKEN, false, false}, {prog::MEMO, false, false},
+         {pda({std::string_view("__event_authority")}, prog::METEORA_DLMM), false, false}, {prog::METEORA_DLMM, false, false}};
+    int32_t from = dex::dlmm::array_index(p.dlmm.active_id), next;
+    for (int k = 0; k < 3 && dex::dlmm::next_array(p, from, a_to_b, next); ++k) {
+      bool loaded = false;
+      for (auto& a : p.dlmm_arrays) if (a.index == next && a.array && a.array->pair == p.address) loaded = true;
+      if (!loaded) break;
+      v.push_back({state::dlmm_bin_array_pda(p.address, next), false, true});
+      from = next + (a_to_b ? -1 : 1);
+    }
+    if (v.size() == 16) throw std::invalid_argument("DLMM first bin array absent");
+    return v;
+  }
   if (p.kind == DexKind::Clmm) {
     // swap_v2: payer (signer), amm_config, pool_state (w), input token account (w), output token account (w),
     // input vault (w), output vault (w), observation_state (w), token_program, token_program_2022, memo_program,
@@ -201,8 +223,13 @@ std::vector<uint8_t> swap_data(DexKind kind, bool a_to_b, uint64_t amount_in, ui
     n += len;
   };
   if (kind != DexKind::RaydiumV4 && kind != DexKind::Whirlpool && kind != DexKind::Cpmm && kind != DexKind::PumpSwap &&
-      kind != DexKind::Clmm)
+      kind != DexKind::Dlmm && kind != DexKind::Clmm)
     throw std::invalid_argument(std::string("swap data: unsupported dex ") + dex_name(kind));
+  if (kind == DexKind::Dlmm) {
+    put(DLMM_SWAP2_DISC, 8); put(&amount_in, 8); put(&min_out, 8);
+    uint32_t slices = 0; put(&slices, 4); // RemainingAccountsInfo { slices: vec![] }; no token hooks
+    return std::vector<uint8_t>(d, d + n);
+  }
   if (kind == DexKind::Clmm) {  // swap_v2(amount, other_amount_threshold, sqrt_price_limit_x64 = 0, is_base_input = true)
     put(CLMM_SWAP_V2_DISC, 8);
     put(&amount_in, 8);

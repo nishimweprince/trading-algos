@@ -59,6 +59,7 @@ class Runtime {
   dex::WhirlpoolQuoter wp_q_;
   dex::CpmmQuoter cpmm_q_;
   dex::PumpSwapQuoter pump_q_;
+  dex::DlmmQuoter dlmm_q_;
   dex::ClmmQuoter clmm_q_;
   std::unique_ptr<engine::Engine> engine_;
   feed::SlotClock clock_;

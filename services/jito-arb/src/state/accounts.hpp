@@ -294,6 +294,17 @@ struct DlmmBin {
   bool limit_order_ask_side = false;
 };
 
+constexpr size_t DLMM_BITMAP_LEN = 1576;
+inline constexpr uint8_t DISC_DLMM_BITMAP[8] = {80,111,124,113,55,237,18,5};
+struct DlmmBitmapExtension {
+  Pubkey pair{};
+  uint64_t positive[96]{}, negative[96]{}; // 12 x 512 bits per side
+};
+struct DlmmClock { uint64_t slot = 0; int64_t unix_timestamp = 0; };
+Result<DlmmBitmapExtension> decode_dlmm_bitmap(const uint8_t*, size_t, const Pubkey&);
+Pubkey dlmm_bitmap_pda(const Pubkey& pair);
+inline const Pubkey DLMM_CLOCK = PK("SysvarC1ock11111111111111111111111111111111");
+
 struct DlmmBinArray {
   int64_t index = 0;
   Pubkey pair{};
