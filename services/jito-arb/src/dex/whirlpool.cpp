@@ -228,6 +228,19 @@ Result<Quote> WhirlpoolQuoter::quote_exact_in(const PoolState& p, bool a_to_b, u
 }
 
 u128 spot_rate_x64(const PoolState& p, bool a_to_b) {
+  if (p.kind == DexKind::Cpmm) {
+    uint64_t rin = 0, rout = 0;
+    if (!cp_reserves(p, a_to_b, rin, rout) || rin == 0) return 0;
+    const u128 den = 1'000'000;
+    u128 trade = p.cpmm_cfg.trade_fee_rate, creator = p.cpmm.enable_creator_fee ? p.cpmm_cfg.creator_fee_rate : 0;
+    // Creator fee on the input adds to the input fee; on the output it scales the output.
+    u128 keep = p.cpmm.creator_fee_on_input(a_to_b) ? den - std::min(den, trade + creator)
+                                                    : (den - std::min(den, trade)) * (den - std::min(den, creator)) / den;
+    u128 rate = (u128(rout) << 64) / rin;
+    U256 qq, rr;
+    U256::mul(rate, keep).divmod(U256::from_u128(den), qq, rr);
+    return qq.fits_u128() ? qq.lo128() : ~u128(0);
+  }
   if (p.kind != DexKind::RaydiumV4 && p.kind != DexKind::Whirlpool) return 0;  // no spot: the prefilter skips the cycle
   if (p.kind == DexKind::RaydiumV4) {
     u128 rin = a_to_b ? p.vault_a_amount - std::min(p.vault_a_amount, p.ray.need_take_pnl_coin)
@@ -264,7 +277,11 @@ u128 spot_rate_x64(const PoolState& p, bool a_to_b) {
 }
 
 uint64_t input_depth(const PoolState& p, bool a_to_b) {
-  if (is_constant_product(p.kind)) return a_to_b ? p.vault_a_amount : p.vault_b_amount;
+  if (is_constant_product(p.kind)) {
+    uint64_t rin = 0, rout = 0;
+    if (cp_reserves(p, a_to_b, rin, rout)) return rin;
+    return a_to_b ? p.vault_a_amount : p.vault_b_amount;
+  }
   if (p.kind != DexKind::Whirlpool) return 0;
   // Concentrated liquidity: the vaults also hold positions far from the current price, so their balances
   // overstate what a swap can use. Depth is the input that moves sqrt-price 5% (about 10% in price) inside the

@@ -118,3 +118,11 @@ TEST(parity_whirlpool_exact) {
               r.ok_samples, r.failed_sims, r.mismatches);
   require_parity_or_disabled("whirlpool", r, Config{}.dex.whirlpool_enabled, "whirlpool_enabled");
 }
+
+TEST(parity_cpmm_exact) {
+  dex::CpmmQuoter q;
+  auto r = replay("parity_cpmm.json", q);
+  std::printf("    cpmm parity: %zu batches, %zu exact-compare samples, %zu failed sims, %zu mismatches\n", r.batches,
+              r.ok_samples, r.failed_sims, r.mismatches);
+  require_parity_or_disabled("cpmm", r, Config{}.dex.cpmm_enabled, "cpmm_enabled");
+}

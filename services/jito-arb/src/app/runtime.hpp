@@ -57,6 +57,7 @@ class Runtime {
   engine::TipPolicy tips_;
   dex::RaydiumV4Quoter ray_q_;
   dex::WhirlpoolQuoter wp_q_;
+  dex::CpmmQuoter cpmm_q_;
   std::unique_ptr<engine::Engine> engine_;
   feed::SlotClock clock_;
   feed::FeedHandler handler_;

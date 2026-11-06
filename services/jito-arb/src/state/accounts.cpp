@@ -120,6 +120,55 @@ Result<RaydiumV4> decode_raydium_v4(const uint8_t* d, size_t n, const Pubkey& ow
   return a;
 }
 
+// CPMM PoolState (repr(C, packed), after the discriminator): amm_config 8, pool_creator 40, token_0_vault 72,
+// token_1_vault 104, lp_mint 136, token_0_mint 168, token_1_mint 200, token_0_program 232, token_1_program 264,
+// observation_key 296, auth_bump 328, status 329, lp/mint decimals 330..332, lp_supply 333, protocol_fees 341/349,
+// fund_fees 357/365, open_time 373, recent_epoch 381, creator_fee_on 389, enable_creator_fee 390, padding1 391,
+// creator_fees 397/405, padding 413..637.
+Result<CpmmPool> decode_cpmm_pool(const uint8_t* d, size_t n, const Pubkey& owner) {
+  if (owner != prog::RAYDIUM_CPMM) return fail(Errc::bad_owner, "cpmm owner");
+  if (n != CPMM_POOL_LEN) return fail(Errc::bad_length, "cpmm pool length");
+  if (std::memcmp(d, DISC_CPMM_POOL, 8) != 0) return fail(Errc::bad_discriminator, "cpmm pool discriminator");
+  CpmmPool p;
+  p.amm_config = pk(d + 8);
+  p.token_0_vault = pk(d + 72);
+  p.token_1_vault = pk(d + 104);
+  p.token_0_mint = pk(d + 168);
+  p.token_1_mint = pk(d + 200);
+  p.token_0_program = pk(d + 232);
+  p.token_1_program = pk(d + 264);
+  p.observation_key = pk(d + 296);
+  p.auth_bump = d[328];
+  p.status = d[329];
+  p.protocol_fees_0 = rd_u64(d + 341);
+  p.protocol_fees_1 = rd_u64(d + 349);
+  p.fund_fees_0 = rd_u64(d + 357);
+  p.fund_fees_1 = rd_u64(d + 365);
+  p.open_time = rd_u64(d + 373);
+  p.creator_fee_on = d[389];
+  p.enable_creator_fee = d[390] != 0;
+  p.creator_fees_0 = rd_u64(d + 397);
+  p.creator_fees_1 = rd_u64(d + 405);
+  if (p.creator_fee_on > 2) return fail(Errc::bad_data, "cpmm creator_fee_on");
+  return p;
+}
+
+// CPMM AmmConfig (borsh): bump 8, disable_create_pool 9, index 10, trade_fee_rate 12, protocol_fee_rate 20,
+// fund_fee_rate 28, create_pool_fee 36, protocol_owner 44, fund_owner 76, creator_fee_rate 108,
+// creator_fee_share_rate 116, padding 124..236.
+Result<CpmmConfig> decode_cpmm_config(const uint8_t* d, size_t n, const Pubkey& owner) {
+  if (owner != prog::RAYDIUM_CPMM) return fail(Errc::bad_owner, "cpmm owner");
+  if (n != CPMM_CONFIG_LEN) return fail(Errc::bad_length, "cpmm config length");
+  if (std::memcmp(d, DISC_CPMM_CONFIG, 8) != 0) return fail(Errc::bad_discriminator, "cpmm config discriminator");
+  CpmmConfig c;
+  c.trade_fee_rate = rd_u64(d + 12);
+  c.protocol_fee_rate = rd_u64(d + 20);
+  c.fund_fee_rate = rd_u64(d + 28);
+  c.creator_fee_rate = rd_u64(d + 108);
+  if (c.trade_fee_rate + c.creator_fee_rate >= 1'000'000) return fail(Errc::bad_data, "cpmm fee rate");
+  return c;
+}
+
 // Whirlpool (after the 8-byte discriminator): whirlpools_config 8, bump 40, tick_spacing 41, fee_tier_index_seed 43,
 // fee_rate 45, protocol_fee_rate 47, liquidity 49, sqrt_price 65, tick_current_index 81, protocol_fee_owed_a 85,
 // protocol_fee_owed_b 93, token_mint_a 101, token_vault_a 133, fee_growth_global_a 165, token_mint_b 181,

@@ -84,6 +84,8 @@ struct Config {
     bool whirlpool_enabled = true;   // sim-parity 204/204 exact (2026-11-04, Helius-funded); adaptive-fee pools stay refused
     uint32_t raydium_v4_cu = 40000;  // measured on a local validator (VM step); placeholder until then
     uint32_t whirlpool_cu = 80000;
+    bool cpmm_enabled = false;       // until sim-parity proves the quoter (tests/fixtures/parity_cpmm.json)
+    uint32_t cpmm_cu = 50000;
   } dex;
 
   struct Discovery {
@@ -96,6 +98,10 @@ struct Config {
     // Raydium v4 pools whose base-side vault clears the floor are fetched in full, deepest first, up to this
     // many (about 16k cleared 25 SOL in Nov 2026); the cycle prefilter and TVL filter then cut the set.
     int raydium_fetch_cap = 16000;
+    // Track CPMM pools before dex.cpmm_enabled (recordings, a second pool for tokens); fetched by the same
+    // vault-floor path as Raydium v4, deepest first, up to cpmm_fetch_cap.
+    bool track_cpmm = false;
+    int cpmm_fetch_cap = 4000;
   } discovery;
 
   struct Flash {

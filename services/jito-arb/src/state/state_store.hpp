@@ -50,7 +50,7 @@ struct PubkeyHash {
 };
 
 /** What a subscribed account is, decided at registration. */
-enum class AccountKind : uint8_t { RaydiumPool, Whirlpool, TickArray, Vault, Mint, KaminoReserve, Wallet };
+enum class AccountKind : uint8_t { RaydiumPool, Whirlpool, TickArray, Vault, Mint, KaminoReserve, Wallet, CpmmPool, CpmmConfig };
 
 /** A pool to track and the accounts it is built from. */
 struct PoolDef {
@@ -58,6 +58,7 @@ struct PoolDef {
   Pubkey address{};
   Pubkey mint_a{}, mint_b{}, vault_a{}, vault_b{};
   std::vector<std::pair<int32_t, Pubkey>> tick_arrays;  // Whirlpool: (start index, PDA)
+  Pubkey config{};  // CPMM: the AmmConfig holding the fee rates (shared by many pools)
 };
 
 struct AccountUpdate {
@@ -106,7 +107,7 @@ class StateStore {
     uint64_t slot = 0, write_version = 0;
     bool seen = false, missing = false;
     bool awaiting_push = false;  // last applied value came from a resync
-    std::variant<std::monostate, state::RaydiumV4, state::Whirlpool, state::TokenAccount> pool_data;
+    std::variant<std::monostate, state::RaydiumV4, state::Whirlpool, state::TokenAccount, state::CpmmPool, state::CpmmConfig> pool_data;
     std::shared_ptr<const state::TickArray> tick_array;
     std::shared_ptr<const state::Mint> mint;
     std::shared_ptr<const state::KaminoReserve> reserve;

@@ -8,8 +8,10 @@
 // on exactly the state the quoter saw. Kept batches (account bytes + simulated amounts) are written to
 // tests/fixtures/parity_<dex>.json; the unit test replays them offline and requires exact equality.
 //
-//   sim-parity [--rpc URL] [--dex raydium_v4|whirlpool|all] [--min-samples N] [--max-pools N]
-//              [--seed-holders harness/holders_seed.json]
+//   sim-parity [--rpc URL] [--dex raydium_v4|whirlpool|cpmm|all] [--min-samples N] [--max-pools N]
+//              [--seed-holders harness/holders_seed.json] [--pools-file pools.json]
+// --pools-file takes the pools of that kind from a discovery output (deepest first) instead of
+// tests/fixtures/pools.json, for DEXes the fixture list does not cover yet.
 //
 // Funding: holders' own wallets (see holders()). Rate: one request every 280 ms (~3.5 req/s), exponential backoff on 429.
 #include <simdjson.h>
@@ -215,7 +217,28 @@ void write_batches(const std::string& path, const std::vector<Batch>& bs, const 
   f << "\n]}\n";
 }
 
+std::string g_pools_file;
+
 std::vector<std::string> fixture_pools(const std::string& root, const char* list) {
+  if (!g_pools_file.empty()) {
+    std::ifstream f(g_pools_file);
+    std::stringstream ss;
+    ss << f.rdbuf();
+    simdjson::dom::parser p;
+    simdjson::padded_string ps(ss.str());
+    std::vector<std::pair<double, std::string>> v;
+    for (auto e : simdjson::dom::array(p.parse(ps)["pools"])) {
+      std::string_view kind, addr;
+      double tvl = 0;
+      if (e["kind"].get(kind) || kind != list || e["address"].get(addr)) continue;
+      if (e["tvl_sol"].get(tvl)) tvl = 0;
+      v.emplace_back(tvl, std::string(addr));
+    }
+    std::sort(v.begin(), v.end(), [](auto& a, auto& b) { return a.first > b.first; });
+    std::vector<std::string> out;
+    for (auto& [t, a] : v) out.push_back(a);
+    return out;
+  }
   std::ifstream f(root + "/tests/fixtures/pools.json");
   std::stringstream ss;
   ss << f.rdbuf();
@@ -259,6 +282,7 @@ bool run_pool(DexKind kind, const Pubkey& pool, std::vector<Batch>& out, Stats& 
   std::vector<Pubkey> keys = {pool, def->vault_a, def->vault_b, def->mint_a, def->mint_b, dA, dB,
                               hA ? hA->account : dA, hB ? hB->account : dB};
   for (auto& [start, k] : def->tick_arrays) keys.push_back(k);
+  if (!is_zero(def->config)) keys.push_back(def->config);  // CPMM fee rates
   uint64_t s1 = 0, s2 = 0;
   auto before = rpc_call([&](Rpc& r) { return r.multiple_accounts_at(keys, s1); });
   if (before.size() != keys.size() || !before[0] || !before[1] || !before[2]) return false;
@@ -285,7 +309,14 @@ bool run_pool(DexKind kind, const Pubkey& pool, std::vector<Batch>& out, Stats& 
 
   dex::RaydiumV4Quoter rq;
   dex::WhirlpoolQuoter wq;
-  const dex::IQuoter& q = kind == DexKind::RaydiumV4 ? static_cast<const dex::IQuoter&>(rq) : wq;
+  dex::CpmmQuoter cq;
+  const dex::IQuoter* qs[] = {&rq, &wq, &cq};
+  const dex::IQuoter* qp = nullptr;
+  for (const dex::IQuoter* c : qs)
+    if (c->kind() == kind) qp = c;
+  if (!qp) return false;
+  const dex::IQuoter& q = *qp;
+  if (!q.supports(*ps)) { std::fprintf(stderr, "  skip %s: not supported by the quoter\n", b58(pool).c_str()); return false; }
 
   Batch b;
   b.kind = kind;
@@ -421,6 +452,7 @@ int main(int argc, char** argv) {
     else if (a == "--min-samples") min_samples = std::stoul(argv[i + 1]);
     else if (a == "--max-pools") max_pools = std::stoul(argv[i + 1]);
     else if (a == "--root") root = argv[i + 1];
+    else if (a == "--pools-file") g_pools_file = argv[i + 1];
     else if (a == "--seed-holders") {
       std::ifstream f(argv[i + 1]);
       std::stringstream ss;
@@ -441,7 +473,8 @@ int main(int argc, char** argv) {
   std::fprintf(stderr, "funding: largest wallet-owned holders per mint (simulation only)\n");
   int rc = 0;
   for (auto [kind, list, name] : {std::tuple{DexKind::RaydiumV4, "raydium_v4", "raydium_v4"},
-                                  std::tuple{DexKind::Whirlpool, "whirlpool", "whirlpool"}}) {
+                                  std::tuple{DexKind::Whirlpool, "whirlpool", "whirlpool"},
+                                  std::tuple{DexKind::Cpmm, "cpmm", "cpmm"}}) {
     if (dex != "all" && dex != name) continue;
     std::vector<Batch> batches;
     Stats st;

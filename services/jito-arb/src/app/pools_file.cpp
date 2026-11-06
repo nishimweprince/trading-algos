@@ -18,6 +18,7 @@ std::string to_json(const PoolsFile& f) {
          "\",\"mint_b\":\"" + b58(d.mint_b) + "\",\"vault_a\":\"" + b58(d.vault_a) + "\",\"vault_b\":\"" + b58(d.vault_b) + "\"";
     std::snprintf(buf, sizeof buf, ",\"tvl_sol\":%.3f", i < f.tvl_sol.size() ? f.tvl_sol[i] : 0.0);
     s += buf;
+    if (!is_zero(d.config)) s += ",\"config\":\"" + b58(d.config) + "\"";
     s += ",\"tick_arrays\":[";
     for (size_t j = 0; j < d.tick_arrays.size(); ++j) {
       if (j) s += ",";
@@ -54,6 +55,10 @@ bool from_json(const std::string& body, PoolsFile& out, std::string* err) {
       if (!key(e, "address", d.address) || !key(e, "mint_a", d.mint_a) || !key(e, "mint_b", d.mint_b) ||
           !key(e, "vault_a", d.vault_a) || !key(e, "vault_b", d.vault_b)) {
         if (err) *err = "pools file: bad pool entry";
+        return false;
+      }
+      if (std::string_view cs; e["config"].get(cs) == simdjson::SUCCESS && !b58_decode32(cs, d.config)) {
+        if (err) *err = "pools file: bad config key";
         return false;
       }
       simdjson::dom::array ta;
