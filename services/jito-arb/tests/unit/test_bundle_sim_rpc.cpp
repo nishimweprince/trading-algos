@@ -206,7 +206,7 @@ struct Case {
   Pubkey middle_mint = job.c.legs[0].mint_out;
   Pubkey middle_ata = ata(owner, middle_mint, prog::TOKEN);
   Pubkey hint = job.legs[0]->address;  // seed can be a noncanonical account owned by the holder
-  Pubkey invalid_owner = ata(owner, job.c.base, prog::TOKEN); // off-curve PDA
+  Pubkey invalid_owner = ata(owner, middle_mint, prog::TOKEN_2022); // off-curve PDA
   Scenario scenario;
   std::atomic<unsigned> pre_reads{0};
   Config cfg;
