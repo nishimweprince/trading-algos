@@ -316,7 +316,8 @@ bool run_pool(DexKind kind, const Pubkey& pool, std::vector<Batch>& out, Stats& 
   dex::WhirlpoolQuoter wq;
   dex::CpmmQuoter cq;
   dex::PumpSwapQuoter pq;
-  const dex::IQuoter* qs[] = {&rq, &wq, &cq, &pq};
+  dex::ClmmQuoter lq;
+  const dex::IQuoter* qs[] = {&rq, &wq, &cq, &pq, &lq};
   const dex::IQuoter* qp = nullptr;
   for (const dex::IQuoter* c : qs)
     if (c->kind() == kind) qp = c;
@@ -495,7 +496,8 @@ int main(int argc, char** argv) {
   for (auto [kind, list, name] : {std::tuple{DexKind::RaydiumV4, "raydium_v4", "raydium_v4"},
                                   std::tuple{DexKind::Whirlpool, "whirlpool", "whirlpool"},
                                   std::tuple{DexKind::Cpmm, "cpmm", "cpmm"},
-                                  std::tuple{DexKind::PumpSwap, "pumpswap", "pumpswap"}}) {
+                                  std::tuple{DexKind::PumpSwap, "pumpswap", "pumpswap"},
+                                  std::tuple{DexKind::Clmm, "clmm", "clmm"}}) {
     if (dex != "all" && dex != name) continue;
     std::vector<Batch> batches;
     Stats st;

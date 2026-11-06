@@ -7,6 +7,7 @@
 
 #include "core/crypto.hpp"
 #include "core/programs.hpp"
+#include "dex/clmm_math.hpp"
 #include "state/discovery.hpp"
 
 namespace arb::tx::dexix {
@@ -66,8 +67,44 @@ const Pubkey& program_of(DexKind kind) {
 
 std::vector<AccountMeta> swap_accounts(const PoolState& p, bool a_to_b, const UserAccounts& u) {
   std::vector<AccountMeta> v;
-  if (p.kind != DexKind::RaydiumV4 && p.kind != DexKind::Whirlpool && p.kind != DexKind::Cpmm && p.kind != DexKind::PumpSwap)
+  if (p.kind != DexKind::RaydiumV4 && p.kind != DexKind::Whirlpool && p.kind != DexKind::Cpmm && p.kind != DexKind::PumpSwap &&
+      p.kind != DexKind::Clmm)
     throw std::invalid_argument(std::string("swap accounts: unsupported dex ") + dex_name(p.kind));
+  if (p.kind == DexKind::Clmm) {
+    // swap_v2: payer (signer), amm_config, pool_state (w), input token account (w), output token account (w),
+    // input vault (w), output vault (w), observation_state (w), token_program, token_program_2022, memo_program,
+    // input vault mint, output vault mint; then the tick arrays the swap walks (remaining accounts), starting at
+    // the first initialized array in the swap's direction. Token "a" is token_0.
+    v.push_back({u.authority, true, false});
+    v.push_back({p.clmm.amm_config, false, false});
+    v.push_back({p.address, false, true});
+    v.push_back({a_to_b ? u.token_a : u.token_b, false, true});
+    v.push_back({a_to_b ? u.token_b : u.token_a, false, true});
+    v.push_back({a_to_b ? p.vault_a : p.vault_b, false, true});
+    v.push_back({a_to_b ? p.vault_b : p.vault_a, false, true});
+    v.push_back({p.clmm.observation_key, false, true});
+    v.push_back({prog::TOKEN, false, false});
+    v.push_back({prog::TOKEN_2022, false, false});
+    v.push_back({prog::MEMO, false, false});
+    v.push_back({a_to_b ? p.mint_a : p.mint_b, false, false});
+    v.push_back({a_to_b ? p.mint_b : p.mint_a, false, false});
+    const uint16_t sp = p.clmm.tick_spacing;
+    int32_t start = 0;
+    if (!dex::clmm::current_array_initialized(p.clmm.tick_array_bitmap, p.clmm.tick_current, sp, start))
+      dex::clmm::next_initialized_array(p.clmm.tick_array_bitmap, dex::clmm::array_start_index(p.clmm.tick_current, sp), sp, a_to_b,
+                                        start);
+    for (int k = 0; k < 3; ++k) {
+      const TickArraySlot* slot = nullptr;
+      for (uint8_t i = 0; i < p.n_ticks; ++i)
+        if (p.ticks[i].start == start && p.ticks[i].state == TickArraySlot::Loaded) slot = &p.ticks[i];
+      if (!slot) break;
+      v.push_back({slot->key, false, true});
+      int32_t next = 0;
+      if (!dex::clmm::next_initialized_array(p.clmm.tick_array_bitmap, start, sp, a_to_b, next)) break;
+      start = next;
+    }
+    return v;
+  }
   if (p.kind == DexKind::PumpSwap) {
     // sell_v2 / buy_exact_quote_in_v2 (PUMP_SWAP_TRADE_V2.md): 17 accounts, the same for both. Token "a" is base.
     auto tp = [](const std::shared_ptr<const state::Mint>& m) {
@@ -154,8 +191,18 @@ std::vector<uint8_t> swap_data(DexKind kind, bool a_to_b, uint64_t amount_in, ui
     std::memcpy(d + n, p, len);
     n += len;
   };
-  if (kind != DexKind::RaydiumV4 && kind != DexKind::Whirlpool && kind != DexKind::Cpmm && kind != DexKind::PumpSwap)
+  if (kind != DexKind::RaydiumV4 && kind != DexKind::Whirlpool && kind != DexKind::Cpmm && kind != DexKind::PumpSwap &&
+      kind != DexKind::Clmm)
     throw std::invalid_argument(std::string("swap data: unsupported dex ") + dex_name(kind));
+  if (kind == DexKind::Clmm) {  // swap_v2(amount, other_amount_threshold, sqrt_price_limit_x64 = 0, is_base_input = true)
+    put(CLMM_SWAP_V2_DISC, 8);
+    put(&amount_in, 8);
+    put(&min_out, 8);
+    unsigned __int128 no_limit = 0;
+    put(&no_limit, 16);
+    d[n++] = 1;
+    return std::vector<uint8_t>(d, d + n);
+  }
   if (kind == DexKind::PumpSwap) {
     // a_to_b: sell_v2(base_amount_in, min_quote_amount_out); b_to_a: buy_exact_quote_in_v2(spendable_quote_in,
     // min_base_amount_out), whose minimum must be > 0.

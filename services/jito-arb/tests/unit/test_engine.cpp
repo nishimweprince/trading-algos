@@ -2,6 +2,7 @@
 #include <cstring>
 
 #include "app/bundle_sim.hpp"
+#include "dex/clmm_math.hpp"
 #include "core/crypto.hpp"
 #include "tx/dex_ix.hpp"
 #include "core/programs.hpp"
@@ -738,4 +739,37 @@ TEST(pumpswap_addresses_and_fee_tiers) {
   p.pump_cfg.creator_fee_configurable = true;
   f = dex::pump_fee_bps(p, 1000, 999);
   CHECK(f && f->creator == 250);
+}
+
+TEST(clmm_tick_math_matches_program_bounds_and_round_trips) {
+  using namespace dex::clmm;
+  CHECK(*sqrt_price_at_tick(0) == (u128(1) << 64));
+  CHECK(*sqrt_price_at_tick(MIN_TICK) == MIN_SQRT_PRICE_X64);
+  CHECK(*sqrt_price_at_tick(MAX_TICK) == MAX_SQRT_PRICE_X64);
+  CHECK(!sqrt_price_at_tick(MAX_TICK + 1).has_value());
+  CHECK(*tick_at_sqrt_price(MIN_SQRT_PRICE_X64) == MIN_TICK);
+  int bad = 0;
+  for (int32_t t : {-443635, -200000, -88722, -1001, -60, -1, 1, 59, 60, 1000, 88722, 200000, 443635}) {
+    u128 s = *sqrt_price_at_tick(t);
+    if (*tick_at_sqrt_price(s) != t) ++bad;
+    if (*tick_at_sqrt_price(s + 1) != t) ++bad;   // inside [tick, tick+1)
+    if (*tick_at_sqrt_price(s - 1) != t - 1) ++bad;
+  }
+  CHECK_EQ(bad, 0);
+  // Bitmap navigation: arrays at starts -60 and 120 (spacing 1, 60 ticks per array).
+  uint64_t bm[16]{};
+  auto set = [&](int32_t start) {
+    int32_t pos = start / 60 + 512;
+    bm[pos / 64] |= uint64_t(1) << (pos % 64);
+  };
+  set(-60);
+  set(120);
+  int32_t start = 0, out = 0;
+  CHECK(!current_array_initialized(bm, 5, 1, start) && start == 0);
+  CHECK(next_initialized_array(bm, 0, 1, true, out) && out == -60);
+  CHECK(next_initialized_array(bm, 0, 1, false, out) && out == 120);
+  CHECK(current_array_initialized(bm, -1, 1, start) && start == -60);
+  // One exact-in step that stays inside the range: fee on input, zero for one.
+  auto r = compute_swap_exact_in(u128(1) << 64, *sqrt_price_at_tick(-100), u128(1'000'000'000'000ULL), 1'000'000, 2500, true, true);
+  CHECK(r.has_value() && r->amount_in + r->fee_amount == 1'000'000 && r->amount_out > 0 && r->amount_out < 1'000'000);
 }

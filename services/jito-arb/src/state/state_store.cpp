@@ -33,6 +33,7 @@ const Pubkey* dex_program(DexKind k) {
     case DexKind::Whirlpool: return &prog::WHIRLPOOL;
     case DexKind::Cpmm: return &prog::RAYDIUM_CPMM;
     case DexKind::PumpSwap: return &prog::PUMPSWAP;
+    case DexKind::Clmm: return &prog::RAYDIUM_CLMM;
     default: return nullptr;
   }
 }
@@ -46,6 +47,7 @@ AccountKind pool_account_kind(DexKind k) {
     case DexKind::Whirlpool: return AccountKind::Whirlpool;
     case DexKind::Cpmm: return AccountKind::CpmmPool;
     case DexKind::PumpSwap: return AccountKind::PumpPool;
+    case DexKind::Clmm: return AccountKind::ClmmPool;
     default: throw std::invalid_argument(std::string("state store: unsupported dex ") + dex_name(k));
   }
 }
@@ -81,10 +83,13 @@ uint32_t StateStore::add_pool(const PoolDef& def) {
   entry(def.mint_a, AccountKind::Mint).pools.push_back(id);
   entry(def.mint_b, AccountKind::Mint).pools.push_back(id);
   if (!is_zero(def.config))
-    entry(def.config, def.kind == DexKind::PumpSwap ? AccountKind::PumpGlobalConfig : AccountKind::CpmmConfig).pools.push_back(id);
+    entry(def.config, def.kind == DexKind::PumpSwap ? AccountKind::PumpGlobalConfig
+                      : def.kind == DexKind::Clmm   ? AccountKind::ClmmConfig
+                                                    : AccountKind::CpmmConfig)
+        .pools.push_back(id);
   if (!is_zero(def.fee_config)) entry(def.fee_config, AccountKind::PumpFeeConfig).pools.push_back(id);
   for (auto& [start, key] : def.tick_arrays) {
-    AccountEntry& e = entry(key, AccountKind::TickArray);
+    AccountEntry& e = entry(key, def.kind == DexKind::Clmm ? AccountKind::ClmmTickArray : AccountKind::TickArray);
     e.tick_start = start;
     e.pools.push_back(id);
   }
@@ -157,6 +162,22 @@ bool StateStore::apply(const AccountUpdate& u) {
       case AccountKind::CpmmConfig: {
         auto r = state::decode_cpmm_config(u.data, u.len, u.owner);
         if (r) e.pool_data = *r; else ok = false;
+        break;
+      }
+      case AccountKind::ClmmPool: {
+        auto r = state::decode_clmm_pool(u.data, u.len, u.owner);
+        if (r) e.pool_data = *r; else ok = false;
+        break;
+      }
+      case AccountKind::ClmmConfig: {
+        auto r = state::decode_clmm_config(u.data, u.len, u.owner);
+        if (r) e.pool_data = *r; else ok = false;
+        break;
+      }
+      case AccountKind::ClmmTickArray: {
+        auto r = state::decode_clmm_tick_array(u.data, u.len, u.owner);
+        if (r && r->start_tick_index == e.tick_start) e.clmm_tick_array = std::make_shared<const state::ClmmTickArray>(*r);
+        else ok = false;
         break;
       }
       case AccountKind::PumpPool: {
@@ -247,6 +268,13 @@ void StateStore::rebuild(uint32_t id) {
         if (cc) s->cpmm_cfg = *cc; else complete = false;
         break;
       }
+      case DexKind::Clmm: {
+        if (auto* c = std::get_if<state::ClmmPool>(&pool->pool_data)) s->clmm = *c; else complete = false;
+        const AccountEntry* cfg = find(d.config);
+        const state::ClmmConfig* cc = cfg && cfg->seen && !cfg->missing ? std::get_if<state::ClmmConfig>(&cfg->pool_data) : nullptr;
+        if (cc) s->clmm_cfg = *cc; else complete = false;
+        break;
+      }
       case DexKind::PumpSwap: {
         if (auto* pp = std::get_if<state::PumpPool>(&pool->pool_data)) {
           s->pump = *pp;
@@ -298,6 +326,7 @@ void StateStore::rebuild(uint32_t id) {
     if (e && e->seen) {
       if (e->missing) t.state = TickArraySlot::Missing;
       else if (e->tick_array) { t.state = TickArraySlot::Loaded; t.array = e->tick_array; }
+      else if (e->clmm_tick_array) { t.state = TickArraySlot::Loaded; t.clmm = e->clmm_tick_array; }
     }
   }
   s->slot = std::max({s->pool_slot, s->vault_a_slot, s->vault_b_slot});
