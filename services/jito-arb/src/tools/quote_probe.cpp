@@ -69,7 +69,15 @@ int main(int argc, char** argv) {
   }
   dex::RaydiumV4Quoter rq;
   dex::WhirlpoolQuoter wq;
-  const dex::IQuoter& q = p->kind == DexKind::Whirlpool ? static_cast<const dex::IQuoter&>(wq) : rq;
+  const dex::IQuoter* quoters[] = {&rq, &wq};
+  const dex::IQuoter* qp = nullptr;
+  for (const dex::IQuoter* c : quoters)
+    if (c->kind() == p->kind) qp = c;
+  if (!qp) {
+    std::fprintf(stderr, "no quoter for %s\n", dex_name(p->kind));
+    return 1;
+  }
+  const dex::IQuoter& q = *qp;
   std::printf("  depth a>b %llu  b>a %llu\n", (unsigned long long)dex::input_depth(*p, true), (unsigned long long)dex::input_depth(*p, false));
   for (bool d : {true, false})
     for (uint64_t x = 1000; x <= 100'000'000'000'000ULL; x *= 10) {

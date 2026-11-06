@@ -562,3 +562,30 @@ TEST(time_limits_follow_slot_duration) {
   CHECK_EQ(ms_to_slots(c, 1), uint64_t(1));
   CHECK_EQ(ms_to_slots(c, 0), uint64_t(1));
 }
+
+TEST(dex_dispatch_names_programs_and_unsupported_kinds) {
+  for (DexKind k : {DexKind::RaydiumV4, DexKind::Whirlpool, DexKind::Cpmm, DexKind::Dlmm, DexKind::Clmm, DexKind::PumpSwap}) {
+    auto back = dex_kind_from_name(dex_name(k));
+    CHECK(back.has_value() && *back == k);
+  }
+  CHECK(!dex_kind_from_name("orca").has_value());
+  CHECK(dex_program(DexKind::RaydiumV4) && *dex_program(DexKind::RaydiumV4) == prog::RAYDIUM_V4);
+  CHECK(dex_program(DexKind::Whirlpool) && *dex_program(DexKind::Whirlpool) == prog::WHIRLPOOL);
+  CHECK(is_constant_product(DexKind::RaydiumV4) && is_constant_product(DexKind::Cpmm) && is_constant_product(DexKind::PumpSwap));
+  CHECK(!is_constant_product(DexKind::Whirlpool) && !is_constant_product(DexKind::Clmm) && !is_constant_product(DexKind::Dlmm));
+  // Registering a kind with no decoder fails loudly instead of being treated as a Whirlpool.
+  for (DexKind k : {DexKind::Cpmm, DexKind::Dlmm, DexKind::Clmm, DexKind::PumpSwap}) {
+    if (dex_program(k)) continue;  // supported by now: covered by its own tests
+    StateStore store;
+    PoolDef d;
+    d.kind = k;
+    bool threw = false;
+    try {
+      store.add_pool(d);
+    } catch (const std::invalid_argument&) {
+      threw = true;
+    }
+    CHECK(threw);
+    CHECK_EQ(store.pool_count(), uint32_t(0));
+  }
+}

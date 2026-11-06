@@ -4,6 +4,7 @@
 
 #include <cstring>
 #include <set>
+#include <stdexcept>
 
 #include "core/base58.hpp"
 #include "core/programs.hpp"
@@ -58,9 +59,15 @@ void seed_virtual_tables(tx::AltManager& alts, const StateStore& store, const Pu
     add(a, p->vault_b);
     add(a, tx::wallet_ata(wallet, p->mint_a, *p));
     add(a, tx::wallet_ata(wallet, p->mint_b, *p));
-    if (p->kind == DexKind::Whirlpool) {
-      add(a, tx::dexix::whirlpool_oracle(p->address));
-      for (uint8_t t = 0; t < p->n_ticks; ++t) add(a, p->ticks[t].key);
+    switch (p->kind) {
+      case DexKind::Whirlpool:
+        add(a, tx::dexix::whirlpool_oracle(p->address));
+        for (uint8_t t = 0; t < p->n_ticks; ++t) add(a, p->ticks[t].key);
+        break;
+      case DexKind::RaydiumV4:
+        break;
+      default:
+        throw std::invalid_argument(std::string("virtual ALT: unsupported dex ") + dex_name(p->kind));
     }
     alts.upsert(table_key(i + 1), a);
   }
