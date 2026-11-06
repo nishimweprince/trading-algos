@@ -206,9 +206,9 @@ TEST(clmm_quote_crosses_default_into_extension_and_builds_directional_accounts) 
   CHECK(accounts[14].key == p.ticks[0].key); CHECK(accounts[15].key == p.ticks[1].key); CHECK(accounts[16].key == p.ticks[2].key);
   p.clmm_bitmap.reset();
   auto gap = q.quote_exact_in(p, false, amount);
-  CHECK(gap); CHECK(gap->cache_gap); CHECK(gap->crosses_boundary);
+  CHECK(gap); if (gap) CHECK(gap->cache_gap); CHECK(gap->crosses_boundary);
   p.clmm_bitmap = ext; p.ticks[1].state = TickArraySlot::Missing;
-  gap = q.quote_exact_in(p, false, amount); CHECK(gap); CHECK(gap->cache_gap);
+  gap = q.quote_exact_in(p, false, amount); CHECK(gap); if (gap) CHECK(gap->cache_gap);
 }
 
 TEST(clmm_strict_token2022_extension_refusal_in_quote_and_tx) {
@@ -377,8 +377,10 @@ TEST(clmm_swap_v2_fixed_accounts_and_data_match_pinned_idl) {
       for(size_t i=0;i<expected.size();++i) {
         CHECK(accounts[i].key == expected[i]);
         bool writable=false, signer=false;
-        (void)ix["accounts"].at(i)["writable"].get(writable);
-        (void)ix["accounts"].at(i)["signer"].get(signer);
+        auto writable_error = ix["accounts"].at(i)["writable"].get(writable);
+        CHECK(writable_error == simdjson::SUCCESS || writable_error == simdjson::NO_SUCH_FIELD);
+        auto signer_error = ix["accounts"].at(i)["signer"].get(signer);
+        CHECK(signer_error == simdjson::SUCCESS || signer_error == simdjson::NO_SUCH_FIELD);
         CHECK_EQ(accounts[i].writable,writable); CHECK_EQ(accounts[i].signer,signer);
       }
     }
