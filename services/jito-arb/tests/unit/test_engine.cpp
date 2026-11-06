@@ -626,25 +626,25 @@ TEST(bundle_sim_builds_direct_legs_and_scores_outcomes) {
   auto lay = app::build_sim_ixs(l, *pick, std::span<const std::shared_ptr<const PoolState>>(legs, 2), o, holder, {true});
   CHECK(lay.has_value());
   if (!lay) return;
-  CHECK_EQ(int(l.n), 3);  // ATA create for the intermediate, then two swaps
-  CHECK_EQ(int(lay->first_swap), 1);
-  CHECK(l.ixs[0].program == prog::ATA);
-  CHECK(l.ixs[0].accounts[1].key == lay->intermediates[0]);
-  CHECK(l.ixs[1].program == *dex_program(legs[0]->kind) && l.ixs[2].program == *dex_program(legs[1]->kind));
+  CHECK_EQ(int(l.n), 4);  // ATA create for the intermediate, then two swaps
+  CHECK_EQ(int(lay->first_swap), 2);
+  CHECK(l.ixs[0].program == prog::COMPUTE_BUDGET && l.ixs[1].program == prog::ATA);
+  CHECK(l.ixs[1].accounts[1].key == lay->intermediates[0]);
+  CHECK(l.ixs[2].program == *dex_program(legs[0]->kind) && l.ixs[3].program == *dex_program(legs[1]->kind));
   // Amount in: after Raydium's 1-byte tag, after Whirlpool's 8-byte discriminator.
   auto amount_at = [](const tx::Ix& ix, DexKind k) {
     uint64_t v;
     std::memcpy(&v, ix.data + (k == DexKind::RaydiumV4 ? 1 : 8), 8);
     return v;
   };
-  uint64_t in1 = amount_at(l.ixs[1], legs[0]->kind), in2 = amount_at(l.ixs[2], legs[1]->kind);
+  uint64_t in1 = amount_at(l.ixs[2], legs[0]->kind), in2 = amount_at(l.ixs[3], legs[1]->kind);
   CHECK_EQ(in1, o.x);
   CHECK_EQ(in2, o.leg_out[0]);  // leg 2 takes leg 1's quoted output
   CHECK(lay->base_account == ata(holder, mint::WSOL, prog::TOKEN));
   CHECK(!app::unsigned_tx_b64(holder, l).empty());  // fits 1,232 bytes without lookup tables
   // No ATA create when the holder already has the intermediate account.
   auto lay2 = app::build_sim_ixs(l, *pick, std::span<const std::shared_ptr<const PoolState>>(legs, 2), o, holder, {false});
-  CHECK(lay2 && lay2->first_swap == 0 && l.n == 2);
+  CHECK(lay2 && lay2->first_swap == 1 && l.n == 3);
 
   CHECK(app::classify_sim_error("{\"InstructionError\":[2,{\"Custom\":30}]}", 1, 2) == obs::SimFail::leg2);
   CHECK(app::classify_sim_error("{\"InstructionError\":[1,\"InvalidAccountData\"]}", 1, 2) == obs::SimFail::leg1);

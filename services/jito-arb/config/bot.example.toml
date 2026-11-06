@@ -59,6 +59,7 @@ metrics_port = 9100
 log_level = "info"
 
 [sim]
+holder_seed_path = "harness/holders_seed.json"
 # Read-only simulateTransaction of every dry-run bundle's swap legs, paid by a public holder of the base token.
 enabled = true
 max_per_s = 5

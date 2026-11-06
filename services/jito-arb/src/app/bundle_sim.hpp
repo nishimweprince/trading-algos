@@ -65,6 +65,9 @@ SimLayout sim_accounts(const engine::Cycle& c, std::span<const std::shared_ptr<c
 Result<SimLayout> build_sim_ixs(tx::IxList& l, const engine::Cycle& c, std::span<const std::shared_ptr<const PoolState>> legs,
                                 const engine::Opportunity& o, const Pubkey& holder, const std::vector<bool>& need_ata);
 
+std::array<uint64_t, 3> sim_leg_units(const std::vector<std::string>& logs,
+                                     std::span<const std::shared_ptr<const PoolState>> legs);
+
 /** The piece that failed, from simulateTransaction's err JSON ({"InstructionError":[i, ...]}). */
 obs::SimFail classify_sim_error(const std::string& err_json, uint8_t first_swap, int n_legs);
 
@@ -82,12 +85,15 @@ class BundleSim {
  public:
   struct Counters {
     std::atomic<uint64_t> submitted{0}, dropped{0}, ok{0}, failed{0}, profitable{0}, no_holder{0}, too_large{0}, rpc_error{0};
+    std::atomic<uint64_t> queued{0}, in_flight{0}, terminal{0}, funding_changed{0}, intermediate_balance{0};
   };
   BundleSim(const Config& cfg, std::atomic<bool>& stop);
   ~BundleSim();
   BundleSim(const BundleSim&) = delete;
   BundleSim& operator=(const BundleSim&) = delete;
   void start();
+  /** Join the worker and emit terminal outcomes for queued jobs, before the decision log closes. */
+  void shutdown();
   /** Queue a job (engine thread). False, and counted as dropped, above the rate cap or with a full queue. */
   bool submit(SimJob j);
   /** Finished Outcome records, oldest first (the decision log's thread). */
@@ -116,6 +122,7 @@ class BundleSim {
     int64_t refreshed_ms = 0;
   };
   std::map<Pubkey, Holders> holders_;  // worker thread only
+  std::map<Pubkey, std::vector<Pubkey>> seeds_;
 };
 
 }  // namespace arb::app

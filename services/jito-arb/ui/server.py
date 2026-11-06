@@ -45,7 +45,7 @@ REASONS = ["none", "base_price_unknown", "no_profit", "cu_over_budget", "below_m
 ACTIONS = {0: "skipped", 1: "sent", 2: "dry_run"}
 # Outcome records (kind 2) of a dry-run bundle's simulation: reason byte = the failing piece (obs::SimFail).
 SIM_FAIL = {0: "", 1: "leg 1", 2: "leg 2", 3: "leg 3", 0x10: "ata setup", 0x20: "too large", 0x21: "no holder", 0x22: "rpc",
-            0x2f: "other"}
+            0x23: "holder moved", 0x24: "consumed inventory", 0x25: "shutdown", 0x2f: "other"}
 DEXES = {0: "raydium_v4", 1: "whirlpool", 2: "cpmm", 3: "dlmm", 4: "clmm", 5: "pumpswap"}
 B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 WSOL = "So11111111111111111111111111111111111111112"
@@ -241,6 +241,8 @@ def read_decisions(data_dir, hours):
             "reason": REASONS[reason] if action == 0 and reason < len(REASONS) else "",
             "sim": sim_label(sims.get(v[-1])) if action != 0 else "",
             "sim_net_sol": sims[v[-1]][19] / 1e9 if action != 0 and v[-1] in sims and sims[v[-1]][5] == 5 else None,
+            "sim_leg_units": list(sims[v[-1]][24:27]) if action != 0 and v[-1] in sims else [],
+            "simulation_semantics": "fixed quoted inputs; excludes residual intermediate value",
         })
     rows.sort(key=lambda r: -r["t"])
     return {"hours": hours, "records": len(recs), "files": len(files), "by_day": dict(sorted(by_day.items())),
