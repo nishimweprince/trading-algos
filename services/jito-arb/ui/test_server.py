@@ -62,6 +62,15 @@ class DecisionTests(unittest.TestCase):
         self.assertEqual(self.day(result)['sim_unsimulated'], 0)
         self.assertEqual(result['latest'][0]['sim_leg_units'], [30000, 50000, 0])
 
+    def test_repeated_signature_preserves_each_signed_event(self):
+        self.append(record(action=2) * 2)
+        self.append(record(kind=2, action=2, outcome=5, reason=0))
+        result = self.read()
+        self.assertEqual(result['records'], 2)
+        self.assertEqual(self.day(result)['dispatched'], 2)
+        self.assertEqual(self.day(result)['sim_ok'], 2)
+        self.assertEqual(self.day(result)['sim_net_lamports'], 1700)
+
     def test_setup_errors_stay_separate_from_route_failures(self):
         for signature, reason in [(1, 0x10), (2, 2)]:
             self.append(record(action=2, signature=signature))

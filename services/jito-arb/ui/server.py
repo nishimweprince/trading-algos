@@ -238,7 +238,7 @@ class DecisionCache:
                                 for name, index in (("gross_lamports", 16), ("tip_lamports", 17),
                                                     ("net_lamports", 19), ("ev_lamports", 20)):
                                     d[name] += v[index]
-                                self.dispatched[v[-1]] = v
+                                self.dispatched.setdefault(v[-1], collections.Counter())[second] += 1
                             else:
                                 reasons[REASONS[v[3]] if v[3] < len(REASONS) else str(v[3])] += 1
                             self.sequence += 1
@@ -256,7 +256,9 @@ class DecisionCache:
                 continue
         oldest = int(time.time()) - 72 * 3600
         self.seconds = {s: b for s, b in self.seconds.items() if s >= oldest}
-        self.dispatched = {k: v for k, v in self.dispatched.items() if v[10] // 1000 >= oldest}
+        self.dispatched = {k: collections.Counter({second: count for second, count in counts.items() if second >= oldest})
+                           for k, counts in self.dispatched.items()}
+        self.dispatched = {k: counts for k, counts in self.dispatched.items() if counts}
         self.sims = {k: v for k, v in self.sims.items() if v[10] // 1000 >= oldest}
 
     def result(self, hours, file_count):
@@ -270,20 +272,21 @@ class DecisionCache:
             for name, value in totals.items():
                 by_day[day][name] += value
             by_reason.update(reasons)
-        for signature, v in self.dispatched.items():
-            if v[10] // 1000 < cutoff:
-                continue
-            day = datetime.datetime.utcfromtimestamp(v[10] / 1000).strftime("%Y-%m-%d")
-            d = by_day[day]
+        for signature, seconds in self.dispatched.items():
             s = self.sims.get(signature)
-            if s is None or (s[5] != 5 and s[3] >= 0x10):
-                d["sim_unsimulated"] += 1
-            elif s[5] == 5:
-                d["sim_ok"] += 1
-                d["sim_net_lamports"] += s[19]
-                d["sim_profitable"] += int(s[19] > 0)
-            else:
-                d["sim_failed"] += 1
+            for second, count in seconds.items():
+                if second < cutoff:
+                    continue
+                day = datetime.datetime.utcfromtimestamp(second).strftime("%Y-%m-%d")
+                d = by_day[day]
+                if s is None or (s[5] != 5 and s[3] >= 0x10):
+                    d["sim_unsimulated"] += count
+                elif s[5] == 5:
+                    d["sim_ok"] += count
+                    d["sim_net_lamports"] += s[19] * count
+                    d["sim_profitable"] += int(s[19] > 0) * count
+                else:
+                    d["sim_failed"] += count
         rows = []
         for _, _, v in sorted(self.latest, reverse=True):
             if v[10] // 1000 < cutoff:
