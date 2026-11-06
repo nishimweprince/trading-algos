@@ -8,7 +8,7 @@ bash services/jito-arb/tools/preprocessed-probe/build.sh /tmp/preproc-probe
 ```
 
 Run `/tmp/preproc-probe/probe` with `PREPROC_ENDPOINT` (TLS endpoint) and
-`PREPROC_TOKEN` supplied through a protected environment, never command-line
+`PREPROC_TOKEN` supplied through a protected environment, and `PREPROC_ACCOUNTS_FILE` naming a newline-separated list of tracked pool addresses. Empty filters are refused. Never pass credentials as command-line
 arguments. The probe opens exactly one stream, subscribes to non-vote
 transactions, answers pings, and terminates after 60 seconds. No reconnect or
 alternate transport is attempted. It does not subscribe to accounts.
@@ -53,3 +53,13 @@ An earlier attempt against the config-file placeholder (before resolving the
 service's environment override) returned UNAVAILABLE, code 14; that was not the
 effective-endpoint result. Before and after the effective-endpoint attempt, the
 existing service had five active streams and zero reconnects (PID 224987).
+
+Filtered repeat on 2026-11-06:
+
+```text
+filter_accounts=1047 rate_per_s=0 created_at_lag_us_p50=-1 created_at_lag_us_p99=-1 probe_success=0 elapsed_ms=1 grpc_code=12 transactions=0 malformed=0 pings=0
+probe_exit 1
+```
+
+The required pool filter was applied. The same immediate `UNIMPLEMENTED` response
+blocks Phase 6; no shadow implementation or transport substitution is enabled.
