@@ -2,6 +2,8 @@
 #include <cstring>
 
 #include "app/bundle_sim.hpp"
+#include "core/crypto.hpp"
+#include "tx/dex_ix.hpp"
 #include "core/programs.hpp"
 #include "obs/replay_report.hpp"
 #include "engine/engine.hpp"
@@ -786,4 +788,46 @@ TEST(cp_acceptance_seed_bit_extremes_fall_back_without_truncation) {
   a->cpmm.creator_fee_on = 2; a->cpmm.enable_creator_fee = true;
   a->cpmm_cfg.creator_fee_rate = 999999; a->vault_b_amount = 1;
   CHECK_EQ(closed_form_2hop_cp(c, s), uint64_t(0));  // output reserve scales to zero
+}
+
+TEST(pumpswap_addresses_and_fee_tiers) {
+  // Published addresses (pump-public-docs PUMP_SWAP_README.md, PUMP_SWAP_TRADE_V2.md).
+  CHECK(tx::dexix::pump_global_config() == parse_pubkey("ADyA8hdefvWN2dbGGWFotbzWxrAvLW83WG6QCVXvJKqw"));
+  CHECK(tx::dexix::pump_fee_config() == parse_pubkey("5PHirr8joyTMp9JMm6nW7hNDVyEYdkzDqazxPD7RaTjx"));
+  const uint8_t index0[2] = {0, 0};
+  Pubkey pool = pda({std::string_view("pool"), Seed(index0, 2), parse_pubkey("9XDYTfQKwW8sHPqnFdUreMmtmffmkHVPGTNV2e3LKxNW"),
+                     parse_pubkey("7LSsEoJGhLeZzGvDofTdNg7M3JttxQqGWNLo6vWMpump"), mint::WSOL},
+                    prog::PUMPSWAP);
+  CHECK(pool == parse_pubkey("GseMAnNDvntR5uFePZ51yZBXzNSn7GdFPkfHwfr6d77J"));
+
+  // Fee selection (pump-rust-client fees.rs selection_matrix): tiers by market cap for pump pools, flat otherwise.
+  auto cfg = std::make_shared<state::PumpFeeConfig>();
+  cfg->flat_fees = {25, 5, 0};
+  cfg->fee_tiers = {{0, {1, 90, 30}}, {1000, {2, 80, 20}}};
+  cfg->stable_fee_tiers = {{0, {3, 70, 10}}, {1000, {4, 60, 5}}};
+  auto mint_info = std::make_shared<state::Mint>();
+  mint_info->supply = 1000;
+  PoolState p;
+  p.kind = DexKind::PumpSwap;
+  p.mint_a_info = mint_info;
+  p.mint_b = mint::WSOL;
+  p.pump_fees = cfg;
+  p.pump_canonical = true;
+  auto f = dex::pump_fee_bps(p, 1000, 999);  // market cap 999 < 1000: first tier
+  CHECK(f && f->lp == 1 && f->protocol == 90 && f->creator == 30);
+  f = dex::pump_fee_bps(p, 1000, 1000);  // 1000: second tier
+  CHECK(f && f->lp == 2 && f->protocol == 80 && f->creator == 20);
+  p.mint_b = mint::USDC;
+  f = dex::pump_fee_bps(p, 1000, 999);
+  CHECK(f && f->lp == 3 && f->protocol == 70);
+  p.pump_canonical = false;  // not a pump-migrated pool: flat fees
+  f = dex::pump_fee_bps(p, 1000, 5000);
+  CHECK(f && f->lp == 25 && f->protocol == 5 && f->creator == 0);
+  // The pool's own creator fee wins when the global gate is on.
+  p.pump_canonical = true;
+  p.mint_b = mint::WSOL;
+  p.pump.creator_fee_bps = 250;
+  p.pump_cfg.creator_fee_configurable = true;
+  f = dex::pump_fee_bps(p, 1000, 999);
+  CHECK(f && f->creator == 250);
 }
