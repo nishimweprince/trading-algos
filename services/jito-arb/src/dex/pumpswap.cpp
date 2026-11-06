@@ -118,9 +118,11 @@ Result<Quote> PumpSwapQuoter::quote_exact_in(const PoolState& p, bool a_to_b, ui
   u128 raw = (u128(quote_reserve) * base_out + (u128(base_reserve) - base_out) - 1) / (u128(base_reserve) - base_out);
   u128 charged = raw + fee_amount(raw, b3[0]) + fee_amount(raw, b3[1]) + (has_creator ? fee_amount(raw, b3[2]) : 0);
   if (charged > input) return fail(Errc::overflow, "ExceededSlippage");
-  q.amount_in = uint64_t(charged);
+  // buy_exact_quote_in spends the whole spendable amount (sim-parity: sim_in == spendable on every buy); what the
+  // fee formulas leave over (at most a few units) stays with the pool.
+  q.amount_in = amount_in;
   q.amount_out = uint64_t(base_out);
-  q.fee_paid = uint64_t(charged - raw);
+  q.fee_paid = uint64_t(input - raw);
   return q;
 }
 
