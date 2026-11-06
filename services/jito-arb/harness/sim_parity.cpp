@@ -289,6 +289,7 @@ bool run_pool(DexKind kind, const Pubkey& pool, std::vector<Batch>& out, Stats& 
   for (auto& [start, k] : def->tick_arrays) keys.push_back(k);
   for (auto& [index, k] : def->bin_arrays) keys.push_back(k);
   if (def->kind == DexKind::Dlmm) { keys.push_back(def->bitmap_extension); keys.push_back(state::DLMM_CLOCK); }
+  if (def->kind == DexKind::Clmm) keys.push_back(state::clmm_bitmap_extension_pda(def->address));
   if (!is_zero(def->config)) keys.push_back(def->config);  // CPMM fee rates, PumpSwap global config
   if (!is_zero(def->fee_config)) keys.push_back(def->fee_config);  // PumpSwap fee tiers
   uint64_t s1 = 0, s2 = 0;

@@ -67,6 +67,7 @@ std::optional<PoolDef> pool_def_from_account(const RawAccount& a, const Discover
     d.mint_a = p->token_x_mint; d.mint_b = p->token_y_mint;
     d.vault_a = p->reserve_x; d.vault_b = p->reserve_y;
     d.bitmap_extension = dlmm_bitmap_pda(a.key);
+    if (!include_arrays) return d;
     int32_t cur = dex::dlmm::array_index(p->active_id);
     // Subscribe a bounded contiguous window, plus initialized internal arrays in either direction.
     // Extension-based pools outside this window fail closed until rediscovery refreshes the cache.
@@ -110,6 +111,7 @@ std::optional<PoolDef> pool_def_from_account(const RawAccount& a, const Discover
     d.vault_a = c->token_vault_0;
     d.vault_b = c->token_vault_1;
     d.config = c->amm_config;
+    if (!include_arrays) return d;
     // The current tick's array, then up to three initialized arrays each way along the pool's bitmap.
     const uint16_t sp = c->tick_spacing;
     int32_t cur = dex::clmm::array_start_index(c->tick_current, sp);

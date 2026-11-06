@@ -9,7 +9,9 @@ A two-leg round trip through each pool validates both directions and measured-ou
 - CPMM: input 1,000,000, final output 995,004; 75,244 CU; acceptance passed.
 - PumpSwap: input 1,000,000, final output 994,012; 135,582 CU; acceptance passed.
 - CLMM: input 1,000,000, final output 999,182; 128,199 CU; acceptance passed.
-- DLMM: pending parity and cloned-validator execution.
+- DLMM: input 1,000,000, final output 997,984; 102,736 CU; acceptance passed.
+
+DLMM parity: 246 exact verified samples in 13 unchanged-state batches, zero mismatches. Five moved batches and 14 unverified samples were discarded; both directions were exercised. Initial enablement remains limited to supported classic SPL token pools; Token-2022 DLMM pools are explicitly rejected.
 
 PumpSwap exposed a holder volume accumulator below the local rent threshold. Diagnostic assembly now initializes a missing accumulator or funds its rent deficit from the public payer inside the unsigned simulation. This setup does not mutate mainnet. Direct-leg simulations retain fixed quoted inputs and remain distinct from this executor test.
 

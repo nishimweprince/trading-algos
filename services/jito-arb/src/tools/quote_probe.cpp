@@ -44,6 +44,7 @@ int main(int argc, char** argv) {
   for (auto& [s, k] : def->tick_arrays) keys.push_back(k);
   for (auto& [index, k] : def->bin_arrays) keys.push_back(k);
   if (def->kind == DexKind::Dlmm) { keys.push_back(def->bitmap_extension); keys.push_back(state::DLMM_CLOCK); }
+  if (def->kind == DexKind::Clmm) keys.push_back(state::clmm_bitmap_extension_pda(def->address));
   if (!is_zero(def->config)) keys.push_back(def->config);
   if (!is_zero(def->fee_config)) keys.push_back(def->fee_config);
   uint64_t slot = 0;
