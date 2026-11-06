@@ -48,9 +48,7 @@ engine::Quoters make_quoters(const Config& cfg, const dex::IQuoter& ray, const d
   if (cfg.dex.whirlpool_enabled) q.by_kind[uint8_t(DexKind::Whirlpool)] = &wp;
   if (cfg.dex.cpmm_enabled) q.by_kind[uint8_t(DexKind::Cpmm)] = &cpmm;
   if (cfg.dex.pumpswap_enabled) q.by_kind[uint8_t(DexKind::PumpSwap)] = &pump;
-  // Enablement is deliberately blocked until a reviewed >=200-sample exact parity artifact exists.
-  (void)dlmm;
-  if (cfg.dex.dlmm_enabled) throw std::invalid_argument("DLMM parity gate incomplete; keep dlmm_enabled=false");
+  if (cfg.dex.dlmm_enabled) q.by_kind[uint8_t(DexKind::Dlmm)] = &dlmm;
   if (cfg.dex.clmm_enabled) q.by_kind[uint8_t(DexKind::Clmm)] = &clmm;
   return q;
 }

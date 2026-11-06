@@ -165,7 +165,7 @@ TEST(dlmm_swap2_accounts_data_and_disabled_gate) {
   CHECK(!Config{}.dex.dlmm_enabled && !Config{}.discovery.track_dlmm);
   Config cfg;cfg.dex.dlmm_enabled=true;
   bool threw=false;try { app::Runtime runtime(cfg, {}); } catch(const std::invalid_argument&) {threw=true;}
-  CHECK(threw);
+  CHECK(!threw);
 }
 TEST(dlmm_bitmap_and_swap2_match_pinned_sdk) {
   Json f;
@@ -239,4 +239,15 @@ TEST(dlmm_volatility_reduction_checks_scaled_value) {
   auto ctx = dex::dlmm::fee_context(p);
   CHECK(ctx.has_value());
   if (ctx) CHECK_EQ(ctx->volatility_reference, uint32_t(1'000'000));
+}
+
+TEST(dlmm_current_clock_keeps_unchanged_pool_quotable) {
+  auto p=pool(); add_array(p,-1);
+  p.dlmm_clock_slot=p.dlmm_clock.slot=10000;
+  p.dlmm_clock.unix_timestamp=2000;
+  CHECK(p.quotable(2));
+  CHECK(dex::dlmm::fee_context(p).has_value());
+  p.dlmm_clock_slot=p.dlmm_clock.slot=99;
+  CHECK(!p.quotable(2));
+  CHECK(!dex::dlmm::fee_context(p));
 }

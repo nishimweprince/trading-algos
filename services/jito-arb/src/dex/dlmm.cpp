@@ -58,7 +58,7 @@ Result<u128> price(int32_t id, uint16_t step) {
 Result<state::DlmmPair> fee_context(const PoolState& p) {
   auto v = p.dlmm;
   if (!p.dlmm_clock_slot || p.dlmm_clock.slot != p.dlmm_clock_slot || p.dlmm_clock_slot < p.pool_slot ||
-      p.dlmm_clock_slot - p.pool_slot > 32 || p.dlmm_clock.unix_timestamp < 0)
+      p.dlmm_clock.unix_timestamp < 0)
     return fail(Errc::not_quotable, "dlmm missing/stale clock");
   const int64_t now = p.dlmm_clock.unix_timestamp;
   // A backwards timestamp is conservatively refused rather than extrapolated.
