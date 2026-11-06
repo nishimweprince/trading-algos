@@ -8,7 +8,7 @@ bash services/jito-arb/tools/preprocessed-probe/build.sh /tmp/preproc-probe
 ```
 
 Run `/tmp/preproc-probe/probe` with `PREPROC_ENDPOINT` (TLS endpoint) and
-`PREPROC_TOKEN` supplied through a protected environment, never command-line
+`PREPROC_TOKEN` supplied through a protected environment, and `PREPROC_ACCOUNTS_FILE` naming a newline-separated list of tracked pool addresses. Empty filters are refused. Never pass credentials as command-line
 arguments. The probe opens exactly one stream, subscribes to non-vote
 transactions, answers pings, and terminates after 60 seconds. No reconnect or
 alternate transport is attempted. It does not subscribe to accounts.
