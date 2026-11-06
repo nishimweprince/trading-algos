@@ -135,6 +135,15 @@ struct Config {
     int decision_log_rotate_s = 3600;
   } obs;
 
+  // Read-only simulation of every dry-run bundle's swap legs (spec §9), paid by a public holder of the base token.
+  struct Sim {
+    bool enabled = true;
+    double max_per_s = 5;              // above this, bundles are sampled (dropped), never queued without bound
+    std::string holder_seed_path = "harness/holders_seed.json";
+    int holder_refresh_s = 600;        // re-read the base tokens' largest holders
+    uint64_t min_payer_lamports = 20'000'000;  // holder wallet SOL for fees and intermediate ATA rent
+  } sim;
+
   struct Recorder {
     std::string dir = "data/frames";
     int rotate_s = 3600;

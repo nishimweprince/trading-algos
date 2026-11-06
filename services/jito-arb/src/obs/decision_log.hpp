@@ -14,7 +14,26 @@ constexpr char DECISION_MAGIC[8] = {'A', 'R', 'B', 'D', 'E', 'C', '0', '1'};
 
 enum class RecordKind : uint8_t { Candidate = 1, Outcome = 2 };
 enum class Action : uint8_t { Skipped = 0, Sent = 1, DryRun = 2 };  // DryRun: would have been sent
-enum class Outcome : uint8_t { Pending = 0, Landed = 1, NotLanded = 2, Rejected = 3, SimulationFailed = 4 };
+enum class Outcome : uint8_t { Pending = 0, Landed = 1, NotLanded = 2, Rejected = 3, SimulationFailed = 4, SimulatedOk = 5 };
+
+/**
+ * Outcome records of a dry-run bundle's simulation (kind Outcome, keyed by `signature`) reuse the candidate
+ * layout: cycle, hops, dex, pools, base and signature copied from the candidate; `slot` = the simulation's
+ * context slot, `state_slot[0]` = the candidate's trigger slot, `x` = amount in, `final_out` = simulated final
+ * out, `min_out` = quoted final out, `profit_base` / gross / net = simulated, tip and fee = the candidate's,
+ * `cu_limit` = units consumed, `reason` = SimFail (below).
+ */
+enum class SimFail : uint8_t {
+  none = 0, leg1 = 1, leg2 = 2, leg3 = 3,  // the swap leg that failed
+  setup = 0x10,       // an intermediate ATA create
+  too_large = 0x20,   // the static message does not fit 1,232 bytes
+  no_holder = 0x21,   // no public holder with the trade size in its account
+  rpc = 0x22,         // the RPC call failed (timeout, min context slot)
+  funding_changed = 0x23,  // wallet moved while the diagnostic ran
+  intermediate_balance = 0x24, // quoted inputs consumed pre-existing intermediate inventory
+  shutdown = 0x25,    // queued job cancelled on shutdown
+  other = 0x2f,
+};
 
 struct DecisionRecord {
   uint8_t kind = uint8_t(RecordKind::Candidate);
@@ -36,7 +55,7 @@ struct DecisionRecord {
   int64_t net_lamports = 0, ev_lamports = 0;
   uint64_t min_out = 0;
   uint32_t cu_limit = 0, p_land_ppm = 0;
-  uint64_t leg_out[3]{};
+  uint64_t leg_out[3]{};  // Outcome: per-leg compute units; Candidate: quoted outputs
   uint64_t state_slot[3]{};
   uint64_t state_seq[3]{};
   uint8_t pools[3][32]{};
