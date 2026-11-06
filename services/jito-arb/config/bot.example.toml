@@ -41,6 +41,7 @@ pumpswap_enabled = true         # PumpSwap: 530/530 exact, sells and buys (tests
 clmm_enabled = false            # Raydium CLMM: 256 exact swaps (tests/fixtures/parity_clmm.json)
 
 [discovery]
+dlmm_fetch_cap = 4000            # newest eligible DLMM pairs before generic TVL/safety filtering
 min_pool_tvl_sol = 50
 max_tracked_pools = 1500
 track_cpmm = false              # discover and subscribe CPMM pools before cpmm_enabled (recordings, parity)
