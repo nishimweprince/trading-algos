@@ -67,9 +67,9 @@ Result<state::DlmmPair> fee_context(const PoolState& p) {
     v.index_reference = v.active_id;
     v.volatility_reference = 0;
     if (now - v.last_update_timestamp < v.decay_period) {
-      uint64_t reduced = uint64_t(v.volatility_accumulator) * v.reduction_factor;
+      uint64_t reduced = uint64_t(v.volatility_accumulator) * v.reduction_factor / 10000;
       if (reduced > UINT32_MAX) return fail(Errc::overflow, "dlmm reduction overflow");
-      v.volatility_reference = uint32_t(reduced / 10000);
+      v.volatility_reference = uint32_t(reduced);
     }
   }
   return v;
