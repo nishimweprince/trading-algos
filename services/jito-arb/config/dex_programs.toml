@@ -36,3 +36,24 @@ token_2022_source_commit = "f052d0aa91884157861bd724b70c016026517697"  # solana-
 
 [yellowstone]
 protos = "proto/geyser.proto, proto/solana-storage.proto (copied from pump-desk, which pins rpcpool/yellowstone-grpc)"
+
+[cpmm]
+program_id = "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C"
+source = "https://github.com/raydium-io/raydium-cp-swap"
+commit = "3d69122790e97cd6aff24e8ba95940793773f58c"
+idl_source = "https://github.com/raydium-io/raydium-idl"
+idl_commit = "e7e0c96fe77bcf6a020b84a44c47a722aac8e359"
+idl = "harness/idl/raydium_cp_swap.json"
+swap_instruction = "swap_base_input (13 accounts)"
+transfer_fee_extension = "unsupported, including zero rates"
+
+[pumpswap]
+program_id = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"
+source = "https://github.com/pump-fun/pump-public-docs"
+commit = "639b87fb45c3adeffa6f7c4a1bf0cb85e392bf22"
+idl_commit = "639b87fb45c3adeffa6f7c4a1bf0cb85e392bf22"
+idl = "harness/idl/pump_amm.json"
+fee_idl = "harness/idl/pump_fees.json"
+swap_instruction = "sell_v2 / buy_exact_quote_in_v2 (17 accounts)"
+math_reference = "pump-rust-client 0.4.1 src/math/{amm,fees}.rs"
+transfer_fee_extension = "unsupported, including zero rates"

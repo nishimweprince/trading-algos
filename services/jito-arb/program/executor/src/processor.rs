@@ -23,11 +23,13 @@ pub const OWNER: Pubkey = pubkey!("11111111111111111111111111111111");
 
 pub const RAYDIUM_V4: Pubkey = pubkey!("675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8");
 pub const WHIRLPOOL: Pubkey = pubkey!("whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc");
+pub const RAYDIUM_CPMM: Pubkey = pubkey!("CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C");
 const TOKEN: Pubkey = pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const TOKEN_2022: Pubkey = pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 
 const RAYDIUM_SWAP_BASE_IN_V2: u8 = 16;
 const WHIRLPOOL_SWAP_DISC: [u8; 8] = [248, 198, 158, 145, 225, 117, 135, 200];
+const CPMM_SWAP_BASE_INPUT_DISC: [u8; 8] = [143, 190, 90, 218, 196, 30, 51, 222];
 
 #[cfg(feature = "logs")]
 macro_rules! log { ($($t:tt)*) => { solana_program::msg!($($t)*) } }
@@ -64,6 +66,12 @@ fn swap_data(dex: Dex, a_to_b: bool, amount_in: u64) -> Result<Vec<u8>, Executor
             d.push(1);
             d.push(a_to_b as u8);
         }
+        Dex::Cpmm => {
+            // swap_base_input(amount_in, minimum_amount_out = 0)
+            d.extend_from_slice(&CPMM_SWAP_BASE_INPUT_DISC);
+            d.extend_from_slice(&amount_in.to_le_bytes());
+            d.extend_from_slice(&0u64.to_le_bytes());
+        }
         _ => return Err(ExecutorError::UnsupportedDex),
     }
     Ok(d)
@@ -81,6 +89,7 @@ fn run_leg<'a>(leg: &LegSpec, legs_accounts: &[AccountInfo<'a>], amount_in: u64)
     let expected = match dex {
         Dex::RaydiumV4 => RAYDIUM_V4,
         Dex::Whirlpool => WHIRLPOOL,
+        Dex::Cpmm => RAYDIUM_CPMM,
         _ => return Err(ExecutorError::UnsupportedDex.into()),
     };
     if *program.key != expected {

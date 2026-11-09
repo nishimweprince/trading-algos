@@ -2,6 +2,9 @@
 //
 //   NODE_PATH=../../pump-desk/tools/fixtures/node_modules node tools/fetch_fixtures.mjs [RPC_URL]
 //
+//   --cp-from-parity independently decodes committed mainnet CPMM/PumpSwap RPC
+//   snapshots using pinned upstream IDLs, writing cp_decode.json without network calls.
+//
 // Pool lists come from the official Raydium and Orca pool APIs (top TVL pools that
 // contain SOL or USDC). Account bytes come from getMultipleAccounts at one context
 // slot per batch. Independent decodes for the decoder tests:
@@ -260,4 +263,7 @@ async function main() {
   console.error(`accounts ${Object.keys(accounts).length}, gpa raydium ${gpaRay.length}, whirlpool ${gpaWp.length}`);
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+if (process.argv.includes('--cp-from-parity')) {
+  const { fetchCpFixtures } = await import('./fetch_cp_fixtures.mjs');
+  fetchCpFixtures(root);
+} else main().catch((e) => { console.error(e); process.exit(1); });

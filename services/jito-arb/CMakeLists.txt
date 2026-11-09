@@ -83,7 +83,7 @@ else()
   target_sources(jito-arb PRIVATE src/feed/laserstream_stub.cpp)
 endif()
 
-foreach(tool discover recorder replay_report fetch_fixtures sim_check fixture_frames quote_probe sim_replay)
+foreach(tool discover recorder replay_report fetch_fixtures sim_check fixture_frames quote_probe sim_replay executor_probe pool_inventory)
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/${tool}.cpp)
     string(REPLACE "_" "-" exe ${tool})
     add_executable(${exe} src/tools/${tool}.cpp)
