@@ -109,6 +109,7 @@ class BundleSim {
   const Config& cfg_;
   std::atomic<bool>& stop_;
   std::atomic<bool> quit_{false};
+  int64_t quota_try_ms_ = 0;  // worker thread only
   std::thread thread_;
   std::mutex mu_;
   std::condition_variable cv_;

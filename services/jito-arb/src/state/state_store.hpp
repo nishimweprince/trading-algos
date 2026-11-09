@@ -53,6 +53,9 @@ struct PubkeyHash {
 enum class AccountKind : uint8_t { RaydiumPool, Whirlpool, TickArray, Vault, Mint, KaminoReserve, Wallet, CpmmPool, CpmmConfig, PumpPool, PumpGlobalConfig,
                                     PumpFeeConfig, ClmmPool, ClmmConfig, ClmmTickArray, ClmmBitmapExtension, DlmmPair, DlmmArray, DlmmBitmap, DlmmClock };
 
+constexpr size_t ACCOUNT_KIND_COUNT = size_t(AccountKind::DlmmClock) + 1;
+const char* account_kind_name(AccountKind k);
+
 /** A pool to track and the accounts it is built from. */
 struct PoolDef {
   DexKind kind = DexKind::RaydiumV4;
@@ -100,6 +103,8 @@ class StateStore {
   std::shared_ptr<const state::Mint> mint(const Pubkey& key) const;
   /** Every account key the feed must subscribe to. */
   std::vector<Pubkey> subscribed_keys() const;
+  /** What a subscribed account is registered as (nullopt for an unknown key). */
+  std::optional<AccountKind> kind_of(const Pubkey& key) const;
   uint64_t newest_slot() const { return newest_slot_.load(std::memory_order_relaxed); }
   uint64_t decode_failures() const { return decode_failures_.load(); }
   uint64_t updates() const { return updates_.load(); }

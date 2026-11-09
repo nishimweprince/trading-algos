@@ -89,6 +89,12 @@ bool FeedHandler::on_frame(const uint8_t* data, size_t len, uint64_t recv_ns) {
     feed_lag_us_.add(recv_ns, (int64_t(recv_ns) + wall_minus_mono_ns_ - view_.created_at_ns) / 1000);
   if (auto it = slot_start_ns_.find(a.slot); it != slot_start_ns_.end() && recv_ns >= it->second)
     slot_offset_us_.add(recv_ns, int64_t(recv_ns - it->second) / 1000);
+  {
+    auto kind = store_.kind_of(u.key);
+    KindTraffic& t = traffic_[kind ? size_t(*kind) : ACCOUNT_KIND_COUNT];
+    ++t.updates;
+    t.bytes += u.len;
+  }
   if (!store_.apply(u)) {
     ++bad_;
     return false;

@@ -15,6 +15,7 @@
 #include "core/crypto.hpp"
 #include "core/programs.hpp"
 #include "core/rpc.hpp"
+#include "core/usage.hpp"
 #include "core/sys.hpp"
 #include "obs/log.hpp"
 #include "tx/builders.hpp"
@@ -220,6 +221,12 @@ void BundleSim::run() {
       queue_.pop_front();
       n_.queued = queue_.size();
       n_.in_flight = 1;
+    }
+    // While the Helius quota is exhausted every call fails: try one job a minute, drop the rest.
+    if (!usage::may_call(quota_try_ms_, wall_ms())) {
+      ++n_.dropped;
+      n_.in_flight = 0;
+      continue;
     }
     process(j, rpc);
   }

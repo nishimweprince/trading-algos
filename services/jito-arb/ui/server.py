@@ -55,6 +55,8 @@ BASE_NAMES = {WSOL: "SOL", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC
 # Cumulative counters shown as per-second rates.
 RATE_KEYS = ["arb_feed_frames", "arb_feed_bytes", "arb_engine_pool_updates", "arb_engine_cycles_seen",
              "arb_engine_prefilter_pass", "arb_engine_sized", "arb_engine_candidates"]
+# Helius usage counters (per RPC method, per stream account kind): rated like RATE_KEYS for the usage panel.
+USAGE_PREFIXES = ("arb_rpc_calls_", "arb_rpc_bytes_in_", "arb_rpc_rate_limited_", "arb_feed_updates_", "arb_feed_bytes_")
 UNITS = ["jito-arb.service", "jito-arb-discover.timer", "jito-arb-discover.service", "jito-arb-recorder.service"]
 
 
@@ -119,7 +121,8 @@ def rates(samples, window_s=60):
             break
     dt = t1 - t0
     out = {}
-    for k in RATE_KEYS:
+    usage = [k for k in m1 if k.startswith(USAGE_PREFIXES)]
+    for k in RATE_KEYS + usage:
         if k in m1 and k in m0 and dt > 0:
             d = m1[k] - m0[k]
             out[k] = d / dt if d >= 0 else None

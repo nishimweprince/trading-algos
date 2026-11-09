@@ -136,6 +136,21 @@ std::shared_ptr<const state::Mint> StateStore::mint(const Pubkey& key) const {
   return it == accounts_.end() ? nullptr : it->second.mint;
 }
 
+const char* account_kind_name(AccountKind k) {
+  static const char* names[] = {"raydium_pool", "whirlpool", "tick_array", "vault", "mint", "kamino_reserve", "wallet",
+                                "cpmm_pool", "cpmm_config", "pump_pool", "pump_global_config", "pump_fee_config",
+                                "clmm_pool", "clmm_config", "clmm_tick_array", "clmm_bitmap", "dlmm_pair", "dlmm_bin_array",
+                                "dlmm_bitmap", "dlmm_clock"};
+  static_assert(sizeof(names) / sizeof(names[0]) == ACCOUNT_KIND_COUNT, "a name per AccountKind");
+  return size_t(k) < ACCOUNT_KIND_COUNT ? names[size_t(k)] : "unknown";
+}
+
+std::optional<AccountKind> StateStore::kind_of(const Pubkey& key) const {
+  auto it = accounts_.find(key);
+  if (it == accounts_.end()) return std::nullopt;
+  return it->second.kind;
+}
+
 std::vector<Pubkey> StateStore::subscribed_keys() const {
   std::vector<Pubkey> out;
   out.reserve(accounts_.size());
