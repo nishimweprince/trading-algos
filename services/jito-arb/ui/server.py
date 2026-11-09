@@ -42,7 +42,8 @@ MAGIC = b"ARBDEC01"
 REASONS = ["none", "base_price_unknown", "no_profit", "cu_over_budget", "below_min_net", "guard_overflow",
            "guard_above_quote", "below_min_ev", "pool_conflict", "slot_cap", "send_lag", "sizer_failed",
            "boundary", "flash_disabled", "risk_block", "tx_build_failed", "sign_guard", "sizer_no_room",
-           "sizer_no_profit", "sizer_partial_fill", "sizer_quote_error", "sizer_zero_out"]
+           "sizer_no_profit", "sizer_partial_fill", "sizer_quote_error", "sizer_zero_out", "implausible_profit",
+           "quarantined"]
 ACTIONS = {0: "skipped", 1: "sent", 2: "dry_run"}
 # Outcome records (kind 2) of a dry-run bundle's simulation: reason byte = the failing piece (obs::SimFail).
 SIM_FAIL = {0: "", 1: "leg 1", 2: "leg 2", 3: "leg 3", 0x10: "setup", 0x20: "too large", 0x21: "no holder", 0x22: "rpc",
@@ -375,6 +376,13 @@ class Handler(BaseHTTPRequestHandler):
                     "scrape_error": self.sampler.error, "rates": rates(s), "units": unit_states(),
                     "pools": pools_summary(self.data_dir),
                 })
+            elif u.path == "/api/quarantine":
+                # Written by the bot each second: pool directions the simulations keep rejecting.
+                try:
+                    with open(os.path.join(self.data_dir, "quarantine.json")) as f:
+                        self.json(json.load(f))
+                except (OSError, ValueError):
+                    self.json({"at_ms": 0, "pools": []})
             elif u.path == "/api/history":
                 minutes = max(5, min(360, int(q.get("minutes", ["60"])[0])))
                 s = [x for x in self.sampler.snapshot() if x[0] >= time.time() - minutes * 60]

@@ -184,6 +184,12 @@
     <div class="tablewrap"><table id="latest"></table></div>
   </section>
 
+  <section class="panel">
+    <h2>Quarantined by simulation</h2>
+    <p class="note">Pool directions not dispatched for a while because their bundle simulations failed or came out short repeatedly.</p>
+    <div class="tablewrap"><table id="quarantine"></table></div>
+  </section>
+
   <section class="cols">
     <div class="panel">
       <h2>Tracked pools</h2>
@@ -382,6 +388,17 @@ $("drange").addEventListener("click", (e) => {
   refreshDecisions();
 });
 refreshState(); refreshHistory(); refreshDecisions();
+async function refreshQuarantine() {
+  try {
+    const q = await getJSON("/api/quarantine");
+    $("quarantine").innerHTML = q.pools.length
+      ? `<tr><th>Pool</th><th>DEX</th><th>Direction</th><th class="num">Strikes</th><th>Until</th></tr>` +
+        q.pools.map((p) => `<tr><td class="mono"><a href="https://solscan.io/account/${esc(p.pool)}" target="_blank" rel="noopener" style="color:inherit">${esc(short(p.pool))}</a></td><td>${esc(p.dex)}</td><td>${esc(p.dir)}</td><td class="num">${fmt(p.strikes)}</td><td>${new Date(p.until_ms).toLocaleTimeString()}</td></tr>`).join("")
+      : `<tr><td class="empty sub">None quarantined.</td></tr>`;
+  } catch (e) {}
+}
+refreshQuarantine();
+setInterval(refreshQuarantine, 15000);
 setInterval(refreshState, 5000);
 setInterval(refreshHistory, 15000);
 setInterval(refreshDecisions, 30000);

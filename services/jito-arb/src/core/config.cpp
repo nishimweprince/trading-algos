@@ -150,6 +150,7 @@ Config load_config(const std::string& path) {
   G(obs, decision_log_rotate_s); G(obs, skip_log_max_per_s);
   G(recorder, dir); G(recorder, rotate_s);
   G(sim, enabled); G(sim, max_per_s); G(sim, holder_refresh_s); G(sim, min_payer_lamports); G(sim, holder_seed_path);
+  G(sim, quarantine_strikes); G(sim, quarantine_window_s); G(sim, quarantine_s); G(sim, short_bps); G(engine, max_profit_ratio);
 #undef G
   r.get("pools_path", c.pools_path);
   for (auto& [k, v] : kv)
