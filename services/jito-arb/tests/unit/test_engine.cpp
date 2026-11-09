@@ -480,6 +480,31 @@ TEST(engine_finds_an_injected_cycle_on_fixture_pools) {
   // Far behind the slot clock counts as lag, not spread.
   CHECK(!eng3.evaluate(pick->id, 1010 + ec.max_slot_lag + 100));
   CHECK_EQ(eng3.counters().stale_lag, uint64_t(1));
+
+  // No room: with min_trade above any x_max the sizer is skipped, and the cycle is not re-priced until a leg's
+  // pool changes (re-pushing the pool and vaults bumps the snapshot seq).
+  auto push_all = [&](uint64_t slot) {
+    for (const Pubkey& k : {d2.address, d2.vault_a, d2.vault_b}) {
+      const FixtureAccount* fa = fixture(b58(k));
+      AccountUpdate u{k, fa->raw.owner, k == out_vault ? bytes.data() : fa->raw.data.data(),
+                      k == out_vault ? bytes.size() : fa->raw.data.size(), slot, 0, false, false};
+      store.apply(u);
+    }
+  };
+  push_all(1020);
+  EngineConfig huge = ec;
+  huge.min_trade_lamports = 1'000'000'000'000'000ULL;
+  Engine eng4(store, idx, both_quoters(), huge, tips);
+  eng4.set_flash_reserve(mint::WSOL, wsol_reserve);
+  CHECK(!eng4.evaluate(pick->id, 1020));
+  CHECK_EQ(eng4.sizer_diag().no_room, uint64_t(1));
+  CHECK_EQ(eng4.counters().sized, uint64_t(0));  // the sizer never ran
+  CHECK(!eng4.evaluate(pick->id, 1020));
+  CHECK_EQ(eng4.counters().no_room_memo, uint64_t(1));
+  CHECK_EQ(eng4.sizer_diag().no_room, uint64_t(1));
+  push_all(1021);
+  CHECK(!eng4.evaluate(pick->id, 1021));
+  CHECK_EQ(eng4.sizer_diag().no_room, uint64_t(2));  // re-priced after the pool changed
 }
 
 TEST(cycle_cap_lists_per_pool_hub_does_not_block) {
