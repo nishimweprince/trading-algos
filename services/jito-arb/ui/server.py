@@ -18,6 +18,7 @@ import argparse
 import collections
 import datetime
 import glob
+import heapq
 import json
 import os
 import re
@@ -177,77 +178,149 @@ def sim_label(s):
     return ("not simulated: " if s[3] >= 0x10 else "failed: ") + why
 
 
+def empty_day():
+    return {"candidates": 0, "dispatched": 0, "gross_lamports": 0, "tip_lamports": 0,
+            "net_lamports": 0, "ev_lamports": 0, "sim_ok": 0, "sim_failed": 0,
+            "sim_unsimulated": 0, "sim_profitable": 0, "sim_net_lamports": 0}
+
+
+class DecisionCache:
+    """Append-only reader: second-resolution totals and 60 recent rows, never all skipped records.
+
+    A reset/rotation rebuilds the cache. Partial trailing records are retried on the next read.
+    Signed candidates and outcomes stay available for signature joins within the 72-file horizon.
+    """
+    def __init__(self):
+        self.offsets = {}
+        self.seconds = {}
+        self.dispatched = {}
+        self.sims = {}
+        self.latest = []
+        self.sequence = 0
+        self.bytes_read = 0
+
+    def update(self, files):
+        stats = {}
+        for path in files:
+            try:
+                st = os.stat(path)
+                stats[path] = (st.st_ino, st.st_size)
+            except OSError:
+                pass
+        if any(path not in stats or stats[path][0] != inode or stats[path][1] < offset
+               for path, (inode, offset) in self.offsets.items()):
+            self.__init__()
+        for path, (inode, size) in stats.items():
+            offset = self.offsets.get(path, (inode, 8))[1]
+            if size <= offset and path in self.offsets:
+                continue
+            try:
+                with open(path, "rb") as f:
+                    if f.read(8) != MAGIC:
+                        continue
+                    f.seek(offset)
+                    while True:
+                        block = f.read(REC.size * 4096)
+                        count = len(block) // REC.size
+                        for v in REC.iter_unpack(block[:count * REC.size]):
+                            if v[0] == 2:
+                                self.sims[v[-1]] = v
+                                continue
+                            if v[0] != 1:
+                                continue
+                            second = v[10] // 1000
+                            if second not in self.seconds:
+                                self.seconds[second] = (empty_day(), collections.Counter())
+                            d, reasons = self.seconds[second]
+                            d["candidates"] += 1
+                            if v[2] != 0:
+                                d["dispatched"] += 1
+                                for name, index in (("gross_lamports", 16), ("tip_lamports", 17),
+                                                    ("net_lamports", 19), ("ev_lamports", 20)):
+                                    d[name] += v[index]
+                                self.dispatched.setdefault(v[-1], collections.Counter())[second] += 1
+                            else:
+                                reasons[REASONS[v[3]] if v[3] < len(REASONS) else str(v[3])] += 1
+                            self.sequence += 1
+                            item = (v[10], self.sequence, v)
+                            if len(self.latest) < 60:
+                                heapq.heappush(self.latest, item)
+                            else:
+                                heapq.heappushpop(self.latest, item)
+                        offset += count * REC.size
+                        self.bytes_read += count * REC.size
+                        if len(block) < REC.size * 4096:
+                            break
+                self.offsets[path] = (inode, offset)
+            except OSError:
+                continue
+        oldest = int(time.time()) - 72 * 3600
+        self.seconds = {s: b for s, b in self.seconds.items() if s >= oldest}
+        self.dispatched = {k: collections.Counter({second: count for second, count in counts.items() if second >= oldest})
+                           for k, counts in self.dispatched.items()}
+        self.dispatched = {k: counts for k, counts in self.dispatched.items() if counts}
+        self.sims = {k: v for k, v in self.sims.items() if v[10] // 1000 >= oldest}
+
+    def result(self, hours, file_count):
+        cutoff = int(time.time() - hours * 3600)
+        by_day = collections.defaultdict(empty_day)
+        by_reason = collections.Counter()
+        for second, (totals, reasons) in self.seconds.items():
+            if second < cutoff:
+                continue
+            day = datetime.datetime.utcfromtimestamp(second).strftime("%Y-%m-%d")
+            for name, value in totals.items():
+                by_day[day][name] += value
+            by_reason.update(reasons)
+        for signature, seconds in self.dispatched.items():
+            s = self.sims.get(signature)
+            for second, count in seconds.items():
+                if second < cutoff:
+                    continue
+                day = datetime.datetime.utcfromtimestamp(second).strftime("%Y-%m-%d")
+                d = by_day[day]
+                if s is None or (s[5] != 5 and s[3] >= 0x10):
+                    d["sim_unsimulated"] += count
+                elif s[5] == 5:
+                    d["sim_ok"] += count
+                    d["sim_net_lamports"] += s[19] * count
+                    d["sim_profitable"] += int(s[19] > 0) * count
+                else:
+                    d["sim_failed"] += count
+        rows = []
+        for _, _, v in sorted(self.latest, reverse=True):
+            if v[10] // 1000 < cutoff:
+                continue
+            hops, action, reason, dex = v[1], v[2], v[3], v[6]
+            base = b58(v[-2])
+            s = self.sims.get(v[-1])
+            rows.append({
+                "t": v[10], "slot": v[11], "cycle": v[8], "hops": hops,
+                "route": " → ".join(DEXES.get(dex[i], "?") for i in range(min(hops, 3))),
+                "base": BASE_NAMES.get(base, base[:4]), "size": v[12] / 10 ** BASE_DECIMALS.get(base, 9),
+                "gross_sol": v[16] / 1e9, "tip_sol": v[17] / 1e9, "net_sol": v[19] / 1e9,
+                "ev_sol": v[20] / 1e9, "action": ACTIONS.get(action, str(action)),
+                "reason": REASONS[reason] if action == 0 and reason < len(REASONS) else "",
+                "sim": sim_label(s) if action != 0 else "",
+                "sim_net_sol": s[19] / 1e9 if action != 0 and s is not None and s[5] == 5 else None,
+                "sim_leg_units": list(s[24:27]) if action != 0 and s is not None else [],
+                "simulation_semantics": "fixed quoted inputs; excludes residual intermediate value",
+            })
+        return {"hours": hours, "time_resolution_seconds": 1, "records": sum(d["candidates"] for d in by_day.values()),
+                "files": file_count, "by_day": dict(sorted(by_day.items())),
+                "skipped_by_reason": dict(by_reason.most_common()), "latest": rows}
+
+
+_DECISION_CACHES = {}
+_DECISION_LOCK = threading.Lock()
+
+
 def read_decisions(data_dir, hours):
     files = sorted(glob.glob(os.path.join(data_dir, "decisions", "decisions-*.bin")), key=os.path.getmtime)[-72:]
-    cutoff_ms = (time.time() - hours * 3600) * 1000
-    recs = []
-    sims = {}
-    for path in files:
-        try:
-            with open(path, "rb") as f:
-                if f.read(8) != MAGIC:
-                    continue
-                while True:
-                    b = f.read(REC.size)
-                    if len(b) < REC.size:
-                        break
-                    v = REC.unpack(b)
-                    if v[10] < cutoff_ms:  # wall_ms
-                        continue
-                    if v[0] == 2:  # simulation outcome, keyed by the bundle's signature
-                        sims[v[-1]] = v
-                    elif v[0] == 1:
-                        recs.append(v)
-        except OSError:
-            continue
-    by_reason = collections.Counter()
-    by_day = collections.defaultdict(lambda: {"candidates": 0, "dispatched": 0, "gross_lamports": 0, "tip_lamports": 0,
-                                              "net_lamports": 0, "ev_lamports": 0, "sim_ok": 0, "sim_failed": 0,
-                                              "sim_unsimulated": 0, "sim_profitable": 0, "sim_net_lamports": 0})
-    rows = []
-    for v in recs:
-        (kind, hops, action, reason, route_class, outcome, dex, mask, cycle_id, _pad, wall_ms, slot, x, final_out,
-         flash_fee, profit, gross, tip, fee, net, ev, min_out, cu, p_land) = v[:24]
-        base = b58(v[-2])
-        day = datetime.datetime.utcfromtimestamp(wall_ms / 1000).strftime("%Y-%m-%d")
-        d = by_day[day]
-        d["candidates"] += 1
-        if action != 0:
-            d["dispatched"] += 1
-            d["gross_lamports"] += gross
-            d["tip_lamports"] += tip
-            d["net_lamports"] += net
-            d["ev_lamports"] += ev
-            s = sims.get(v[-1])
-            if s is None:
-                d["sim_unsimulated"] += 1
-            elif s[5] == 5:  # outcome = SimulatedOk
-                d["sim_ok"] += 1
-                d["sim_net_lamports"] += s[19]
-                if s[19] > 0:
-                    d["sim_profitable"] += 1
-            elif s[3] >= 0x10:  # not a route failure: too large, no holder, rpc
-                d["sim_unsimulated"] += 1
-            else:
-                d["sim_failed"] += 1
-        else:
-            by_reason[REASONS[reason] if reason < len(REASONS) else str(reason)] += 1
-        dec = BASE_DECIMALS.get(base, 9)
-        rows.append({
-            "t": wall_ms, "slot": slot, "cycle": cycle_id, "hops": hops,
-            "route": " → ".join(DEXES.get(dex[i], "?") for i in range(min(hops, 3))),
-            "base": BASE_NAMES.get(base, base[:4]), "size": x / 10 ** dec, "gross_sol": gross / 1e9, "tip_sol": tip / 1e9,
-            "net_sol": net / 1e9, "ev_sol": ev / 1e9, "action": ACTIONS.get(action, str(action)),
-            "reason": REASONS[reason] if action == 0 and reason < len(REASONS) else "",
-            "sim": sim_label(sims.get(v[-1])) if action != 0 else "",
-            "sim_net_sol": sims[v[-1]][19] / 1e9 if action != 0 and v[-1] in sims and sims[v[-1]][5] == 5 else None,
-            "sim_leg_units": list(sims[v[-1]][24:27]) if action != 0 and v[-1] in sims else [],
-            "simulation_semantics": "fixed quoted inputs; excludes residual intermediate value",
-        })
-    rows.sort(key=lambda r: -r["t"])
-    return {"hours": hours, "records": len(recs), "files": len(files), "by_day": dict(sorted(by_day.items())),
-            "skipped_by_reason": dict(by_reason.most_common()), "latest": rows[:60]}
-
+    with _DECISION_LOCK:
+        cache = _DECISION_CACHES.setdefault(os.path.abspath(data_dir), DecisionCache())
+        cache.update(files)
+        return cache.result(hours, len(files))
 
 class Handler(BaseHTTPRequestHandler):
     sampler = None

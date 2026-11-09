@@ -8,6 +8,7 @@
 #include "app/runtime.hpp"
 #include "core/programs.hpp"
 #include "fixture.hpp"
+#include "feed/frames.hpp"
 #include "obs/replay_report.hpp"
 #include "test.hpp"
 
@@ -65,4 +66,25 @@ TEST(replay_frames_into_decision_log_and_report) {
   std::string json = obs::to_json(rep);
   CHECK(json.find("\"gate_passes\"") != std::string::npos);
   std::remove(path);
+}
+
+TEST(skip_log_cap_preserves_every_signed_candidate) {
+  struct Result { uint64_t sent, signed_records, skipped, dropped; };
+  auto run = [](uint32_t cap) {
+    app::PoolsFile pf;std::string error;
+    CHECK(app::from_json(read_file(fixture_path("replay_pools.json")),pf,&error));
+    Config cfg;cfg.obs.skip_log_max_per_s=cap;app::Runtime rt(cfg,pf);
+    char path[]="/tmp/arb_skip_cap_XXXXXX";int fd=mkstemp(path);close(fd);
+    obs::DecisionLog log("",0);CHECK(log.open_path(path));rt.set_decision_log(&log);
+    feed::FrameReader reader;CHECK(reader.open(fixture_path("frames.bin")));feed::Frame frame;
+    while(reader.next(frame)) rt.on_frame(frame.data.data(),frame.data.size(),frame.recv_ns,1700000000000LL);
+    log.close();auto records=obs::read_records({path});std::remove(path);
+    uint64_t signed_records=0,skipped=0;
+    for(const auto& record:records) { if(record.action==uint8_t(obs::Action::Skipped))++skipped;else ++signed_records; }
+    return Result{rt.stats().sent,signed_records,skipped,rt.stats().skip_logs_dropped};
+  };
+  auto full=run(0),limited=run(1);
+  CHECK(full.skipped>1);CHECK_EQ(limited.skipped,uint64_t(1));
+  CHECK_EQ(full.sent,limited.sent);CHECK_EQ(limited.signed_records,limited.sent);
+  CHECK_EQ(limited.dropped,full.skipped-1);
 }

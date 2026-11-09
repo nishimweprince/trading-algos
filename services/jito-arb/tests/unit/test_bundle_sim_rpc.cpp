@@ -193,7 +193,7 @@ app::SimJob fixture_job(const Keypair& signer) {
   return j;
 }
 
-enum class Scenario { funded, wrong_mint, pda, insufficient, fallback, sim_failure, setup_failure, rpc_failure, moved, inventory, loss };
+enum class Scenario { funded, wrong_mint, pda, insufficient, fallback, sim_failure, setup_failure, context_retry, context_never, rpc_failure, moved, inventory, loss };
 
 struct Case {
   TempDir dir;
@@ -208,7 +208,7 @@ struct Case {
   Pubkey hint = job.legs[0]->address;  // seed can be a noncanonical account owned by the holder
   Pubkey invalid_owner = ata(owner, middle_mint, prog::TOKEN_2022); // off-curve PDA
   Scenario scenario;
-  std::atomic<unsigned> pre_reads{0};
+  std::atomic<unsigned> pre_reads{0}, simulation_calls{0};
   Config cfg;
   FakeRpc rpc;
 
@@ -260,6 +260,9 @@ struct Case {
       auto options = params.at(1);
       if (bool(options["sigVerify"]) || !bool(options["replaceRecentBlockhash"]) || uint64_t(options["minContextSlot"]) < 100)
         throw std::runtime_error("unsafe/wrong simulation options");
+      const unsigned call = ++simulation_calls;
+      if ((scenario == Scenario::context_retry && call == 1) || scenario == Scenario::context_never)
+        return std::string(R"({"error":{"code":-32016,"message":"Minimum context slot has not been reached","data":{"contextSlot":99}}})");
       auto watched = simdjson::dom::array(options["accounts"]["addresses"]);
       if (watched.size() != 2 || std::string_view(watched.at(0)) != b58(base_ata) || std::string_view(watched.at(1)) != b58(middle_ata))
         throw std::runtime_error("wrong watched account order");
@@ -291,6 +294,16 @@ struct Case {
     CHECK_EQ(sim.counters().in_flight.load(), uint64_t(0));
     CHECK_EQ(sim.counters().dropped.load(), uint64_t(0));
     CHECK(sim.drain().empty());
+    if (scenario == Scenario::context_retry) {
+      CHECK_EQ(sim.counters().context_retries.load(),uint64_t(1));
+      CHECK_EQ(sim.counters().rpc_error.load(),uint64_t(0));
+      CHECK_EQ(simulation_calls.load(),unsigned(2));
+    }
+    if (scenario == Scenario::context_never) {
+      CHECK_EQ(sim.counters().context_retries.load(),uint64_t(2));
+      CHECK_EQ(sim.counters().rpc_error.load(),uint64_t(1));
+      CHECK_EQ(simulation_calls.load(),unsigned(3));
+    }
     if (scenario == Scenario::setup_failure) {
       CHECK_EQ(sim.counters().setup_error.load(),uint64_t(1));
       CHECK_EQ(sim.counters().failed.load(),uint64_t(0));
@@ -374,4 +387,11 @@ TEST(bundle_sim_rpc_setup_failures_are_not_route_failures) {
   Case c(Scenario::setup_failure);auto r=c.run();
   CHECK(r.outcome==uint8_t(obs::Outcome::SimulationFailed));
   CHECK(r.reason==uint8_t(obs::SimFail::setup));
+}
+
+TEST(bundle_sim_rpc_min_context_retry_preserves_required_slot) {
+  Case c(Scenario::context_retry);auto r=c.run();CHECK(r.outcome==uint8_t(obs::Outcome::SimulatedOk));
+}
+TEST(bundle_sim_rpc_min_context_retry_is_bounded_and_terminal) {
+  Case c(Scenario::context_never);auto r=c.run();CHECK(r.reason==uint8_t(obs::SimFail::rpc));
 }

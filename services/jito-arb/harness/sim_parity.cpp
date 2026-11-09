@@ -171,6 +171,7 @@ struct Sample {
   bool quote_ok;
   bool quote_boundary;
   uint64_t quote_out, quote_in;
+  int64_t dlmm_timestamp = 0;
 };
 
 struct Batch {
@@ -210,7 +211,7 @@ void write_batches(const std::string& path, const std::vector<Batch>& bs, const 
       const Sample& s = b.samples[j];
       f << (j ? "," : "") << "{\"a_to_b\":" << (s.a_to_b ? "true" : "false") << ",\"amount_in\":" << s.amount_in
         << ",\"sim_ok\":" << (s.sim_ok ? "true" : "false") << ",\"sim_out\":" << s.sim_out << ",\"sim_in\":" << s.sim_in
-        << ",\"units\":" << s.units << ",\"sim_slot\":" << s.sim_slot << ",\"verified\":" << (s.verified ? "true" : "false") << ",\"err\":\"" << json_escape(s.err) << "\"}";
+        << ",\"dlmm_timestamp\":" << s.dlmm_timestamp << ",\"units\":" << s.units << ",\"sim_slot\":" << s.sim_slot << ",\"verified\":" << (s.verified ? "true" : "false") << ",\"err\":\"" << json_escape(s.err) << "\"}";
     }
     f << "]}";
   }
@@ -286,6 +287,8 @@ bool run_pool(DexKind kind, const Pubkey& pool, std::vector<Batch>& out, Stats& 
   std::vector<Pubkey> keys = {pool, def->vault_a, def->vault_b, def->mint_a, def->mint_b, dA, dB,
                               hA ? hA->account : dA, hB ? hB->account : dB};
   for (auto& [start, k] : def->tick_arrays) keys.push_back(k);
+  for (auto& [index, k] : def->bin_arrays) keys.push_back(k);
+  if (def->kind == DexKind::Dlmm) { keys.push_back(def->bitmap_extension); keys.push_back(state::DLMM_CLOCK); }
   if (def->kind == DexKind::Clmm) keys.push_back(state::clmm_bitmap_extension_pda(def->address));
   if (!is_zero(def->config)) keys.push_back(def->config);  // CPMM fee rates, PumpSwap global config
   if (!is_zero(def->fee_config)) keys.push_back(def->fee_config);  // PumpSwap fee tiers
@@ -317,8 +320,9 @@ bool run_pool(DexKind kind, const Pubkey& pool, std::vector<Batch>& out, Stats& 
   dex::WhirlpoolQuoter wq;
   dex::CpmmQuoter cq;
   dex::PumpSwapQuoter pq;
+  dex::DlmmQuoter dq;
   dex::ClmmQuoter lq;
-  const dex::IQuoter* qs[] = {&rq, &wq, &cq, &pq, &lq};
+  const dex::IQuoter* qs[] = {&rq, &wq, &cq, &pq, &lq, &dq};
   const dex::IQuoter* qp = nullptr;
   for (const dex::IQuoter* c : qs)
     if (c->kind() == kind) qp = c;
@@ -355,11 +359,25 @@ bool run_pool(DexKind kind, const Pubkey& pool, std::vector<Batch>& out, Stats& 
       tx::dexix::swap(ixs, *ps, a_to_b, ua, amount, 0);
       std::string txb = unsigned_tx_b64(wallet, ixs);
       const Pubkey& src = src_h->account;
-      auto sim = rpc_call([&](Rpc& r) { return r.simulate_full(txb, {dst, src, def->vault_a, def->vault_b}, s1); });
+      std::vector<Pubkey> returned = {dst, src, def->vault_a, def->vault_b};
+      if (kind == DexKind::Dlmm) returned.push_back(state::DLMM_CLOCK);
+      auto sim = rpc_call([&](Rpc& r) { return r.simulate_full(txb, returned, s1); });
       s.sim_slot = sim.slot;
       s.sim_ok = sim.ok;
       s.units = sim.units;
-      if (sim.ok && sim.accounts.size() == 4 && sim.accounts[0] && sim.accounts[1] && sim.accounts[2] && sim.accounts[3]) {
+      if (kind == DexKind::Dlmm && sim.ok && sim.accounts.size() == 5 && sim.accounts[4] && sim.accounts[4]->data.size() == 40 &&
+          sim.accounts[4]->owner == PK("Sysvar1111111111111111111111111111111111111") && rd_u64(sim.accounts[4]->data.data()) == sim.slot) {
+        // Clock returned from the simulation bank, rather than the earlier RPC bracket.
+        PoolState timed = *ps;
+        timed.dlmm_clock = {sim.slot, int64_t(rd_u64(sim.accounts[4]->data.data() + 32))};
+        timed.dlmm_clock_slot = timed.pool_slot = sim.slot;
+        s.dlmm_timestamp = timed.dlmm_clock.unix_timestamp;
+        auto exact = q.quote_exact_in(timed, a_to_b, amount);
+        s.quote_ok = exact && !exact->crosses_boundary;
+        s.quote_boundary = exact && exact->crosses_boundary;
+        s.quote_out = exact ? exact->amount_out : 0; s.quote_in = exact ? exact->amount_in : 0;
+      }
+      if (sim.ok && sim.accounts.size() == returned.size() && sim.accounts[0] && sim.accounts[1] && sim.accounts[2] && sim.accounts[3]) {
         auto d = state::decode_token_account(sim.accounts[0]->data.data(), sim.accounts[0]->data.size(), sim.accounts[0]->owner);
         auto srt = state::decode_token_account(sim.accounts[1]->data.data(), sim.accounts[1]->data.size(), sim.accounts[1]->owner);
         uint64_t pre_d = a_to_b ? pre_dB : pre_dA, pre_s = a_to_b ? bal_A : bal_B;
@@ -396,6 +414,7 @@ bool run_pool(DexKind kind, const Pubkey& pool, std::vector<Batch>& out, Stats& 
   for (size_t i = 0; same && i < keys.size(); ++i) {
     bool eb = before[i].has_value(), ea = after[i].has_value();
     bool eq = eb == ea && (!eb || before[i]->data == after[i]->data);
+    if (kind == DexKind::Dlmm && keys[i] == state::DLMM_CLOCK) continue; // exact simulation-bank clock retained per sample
     if (i == 7 || i == 8) { src_same[i - 7] = eq; continue; }  // funding accounts may move
     if (!eq) same = false;
   }
@@ -411,6 +430,7 @@ bool run_pool(DexKind kind, const Pubkey& pool, std::vector<Batch>& out, Stats& 
   };
   size_t mism = 0;
   for (auto& s : b.samples) {
+    if (kind == DexKind::Dlmm && (!s.sim_ok || !s.dlmm_timestamp)) continue;
     if (s.sim_ok && !s.verified) continue;  // simulation ran on a different state than the bracket
     if (funding_moved(s) || pre_swap_failure(s)) continue;
     bool bad = (s.sim_ok && s.quote_ok && (s.sim_out != s.quote_out || (s.sim_in && s.sim_in != s.quote_in))) ||
@@ -433,7 +453,8 @@ bool run_pool(DexKind kind, const Pubkey& pool, std::vector<Batch>& out, Stats& 
   std::vector<Sample> kept;
   bool told = false;
   for (auto& s : b.samples) {
-    if ((s.sim_ok && !s.verified) || funding_moved(s) || pre_swap_failure(s)) {
+    if ((kind == DexKind::Dlmm && (!s.sim_ok || !s.dlmm_timestamp)) ||
+        (s.sim_ok && !s.verified) || funding_moved(s) || pre_swap_failure(s)) {
       if (!told) {
         told = true;
         std::fprintf(stderr, "    dropped: sim_ok=%d verified=%d funding_moved=%d pre_swap=%d err=%s\n", int(s.sim_ok), int(s.verified),
@@ -449,7 +470,7 @@ bool run_pool(DexKind kind, const Pubkey& pool, std::vector<Batch>& out, Stats& 
   if (b.samples.empty()) { ++st.discarded_batches; return false; }
   for (size_t i = 0; i < keys.size(); ++i) b.accounts.emplace_back(keys[i], before[i]);
   for (auto& s : b.samples) {
-    ++st.kept;
+    if (kind != DexKind::Dlmm || (s.sim_ok && s.quote_ok && s.sim_out == s.quote_out && s.sim_in == s.quote_in)) ++st.kept;
     if (s.sim_ok) { st.units_sum += s.units; ++st.units_n; st.units_max = std::max(st.units_max, s.units); }
     if (!s.sim_ok && !s.quote_ok) ++st.both_fail;
     if (s.quote_boundary) ++st.boundary;
@@ -498,6 +519,7 @@ int main(int argc, char** argv) {
                                   std::tuple{DexKind::Whirlpool, "whirlpool", "whirlpool"},
                                   std::tuple{DexKind::Cpmm, "cpmm", "cpmm"},
                                   std::tuple{DexKind::PumpSwap, "pumpswap", "pumpswap"},
+                                  std::tuple{DexKind::Dlmm, "dlmm", "dlmm"},
                                   std::tuple{DexKind::Clmm, "clmm", "clmm"}}) {
     if (dex != "all" && dex != name) continue;
     std::vector<Batch> batches;

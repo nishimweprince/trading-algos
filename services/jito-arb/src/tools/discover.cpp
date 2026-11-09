@@ -51,7 +51,7 @@ int run(int argc, char** argv) {
   dc.max_tracked_pools = size_t(cfg.discovery.max_tracked_pools);
 
   // Confirm the program IDs before anything else.
-  for (const Pubkey& p : {prog::RAYDIUM_V4, prog::WHIRLPOOL, prog::RAYDIUM_CPMM, prog::PUMPSWAP, prog::RAYDIUM_CLMM, prog::KLEND}) {
+  for (const Pubkey& p : {prog::RAYDIUM_V4, prog::WHIRLPOOL, prog::RAYDIUM_CPMM, prog::PUMPSWAP, prog::RAYDIUM_CLMM, prog::METEORA_DLMM, prog::KLEND}) {
     auto pi = rpc.program_info(p);
     if (!pi.found || !pi.executable) {
       std::fprintf(stderr, "program %s is not an executable account\n", b58(p).c_str());
@@ -161,6 +161,26 @@ int run(int argc, char** argv) {
     std::fprintf(stderr, "whirlpool: %zu read, %zu live static-fee pools%s\n", seen_wp, kept_wp,
                  cfg.dex.whirlpool_enabled ? "" : " (tracked only: quoting disabled)");
   }
+  if (cfg.dex.dlmm_enabled || cfg.discovery.track_dlmm) {
+    std::vector<std::pair<int64_t, state::RawAccount>> eligible;
+    for (uint64_t off : {uint64_t(88), uint64_t(120)}) {
+      for (auto& base : dc.base_mints) {
+        auto body = rpc.program_accounts_raw(prog::METEORA_DLMM, state::DLMM_PAIR_LEN, {{off, b58(base)}});
+        for (auto& a : state::parse_gpa_response(body)) {
+          auto pair = state::decode_dlmm_pair(a.data.data(), a.data.size(), a.owner);
+          if (pair && pair->status == 0 && !pair->token_x_program_flag && !pair->token_y_program_flag && seen.insert(a.key).second)
+            eligible.emplace_back(pair->last_update_timestamp, std::move(a));
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+      }
+    }
+    std::sort(eligible.begin(), eligible.end(), [](const auto& x, const auto& y) {
+      return x.first != y.first ? x.first > y.first : x.second.key < y.second.key;
+    });
+    const size_t limit = std::min(eligible.size(), size_t(std::max(1, cfg.discovery.dlmm_fetch_cap)));
+    std::fprintf(stderr, "dlmm: %zu eligible pairs; keeping %zu most recently updated before dependent reads\n", eligible.size(), limit);
+    for (size_t i = 0; i < limit; ++i) pools.push_back(std::move(eligible[i].second));
+  }
   if (cfg.dex.clmm_enabled || cfg.discovery.track_clmm) {
     size_t seen_cl = 0, kept_cl = 0;
     for (uint64_t off : {uint64_t(73), uint64_t(105)}) {  // token_mint_0, token_mint_1
@@ -186,6 +206,7 @@ int run(int argc, char** argv) {
       if (auto w = state::decode_whirlpool(a.data.data(), a.data.size(), a.owner)) return {w->token_mint_a, w->token_mint_b};
       if (auto c = state::decode_cpmm_pool(a.data.data(), a.data.size(), a.owner)) return {c->token_0_mint, c->token_1_mint};
       if (auto pp = state::decode_pump_pool(a.data.data(), a.data.size(), a.owner)) return {pp->base_mint, pp->quote_mint};
+      if (auto dl = state::decode_dlmm_pair(a.data.data(), a.data.size(), a.owner)) return {dl->token_x_mint, dl->token_y_mint};
       if (auto cl = state::decode_clmm_pool(a.data.data(), a.data.size(), a.owner)) return {cl->token_mint_0, cl->token_mint_1};
       return {Pubkey{}, Pubkey{}};
     };
@@ -196,8 +217,11 @@ int run(int argc, char** argv) {
     std::set<Pubkey> bases(dc.base_mints.begin(), dc.base_mints.end());
     std::set<Pubkey> tokens;
     for (auto& a : pools) {
-      auto [x,y] = mints_of(a);
-      for (const Pubkey& m : {x,y})
+      // Extract mints without deriving tick/bin PDAs for every candidate (hundreds of thousands of expensive
+      // curve checks otherwise, before the TVL/cycle filter has discarded unneeded pools).
+      auto [mint_a, mint_b] = mints_of(a);
+      if (is_zero(mint_a) || is_zero(mint_b)) continue;
+      for (const Pubkey& m : {mint_a, mint_b})
         if (!bases.count(m)) tokens.insert(m);
     }
     std::vector<Pubkey> keys;

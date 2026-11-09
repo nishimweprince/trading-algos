@@ -12,7 +12,7 @@ namespace arb::dex {
 struct Quote {
   uint64_t amount_in = 0;   // actually consumed
   uint64_t amount_out = 0;  // exactly what the program will transfer out
-  uint64_t fee_paid = 0;    // in input-token units
+  uint64_t fee_paid = 0;    // DLMM: collected-fee token units (Y for OnlyY); otherwise input-token units
   uint32_t est_compute_units = 0;
   bool crosses_boundary = false;  // a tick array outside the cache (or past the program's 3-array window) would be needed
   bool cache_gap = false;         // ... and it is one the program would accept but the bot does not hold (vs the window)
@@ -44,6 +44,16 @@ class WhirlpoolQuoter final : public IQuoter {
   DexKind kind() const override { return DexKind::Whirlpool; }
   bool supports(const PoolState& p) const override { return !p.wp.adaptive_fee(); }  // static-fee path only
 
+ private:
+  uint32_t cu_;
+};
+
+class DlmmQuoter final : public IQuoter {
+ public:
+  explicit DlmmQuoter(uint32_t cu = 140000) : cu_(cu) {}
+  Result<Quote> quote_exact_in(const PoolState&, bool, uint64_t) const override;
+  DexKind kind() const override { return DexKind::Dlmm; }
+  bool supports(const PoolState&) const override;
  private:
   uint32_t cu_;
 };

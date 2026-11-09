@@ -6,6 +6,7 @@
 
 #include "core/u256.hpp"
 #include "dex/quoter.hpp"
+#include "dex/dlmm.hpp"
 #include "dex/whirlpool_math.hpp"
 
 namespace arb::dex {
@@ -228,6 +229,7 @@ Result<Quote> WhirlpoolQuoter::quote_exact_in(const PoolState& p, bool a_to_b, u
 }
 
 u128 spot_rate_x64(const PoolState& p, bool a_to_b) {
+  if (p.kind == DexKind::Dlmm) return dlmm::spot(p, a_to_b);
   if (p.kind == DexKind::Cpmm) {
     uint64_t rin = 0, rout = 0;
     if (!cp_reserves(p, a_to_b, rin, rout) || rin == 0) return 0;
@@ -308,6 +310,7 @@ u128 spot_rate_x64(const PoolState& p, bool a_to_b) {
 }
 
 uint64_t input_depth(const PoolState& p, bool a_to_b) {
+  if (p.kind == DexKind::Dlmm) return dlmm::depth(p, a_to_b);
   if (is_constant_product(p.kind)) {
     uint64_t rin = 0, rout = 0;
     if (cp_reserves(p, a_to_b, rin, rout)) return rin;

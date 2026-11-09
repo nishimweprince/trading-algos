@@ -153,9 +153,24 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   auto& g_dry = reg.gauge("arb_bundles_dry_run", "bundles built and signed in dry run");
   auto& g_rec = reg.gauge("arb_recorder_bytes", "bytes written by the recorder");
   auto& g_kill = reg.gauge("arb_kill_switch", "1 while the KILL file is present");
+  auto& g_skip_logs = reg.gauge("arb_decision_skip_logs_dropped", "skipped decision records sampled out; signed candidates and outcomes are never sampled here");
   auto& g_pools = reg.gauge("arb_pools", "tracked pools");
   auto& g_cycles = reg.gauge("arb_cycles", "indexed cycles");
   auto& g_quotable = reg.gauge("arb_pools_quotable", "pools whose snapshot is quotable now");
+  dex::RaydiumV4Quoter coverage_ray; dex::WhirlpoolQuoter coverage_wp; dex::CpmmQuoter coverage_cp;
+  dex::DlmmQuoter coverage_dl; dex::ClmmQuoter coverage_cl; dex::PumpSwapQuoter coverage_pump;
+  const dex::IQuoter* coverage_quoters[] = {&coverage_ray,&coverage_wp,&coverage_cp,&coverage_dl,&coverage_cl,&coverage_pump};
+  const bool coverage_enabled[] = {cfg.dex.raydium_v4_enabled,cfg.dex.whirlpool_enabled,cfg.dex.cpmm_enabled,
+      cfg.dex.dlmm_enabled,cfg.dex.clmm_enabled,cfg.dex.pumpswap_enabled};
+  obs::Gauge* coverage_gauges[6][5]{};
+  const char* coverage_fields[] = {"tracked","complete","ready","supported","unsupported"};
+  for (uint8_t d=0; d<6; ++d) {
+    for (size_t f=0; f<5; ++f)
+      coverage_gauges[d][f]=&reg.gauge(std::string("arb_pools_")+coverage_fields[f]+"_"+dex_name(DexKind(d)),
+          "per-DEX coverage; support checks require complete snapshots and are separate from readiness/enablement");
+    reg.gauge(std::string("arb_dex_enabled_")+dex_name(DexKind(d)),"DEX quoting explicitly enabled").set(coverage_enabled[d]);
+  }
+
   auto& g_slot = reg.gauge("arb_slot", "slot clock (newest slot seen)");
   auto& g_uptime = reg.gauge("arb_uptime_seconds", "seconds since start");
   auto& g_updates = reg.gauge("arb_engine_pool_updates", "pool updates evaluated");
@@ -184,6 +199,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   auto& g_sim_dropped = reg.gauge("arb_sim_dropped", "dry-run bundles not simulated (rate cap or queue full)");
   auto& g_sim_no_holder = reg.gauge("arb_sim_no_holder", "dry-run bundles with no public holder of the trade size");
   auto& g_sim_too_large = reg.gauge("arb_sim_too_large", "dry-run bundles whose direct-swap message exceeds 1,232 bytes");
+  auto& g_sim_context_retries = reg.gauge("arb_sim_context_retries", "bounded retries while the simulation bank catches up to the unchanged minimum context slot");
   auto& g_sim_setup = reg.gauge("arb_sim_setup_error", "simulation setup or unclassified message errors; excludes failed swap legs");
   auto& g_sim_rpc = reg.gauge("arb_sim_rpc_error", "simulation RPC errors");
   auto& g_untradable = reg.gauge("arb_engine_untradable", "evaluations skipped: a leg the program rejects in that direction");
@@ -321,6 +337,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       g_sim_dropped.set(int64_t(sc.dropped.load()));
       g_sim_no_holder.set(int64_t(sc.no_holder.load()));
       g_sim_too_large.set(int64_t(sc.too_large.load()));
+      g_sim_context_retries.set(int64_t(sc.context_retries.load()));
       g_sim_setup.set(int64_t(sc.setup_error.load()));
       g_sim_rpc.set(int64_t(sc.rpc_error.load()));
       g_st_incomplete.set(int64_t(n.stale_incomplete));
@@ -337,11 +354,20 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       for (auto& s : shards) up += s.client->counters().up.load() ? 1 : 0;
       g_shards.set(up);
       int64_t q = 0;
+      int64_t coverage_counts[6][5]{};
       for (uint32_t i = 0; i < rt.store().pool_count(); ++i) {
         auto p = rt.store().pool(i);
-        q += p && p->quotable(uint64_t(cfg.engine.max_state_age_slots)) ? 1 : 0;
+        const bool ready = p && p->quotable(uint64_t(cfg.engine.max_state_age_slots));
+        q += ready ? 1 : 0;
+        if (p && uint8_t(p->kind)<6) {
+          const uint8_t d=uint8_t(p->kind);
+          ++coverage_counts[d][0]; coverage_counts[d][1]+=p->complete; coverage_counts[d][2]+=ready;
+          if (p->complete) ++coverage_counts[d][coverage_quoters[d]->supports(*p)?3:4];
+        }
       }
+      g_skip_logs.set(int64_t(rt.stats().skip_logs_dropped));
       g_quotable.set(q);
+      for (uint8_t d=0; d<6; ++d) for (size_t f=0; f<5; ++f) coverage_gauges[d][f]->set(coverage_counts[d][f]);
       uint64_t tnow = mono_ns();
       put(g_lag, rt.feed().feed_lag_us(), tnow);
       put(g_off, rt.feed().slot_offset_us(), tnow);

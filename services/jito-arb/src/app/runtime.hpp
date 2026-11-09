@@ -20,7 +20,7 @@ namespace arb::app {
 obs::DecisionRecord make_record(const StateStore& store, const engine::Cycle& c, const engine::Opportunity& o, int64_t wall_ms);
 
 struct RuntimeStats {
-  uint64_t frames = 0, bad_frames = 0, updates = 0, records = 0, sent = 0;
+  uint64_t frames = 0, bad_frames = 0, updates = 0, records = 0, sent = 0, skip_logs_dropped = 0;
 };
 
 class Runtime {
@@ -59,6 +59,7 @@ class Runtime {
   dex::WhirlpoolQuoter wp_q_;
   dex::CpmmQuoter cpmm_q_;
   dex::PumpSwapQuoter pump_q_;
+  dex::DlmmQuoter dlmm_q_;
   dex::ClmmQuoter clmm_q_;
   std::unique_ptr<engine::Engine> engine_;
   feed::SlotClock clock_;
@@ -69,6 +70,8 @@ class Runtime {
   SendHook send_hook_;
   RuntimeStats stats_;
   int64_t wall_ms_ = 0;
+  int64_t skip_log_second_ = -1;
+  uint32_t skip_logs_this_second_ = 0;
   uint64_t frame_recv_ns_ = 0;
   uint64_t inputs_slot_ = 0;
 };

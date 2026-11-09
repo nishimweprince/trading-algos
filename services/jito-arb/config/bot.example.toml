@@ -35,13 +35,17 @@ max_bundles_per_slot = 3
 raydium_v4_enabled = true       # 313/313 exact (tests/fixtures/parity_raydium_v4.json)
 whirlpool_enabled = true        # 204/204 exact (tests/fixtures/parity_whirlpool.json)
 cpmm_enabled = true             # Raydium CPMM: 260/260 exact (tests/fixtures/parity_cpmm.json)
+dlmm_enabled = false            # explicit opt-in: 246 exact swaps; see docs/DLMM-ACCEPTANCE.md
+dlmm_cu = 140000
 pumpswap_enabled = true         # PumpSwap: 530/530 exact, sells and buys (tests/fixtures/parity_pumpswap.json)
-clmm_enabled = false            # Raydium CLMM: until tests/fixtures/parity_clmm.json has >= 200 exact samples
+clmm_enabled = false            # Raydium CLMM: 256 exact swaps (tests/fixtures/parity_clmm.json)
 
 [discovery]
+dlmm_fetch_cap = 4000            # newest eligible DLMM pairs before generic TVL/safety filtering
 min_pool_tvl_sol = 50
 max_tracked_pools = 1500
 track_cpmm = false              # discover and subscribe CPMM pools before cpmm_enabled (recordings, parity)
+track_dlmm = false              # read-only discovery/subscriptions independent of quoting
 track_clmm = false              # discover and subscribe CLMM pools before clmm_enabled
 track_pumpswap = false          # derive and subscribe canonical PumpSwap pools before pumpswap_enabled
 
@@ -60,6 +64,7 @@ cold_wallet_pubkey = "VERIFY"
 executor_program_id = "VERIFY"
 
 [obs]
+skip_log_max_per_s = 0           # optional skip-only log cap; signed candidates/outcomes are always kept
 metrics_addr = "127.0.0.1"
 metrics_port = 9100
 log_level = "info"

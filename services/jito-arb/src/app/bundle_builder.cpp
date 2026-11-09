@@ -64,6 +64,13 @@ void seed_virtual_tables(tx::AltManager& alts, const StateStore& store, const Pu
     add(a, tx::wallet_ata(wallet, p->mint_a, *p));
     add(a, tx::wallet_ata(wallet, p->mint_b, *p));
     switch (p->kind) {
+      case DexKind::Dlmm:
+        add(a, prog::METEORA_DLMM);
+        add(a, p->dlmm.oracle);
+        add(a, state::dlmm_bitmap_pda(p->address));
+        add(a, p->mint_a); add(a, p->mint_b);
+        for (auto& slot : p->dlmm_arrays) add(a, slot.key);
+        break;
       case DexKind::Whirlpool:
         add(a, tx::dexix::whirlpool_oracle(p->address));
         for (uint8_t t = 0; t < p->n_ticks; ++t) add(a, p->ticks[t].key);

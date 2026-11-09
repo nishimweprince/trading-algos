@@ -6,6 +6,7 @@
 #include "core/programs.hpp"
 #include "core/sys.hpp"
 #include "core/u256.hpp"
+#include "dex/dlmm.hpp"
 
 namespace arb::engine {
 
@@ -16,6 +17,7 @@ uint32_t ppm(double v) { return uint32_t(std::llround(std::max(0.0, v) * 1e6)); 
 /** Mid price of `p` as Q64.64 units of `to` per unit of `from` (no fee): reserves or sqrt price. */
 bool mid_x64(const PoolState& p, const Pubkey& from, u128& out) {
   bool a_to_b = p.mint_a == from;
+  if (p.kind == DexKind::Dlmm) { out = dex::dlmm::mid(p, a_to_b); return out != 0; }
   if (is_constant_product(p.kind)) {
     uint64_t ri = a_to_b ? p.vault_a_amount : p.vault_b_amount, ro = a_to_b ? p.vault_b_amount : p.vault_a_amount;
     dex::cp_reserves(p, a_to_b, ri, ro);  // less fees owed where the program excludes them
