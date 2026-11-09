@@ -375,6 +375,7 @@ TEST(engine_finds_an_injected_cycle_on_fixture_pools) {
   Engine eng(store, idx, both_quoters(), ec, tips);
   // Flash reserve for wSOL from the fixture's Kamino reserve.
   bool have_reserve = false;
+  flash::FlashReserve wsol_reserve;
   std::string body = read_file(fixture_path("pools.json"));
   simdjson::dom::parser jp;
   simdjson::padded_string jps(body);
@@ -383,7 +384,8 @@ TEST(engine_finds_an_injected_cycle_on_fixture_pools) {
     Pubkey rk = parse_pubkey(std::string_view(e));
     auto r = store.reserve(rk);
     if (r && r->liquidity_mint == mint::WSOL) {
-      eng.set_flash_reserve(mint::WSOL, flash::make_reserve(rk, *r, 1000));
+      wsol_reserve = flash::make_reserve(rk, *r, 1000);
+      eng.set_flash_reserve(mint::WSOL, wsol_reserve);
       have_reserve = r->flash_enabled();
     }
   }
@@ -438,6 +440,40 @@ TEST(engine_finds_an_injected_cycle_on_fixture_pools) {
   CHECK(!eng2.evaluate(pick->id, 1001));
   eng2.set_own_balance(mint::WSOL, 1'000'000'000'000ULL);
   CHECK(eng2.evaluate(pick->id, 1001));
+
+  // Spread-stale: only the out vault is written again, 9 slots after the pool account. The engine refuses the
+  // cycle (stale by spread) but shadow-prices it: the same edge shows up in the spread counters and examples.
+  {
+    const FixtureAccount* fa = fixture(b58(out_vault));
+    AccountUpdate u{out_vault, fa->raw.owner, bytes.data(), bytes.size(), 1010, 0, false, false};
+    store.apply(u);
+  }
+  Engine eng3(store, idx, both_quoters(), ec, tips);
+  eng3.set_flash_reserve(mint::WSOL, wsol_reserve);
+  std::vector<Opportunity> sent3;
+  eng3.on_send([&](const Opportunity& o3) { sent3.push_back(o3); });
+  CHECK(!eng3.evaluate(pick->id, 1010));
+  eng3.dispatch_best(1010);
+  CHECK(sent3.empty());
+  const EngineCounters& n3 = eng3.counters();
+  CHECK_EQ(n3.stale, uint64_t(1));
+  CHECK_EQ(n3.stale_spread, uint64_t(1));
+  CHECK_EQ(n3.stale_incomplete + n3.stale_resync + n3.stale_lag, uint64_t(0));
+  CHECK_EQ(n3.spread_edge, uint64_t(1));
+  CHECK_EQ(n3.spread_priced, uint64_t(1));
+  CHECK(n3.spread_gross_lamports > 0);
+  CHECK_EQ(n3.candidates, uint64_t(0));
+  auto ex = eng3.take_spread_examples(5);
+  CHECK_EQ(ex.size(), size_t(1));
+  if (!ex.empty()) {
+    CHECK_EQ(ex[0].pool, l2.pool);
+    CHECK_EQ(ex[0].priced, uint64_t(1));
+    CHECK_EQ(ex[0].best_cycle, pick->id);
+  }
+  CHECK(eng3.take_spread_examples(5).empty());
+  // Far behind the slot clock counts as lag, not spread.
+  CHECK(!eng3.evaluate(pick->id, 1010 + ec.max_slot_lag + 100));
+  CHECK_EQ(eng3.counters().stale_lag, uint64_t(1));
 }
 
 TEST(cycle_cap_lists_per_pool_hub_does_not_block) {
@@ -458,4 +494,71 @@ TEST(cycle_cap_lists_per_pool_hub_does_not_block) {
   for (uint32_t p = 1; p < pools.size(); ++p) spokes_with_cycles += idx.cycles_of(p).empty() ? 0 : 1;
   CHECK_EQ(spokes_with_cycles, size_t(6));  // every spoke still evaluates its cycles with the hub
   CHECK(idx.size() >= 12);                  // hub->spoke and spoke->hub for every spoke
+}
+
+TEST(sizer_log_scan_finds_small_optimum_in_huge_range) {
+  Pubkey B = mint::WSOL, X = key_n(1);
+  Snapshots s{ray(0, B, X, 1000'000'000'000ULL, 102'000'000'000ULL), ray(1, B, X, 1000'000'000'000ULL, 100'000'000'000ULL)};
+  Cycle c = two_hop(0, true, 1, false, B, X);
+  FlashFeeFn fee;
+  SizerConfig sc;
+  sc.min_trade = 1'000'000;
+  sc.x_max = 1'000'000'000'000'000ULL;  // a million SOL: the optimum (~3.69 SOL) sits near the bottom of the range
+  sc.use_closed_form = false;
+  SizeResult r = size_cycle(c, s, both_quoters(), fee, sc);
+  std::printf("    log scan x=%llu profit=%lld evals=%d\n", (unsigned long long)r.x, (long long)r.profit, r.evals);
+  CHECK(r.ok && r.evals <= 24);
+  CHECK(r.profit >= 27'399'925LL * 99 / 100);  // the brute-force optimum is 27,399,925 (sizer test above)
+}
+
+TEST(whirlpool_depth_from_active_liquidity_and_cp_base_price) {
+  StateStore store;
+  load_fixture_pools(store, 1000);
+  size_t checked = 0;
+  for (uint32_t i = 0; i < store.pool_count(); ++i) {
+    auto p = store.pool(i);
+    if (p->kind != DexKind::Whirlpool || !p->complete || p->wp.liquidity == 0) continue;
+    for (bool d : {true, false}) {
+      uint64_t depth = dex::input_depth(*p, d);
+      CHECK(depth > 0);
+      // A stranded copy (1/1000 of the liquidity, same vaults) gets about 1/1000 of the depth.
+      PoolState stranded = *p;
+      stranded.wp.liquidity = p->wp.liquidity / 1000;
+      uint64_t sd = dex::input_depth(stranded, d);
+      CHECK(sd <= depth / 999 + 1);
+    }
+    ++checked;
+  }
+  std::printf("    whirlpools checked: %zu\n", checked);
+  CHECK(checked >= 10);
+  // USDC priced from constant-product pools: lamports per USDC unit lands in a sane range ($5..$5,000 per SOL).
+  std::vector<PoolDef> defs;
+  for (uint32_t i = 0; i < store.pool_count(); ++i) defs.push_back(store.def(i));
+  CycleIndex idx;
+  GraphConfig g;
+  g.base_mints = {mint::WSOL, mint::USDC};
+  idx.build(defs, {}, g);
+  TipPolicy tips;
+  Engine eng(store, idx, both_quoters(), EngineConfig{}, tips);
+  CHECK(eng.refresh_base_price_from_pools(mint::USDC));
+  const BasePrice* bp = eng.base_price(mint::USDC);
+  CHECK(bp != nullptr);
+  double lamports_per_unit = double(bp->lamports_per_unit_x64) / 18446744073709551616.0;
+  std::printf("    USDC: %.3f lamports per unit (%.2f USDC per SOL)\n", lamports_per_unit, 1e3 / lamports_per_unit);
+  CHECK(lamports_per_unit > 0.2 && lamports_per_unit < 200);
+  CHECK(bp->from_lamports_ceil(1'000'000) < 1'000'000'000ULL);  // min_trade in USDC units is finite
+}
+
+TEST(time_limits_follow_slot_duration) {
+  Config c;  // 200 ms slots (Solana since October 2026)
+  CHECK_EQ(c.chain.slot_ms, 200);
+  EngineConfig e = engine_config(c);
+  CHECK_EQ(e.dispatch.max_send_lag_slots, 2);  // 400 ms
+  CHECK_EQ(e.dispatch.cooldown_slots, 4);      // 800 ms
+  CHECK_EQ(e.max_slot_lag, uint64_t(600));     // 2 x 60 s
+  c.chain.slot_ms = 400;                       // the old slot time gives back the old slot counts
+  e = engine_config(c);
+  CHECK(e.dispatch.max_send_lag_slots == 1 && e.dispatch.cooldown_slots == 2 && e.max_slot_lag == 300);
+  CHECK_EQ(ms_to_slots(c, 1), uint64_t(1));
+  CHECK_EQ(ms_to_slots(c, 0), uint64_t(1));
 }

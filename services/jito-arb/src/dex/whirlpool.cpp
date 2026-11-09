@@ -157,6 +157,7 @@ Result<Quote> WhirlpoolQuoter::quote_exact_in(const PoolState& p, bool a_to_b, u
   q.est_compute_units = cu_;
   if (seq.n == 0) {  // InvalidTickArraySequence (or nothing cached)
     q.crosses_boundary = true;
+    q.cache_gap = seq.truncated_by_cache;
     return q;
   }
   const uint16_t spacing = w.tick_spacing;
@@ -174,6 +175,9 @@ Result<Quote> WhirlpoolQuoter::quote_exact_in(const PoolState& p, bool a_to_b, u
       // The program fails (TickArraySequenceInvalidIndex / InvalidTickArraySequence): the swap needs more
       // tick arrays than the transaction can carry or the bot holds. Discard this size.
       q.crosses_boundary = true;
+      // Out of arrays: a cache gap if the sequence was cut short by an array the bot does not hold, otherwise
+      // the program's 3-array window is used up (the chain would fail the same way).
+      q.cache_gap = seq.truncated_by_cache;
       q.amount_in = amount - amount_remaining;
       q.amount_out = amount_calculated;
       q.fee_paid = fee_sum;
@@ -258,6 +262,24 @@ u128 spot_rate_x64(const PoolState& p, bool a_to_b) {
   return qq.fits_u128() ? qq.lo128() : ~u128(0);
 }
 
-uint64_t input_depth(const PoolState& p, bool a_to_b) { return a_to_b ? p.vault_a_amount : p.vault_b_amount; }
+uint64_t input_depth(const PoolState& p, bool a_to_b) {
+  if (p.kind != DexKind::Whirlpool) return a_to_b ? p.vault_a_amount : p.vault_b_amount;
+  // Concentrated liquidity: the vaults also hold positions far from the current price, so their balances
+  // overstate what a swap can use. Depth is the input that moves sqrt-price 5% (about 10% in price) inside the
+  // active liquidity L, from the CLMM identities (sqrt-price s in Q64.64):
+  //   a in (s falls to s(1 - d)):  da = L * 2^64 * d / (s * (1 - d))   d = 5%: L * 2^64 / s / 19
+  //   b in (s rises to s(1 + d)):  db = L * s * d / 2^64                       L * s / 2^64 / 20
+  // A stranded pool (little L near a far-off price) gets a small depth and so a small x_max.
+  const u128 L = p.wp.liquidity, sq = p.wp.sqrt_price;
+  if (L == 0 || sq == 0) return 0;
+  U256 v, t, r;
+  if (a_to_b) {
+    U256::mul(L, u128(1) << 64).divmod(U256::from_u128(sq), t, r);
+    t.divmod(U256::from_u128(19), v, r);
+  } else {
+    U256::mul(L, sq).shr(64).divmod(U256::from_u128(20), v, r);
+  }
+  return v.fits_u128() && v.lo128() <= UINT64_MAX ? uint64_t(v.lo128()) : UINT64_MAX;
+}
 
 }  // namespace arb::dex

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <fstream>
 #include <memory>
 #include <sstream>
@@ -158,6 +159,14 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   auto& g_pass = reg.gauge("arb_engine_prefilter_pass", "cycles past the spot-edge prefilter");
   auto& g_sized = reg.gauge("arb_engine_sized", "cycles sized");
   auto& g_skipped = reg.gauge("arb_engine_skipped", "sized candidates not dispatched");
+  auto& g_st_incomplete = reg.gauge("arb_engine_stale_incomplete", "stale: a pool component not yet seen");
+  auto& g_st_resync = reg.gauge("arb_engine_stale_resync", "stale: a resync read awaiting its stream push");
+  auto& g_st_spread = reg.gauge("arb_engine_stale_spread", "stale: pool account and vaults written over max_state_age_slots apart");
+  auto& g_st_lag = reg.gauge("arb_engine_stale_lag", "stale: snapshot behind the slot clock by over max_slot_lag");
+  auto& g_sp_edge = reg.gauge("arb_engine_spread_edge", "spread-stale cycles past the spot-edge prefilter (shadow, never sent)");
+  auto& g_sp_priced = reg.gauge("arb_engine_spread_priced", "spread-stale cycles that sized and priced as a candidate (shadow)");
+  auto& g_sp_gross = reg.gauge("arb_engine_spread_gross_lamports", "gross of spread-stale priced cycles (shadow), lamports");
+  auto& g_untradable = reg.gauge("arb_engine_untradable", "evaluations skipped: a leg the program rejects in that direction");
   auto& g_signed = reg.gauge("arb_bundles_signed", "bundles built and signed");
   auto& g_shards = reg.gauge("arb_feed_shards_up", "LaserStream streams currently up");
   // Latency windows (last 60 s), microseconds: p50 / p99 / max and the sample count.
@@ -185,11 +194,21 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       {"arb_sizer_fail_quote_error", &engine::SizerDiag::quote_error, nullptr},
       {"arb_sizer_fail_zero_out", &engine::SizerDiag::zero_out, nullptr},
       {"arb_sizer_fail_boundary", &engine::SizerDiag::boundary, nullptr},
+      {"arb_sizer_fail_boundary_cache", &engine::SizerDiag::boundary_cache, nullptr},
       {"arb_sizer_fail_other", &engine::SizerDiag::other, nullptr},
       {"arb_sizer_zero_liquidity_leg", &engine::SizerDiag::zero_liquidity_leg, nullptr},
   };
   for (auto& d : diag_gauges) d.g = &reg.gauge(d.name, "sized cycles that failed, by reason (since start)");
   auto last_example = std::chrono::steady_clock::now();
+  auto& g_bank_updates = reg.gauge("arb_feed_updates_with_bank", "account updates carrying a bank_id (Alpenglow, Agave 4.3)");
+  auto& g_created_banks = reg.gauge("arb_feed_created_banks", "CreatedBank slot statuses seen");
+  auto& g_contested = reg.gauge("arb_feed_contested_slots", "slots with updates from two or more banks");
+  auto& g_resolved = reg.gauge("arb_feed_resolved_slots", "contested slots resolved when their bank was confirmed");
+  auto& g_bank_resyncs = reg.gauge("arb_feed_bank_resyncs", "accounts re-read because a losing bank had written them");
+  auto last_bank_resync = std::chrono::steady_clock::now();
+  auto& g_slot_ms = reg.gauge("arb_slot_time_ms", "measured slot duration over the last minute (config chain.slot_ms is the assumed one)");
+  auto slot_mark_t = std::chrono::steady_clock::now();
+  uint64_t slot_mark = 0;
   auto put = [](LatGauges& g, obs::LatencyWindow& w, uint64_t now) {
     auto st = w.stats(now);
     g.p50->set(st.p50);
@@ -241,6 +260,14 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       g_pass.set(int64_t(n.prefilter_pass));
       g_sized.set(int64_t(n.sized));
       g_skipped.set(int64_t(n.skipped));
+      g_untradable.set(int64_t(n.untradable));
+      g_st_incomplete.set(int64_t(n.stale_incomplete));
+      g_st_resync.set(int64_t(n.stale_resync));
+      g_st_spread.set(int64_t(n.stale_spread));
+      g_st_lag.set(int64_t(n.stale_lag));
+      g_sp_edge.set(int64_t(n.spread_edge));
+      g_sp_priced.set(int64_t(n.spread_priced));
+      g_sp_gross.set(int64_t(n.spread_gross_lamports));
       g_signed.set(int64_t(builder.stats().signed_ok));
       g_slot.set(int64_t(rt.clock().slot.load()));
       g_uptime.set(int64_t(std::chrono::duration_cast<std::chrono::seconds>(now - t0).count()));
@@ -257,6 +284,24 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       put(g_lag, rt.feed().feed_lag_us(), tnow);
       put(g_off, rt.feed().slot_offset_us(), tnow);
       put(g_det, builder.detect_to_signed_us(), tnow);
+      // Measured slot time, once a minute: chain.slot_ms should match it (slots went 400 -> 200 ms in Oct 2026).
+      if (uint64_t sl = rt.clock().slot.load(); slot_mark == 0) {
+        slot_mark = sl;
+        slot_mark_t = now;
+      } else if (now - slot_mark_t >= std::chrono::seconds(60) && sl > slot_mark) {
+        double ms = std::chrono::duration<double, std::milli>(now - slot_mark_t).count() / double(sl - slot_mark);
+        g_slot_ms.set(int64_t(ms + 0.5));
+        if (std::abs(ms - cfg.chain.slot_ms) > 0.25 * cfg.chain.slot_ms)
+          LOG_WARN("measured slot time %.0f ms differs from chain.slot_ms %d by over 25%%", ms, cfg.chain.slot_ms);
+        slot_mark = sl;
+        slot_mark_t = now;
+      }
+      const auto& bk = rt.feed().banks();
+      g_bank_updates.set(int64_t(bk.updates_with_bank));
+      g_created_banks.set(int64_t(bk.created_banks));
+      g_contested.set(int64_t(bk.contested_slots));
+      g_resolved.set(int64_t(bk.resolved_slots));
+      g_bank_resyncs.set(int64_t(bk.accounts_resynced));
       put(g_edge, rt.engine().sized_edge_ppm(), tnow);
       put(g_fprof, rt.engine().failed_profit_ppm(), tnow);
       const auto& dg = rt.engine().sizer_diag();
@@ -264,26 +309,38 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       if (now - last_example >= std::chrono::seconds(30)) {
         last_example = now;
         // The largest predicted edge that sized to no profit: what the prefilter believed vs what quoting found.
-        engine::SizerExample ex = rt.engine().take_example();
-        if (ex.set) {
+        for (const engine::SizerExample& ex : rt.engine().take_examples()) {
           const engine::Cycle& c = rt.cycles().cycle(ex.cycle);
           std::string legs;
           for (int i = 0; i < c.n; ++i) {
             auto p = rt.store().pool(c.legs[i].pool);
-            char buf[256];
+            char buf[320];
             if (p->kind == DexKind::Whirlpool)
-              std::snprintf(buf, sizeof buf, " | wp %s %s liq=%llu tick=%d spacing=%u fee=%u arrays=%u", b58(p->address).substr(0, 8).c_str(),
-                            c.legs[i].a_to_b ? "a>b" : "b>a", (unsigned long long)uint64_t(p->wp.liquidity), p->wp.tick_current_index,
-                            unsigned(p->wp.tick_spacing), unsigned(p->wp.fee_rate), unsigned(p->n_ticks));
+              std::snprintf(buf, sizeof buf, " | %swp %s %s liq=%llu tick=%d sqrt=%llu.. spacing=%u fee=%u arrays=%u", i == ex.fail_leg ? "*" : "",
+                            b58(p->address).substr(0, 8).c_str(), c.legs[i].a_to_b ? "a>b" : "b>a", (unsigned long long)uint64_t(p->wp.liquidity),
+                            p->wp.tick_current_index, (unsigned long long)uint64_t(p->wp.sqrt_price >> 64), unsigned(p->wp.tick_spacing),
+                            unsigned(p->wp.fee_rate), unsigned(p->n_ticks));
             else
-              std::snprintf(buf, sizeof buf, " | ray %s %s a=%llu b=%llu fee=%llu/%llu", b58(p->address).substr(0, 8).c_str(),
-                            c.legs[i].a_to_b ? "a>b" : "b>a", (unsigned long long)p->vault_a_amount, (unsigned long long)p->vault_b_amount,
+              std::snprintf(buf, sizeof buf, " | %sray %s %s a=%llu b=%llu pnl=%llu/%llu status=%llu fee=%llu/%llu", i == ex.fail_leg ? "*" : "",
+                            b58(p->address).substr(0, 8).c_str(), c.legs[i].a_to_b ? "a>b" : "b>a", (unsigned long long)p->vault_a_amount,
+                            (unsigned long long)p->vault_b_amount, (unsigned long long)p->ray.need_take_pnl_coin,
+                            (unsigned long long)p->ray.need_take_pnl_pc, (unsigned long long)p->ray.status,
                             (unsigned long long)p->ray.swap_fee_numerator, (unsigned long long)p->ray.swap_fee_denominator);
             legs += buf;
           }
-          LOG_INFO("sizer example: cycle %u slot %llu predicted edge %.2f bps, x_max %llu, best x %llu profit %lld (%.2f bps)%s", ex.cycle,
-                   (unsigned long long)ex.slot, double(ex.edge_ppm) / 100.0, (unsigned long long)ex.x_max, (unsigned long long)ex.best_x,
-                   (long long)ex.best_profit, ex.best_x ? 1e4 * double(ex.best_profit) / double(ex.best_x) : 0.0, legs.c_str());
+          LOG_INFO("sizer example [%s]: cycle %u base %s predicted edge %.2f bps, x_max %llu, min_trade %llu, best x %llu profit %lld, err %s%s",
+                   engine::reason_name(ex.reason), ex.cycle, b58(c.base).substr(0, 4).c_str(), double(ex.edge_ppm) / 100.0,
+                   (unsigned long long)ex.x_max, (unsigned long long)ex.min_trade, (unsigned long long)ex.best_x, (long long)ex.best_profit,
+                   ex.reason == engine::Reason::sizer_quote_error ? errc_name(ex.err) : "-", legs.c_str());
+        }
+        // Pools whose pool/vault slot spread kept edges out of the engine (shadow-priced): is the rule too strict?
+        for (const engine::SpreadExample& e : rt.engine().take_spread_examples(5)) {
+          auto p = rt.store().pool(e.pool);
+          if (!p) continue;
+          LOG_INFO("spread stale: %s %s pool_slot %llu vaults %llu/%llu, %llu past prefilter, %llu priced, best net %lld (cycle %u)",
+                   dex_name(p->kind), b58(p->address).substr(0, 8).c_str(), (unsigned long long)p->pool_slot,
+                   (unsigned long long)p->vault_a_slot, (unsigned long long)p->vault_b_slot, (unsigned long long)e.edge_hits,
+                   (unsigned long long)e.priced, (long long)e.best_net, e.best_cycle);
         }
       }
       uint64_t last = rt.last_update_ns();
@@ -297,7 +354,23 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
         }
       }
     }
-    // Resync (spec §4): pools whose snapshot lags the slot clock by more than resync_lag_slots, every 10 s,
+    // Accounts a losing bank wrote: re-read them as soon as the slot's bank is confirmed (rare: equivocation,
+    // or fast leader handoff from Agave 4.4), at most every 250 ms.
+    if (!recorder && now - last_bank_resync >= std::chrono::milliseconds(250)) {
+      std::vector<Pubkey> keys = rt.feed().take_resync();
+      if (!keys.empty()) {
+        last_bank_resync = now;
+        std::sort(keys.begin(), keys.end());
+        keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+        try {
+          feed::resync(rpc, rt.store(), keys, all_up());
+          LOG_INFO("bank resync: %zu accounts written by a losing bank re-read", keys.size());
+        } catch (const std::exception& e) {
+          LOG_WARN("bank resync: %s", e.what());
+        }
+      }
+    }
+    // Resync (spec §4): pools whose snapshot lags the slot clock by more than resync_lag_ms, every 10 s,
     // on this thread (the StateStore has a single writer).
     if (!recorder && now - last_resync >= std::chrono::seconds(10)) {
       last_resync = now;
@@ -305,7 +378,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       std::vector<uint32_t> lagging;
       for (uint32_t i = 0; i < rt.store().pool_count() && clock; ++i) {
         auto p = rt.store().pool(i);
-        if (p && clock > p->slot + uint64_t(cfg.helius.resync_lag_slots)) lagging.push_back(i);
+        if (p && clock > p->slot + ms_to_slots(cfg, cfg.helius.resync_lag_ms)) lagging.push_back(i);
       }
       if (!lagging.empty()) {
         try {

@@ -5,10 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>jito-arb</title>
 <style>
+  /* Anthropic Sans and Mono (variable web fonts: weight 300-800, Sans optical size 16-48), served from ui/fonts/
+     on the host; the system fonts stand in when they are absent. */
+  @font-face { font-family: "Anthropic Sans"; src: url("/fonts/AnthropicSans-Roman-Web.woff2") format("woff2"); font-weight: 300 800; font-style: normal; font-display: swap; }
+  @font-face { font-family: "Anthropic Mono"; src: url("/fonts/AnthropicMono-Roman-Web.woff2") format("woff2"); font-weight: 300 800; font-style: normal; font-display: swap; }
   :root {
     --bg: #f6f7f9; --panel: #ffffff; --ink: #14181f; --muted: #5d6675; --line: #e3e6eb;
     --accent: #2f6fde; --accent-soft: rgba(47, 111, 222, .12); --good: #1f8a4c; --warn: #b7791f; --bad: #c53030;
-    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --text: "Anthropic Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --display: "Anthropic Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "Anthropic Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --gutter: 24px;
+    --maxw: 1440px;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -17,74 +25,120 @@
     }
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px 20px; padding: 18px 24px 8px; }
-  h1 { font-size: 18px; margin: 0; letter-spacing: .2px; }
-  h2 { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 0 0 10px; }
-  .sub { color: var(--muted); font-size: 13px; }
-  .pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid var(--line); }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 400 13px/1.45 var(--text); font-feature-settings: "tnum" 1; overflow-x: hidden; }
+  /* One centred column for the header and the content, so they line up at every width. */
+  .wrap { width: 100%; max-width: var(--maxw); margin: 0 auto; padding-left: var(--gutter); padding-right: var(--gutter); }
+  header.wrap { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding-top: 20px; padding-bottom: 10px; }
+  h1 { font: 600 17px/1.2 var(--display); margin: 0; letter-spacing: -.1px; }
+  h2 { font: 600 11px/1.3 var(--text); text-transform: uppercase; letter-spacing: .7px; color: var(--muted); margin: 0 0 10px; }
+  .sub { color: var(--muted); font-size: 12px; }
+  #updated { flex: 1 1 auto; min-width: 0; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; border: 1px solid var(--line); white-space: nowrap; }
   .pill.good { color: var(--good); border-color: currentColor; }
   .pill.warn { color: var(--warn); border-color: currentColor; }
   .pill.bad { color: var(--bad); border-color: currentColor; }
-  main { padding: 8px 24px 32px; display: grid; gap: 16px; max-width: 1400px; }
+  main.wrap { padding-top: 8px; padding-bottom: 32px; display: grid; gap: 16px; }
   .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
-  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; min-width: 0; }
-  .tile .k { color: var(--muted); font-size: 12px; }
-  .tile .v { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; margin-top: 2px; }
-  .tile .d { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  /* Tile rows with fixed counts that divide evenly, so no tile is left alone on a row. */
+  .grid.g8 { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+  .grid.g6 { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  @media (max-width: 1240px) { .grid.g8 { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+  @media (max-width: 1100px) { .grid.g6 { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; min-width: 0; }
+  .panelhead { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .panelhead h2 { margin: 0; }
+  .tile .k { color: var(--muted); font-size: 11px; font-weight: 500; }
+  .tile .v { font: 600 20px/1.2 var(--display); font-variant-numeric: tabular-nums; margin-top: 4px; overflow-wrap: anywhere; }
+  .tile .d { color: var(--muted); font-size: 11px; margin-top: 3px; }
   .tile .v.warnv { color: var(--warn); }
   .tile .v.goodv { color: var(--good); }
   .tile .v.badv { color: var(--bad); }
-  .cols { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+  /* min(100%, ...) lets a column shrink below its minimum on narrow phones instead of overflowing. */
+  .cols { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); }
   .chart { width: 100%; height: 120px; display: block; }
   .chart .area { fill: var(--accent-soft); }
   .chart .line { fill: none; stroke: var(--accent); stroke-width: 1.6; vector-effect: non-scaling-stroke; }
   .chart .axis { stroke: var(--line); }
-  .chart text { fill: var(--muted); font-size: 10px; }
-  .chartwrap .row { display: flex; justify-content: space-between; align-items: baseline; }
-  .chartwrap .now { font-variant-numeric: tabular-nums; font-weight: 600; }
-  .funnel { display: grid; gap: 6px; }
-  .bar { display: grid; grid-template-columns: 150px 1fr 90px; gap: 10px; align-items: center; font-size: 13px; }
+  .chart text { fill: var(--muted); font-size: 10px; font-family: var(--text); }
+  .chartwrap .row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .chartwrap .now { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
+  .funnel { display: grid; gap: 7px; }
+  .bar { display: grid; grid-template-columns: minmax(0, 180px) minmax(0, 1fr) 80px; gap: 10px; align-items: center; font-size: 12px; }
   .bar .track { height: 10px; background: var(--line); border-radius: 5px; overflow: hidden; }
   .bar .fill { height: 100%; background: var(--accent); border-radius: 5px; min-width: 2px; }
   .bar .n { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
-  .tablewrap { overflow-x: auto; }
-  table { border-collapse: collapse; width: 100%; font-size: 13px; }
-  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
-  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  /* Tables never squeeze: cells stay on one line and the wrapper scrolls sideways, with a soft shadow at an
+     edge that has more columns beyond it (the panel-coloured covers scroll with the content and hide it). */
+  .tablewrap {
+    overflow-x: auto; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; max-width: 100%;
+    background:
+      linear-gradient(to right, var(--panel) 30%, transparent) left center / 28px 100% no-repeat local,
+      linear-gradient(to left, var(--panel) 30%, transparent) right center / 28px 100% no-repeat local,
+      radial-gradient(farthest-side at 0 50%, rgba(0, 0, 0, .14), transparent) left center / 10px 100% no-repeat scroll,
+      radial-gradient(farthest-side at 100% 50%, rgba(0, 0, 0, .14), transparent) right center / 10px 100% no-repeat scroll;
+  }
+  .tablewrap table { width: max-content; min-width: 100%; }
+  .tablewrap table:has(td.empty) { width: 100%; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 600; font-size: 11px; }
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
-  .mono { font-family: var(--mono); font-size: 12px; }
-  .empty { color: var(--muted); padding: 10px 0; }
-  .note { color: var(--muted); font-size: 12px; }
-  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
-  .seg button { background: none; border: 0; color: var(--muted); padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+  .mono { font-family: var(--mono); font-size: 11px; }
+  .empty { color: var(--muted); padding: 10px 0; white-space: normal; }
+  .note { color: var(--muted); font-size: 11px; line-height: 1.5; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; flex: none; }
+  .seg button { background: none; border: 0; color: var(--muted); padding: 5px 11px; font: inherit; font-size: 11px; font-weight: 500; cursor: pointer; min-height: 30px; }
   .seg button.on { background: var(--accent-soft); color: var(--ink); }
-  @media (max-width: 600px) { header, main { padding-left: 16px; padding-right: 16px; } .bar { grid-template-columns: 110px 1fr 70px; } }
+  /* Tablet: slightly tighter. */
+  @media (max-width: 900px) {
+    :root { --gutter: 20px; }
+    .grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  }
+  /* Phone: two tiles per row, compact panels, funnel bars stacked under their labels. */
+  @media (max-width: 600px) {
+    :root { --gutter: 16px; }
+    header.wrap { padding-top: 14px; }
+    #updated { flex-basis: 100%; font-size: 11px; }
+    main.wrap { gap: 12px; padding-bottom: 24px; }
+    .grid, .grid.g8, .grid.g6 { gap: 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .panel { padding: 12px 14px; border-radius: 10px; }
+    .tile .v { font-size: 17px; }
+    .tile .k, .tile .d { font-size: 10.5px; }
+    .cols { gap: 12px; }
+    .bar { grid-template-columns: minmax(0, 1fr) auto; row-gap: 4px; font-size: 11.5px; }
+    .bar .track { grid-column: 1 / -1; grid-row: 2; }
+    .bar .n { grid-row: 1; grid-column: 2; }
+    .seg button { padding: 5px 10px; }
+    table { font-size: 11.5px; }
+    th, td { padding: 6px 6px; }
+    .chart { height: 100px; }
+  }
 </style>
 </head>
 <body>
-<header>
+<header class="wrap">
   <h1>jito-arb</h1>
   <span id="mode" class="pill">…</span>
   <span id="svc" class="pill">…</span>
   <span class="sub" id="updated">connecting…</span>
 </header>
-<main>
-  <section class="grid" id="tiles"></section>
+<main class="wrap">
+  <section class="grid g8" id="tiles"></section>
 
   <section class="panel">
     <h2>Latency to land a candidate</h2>
-    <div class="grid" id="lattiles"></div>
+    <div class="grid g6" id="lattiles"></div>
     <div class="cols" id="latcharts" style="margin-top:12px"></div>
     <p class="note">Targets come from Jito's 50 ms auction tick: land in the first tick after a gap opens.
       Feed lag is when we receive an account update minus when Helius produced it (created_at), on synced clocks.
-      Slot offset adds where in the 400 ms slot the trade happened. Detect to signed covers everything we control
+      Slot offset adds where in the ~200 ms slot the trade happened. Detect to signed covers everything we control
       before the HTTP write; Jito Frankfurt adds about 1 ms one way (1.9 ms RTT measured).</p>
   </section>
 
   <section class="panel">
-    <div class="row" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-      <h2 style="margin:0">Feed and engine</h2>
+    <div class="panelhead">
+      <h2>Feed and engine</h2>
       <div class="seg" id="range"><button data-m="15">15m</button><button data-m="60" class="on">1h</button><button data-m="360">6h</button></div>
     </div>
     <div class="cols" id="charts"></div>
@@ -103,14 +157,15 @@
       <p class="note">"No profit" means every size quoted cleanly but lost money: the prefilter's spot edge was not
         tradable. A zero-liquidity Whirlpool leg shows a price no trade can get.</p>
     </div>
-    <div class="panel">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-        <h2 style="margin:0">Decisions</h2>
-        <div class="seg" id="drange"><button data-h="24" class="on">24h</button><button data-h="168">7d</button><button data-h="336">14d</button></div>
-      </div>
-      <div id="days"></div>
-      <div id="reasons" style="margin-top:10px"></div>
+  </section>
+
+  <section class="panel">
+    <div class="panelhead">
+      <h2>Decisions by day</h2>
+      <div class="seg" id="drange"><button data-h="24" class="on">24h</button><button data-h="168">7d</button><button data-h="336">14d</button></div>
     </div>
+    <div class="tablewrap"><table id="days"></table></div>
+    <div id="reasons" style="margin-top:10px"></div>
   </section>
 
   <section class="panel">
@@ -201,7 +256,7 @@ async function refreshState() {
       tile("Feed lag p50", lagP50 == null ? "–" : fmt(lagP50, 1) + " ms", "target < 30 ms · " + none(m.arb_feed_lag_us_samples), judge(lagP50, 30, 50)),
       tile("Feed lag p99", lagP99 == null ? "–" : fmt(lagP99, 1) + " ms", "within one 50 ms tick", judge(lagP99, 50, 100)),
       tile("Slot offset p50", offP50 == null ? "–" : fmt(offP50) + " ms", "slot start to update · " + none(m.arb_slot_offset_us_samples)),
-      tile("Slot offset p99", offP99 == null ? "–" : fmt(offP99) + " ms", "a slot is ~400 ms"),
+      tile("Slot offset p99", offP99 == null ? "–" : fmt(offP99) + " ms", m.arb_slot_time_ms > 0 ? `slot time ${fmt(m.arb_slot_time_ms)} ms (measured)` : "slot time ~200 ms"),
       tile("Detect to signed p50", detP50 == null || detP50 < 0 ? "–" : fmt(detP50) + " µs", none(m.arb_detect_to_signed_us_samples), judge(detP50 < 0 ? null : detP50, 250, 500)),
       tile("Detect to signed p99", detP99 == null || detP99 < 0 ? "–" : fmt(detP99) + " µs", "target < 500 µs", judge(detP99 < 0 ? null : detP99, 500, 2000)),
     ].join("");
@@ -212,7 +267,7 @@ async function refreshState() {
     ];
     const ftop = Math.max(1, ...fails.map((x) => x[1] || 0));
     $("sizerfail").innerHTML = fails.map(([k, v]) => `<div class="bar"><span>${esc(k)}</span><div class="track"><div class="fill" style="width:${(100 * (v || 0) / ftop).toFixed(1)}%"></div></div><span class="n">${big(v)}</span></div>`).join("") +
-      `<div class="bar"><span class="sub">Zero-liquidity Whirlpool leg</span><span></span><span class="n">${big(m.arb_sizer_zero_liquidity_leg)}</span></div>`;
+      `<div class="bar"><span class="sub">Zero-liquidity Whirlpool leg</span><div class="track" style="background:none"></div><span class="n">${big(m.arb_sizer_zero_liquidity_leg)}</span></div>`;
     // -1 is the "no samples" value of these windows, but realized profit can itself be negative: use the count.
     const bps = (ppm, n) => !n || ppm == null ? "–" : fmt(ppm / 100, 2) + " bps";
     const ne = m.arb_sized_edge_ppm_samples, nf = m.arb_failed_profit_ppm_samples;
@@ -224,7 +279,7 @@ async function refreshState() {
     ].join("");
     const steps = [
       ["Pool updates", m.arb_engine_pool_updates], ["Cycle evaluations", m.arb_engine_cycles_seen],
-      ["Skipped: stale leg", m.arb_engine_stale], ["Skipped: DEX not quoted", m.arb_engine_unsupported],
+      ["Skipped: stale leg", m.arb_engine_stale], ["Skipped: DEX not quoted", m.arb_engine_unsupported], ["Skipped: pool can't swap", m.arb_engine_untradable],
       ["Passed prefilter", m.arb_engine_prefilter_pass], ["Sized", m.arb_engine_sized],
       ["Candidates", m.arb_engine_candidates], ["Dry-run bundles", m.arb_bundles_dry_run],
     ];
@@ -272,13 +327,14 @@ async function refreshDecisions() {
   try {
     const d = await getJSON("/api/decisions?hours=" + hours);
     const days = Object.entries(d.by_day);
-    $("days").innerHTML = days.length ? `<table><tr><th>Day (UTC)</th><th class="num">Candidates</th><th class="num">Dry-run</th><th class="num">Gross SOL</th><th class="num">Tip SOL</th><th class="num">Net SOL</th></tr>` +
-      days.map(([k, v]) => `<tr><td>${esc(k)}</td><td class="num">${fmt(v.candidates)}</td><td class="num">${fmt(v.dispatched)}</td><td class="num">${fmt(v.gross_lamports / 1e9, 4)}</td><td class="num">${fmt(v.tip_lamports / 1e9, 4)}</td><td class="num">${fmt(v.net_lamports / 1e9, 4)}</td></tr>`).join("") + `</table>`
-      : `<div class="empty">No candidates in this window. A candidate is a sized cycle; most mainnet gaps close before they clear fees and the tip.</div>`;
+    // Sums of gross, tip, net and EV cover dispatched (dry-run) candidates only.
+    $("days").innerHTML = days.length ? `<tr><th>Day (UTC)</th><th class="num">Candidates</th><th class="num">Dry-run</th><th class="num">Skipped</th><th class="num">Gross SOL</th><th class="num">Tip SOL</th><th class="num">Net SOL</th><th class="num">EV SOL</th><th class="num">Net / bundle</th></tr>` +
+      days.map(([k, v]) => `<tr><td>${esc(k)}</td><td class="num">${fmt(v.candidates)}</td><td class="num">${fmt(v.dispatched)}</td><td class="num">${fmt(v.candidates - v.dispatched)}</td><td class="num">${fmt(v.gross_lamports / 1e9, 4)}</td><td class="num">${fmt(v.tip_lamports / 1e9, 4)}</td><td class="num">${fmt(v.net_lamports / 1e9, 4)}</td><td class="num">${fmt(v.ev_lamports / 1e9, 5)}</td><td class="num">${v.dispatched ? fmt(v.net_lamports / 1e9 / v.dispatched, 5) : "–"}</td></tr>`).join("")
+      : `<tr><td class="empty">No candidates in this window. A candidate is a sized cycle; most mainnet gaps close before they clear fees and the tip.</td></tr>`;
     const rs = Object.entries(d.skipped_by_reason);
     $("reasons").innerHTML = rs.length ? `<div class="note">Skipped: ${rs.map(([k, v]) => `${esc(k)} ${fmt(v)}`).join(" · ")}</div>` : "";
-    $("latest").innerHTML = d.latest.length ? `<tr><th>Time</th><th>Route</th><th>Base</th><th class="num">Size</th><th class="num">Gross SOL</th><th class="num">Tip SOL</th><th class="num">Net SOL</th><th>Action</th></tr>` +
-      d.latest.map((x) => `<tr><td>${new Date(x.t).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit"})}</td><td>${esc(x.route)}</td><td>${esc(x.base)}</td><td class="num">${fmt(x.size, 3)}</td><td class="num">${fmt(x.gross_sol, 5)}</td><td class="num">${fmt(x.tip_sol, 5)}</td><td class="num">${fmt(x.net_sol, 5)}</td><td>${x.action === "skipped" ? `<span class="sub">${esc(x.reason)}</span>` : `<span class="pill good">${esc(x.action)}</span>`}</td></tr>`).join("")
+    $("latest").innerHTML = d.latest.length ? `<tr><th>Time</th><th class="num">Slot</th><th class="num">Cycle</th><th class="num">Hops</th><th>Route</th><th>Base</th><th class="num">Size</th><th class="num">Gross SOL</th><th class="num">Tip SOL</th><th class="num">Net SOL</th><th class="num">EV SOL</th><th>Action</th><th>Reason</th></tr>` +
+      d.latest.map((x) => `<tr><td>${new Date(x.t).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit"})}</td><td class="num">${fmt(x.slot)}</td><td class="num">${fmt(x.cycle)}</td><td class="num">${fmt(x.hops)}</td><td>${esc(x.route)}</td><td>${esc(x.base)}</td><td class="num">${fmt(x.size, 3)}</td><td class="num">${fmt(x.gross_sol, 5)}</td><td class="num">${fmt(x.tip_sol, 5)}</td><td class="num">${fmt(x.net_sol, 5)}</td><td class="num">${fmt(x.ev_sol, 6)}</td><td>${x.action === "skipped" ? `<span class="sub">skipped</span>` : `<span class="pill good">${esc(x.action)}</span>`}</td><td class="sub">${esc(x.reason || "")}</td></tr>`).join("")
       : `<tr><td class="empty">No decisions recorded yet.</td></tr>`;
   } catch (e) { $("days").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 }
