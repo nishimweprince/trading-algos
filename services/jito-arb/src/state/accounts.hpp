@@ -14,6 +14,7 @@
 #include "core/bytes.hpp"
 #include "core/error.hpp"
 #include "core/types.hpp"
+#include "core/programs.hpp"
 
 namespace arb::state {
 
@@ -185,6 +186,72 @@ struct CpmmConfig {
 
 Result<CpmmPool> decode_cpmm_pool(const uint8_t* d, size_t n, const Pubkey& owner);
 Result<CpmmConfig> decode_cpmm_config(const uint8_t* d, size_t n, const Pubkey& owner);
+
+// --- Raydium CLMM (raydium-clmm@6d7a0f8, programs/amm/src/states/{pool,config,tick_array}.rs) -------------
+
+constexpr size_t CLMM_POOL_LEN = 1544;
+constexpr size_t CLMM_CONFIG_LEN = 117;
+constexpr size_t CLMM_TICK_ARRAY_LEN = 10240;
+constexpr int32_t CLMM_TICK_ARRAY_SIZE = 60;
+inline constexpr uint8_t DISC_CLMM_POOL[8] = {247, 237, 227, 245, 215, 195, 222, 70};        // account:PoolState
+inline constexpr uint8_t DISC_CLMM_CONFIG[8] = {218, 244, 33, 104, 203, 203, 43, 111};      // account:AmmConfig
+inline constexpr uint8_t DISC_CLMM_TICK_ARRAY[8] = {192, 155, 85, 205, 49, 249, 129, 42};   // account:TickArrayState
+
+struct ClmmPool {
+  Pubkey amm_config{}, token_mint_0{}, token_mint_1{}, token_vault_0{}, token_vault_1{}, observation_key{};
+  uint16_t tick_spacing = 0;
+  u128 liquidity = 0, sqrt_price_x64 = 0;
+  int32_t tick_current = 0;
+  uint8_t status = 0, fee_on = 0;  // fee_on: 0 from input, 1 token 0 only, 2 token 1 only
+  uint64_t tick_array_bitmap[16]{};
+  uint64_t open_time = 0;
+  bool dynamic_fee = false;  // DynamicFeeInfo set: the fee moves with the block time (not modelled)
+
+  /** PoolStatusBitIndex::Swap (bit 4) set = swap disabled. */
+  bool swap_enabled() const { return (status & 0x10) == 0; }
+  /** PoolState::is_fee_on_input. */
+  bool fee_on_input(bool zero_for_one) const { return fee_on == 1 ? zero_for_one : fee_on == 2 ? !zero_for_one : true; }
+};
+
+/** Fee rates in hundredths of a bp (1e-6). */
+struct ClmmConfig {
+  uint32_t protocol_fee_rate = 0, trade_fee_rate = 0, fund_fee_rate = 0;
+  uint16_t tick_spacing = 0;
+};
+
+struct ClmmTick {
+  int32_t tick = 0;
+  i128 liquidity_net = 0;
+  u128 liquidity_gross = 0;
+  bool limit_orders = false;  // orders_amount or part_filled_orders_remaining > 0 (matching is not modelled)
+  bool initialized() const { return liquidity_gross > 0 || limit_orders; }
+};
+
+struct ClmmTickArray {
+  Pubkey pool{};
+  int32_t start_tick_index = 0;
+  std::array<ClmmTick, CLMM_TICK_ARRAY_SIZE> ticks{};
+};
+
+constexpr size_t CLMM_BITMAP_EXTENSION_LEN = 1832;
+inline constexpr uint8_t DISC_CLMM_BITMAP_EXTENSION[8] = {60, 150, 36, 219, 97, 128, 139, 153};
+struct ClmmBitmapExtension {
+  Pubkey pool{};
+  uint64_t positive[14][8]{}, negative[14][8]{};
+};
+Result<ClmmBitmapExtension> decode_clmm_bitmap_extension(const uint8_t* d, size_t n, const Pubkey& owner);
+Pubkey clmm_bitmap_extension_pda(const Pubkey& pool);
+/** CLMM currently supports extension-free mints only, including zero-rate transfer-fee refusal. */
+inline bool clmm_mint_supported(const Mint& m) {
+  return m.token_program == prog::TOKEN ||
+         (m.token_program == prog::TOKEN_2022 && m.n_ext == 0 && m.ext_mask == 0 && !m.has_transfer_fee);
+}
+
+Result<ClmmPool> decode_clmm_pool(const uint8_t* d, size_t n, const Pubkey& owner);
+Result<ClmmConfig> decode_clmm_config(const uint8_t* d, size_t n, const Pubkey& owner);
+Result<ClmmTickArray> decode_clmm_tick_array(const uint8_t* d, size_t n, const Pubkey& owner);
+/** Tick-array PDA ["tick_array", pool, start_index (i32 big-endian)]. */
+Pubkey clmm_tick_array_pda(const Pubkey& pool, int32_t start);
 
 // --- PumpSwap (pump-fun/pump-public-docs@639b87f idl/pump_amm.json, idl/pump_fees.json) -----------------------
 // Accounts grew by appended fields; a shorter (older) account reads the missing trailing fields as 0 / false.

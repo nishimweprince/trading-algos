@@ -24,6 +24,7 @@ pub const OWNER: Pubkey = pubkey!("11111111111111111111111111111111");
 pub const RAYDIUM_V4: Pubkey = pubkey!("675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8");
 pub const WHIRLPOOL: Pubkey = pubkey!("whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc");
 pub const RAYDIUM_CPMM: Pubkey = pubkey!("CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C");
+pub const RAYDIUM_CLMM: Pubkey = pubkey!("CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK");
 pub const PUMPSWAP: Pubkey = pubkey!("pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA");
 const TOKEN: Pubkey = pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const TOKEN_2022: Pubkey = pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
@@ -31,6 +32,7 @@ const TOKEN_2022: Pubkey = pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
 const RAYDIUM_SWAP_BASE_IN_V2: u8 = 16;
 const WHIRLPOOL_SWAP_DISC: [u8; 8] = [248, 198, 158, 145, 225, 117, 135, 200];
 const CPMM_SWAP_BASE_INPUT_DISC: [u8; 8] = [143, 190, 90, 218, 196, 30, 51, 222];
+const CLMM_SWAP_V2_DISC: [u8; 8] = [43, 4, 237, 11, 26, 201, 30, 98];
 const PUMP_SELL_V2_DISC: [u8; 8] = [93, 246, 130, 60, 231, 233, 64, 178];
 const PUMP_BUY_EXACT_QUOTE_IN_V2_DISC: [u8; 8] = [194, 171, 28, 70, 104, 77, 91, 47];
 
@@ -75,6 +77,14 @@ fn swap_data(dex: Dex, a_to_b: bool, amount_in: u64) -> Result<Vec<u8>, Executor
             d.extend_from_slice(&amount_in.to_le_bytes());
             d.extend_from_slice(&0u64.to_le_bytes());
         }
+        Dex::Clmm => {
+            // swap_v2(amount, other_amount_threshold = 0, sqrt_price_limit_x64 = 0 (default), is_base_input = true)
+            d.extend_from_slice(&CLMM_SWAP_V2_DISC);
+            d.extend_from_slice(&amount_in.to_le_bytes());
+            d.extend_from_slice(&0u64.to_le_bytes());
+            d.extend_from_slice(&0u128.to_le_bytes());
+            d.push(1);
+        }
         Dex::PumpSwap => {
             // a_to_b (base -> quote): sell_v2(base_amount_in, min_quote_amount_out = 0);
             // b_to_a: buy_exact_quote_in_v2(spendable_quote_in, min_base_amount_out = 1), whose minimum must be > 0.
@@ -107,6 +117,7 @@ fn run_leg<'a>(leg: &LegSpec, legs_accounts: &[AccountInfo<'a>], amount_in: u64)
         Dex::Whirlpool => WHIRLPOOL,
         Dex::Cpmm => RAYDIUM_CPMM,
         Dex::PumpSwap => PUMPSWAP,
+        Dex::Clmm => RAYDIUM_CLMM,
         _ => return Err(ExecutorError::UnsupportedDex.into()),
     };
     if *program.key != expected {

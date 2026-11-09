@@ -2,6 +2,7 @@
 // Direct DEX swap instructions. Account order and data layouts are the programs':
 //   Raydium AMM v4 SwapBaseInV2 (tag 16): program/src/instruction.rs swap_base_in_v2 (raydium-amm@91739d8)
 //   Whirlpool swap: programs/whirlpool/src/instructions/swap.rs (whirlpools@cc683ec)
+//   Raydium CLMM swap_v2: programs/amm/src/instructions/swap_v2.rs (raydium-clmm@6d7a0f8)
 //   Raydium CPMM swap_base_input: programs/cp-swap/src/instructions/swap_base_input.rs (raydium-cp-swap@3d69122)
 // The sim-parity oracle sends exactly these instructions through simulateTransaction, which is how the
 // account order is proven; the executor's CPI legs reuse the same account lists (spec §8).
@@ -15,6 +16,7 @@ namespace arb::tx::dexix {
 
 inline constexpr uint8_t WHIRLPOOL_SWAP_DISC[8] = {248, 198, 158, 145, 225, 117, 135, 200};  // sha256("global:swap")[..8]
 constexpr uint8_t RAYDIUM_SWAP_BASE_IN_V2 = 16;
+inline constexpr uint8_t CLMM_SWAP_V2_DISC[8] = {43, 4, 237, 11, 26, 201, 30, 98};  // global:swap_v2
 inline constexpr uint8_t PUMP_SELL_V2_DISC[8] = {93, 246, 130, 60, 231, 233, 64, 178};
 inline constexpr uint8_t PUMP_BUY_EXACT_QUOTE_IN_V2_DISC[8] = {194, 171, 28, 70, 104, 77, 91, 47};
 inline constexpr uint8_t CPMM_SWAP_BASE_INPUT_DISC[8] = {143, 190, 90, 218, 196, 30, 51, 222};  // global:swap_base_input

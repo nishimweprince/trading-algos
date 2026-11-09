@@ -134,3 +134,11 @@ TEST(parity_pumpswap_exact) {
               r.ok_samples, r.failed_sims, r.mismatches);
   require_parity_or_disabled("pumpswap", r, Config{}.dex.pumpswap_enabled, "pumpswap_enabled");
 }
+
+TEST(parity_clmm_exact) {
+  dex::ClmmQuoter q;
+  auto r = replay("parity_clmm.json", q);
+  std::printf("    clmm parity: %zu batches, %zu exact-compare samples, %zu failed sims, %zu mismatches\n", r.batches,
+              r.ok_samples, r.failed_sims, r.mismatches);
+  require_parity_or_disabled("clmm", r, Config{}.dex.clmm_enabled, "clmm_enabled");
+}

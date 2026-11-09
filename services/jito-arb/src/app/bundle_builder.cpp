@@ -44,7 +44,7 @@ void seed_virtual_tables(tx::AltManager& alts, const StateStore& store, const Pu
     a.addresses.push_back(k);
   };
   for (const Pubkey& k : {prog::TOKEN, prog::TOKEN_2022, prog::KLEND, prog::SYSVAR_INSTRUCTIONS, prog::RAYDIUM_V4, prog::WHIRLPOOL,
-                          prog::RAYDIUM_CPMM, prog::PUMPSWAP, prog::SYSTEM, tx::dexix::raydium_authority(), tx::dexix::cpmm_authority(),
+                          prog::RAYDIUM_CPMM, prog::PUMPSWAP, prog::RAYDIUM_CLMM, prog::MEMO, prog::SYSTEM, tx::dexix::raydium_authority(), tx::dexix::cpmm_authority(),
                           tx::dexix::pump_global_config(), tx::dexix::pump_fee_config(), tx::dexix::pump_event_authority(),
                           tx::dexix::pump_user_volume_accumulator(wallet), executor})
     add(shared, k);
@@ -66,6 +66,14 @@ void seed_virtual_tables(tx::AltManager& alts, const StateStore& store, const Pu
     switch (p->kind) {
       case DexKind::Whirlpool:
         add(a, tx::dexix::whirlpool_oracle(p->address));
+        for (uint8_t t = 0; t < p->n_ticks; ++t) add(a, p->ticks[t].key);
+        break;
+      case DexKind::Clmm:
+        add(a, p->clmm.amm_config);
+        add(a, p->clmm.observation_key);
+        add(a, state::clmm_bitmap_extension_pda(p->address));
+        add(a, p->mint_a);
+        add(a, p->mint_b);
         for (uint8_t t = 0; t < p->n_ticks; ++t) add(a, p->ticks[t].key);
         break;
       case DexKind::PumpSwap:
