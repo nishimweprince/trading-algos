@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cmath>
 #include <fstream>
+#include <map>
 #include <memory>
 #include <sstream>
 #include <thread>
@@ -17,6 +18,7 @@
 #include "app/runtime.hpp"
 #include "core/base58.hpp"
 #include "core/rpc.hpp"
+#include "core/usage.hpp"
 #include "core/ring.hpp"
 #include "feed/frames.hpp"
 #include "feed/laserstream_client.hpp"
@@ -148,6 +150,16 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   auto& g_bytes = reg.gauge("arb_feed_bytes", "bytes received (all shards)");
   auto& g_reconnects = reg.gauge("arb_feed_reconnects", "stream reconnects (all shards)");
   auto& g_age = reg.gauge("arb_feed_update_age_ms", "age of the newest account update");
+  auto& g_quota = reg.gauge("arb_helius_quota_exhausted", "1 while Helius answers 429 max usage (polling backs off to 1/min)");
+  auto& g_quota_s = reg.gauge("arb_helius_quota_exhausted_seconds", "seconds since the quota ran out (0 when available)");
+  // Usage per source, for the plan budget: RPC calls/bytes by method, stream updates/bytes by account kind.
+  std::map<std::string, obs::Gauge*> usage_gauges;
+  auto usage_gauge = [&](const std::string& name, const char* help) -> obs::Gauge& {
+    auto it = usage_gauges.find(name);
+    if (it == usage_gauges.end()) it = usage_gauges.emplace(name, &reg.gauge(name, help)).first;
+    return *it->second;
+  };
+  int64_t last_blockhash_try = 0, last_resync_try = 0, last_bank_resync_try = 0;
   auto& g_decode = reg.gauge("arb_decode_failures", "account decode failures");
   auto& g_cand = reg.gauge("arb_engine_candidates", "candidates priced above min_ev");
   auto& g_dry = reg.gauge("arb_bundles_dry_run", "bundles built and signed in dry run");
@@ -439,7 +451,23 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       }
       uint64_t last = rt.last_update_ns();
       g_age.set(last ? int64_t((mono_ns() - std::min(mono_ns(), last)) / 1'000'000) : -1);
-      if (!recorder && blockhash.needs_refresh(wall_ms())) {
+      g_quota.set(usage::quota_exhausted() ? 1 : 0);
+      g_quota_s.set(usage::quota_exhausted() ? (wall_ms() - usage::quota_since_ms()) / 1000 : 0);
+      for (const auto& [method, m] : usage::rpc_snapshot()) {
+        usage_gauge("arb_rpc_calls_" + method, "RPC calls of this method since start").set(int64_t(m.calls));
+        usage_gauge("arb_rpc_bytes_in_" + method, "RPC response bytes of this method since start").set(int64_t(m.bytes_in));
+        usage_gauge("arb_rpc_rate_limited_" + method, "429 answers to this method since start").set(int64_t(m.rate_limited));
+      }
+      {
+        const auto& tr = rt.feed().traffic();
+        for (size_t k = 0; k < tr.size(); ++k) {
+          if (!tr[k].updates) continue;
+          std::string name = k < ACCOUNT_KIND_COUNT ? account_kind_name(AccountKind(k)) : "unknown";
+          usage_gauge("arb_feed_updates_" + name, "stream account updates of this kind since start").set(int64_t(tr[k].updates));
+          usage_gauge("arb_feed_bytes_" + name, "stream account data bytes of this kind since start").set(int64_t(tr[k].bytes));
+        }
+      }
+      if (!recorder && blockhash.needs_refresh(wall_ms()) && usage::may_call(last_blockhash_try, wall_ms())) {
         try {
           auto bh = rpc.latest_blockhash("processed");
           blockhash.set(bh.hash, bh.slot, wall_ms());
@@ -450,7 +478,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
     }
     // Accounts a losing bank wrote: re-read them as soon as the slot's bank is confirmed (rare: equivocation,
     // or fast leader handoff from Agave 4.4), at most every 250 ms.
-    if (!recorder && now - last_bank_resync >= std::chrono::milliseconds(250)) {
+    if (!recorder && now - last_bank_resync >= std::chrono::milliseconds(250) && usage::may_call(last_bank_resync_try, wall_ms())) {
       std::vector<Pubkey> keys = rt.feed().take_resync();
       if (!keys.empty()) {
         last_bank_resync = now;
@@ -466,7 +494,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
     }
     // Resync (spec §4): pools whose snapshot lags the slot clock by more than resync_lag_ms, every 10 s,
     // on this thread (the StateStore has a single writer).
-    if (!recorder && now - last_resync >= std::chrono::seconds(10)) {
+    if (!recorder && now - last_resync >= std::chrono::seconds(10) && usage::may_call(last_resync_try, wall_ms())) {
       last_resync = now;
       uint64_t clock = rt.clock().slot.load();
       std::vector<uint32_t> lagging;

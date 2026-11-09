@@ -2,6 +2,7 @@
 #include <cstring>
 
 #include "app/bundle_sim.hpp"
+#include "core/usage.hpp"
 #include "dex/clmm_math.hpp"
 #include "core/crypto.hpp"
 #include "tx/dex_ix.hpp"
@@ -863,4 +864,25 @@ TEST(clmm_tick_math_matches_program_bounds_and_round_trips) {
   // One exact-in step that stays inside the range: fee on input, zero for one.
   auto r = compute_swap_exact_in(u128(1) << 64, *sqrt_price_at_tick(-100), u128(1'000'000'000'000ULL), 1'000'000, 2500, true, true);
   CHECK(r.has_value() && r->amount_in + r->fee_amount == 1'000'000 && r->amount_out > 0 && r->amount_out < 1'000'000);
+}
+TEST(helius_quota_flag_and_backoff) {
+  usage::set_quota(false, 0);
+  CHECK(usage::is_quota_body("{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32429,\"message\":\"max usage reached\"}}"));
+  CHECK(!usage::is_quota_body("Too many requests"));
+  usage::record_rpc("getSlot", 429, 10, 20, "Too many requests", 1000);  // a rate limit, not the plan cap
+  CHECK(!usage::quota_exhausted());
+  usage::record_rpc("getSlot", 429, 10, 20, "max usage reached", 2000);
+  CHECK(usage::quota_exhausted());
+  CHECK_EQ(usage::quota_since_ms(), int64_t(2000));
+  int64_t last = 0;
+  CHECK(usage::may_call(last, 70'000));   // first call after the hold
+  CHECK(!usage::may_call(last, 100'000)); // within a minute of the last one
+  CHECK(usage::may_call(last, 130'001));
+  usage::record_rpc("getSlot", 200, 10, 20, "", 140'000);  // a success clears it
+  CHECK(!usage::quota_exhausted());
+  CHECK(usage::may_call(last, 140'001));
+  bool found = false;
+  for (auto& [m, s] : usage::rpc_snapshot())
+    if (m == "getSlot") found = s.calls >= 3 && s.rate_limited >= 2;
+  CHECK(found);
 }
