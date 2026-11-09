@@ -17,6 +17,7 @@ The VM steps (live feed, recording, the phase-2 replay gate, the executor build 
 |---|---|
 | [docs/jito-arb.md](docs/jito-arb.md) | The full spec: architecture (§2), Helius/Jito/hosting (§3), market data and DEX list (§4), exact quoters (§5), decision engine, sizing, cost model and tips (§6), Kamino flash loans and the tx layout (§7), the Rust executor (§8), building and submitting (§9), risk limits (§10), observability and replay (§11), layout and config (§12), phases and acceptance criteria (§13) |
 | [docs/implementation-plan.md](docs/implementation-plan.md) | How phases 0–3 were built offline: what was reused from pump-desk, the per-phase work list, the guardrails for the unattended run, and the end-of-run checks |
+| [Deployment](#deployment) (below) | Setting up the services and the dashboard, with every env variable they need |
 | [RUNBOOK-VM.md](RUNBOOK-VM.md) | Frankfurt VM steps 0–11: install, build, secrets, Whirlpool and SDK parity, discovery, 24 h LaserStream hold, 3-day recording, the phase-2 replay gate, executor validator tests, devnet ALTs, owner review |
 | [config/bot.example.toml](config/bot.example.toml) | Every config key with its default (defaults live in `src/core/config.hpp`) |
 | [config/dex_programs.toml](config/dex_programs.toml) | Pinned program IDs and the source commits each quoter/decoder was ported from |
@@ -146,6 +147,210 @@ On the VM, the `vm` preset adds the LaserStream gRPC transport (`ARB_WITH_GRPC=O
 Tools: `discover` (pool discovery, gPA through Helius), `recorder` (frame files), `fixture-frames`
 (synthetic replay capture), `replay-report`, `sim-parity` (quoter oracle), `sim-check` (Kamino and swap
 simulations). Tools that talk to mainnet do reads and `simulateTransaction` only.
+
+## Deployment
+
+The production host is a Linux VM in Frankfurt (Amazon Linux 2023 today; Amsterdam is the fallback).
+There are two parts, and you can deploy them separately:
+
+- **Services**: the C++ bot (`jito-arb`) plus pool discovery and the optional recorder. They run as
+  systemd units under the `jito-arb` user.
+- **Frontend**: the read-only dashboard (`ui/server.py` + `ui/index.html`). It is Python 3.9+ standard
+  library only, with no build step and no npm.
+
+Everything below is a dry run. The build refuses `dry_run = false`, so nothing is ever sent to mainnet.
+
+| Unit | What it does | Needs |
+|---|---|---|
+| `jito-arb.service` | Live feed and engine, `--mode live --dry-run`; `/metrics` on 127.0.0.1:9100 | env file, `pools.json` |
+| `jito-arb-discover.service` + `.timer` | Pool discovery (gPA through Helius) every 10 min (first run 1 min after boot); writes `pools.json` | env file |
+| `jito-arb-recorder.service` | Optional. Raw LaserStream frames to `/var/lib/jito-arb/frames` (1–3 GB/hour) | env file, `pools.json` |
+| `jito-arb-ui.service` | Dashboard on 127.0.0.1:8088 | `jito-arb.service` metrics, read access to `/var/lib/jito-arb` |
+
+### Environment variables
+
+The services read their secrets from **`/etc/jito-arb/jito-arb.env`** (`root:root`, mode 0600). Every
+bot unit loads it through `EnvironmentFile=`. `install.sh` creates it from
+[deploy/jito-arb.env.example](deploy/jito-arb.env.example) and never overwrites it afterwards. Fill it
+in before you start anything:
+
+| Variable | Required | Used by | What it is |
+|---|---|---|---|
+| `HELIUS_API_KEY` | **Yes** | `jito-arb`, `discover`, `recorder`, `sim-parity`, `sim-check`, `quote-probe` | Helius API key. It is the LaserStream `x-token` and goes on the RPC URL (`https://mainnet.helius-rpc.com/?api-key=…`). If it is missing, RPC silently falls back to the public `api.mainnet-beta.solana.com` and LaserStream has no token, so always set it. You can change the variable's name with `helius.api_key_env` in `bot.toml`. |
+| `LASERSTREAM_ENDPOINT` | **Yes** for `live` and `recorder` | `jito-arb` | The Frankfurt LaserStream gRPC endpoint from the Helius dashboard, e.g. `https://laserstream-mainnet-fra.helius-rpc.com`. It overrides `helius.laserstream_endpoint` in `bot.toml`, which ships as `"VERIFY"`. |
+
+```bash
+# /etc/jito-arb/jito-arb.env
+HELIUS_API_KEY=<your Helius key>
+LASERSTREAM_ENDPOINT=https://laserstream-mainnet-fra.helius-rpc.com
+```
+
+Variables used only by one-off tools, never by the services:
+
+| Variable | Used by |
+|---|---|
+| `RPC_URL` | `program/executor/tests/cloned_validator.py` (the RPC to clone mainnet accounts from) |
+| `PREPROC_ENDPOINT`, `PREPROC_ACCOUNTS_FILE`, `PREPROC_TOKEN` | `tools/preprocessed-probe` (research probe) |
+
+**The dashboard needs no environment variables.** It holds no secrets and is configured only by its
+command-line flags (below).
+
+No Jito credentials are needed: the bundle path uses Jito's public endpoints. A hot wallet is not
+needed for a dry run either. If `/etc/jito-arb/hot_wallet.json` is absent, a fixed public test key signs.
+
+To run a tool by hand with the same environment as the services:
+
+```bash
+sudo -u jito-arb env $(sudo cat /etc/jito-arb/jito-arb.env | grep -v '^#' | xargs) \
+  /opt/jito-arb/bin/discover --config /etc/jito-arb/bot.toml --out /tmp/pools.json
+```
+
+### 1. Services
+
+**Host packages** (Amazon Linux 2023 / Fedora; use the Debian equivalents elsewhere; grpc++ ≥ 1.51 and
+a compiler with C++23 `<expected>`, i.e. GCC 13+ or Clang 17+):
+
+```bash
+sudo dnf install -y git gcc-c++ cmake ninja-build pkgconf-pkg-config \
+  libsodium-devel openssl-devel simdjson-devel grpc-devel grpc-plugins protobuf-devel python3
+```
+
+**Build and test** (the `vm` preset turns on the real LaserStream gRPC client):
+
+```bash
+git clone https://github.com/nishimweprince/trading-algos.git && cd trading-algos/services/jito-arb
+git rev-parse HEAD                                    # keep this with the rollout evidence
+cmake --preset vm && cmake --build --preset vm
+ctest --test-dir build/vm --output-on-failure
+python3 deploy/tests/test_deploy.py                   # install/reset scripts against a fake systemctl
+```
+
+**Install** (as root, from the repository root). This installs the binaries to `/opt/jito-arb/bin`,
+the config to `/etc/jito-arb`, the data directories under `/var/lib/jito-arb`, the dashboard to
+`/opt/jito-arb/ui`, and the systemd units. It creates the `jito-arb` system user. It is idempotent and
+never overwrites an existing `bot.toml`, env file or denylist. It does not start or restart anything.
+
+```bash
+cd ~/trading-algos
+sudo services/jito-arb/deploy/install.sh
+```
+
+**Configure:**
+
+```bash
+sudo vi /etc/jito-arb/jito-arb.env          # HELIUS_API_KEY and LASERSTREAM_ENDPOINT (table above)
+sudo vi /etc/jito-arb/bot.toml              # from deploy/bot.vm.toml; dry_run must stay true
+```
+
+`bot.toml` is [deploy/bot.vm.toml](deploy/bot.vm.toml). Every key and its default is listed in
+[config/bot.example.toml](config/bot.example.toml), and unknown keys are rejected at startup. Check the
+paths (`pools_path`, `obs.decision_log_dir`, `recorder.dir`) if your data disk is mounted elsewhere.
+
+**Start**, in this order. The bot and recorder will not start until `pools.json` exists
+(`ConditionPathExists`):
+
+```bash
+sudo systemctl start jito-arb-discover.service          # first pools.json (oneshot; takes a few minutes)
+ls -l /var/lib/jito-arb/pools.json
+sudo systemctl enable --now jito-arb-discover.timer jito-arb.service
+sudo systemctl enable --now jito-arb-recorder.service   # optional: only when recording for the replay gate
+```
+
+**Verify:**
+
+```bash
+systemctl is-active jito-arb.service jito-arb-discover.timer
+journalctl -u jito-arb -f                               # feed connect, pool updates, dry-run decisions
+journalctl -u jito-arb-discover --since -15min
+curl -s 127.0.0.1:9100/metrics | grep -E '^arb_(feed_frames|engine_candidates|kill)'
+```
+
+### 2. Frontend (dashboard)
+
+The dashboard samples the bot's `/metrics` every 5 s into a 6-hour buffer. It reads the decision logs
+and `pools.json` from the data directory, and asks `systemctl` for the unit states. It writes nothing
+and has **no login**, so bind it to localhost and put access control in front of it.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--bind` | `127.0.0.1` | Listen address |
+| `--port` | `8088` | Listen port |
+| `--metrics` | `http://127.0.0.1:9100/metrics` | The bot's Prometheus endpoint (`obs.metrics_addr`/`metrics_port`) |
+| `--data` | `/var/lib/jito-arb` | Data directory: `decisions/`, `pools.json` |
+
+**On the bot host, as a service** (`install.sh` has already copied `server.py` and `index.html` to
+`/opt/jito-arb/ui`):
+
+```bash
+sudo systemctl enable --now jito-arb-ui.service
+curl -s 127.0.0.1:8088/api/state | head -c 300
+```
+
+**Fonts (optional).** Anthropic Sans/Mono are proprietary and never committed. To use them, copy
+`AnthropicSans-Roman-Web.woff2` and `AnthropicMono-Roman-Web.woff2` into `services/jito-arb/ui/fonts/`
+on the host, re-run `install.sh`, then run `sudo systemctl restart jito-arb-ui`. Without them, the page
+uses system fonts.
+
+**Update only the frontend.** This does not touch the bot:
+
+```bash
+cd ~/trading-algos && git pull
+sudo install -m 0644 services/jito-arb/ui/server.py services/jito-arb/ui/index.html /opt/jito-arb/ui/
+sudo systemctl restart jito-arb-ui.service
+```
+
+**Open it.** Use either of these:
+
+```bash
+ssh -L 8088:127.0.0.1:8088 <user>@<vm>          # then browse http://127.0.0.1:8088
+# or publish through a tunnel with access control in front, e.g. Cloudflare Tunnel + Access:
+cloudflared tunnel --url http://127.0.0.1:8088
+```
+
+**Run it off the bot host** (a laptop, for development). Tunnel the metrics port and copy the data you
+want to see. Unit states show as `no systemd`:
+
+```bash
+ssh -L 9100:127.0.0.1:9100 <user>@<vm>
+rsync -a <user>@<vm>:/var/lib/jito-arb/{pools.json,decisions} ./arb-data/
+python3 ui/server.py --bind 127.0.0.1 --port 8088 --metrics http://127.0.0.1:9100/metrics --data ./arb-data
+python3 ui/test_server.py                       # dashboard unit tests
+```
+
+### Redeploy, reset, stop
+
+```bash
+cd ~/trading-algos && git pull && git rev-parse HEAD
+cd services/jito-arb && cmake --build --preset vm && ctest --test-dir build/vm --output-on-failure && cd ../..
+sudo services/jito-arb/deploy/install.sh       # new binaries, units; preserves config, env, denylist
+sudo services/jito-arb/deploy/reset-stats.sh   # stop, archive decisions/frames, restart bot + UI (+ recorder if it was running)
+```
+
+`install.sh` does not restart anything, and `reset-stats.sh` is the restart that picks up the new
+binaries. If you only want a restart and do not need the logs archived, run
+`sudo systemctl restart jito-arb jito-arb-ui`. If you changed the systemd units, run
+`sudo systemctl daemon-reload` first (`install.sh` already does this).
+
+| Action | Command |
+|---|---|
+| Block every bundle immediately (kill switch, checked each pass) | `sudo -u jito-arb touch /var/lib/jito-arb/KILL` (remove it to clear) |
+| Stop everything | `sudo systemctl disable --now jito-arb jito-arb-recorder jito-arb-ui jito-arb-discover.timer` |
+| Logs | `journalctl -u jito-arb -u jito-arb-discover -u jito-arb-recorder -u jito-arb-ui` |
+
+### Files on the host
+
+| Path | Contents | Owner, mode |
+|---|---|---|
+| `/opt/jito-arb/bin/` | `jito-arb`, `discover`, `recorder`, `replay-report`, `sim-parity`, `sim-check`, `quote-probe`, … | root, 0755 |
+| `/opt/jito-arb/share/` | `dex_programs.toml`, `denylist.json`, `holders_seed.json` | root, 0644 |
+| `/opt/jito-arb/ui/` | `server.py`, `index.html`, `fonts/` | root, 0644 |
+| `/etc/jito-arb/bot.toml` | Bot config | root:jito-arb, 0640 |
+| `/etc/jito-arb/jito-arb.env` | Secrets (`HELIUS_API_KEY`, `LASERSTREAM_ENDPOINT`) | root:root, 0600 |
+| `/etc/jito-arb/hot_wallet.json` | Optional; absent for dry runs | 0600 |
+| `/var/lib/jito-arb/` | `pools.json`, `decisions/`, `frames/`, `config/denylist.json`, `KILL`, `archive/` | jito-arb, 0750 |
+
+The research steps that follow deployment (24 h LaserStream hold, 3-day recording, replay gate, executor
+validator tests, ALTs) are in [RUNBOOK-VM.md](RUNBOOK-VM.md).
 
 ## What is built, and how it was verified here
 
