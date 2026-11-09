@@ -150,7 +150,28 @@ simulations). Tools that talk to mainnet do reads and `simulateTransaction` only
 
 ## Deployment
 
-The production host is a Linux VM in Frankfurt (Amazon Linux 2023 today; Amsterdam is the fallback).
+These steps work on any x86_64 or arm64 Linux server with systemd: a cloud VM from any provider, or
+bare metal. They are written for two distro families, and the only differences are the package
+commands:
+
+- **Debian family**: Debian 13+, Ubuntu 24.04+ (`apt`)
+- **Red Hat family**: Fedora 39+, RHEL / Rocky / AlmaLinux 9+, Amazon Linux 2023 (`dnf`)
+
+What the server needs:
+
+- **Location**: close to Helius and the Jito block engines. Frankfurt is best and Amsterdam is the
+  fallback. Latency matters more than which provider you use.
+- **Size**: 8+ vCPU, 32 GB RAM, NVMe. Add a data disk if you will record, at 1–3 GB/hour.
+- **Access**: a sudo-capable login user with SSH keys only.
+- **Network**: outbound HTTPS/gRPC. No inbound ports are needed, because the bot and dashboard listen
+  only on 127.0.0.1.
+
+Check RTT to the Jito regions before you settle on a host:
+
+```bash
+for r in frankfurt amsterdam ny; do curl -so /dev/null -w "$r %{time_connect}\n" https://$r.mainnet.block-engine.jito.wtf; done
+```
+
 There are two parts, and you can deploy them separately:
 
 - **Services**: the C++ bot (`jito-arb`) plus pool discovery and the optional recorder. They run as
@@ -177,7 +198,7 @@ in before you start anything:
 | Variable | Required | Used by | What it is |
 |---|---|---|---|
 | `HELIUS_API_KEY` | **Yes** | `jito-arb`, `discover`, `recorder`, `sim-parity`, `sim-check`, `quote-probe` | Helius API key. It is the LaserStream `x-token` and goes on the RPC URL (`https://mainnet.helius-rpc.com/?api-key=…`). If it is missing, RPC silently falls back to the public `api.mainnet-beta.solana.com` and LaserStream has no token, so always set it. You can change the variable's name with `helius.api_key_env` in `bot.toml`. |
-| `LASERSTREAM_ENDPOINT` | **Yes** for `live` and `recorder` | `jito-arb` | The Frankfurt LaserStream gRPC endpoint from the Helius dashboard, e.g. `https://laserstream-mainnet-fra.helius-rpc.com`. It overrides `helius.laserstream_endpoint` in `bot.toml`, which ships as `"VERIFY"`. |
+| `LASERSTREAM_ENDPOINT` | **Yes** for `live` and `recorder` | `jito-arb` | The LaserStream gRPC endpoint for the region nearest the server, from the Helius dashboard (Frankfurt: `https://laserstream-mainnet-fra.helius-rpc.com`). It overrides `helius.laserstream_endpoint` in `bot.toml`, which ships as `"VERIFY"`. |
 
 ```bash
 # /etc/jito-arb/jito-arb.env
@@ -207,13 +228,36 @@ sudo -u jito-arb env $(sudo cat /etc/jito-arb/jito-arb.env | grep -v '^#' | xarg
 
 ### 1. Services
 
-**Host packages** (Amazon Linux 2023 / Fedora; use the Debian equivalents elsewhere; grpc++ ≥ 1.51 and
-a compiler with C++23 `<expected>`, i.e. GCC 13+ or Clang 17+):
+**Host packages.** The build needs CMake ≥ 3.22, Ninja, a C++23 compiler (GCC 13+ or Clang 17+),
+libsodium, OpenSSL, simdjson, grpc++ ≥ 1.51 with protobuf, and Python 3.9+ for the dashboard and the
+deploy tests.
+
+Debian / Ubuntu:
 
 ```bash
-sudo dnf install -y git gcc-c++ cmake ninja-build pkgconf-pkg-config \
-  libsodium-devel openssl-devel simdjson-devel grpc-devel grpc-plugins protobuf-devel python3
+sudo apt-get update
+sudo apt-get install -y git build-essential cmake ninja-build pkg-config \
+  libsodium-dev libssl-dev libsimdjson-dev \
+  libgrpc++-dev libprotobuf-dev protobuf-compiler protobuf-compiler-grpc python3 curl
 ```
+
+RHEL / Rocky / AlmaLinux / Fedora / Amazon Linux:
+
+```bash
+# RHEL, Rocky and Alma only: simdjson and grpc come from EPEL and CRB (Fedora and Amazon Linux skip this)
+sudo dnf install -y epel-release && sudo dnf config-manager --set-enabled crb
+sudo dnf install -y git gcc-c++ cmake ninja-build pkgconf-pkg-config \
+  libsodium-devel openssl-devel simdjson-devel grpc-devel grpc-plugins protobuf-devel python3 curl
+```
+
+Check the compiler with `g++ --version`. Debian 12 and RHEL 9 ship GCC 12 or 11 by default, which is
+too old:
+
+- **Debian 12**: install Clang 17+ from apt.llvm.org.
+- **RHEL 9**: run `sudo dnf install -y gcc-toolset-13` and then `scl enable gcc-toolset-13 bash`.
+
+Then configure with `CXX=<that compiler> cmake --preset vm`. If the distro's grpc++ is older than 1.51,
+build gRPC from source or use a newer release of the distro.
 
 **Build and test** (the `vm` preset turns on the real LaserStream gRPC client):
 
@@ -238,8 +282,8 @@ sudo services/jito-arb/deploy/install.sh
 **Configure:**
 
 ```bash
-sudo vi /etc/jito-arb/jito-arb.env          # HELIUS_API_KEY and LASERSTREAM_ENDPOINT (table above)
-sudo vi /etc/jito-arb/bot.toml              # from deploy/bot.vm.toml; dry_run must stay true
+sudoedit /etc/jito-arb/jito-arb.env          # HELIUS_API_KEY and LASERSTREAM_ENDPOINT (table above)
+sudoedit /etc/jito-arb/bot.toml              # from deploy/bot.vm.toml; dry_run must stay true
 ```
 
 `bot.toml` is [deploy/bot.vm.toml](deploy/bot.vm.toml). Every key and its default is listed in
@@ -302,7 +346,7 @@ sudo systemctl restart jito-arb-ui.service
 **Open it.** Use either of these:
 
 ```bash
-ssh -L 8088:127.0.0.1:8088 <user>@<vm>          # then browse http://127.0.0.1:8088
+ssh -L 8088:127.0.0.1:8088 <user>@<server>          # then browse http://127.0.0.1:8088
 # or publish through a tunnel with access control in front, e.g. Cloudflare Tunnel + Access:
 cloudflared tunnel --url http://127.0.0.1:8088
 ```
@@ -311,8 +355,8 @@ cloudflared tunnel --url http://127.0.0.1:8088
 want to see. Unit states show as `no systemd`:
 
 ```bash
-ssh -L 9100:127.0.0.1:9100 <user>@<vm>
-rsync -a <user>@<vm>:/var/lib/jito-arb/{pools.json,decisions} ./arb-data/
+ssh -L 9100:127.0.0.1:9100 <user>@<server>
+rsync -a <user>@<server>:/var/lib/jito-arb/{pools.json,decisions} ./arb-data/
 python3 ui/server.py --bind 127.0.0.1 --port 8088 --metrics http://127.0.0.1:9100/metrics --data ./arb-data
 python3 ui/test_server.py                       # dashboard unit tests
 ```
