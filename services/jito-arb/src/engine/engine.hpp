@@ -24,6 +24,9 @@ struct EngineConfig {
   uint64_t max_trade_lamports = 500'000'000'000ULL;
   uint64_t min_trade_lamports = 1'000'000;
   int sizer_max_evals = 24;
+  uint32_t max_profit_ppm = 20'000;  // engine.max_profit_ratio
+  int quarantine_strikes = 3;
+  int64_t quarantine_window_ms = 600'000, quarantine_ms = 1'800'000;
   bool flash = true;  // funding_mode == flash
   CostConfig costs;
   DispatchConfig dispatch;
@@ -62,6 +65,8 @@ struct SizerExample {
 
 struct EngineCounters {
   uint64_t untradable = 0;  // a leg whose pool the program rejects in that direction (until its state changes)
+  uint64_t no_room_memo = 0;
+  uint64_t quarantined = 0, implausible = 0;  // evaluations skipped: a quarantined leg / a too-large profit  // skipped: x_max was below min_trade and no leg or reserve changed since
   uint64_t updates = 0, cycles_seen = 0, stale = 0, unsupported = 0, cooling = 0, prefilter_pass = 0, sized = 0, candidates = 0,
            sent = 0, skipped = 0;
   // `stale` by cause (first failing leg): a component not yet seen, a resync read awaiting its push, the pool
@@ -121,6 +126,18 @@ class Engine {
     return out;
   }
   const CycleIndex& cycles() const { return idx_; }
+  /**
+   * A bundle simulation's verdict on one leg's pool direction: bad (the route failed at or after it, or came
+   * out short) adds a strike; enough strikes in the window quarantine it. Good clears its strikes.
+   */
+  void note_sim(uint32_t pool, bool a_to_b, bool bad, int64_t now_ms);
+  struct Quarantine {
+    uint32_t pool = 0;
+    bool a_to_b = false;
+    int64_t until_ms = 0;
+    uint32_t strikes = 0;
+  };
+  std::vector<Quarantine> quarantined(int64_t now_ms) const;
   const BasePrice* base_price(const Pubkey& mint) const;
   const flash::FlashReserve* flash_reserve(const Pubkey& mint) const {
     auto it = reserves_.find(mint);
@@ -155,6 +172,19 @@ class Engine {
   // LiquidityUnderflow, which the chain returns too). Skipped until the pool's state changes.
   std::unordered_map<uint64_t, uint64_t> untradable_;
   std::unordered_map<uint32_t, SpreadExample> spread_by_pool_;
+  struct NoRoom {
+    uint64_t seq[MAX_LEGS]{};
+    uint64_t min_trade = 0;
+    bool reserve_bound = false;  // the reserve (not depth or max_trade) was below min_trade
+  };
+  std::unordered_map<uint32_t, NoRoom> no_room_;
+  struct Strikes {
+    std::vector<int64_t> at_ms;
+    int64_t until_ms = 0;
+  };
+  std::unordered_map<uint64_t, Strikes> strikes_;  // (pool << 1 | a_to_b)
+  // cycle -> the inputs that gave x_max < min_trade
+  uint64_t reserve_available(const Pubkey& base) const;
 };
 
 }  // namespace arb::engine

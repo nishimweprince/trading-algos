@@ -1,5 +1,8 @@
 #include "core/rpc.hpp"
 
+#include "core/sys.hpp"
+#include "core/usage.hpp"
+
 #include <simdjson.h>
 
 #include <algorithm>
@@ -73,6 +76,7 @@ std::string Rpc::call(const std::string& method, const std::string& params_json)
   body_ = "{\"jsonrpc\":\"2.0\",\"id\":" + std::to_string(id_++) + ",\"method\":\"" + method + "\",\"params\":" + params_json + "}";
   int status = 0;
   std::string out = http("POST", url_.path, body_, {}, status, method.c_str());
+  usage::record_rpc(method, status, body_.size(), out.size(), status == 200 ? std::string_view{} : std::string_view(out), wall_ms());
   if (status != 200) throw std::runtime_error("rpc http " + std::to_string(status) + ": " + out.substr(0, 200));
   if (out.find("\"error\"") != std::string::npos && out.find("\"result\"") == std::string::npos)
     throw std::runtime_error("rpc error: " + method + ": " + out.substr(0, 300));

@@ -61,6 +61,9 @@ struct Config {
     uint64_t max_trade_lamports = 500'000'000'000ULL;  // 500 SOL equivalent
     uint64_t min_trade_lamports = 1'000'000;
     double max_input_fraction = 0.20;
+    // A sized profit above this fraction of the input is treated as broken or stale state, not an arb (skipped
+    // as implausible_profit). Live dry runs quoted up to 3.4 SOL gross on routes the chain then rejected.
+    double max_profit_ratio = 0.02;
     double target_land_rate = 0.30;
     int max_bundles_per_slot = 3;
     int max_cycles_per_pool = 64;
@@ -162,6 +165,12 @@ struct Config {
     std::string holder_seed_path = "harness/holders_seed.json";
     int holder_refresh_s = 600;        // re-read the base tokens' largest holders
     uint64_t min_payer_lamports = 20'000'000;  // holder wallet SOL for fees and intermediate ATA rent
+    // Quarantine: a pool direction on a route that failed or came out short (by short_bps) quarantine_strikes
+    // times within quarantine_window_s is not dispatched for quarantine_s. A clean simulation clears its strikes.
+    int quarantine_strikes = 3;
+    int quarantine_window_s = 600;
+    int quarantine_s = 1800;
+    int short_bps = 50;
   } sim;
 
   struct Recorder {

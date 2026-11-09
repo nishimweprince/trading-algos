@@ -15,6 +15,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <deque>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -86,6 +87,8 @@ class BundleSim {
   struct Counters {
     std::atomic<uint64_t> submitted{0}, dropped{0}, ok{0}, failed{0}, profitable{0}, no_holder{0}, too_large{0}, rpc_error{0}, setup_error{0}, context_retries{0};
     std::atomic<uint64_t> queued{0}, in_flight{0}, terminal{0}, funding_changed{0}, intermediate_balance{0};
+    // Per-leg fallback for routes too large for one message; state at simulation vs the engine's snapshot.
+    std::atomic<uint64_t> per_leg{0}, state_matched{0}, state_drifted{0}, quoter_suspect{0};
   };
   BundleSim(const Config& cfg, std::atomic<bool>& stop);
   ~BundleSim();
@@ -103,12 +106,22 @@ class BundleSim {
  private:
   void run();
   void process(SimJob& j, Rpc& rpc);
+  /**
+   * A route too large for one message: simulate each leg alone on its quoted input, paid by a holder of that
+   * leg's input token. Records one outcome: failed at the first failing leg, else the last leg's simulated
+   * output (inputs are the quotes, not chained outputs), with each leg's shortfall in bps.
+   */
+  void per_leg(SimJob& j, Rpc& rpc, std::span<const std::shared_ptr<const PoolState>> legs, uint8_t& flag_per_leg,
+               uint8_t& flag_state, int64_t (&leg_short_bps)[3], std::vector<std::string>& logs, std::string& error,
+               const std::function<void(obs::DecisionRecord)>& finish,
+               const std::function<void(obs::SimFail, uint64_t, uint64_t)>& failed);
   const SimHolder* holder_for(const Pubkey& mint, uint64_t amount, Rpc& rpc);
   void refresh_holders(const Pubkey& mint, Rpc& rpc);
 
   const Config& cfg_;
   std::atomic<bool>& stop_;
   std::atomic<bool> quit_{false};
+  int64_t quota_try_ms_ = 0;  // worker thread only
   std::thread thread_;
   std::mutex mu_;
   std::condition_variable cv_;

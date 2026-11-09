@@ -2,6 +2,8 @@
 #include <cstring>
 
 #include "app/bundle_sim.hpp"
+#include "core/sys.hpp"
+#include "core/usage.hpp"
 #include "dex/clmm_math.hpp"
 #include "core/crypto.hpp"
 #include "tx/dex_ix.hpp"
@@ -377,6 +379,7 @@ TEST(engine_finds_an_injected_cycle_on_fixture_pools) {
   TipPolicy tips;
   EngineConfig ec;
   ec.flash = true;
+  ec.max_profit_ppm = 1'000'000;  // the 3% injection below is far above the 2% plausibility cap
   Engine eng(store, idx, both_quoters(), ec, tips);
   // Flash reserve for wSOL from the fixture's Kamino reserve.
   bool have_reserve = false;
@@ -425,6 +428,29 @@ TEST(engine_finds_an_injected_cycle_on_fixture_pools) {
   if (!got && !skipped.empty()) std::printf("    skipped: %s\n", reason_name(skipped.back()));
   CHECK(got);
   if (!got) return;
+  {
+    // The same edge under the default 2% cap is skipped as implausible.
+    EngineConfig capped = ec;
+    capped.max_profit_ppm = EngineConfig{}.max_profit_ppm;
+    Engine engc(store, idx, both_quoters(), capped, tips);
+    engc.set_flash_reserve(mint::WSOL, wsol_reserve);
+    std::vector<Reason> why;
+    engc.on_skip([&](const Opportunity&, Reason r) { why.push_back(r); });
+    if (o.profit_base * 1'000'000 > int64_t(o.x) * int64_t(capped.max_profit_ppm)) {
+      CHECK(!engc.evaluate(pick->id, 1001));
+      CHECK(!why.empty() && why.back() == Reason::implausible_profit);
+      CHECK_EQ(engc.counters().implausible, uint64_t(1));
+    }
+    // Quarantine: three bad simulations on a leg stop the cycle; it returns after the quarantine.
+    Engine engq(store, idx, both_quoters(), ec, tips);
+    engq.set_flash_reserve(mint::WSOL, wsol_reserve);
+    int64_t now = wall_ms();
+    for (int k = 0; k < 3; ++k) engq.note_sim(pick->legs[0].pool, pick->legs[0].a_to_b, true, now);
+    CHECK_EQ(engq.quarantined(now).size(), size_t(1));
+    CHECK(!engq.evaluate(pick->id, 1001));
+    CHECK_EQ(engq.counters().quarantined, uint64_t(1));
+    CHECK(engq.quarantined(now + 2'000'000).empty());
+  }
   std::printf("    candidate x=%llu out=%llu profit=%lld tip=%llu net=%lld ev=%lld min_out=%llu\n",
               (unsigned long long)o.x, (unsigned long long)o.final_out, (long long)o.profit_base,
               (unsigned long long)o.pr.tip_lamports, (long long)o.pr.net_lamports, (long long)o.pr.ev_lamports,
@@ -479,6 +505,31 @@ TEST(engine_finds_an_injected_cycle_on_fixture_pools) {
   // Far behind the slot clock counts as lag, not spread.
   CHECK(!eng3.evaluate(pick->id, 1010 + ec.max_slot_lag + 100));
   CHECK_EQ(eng3.counters().stale_lag, uint64_t(1));
+
+  // No room: with min_trade above any x_max the sizer is skipped, and the cycle is not re-priced until a leg's
+  // pool changes (re-pushing the pool and vaults bumps the snapshot seq).
+  auto push_all = [&](uint64_t slot) {
+    for (const Pubkey& k : {d2.address, d2.vault_a, d2.vault_b}) {
+      const FixtureAccount* fa = fixture(b58(k));
+      AccountUpdate u{k, fa->raw.owner, k == out_vault ? bytes.data() : fa->raw.data.data(),
+                      k == out_vault ? bytes.size() : fa->raw.data.size(), slot, 0, false, false};
+      store.apply(u);
+    }
+  };
+  push_all(1020);
+  EngineConfig huge = ec;
+  huge.min_trade_lamports = 1'000'000'000'000'000ULL;
+  Engine eng4(store, idx, both_quoters(), huge, tips);
+  eng4.set_flash_reserve(mint::WSOL, wsol_reserve);
+  CHECK(!eng4.evaluate(pick->id, 1020));
+  CHECK_EQ(eng4.sizer_diag().no_room, uint64_t(1));
+  CHECK_EQ(eng4.counters().sized, uint64_t(0));  // the sizer never ran
+  CHECK(!eng4.evaluate(pick->id, 1020));
+  CHECK_EQ(eng4.counters().no_room_memo, uint64_t(1));
+  CHECK_EQ(eng4.sizer_diag().no_room, uint64_t(1));
+  push_all(1021);
+  CHECK(!eng4.evaluate(pick->id, 1021));
+  CHECK_EQ(eng4.sizer_diag().no_room, uint64_t(2));  // re-priced after the pool changed
 }
 
 TEST(cycle_cap_lists_per_pool_hub_does_not_block) {
@@ -863,4 +914,25 @@ TEST(clmm_tick_math_matches_program_bounds_and_round_trips) {
   // One exact-in step that stays inside the range: fee on input, zero for one.
   auto r = compute_swap_exact_in(u128(1) << 64, *sqrt_price_at_tick(-100), u128(1'000'000'000'000ULL), 1'000'000, 2500, true, true);
   CHECK(r.has_value() && r->amount_in + r->fee_amount == 1'000'000 && r->amount_out > 0 && r->amount_out < 1'000'000);
+}
+TEST(helius_quota_flag_and_backoff) {
+  usage::set_quota(false, 0);
+  CHECK(usage::is_quota_body("{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32429,\"message\":\"max usage reached\"}}"));
+  CHECK(!usage::is_quota_body("Too many requests"));
+  usage::record_rpc("getSlot", 429, 10, 20, "Too many requests", 1000);  // a rate limit, not the plan cap
+  CHECK(!usage::quota_exhausted());
+  usage::record_rpc("getSlot", 429, 10, 20, "max usage reached", 2000);
+  CHECK(usage::quota_exhausted());
+  CHECK_EQ(usage::quota_since_ms(), int64_t(2000));
+  int64_t last = 0;
+  CHECK(usage::may_call(last, 70'000));   // first call after the hold
+  CHECK(!usage::may_call(last, 100'000)); // within a minute of the last one
+  CHECK(usage::may_call(last, 130'001));
+  usage::record_rpc("getSlot", 200, 10, 20, "", 140'000);  // a success clears it
+  CHECK(!usage::quota_exhausted());
+  CHECK(usage::may_call(last, 140'001));
+  bool found = false;
+  for (auto& [m, s] : usage::rpc_snapshot())
+    if (m == "getSlot") found = s.calls >= 3 && s.rate_limited >= 2;
+  CHECK(found);
 }

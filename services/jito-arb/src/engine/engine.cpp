@@ -6,6 +6,7 @@
 #include "core/programs.hpp"
 #include "core/sys.hpp"
 #include "core/u256.hpp"
+#include "obs/log.hpp"
 #include "dex/dlmm.hpp"
 
 namespace arb::engine {
@@ -56,6 +57,10 @@ EngineConfig engine_config(const Config& c) {
   e.max_trade_lamports = c.engine.max_trade_lamports;
   e.min_trade_lamports = c.engine.min_trade_lamports;
   e.sizer_max_evals = c.engine.sizer_max_evals;
+  e.max_profit_ppm = ppm(c.engine.max_profit_ratio);
+  e.quarantine_strikes = c.sim.quarantine_strikes;
+  e.quarantine_window_ms = int64_t(c.sim.quarantine_window_s) * 1000;
+  e.quarantine_ms = int64_t(c.sim.quarantine_s) * 1000;
   e.flash = c.mode.funding_mode == "flash";
   e.costs.base_fee_lamports = c.engine.base_fee_lamports;
   e.costs.cu_price_micro_lamports = c.engine.cu_price_micro_lamports;
@@ -219,6 +224,40 @@ std::vector<SpreadExample> Engine::take_spread_examples(size_t n) {
   return v;
 }
 
+void Engine::note_sim(uint32_t pool, bool a_to_b, bool bad, int64_t now_ms) {
+  uint64_t key = (uint64_t(pool) << 1) | uint64_t(a_to_b);
+  if (!bad) {
+    auto it = strikes_.find(key);
+    if (it != strikes_.end() && it->second.until_ms <= now_ms) strikes_.erase(it);
+    return;
+  }
+  Strikes& s = strikes_[key];
+  s.at_ms.push_back(now_ms);
+  std::erase_if(s.at_ms, [&](int64_t t) { return now_ms - t > cfg_.quarantine_window_ms; });
+  if (int(s.at_ms.size()) >= cfg_.quarantine_strikes && s.until_ms <= now_ms) {
+    s.until_ms = now_ms + cfg_.quarantine_ms;
+    LOG_WARN("quarantine: pool %u %s for %lld s after %zu failed or short simulations", pool, a_to_b ? "a>b" : "b>a",
+             (long long)(cfg_.quarantine_ms / 1000), s.at_ms.size());
+  }
+}
+
+std::vector<Engine::Quarantine> Engine::quarantined(int64_t now_ms) const {
+  std::vector<Quarantine> out;
+  for (const auto& [key, s] : strikes_)
+    if (s.until_ms > now_ms) out.push_back({uint32_t(key >> 1), bool(key & 1), s.until_ms, uint32_t(s.at_ms.size())});
+  std::sort(out.begin(), out.end(), [](const Quarantine& a, const Quarantine& b) { return a.until_ms > b.until_ms; });
+  return out;
+}
+
+uint64_t Engine::reserve_available(const Pubkey& base) const {
+  if (cfg_.flash) {
+    auto it = reserves_.find(base);
+    return it == reserves_.end() ? 0 : it->second.available;
+  }
+  auto it = own_balance_.find(base);
+  return it == own_balance_.end() ? 0 : it->second;
+}
+
 bool Engine::evaluate(uint32_t cycle, uint64_t slot, Opportunity* out) {
   const Cycle& c = idx_.cycle(cycle);
   if (disp_.cooling(cycle, slot)) {
@@ -255,6 +294,30 @@ bool Engine::evaluate(uint32_t cycle, uint64_t slot, Opportunity* out) {
       }
     }
   }
+  if (!strikes_.empty()) {
+    int64_t now = wall_ms();
+    for (int i = 0; i < c.n; ++i) {
+      auto it = strikes_.find((uint64_t(c.legs[i].pool) << 1) | uint64_t(c.legs[i].a_to_b));
+      if (it != strikes_.end() && it->second.until_ms > now) {
+        ++n_.quarantined;
+        return false;
+      }
+    }
+  }
+  // A cycle whose x_max was below min_trade stays so until a leg's pool or the flash reserve changes.
+  if (!no_room_.empty()) {
+    auto it = no_room_.find(cycle);
+    if (it != no_room_.end()) {
+      // The flash reserve moves every slot: it only matters when it was what kept x_max below min_trade.
+      bool same = !it->second.reserve_bound || reserve_available(c.base) < it->second.min_trade;
+      for (int i = 0; i < c.n && same; ++i) same = it->second.seq[i] == s[i]->seq;
+      if (same) {
+        ++n_.no_room_memo;
+        return false;
+      }
+      no_room_.erase(it);
+    }
+  }
   u128 prod = spot_product_x64(c, s);
   if (prod < edge_x64_) return false;
   ++n_.prefilter_pass;
@@ -285,6 +348,15 @@ bool Engine::evaluate(uint32_t cycle, uint64_t slot, Opportunity* out) {
   sc.min_trade = std::max<uint64_t>(1, bp->from_lamports_ceil(cfg_.min_trade_lamports));
   sc.x_max = x_max;
   sc.max_evals = cfg_.sizer_max_evals;
+  if (sc.x_max < sc.min_trade) {
+    // No size can trade: do not run the sizer, and skip this cycle until its inputs change.
+    ++diag_.no_room;
+    NoRoom& nr = no_room_[cycle];
+    nr.min_trade = sc.min_trade;
+    nr.reserve_bound = reserve_available(c.base) < sc.min_trade;
+    for (int i = 0; i < c.n; ++i) nr.seq[i] = s[i]->seq;
+    return log_skip(Reason::sizer_no_room);
+  }
   SizeResult r = size_cycle(c, s, q_, fee, sc);
   ++n_.sized;
   uint64_t tnow = now_ns();
@@ -341,6 +413,10 @@ bool Engine::evaluate(uint32_t cycle, uint64_t slot, Opportunity* out) {
   o.flash_fee = r.flash_fee;
   o.profit_base = r.profit;
   for (int i = 0; i < c.n; ++i) o.leg_out[i] = r.chain.outs[i];
+  if (r.profit > 0 && u128(r.profit) * 1'000'000 > u128(r.x) * cfg_.max_profit_ppm) {
+    ++n_.implausible;
+    return log_skip(Reason::implausible_profit);
+  }
   o.pr = price(r.x, r.profit, r.flash_fee, r.chain.cu, c.route_class, *bp, tips_, cfg_.costs);
   if (!o.pr.ok) return log_skip(o.pr.reject);
   ++n_.candidates;

@@ -44,6 +44,9 @@ struct DecisionRecord {
   uint8_t outcome = 0;
   uint8_t dex[3]{};  // DexKind per leg
   uint8_t a_to_b_mask = 0;
+  // Outcome records: pad0[0] = 1 when the route was simulated leg by leg (too large as one message; each leg
+  // alone on its quoted input, state_seq[i] = that leg's shortfall vs quote in bps, negative = above quote);
+  // pad0[1] = the legs' vault balances at the simulation vs the engine's snapshot: 1 equal, 2 different (drift).
   uint8_t pad0[5]{};
   uint32_t cycle_id = 0;
   uint32_t pad1 = 0;

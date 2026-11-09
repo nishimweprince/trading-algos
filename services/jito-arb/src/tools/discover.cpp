@@ -25,6 +25,7 @@
 #include "core/crypto.hpp"
 #include "core/programs.hpp"
 #include "core/rpc.hpp"
+#include "core/usage.hpp"
 #include "feed/subscription.hpp"
 #include "state/discovery.hpp"
 #include "tx/dex_ix.hpp"
@@ -317,6 +318,7 @@ int main(int argc, char** argv) {
     return run(argc, argv);
   } catch (const std::exception& e) {
     std::fprintf(stderr, "discover failed: %s\n", e.what());
-    return 1;
+    // 75 (EX_TEMPFAIL): the Helius plan's usage is exhausted; the timer retries, the bot keeps its pools file.
+    return usage::quota_exhausted() ? 75 : 1;
   }
 }

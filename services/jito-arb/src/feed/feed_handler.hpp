@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 // Applies parsed frames to the StateStore and keeps the slot clock. Shared by the
 // live LaserStream path, the recorder (which also persists frames) and replay.
 #include <atomic>
@@ -34,6 +35,11 @@ class FeedHandler {
   uint64_t frames() const { return frames_; }
   uint64_t bad_frames() const { return bad_; }
   uint64_t account_updates() const { return accounts_; }
+  /** Account updates and their data bytes by the account's registered kind (index = AccountKind; last = unknown). */
+  struct KindTraffic {
+    uint64_t updates = 0, bytes = 0;
+  };
+  const std::array<KindTraffic, ACCOUNT_KIND_COUNT + 1>& traffic() const { return traffic_; }
   uint64_t last_update_ns() const { return last_update_ns_.load(std::memory_order_relaxed); }
   /** Account updates: our receive time minus the server's created_at (Helius -> us), microseconds. */
   obs::LatencyWindow& feed_lag_us() { return feed_lag_us_; }
@@ -57,6 +63,7 @@ class FeedHandler {
   SlotClock& clock_;
   UpdateView view_;
   uint64_t frames_ = 0, bad_ = 0, accounts_ = 0;
+  std::array<KindTraffic, ACCOUNT_KIND_COUNT + 1> traffic_{};
   std::atomic<uint64_t> last_update_ns_{0};
   obs::LatencyWindow feed_lag_us_, slot_offset_us_;
   struct SlotBanks {

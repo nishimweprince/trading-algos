@@ -86,6 +86,7 @@
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   .mono { font-family: var(--mono); font-size: 11px; }
   .empty { color: var(--muted); padding: 10px 0; white-space: normal; }
+  .alert { border: 1px solid var(--bad); color: var(--bad); background: color-mix(in srgb, var(--bad) 8%, transparent); border-radius: 10px; padding: 10px 14px; margin-bottom: 14px; font-weight: 500; }
   .note { color: var(--muted); font-size: 11px; line-height: 1.5; }
   .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; flex: none; }
   .seg button { background: none; border: 0; color: var(--muted); padding: 5px 11px; font: inherit; font-size: 11px; font-weight: 500; cursor: pointer; min-height: 30px; }
@@ -124,7 +125,17 @@
   <span class="sub" id="updated">connecting…</span>
 </header>
 <main class="wrap">
+  <section class="alert" id="alert" hidden></section>
   <section class="grid g8" id="tiles"></section>
+
+  <section class="panel">
+    <h2>Helius usage</h2>
+    <p class="note">Rates over the last minute, scaled to an hour; totals since the bot started. RPC by method, stream by account kind.</p>
+    <div class="cols">
+      <div class="tablewrap"><table id="usage_rpc"></table></div>
+      <div class="tablewrap"><table id="usage_feed"></table></div>
+    </div>
+  </section>
 
   <section class="panel">
     <h2>Latency to land a candidate</h2>
@@ -171,6 +182,12 @@
   <section class="panel">
     <h2>Latest candidates</h2>
     <div class="tablewrap"><table id="latest"></table></div>
+  </section>
+
+  <section class="panel">
+    <h2>Quarantined by simulation</h2>
+    <p class="note">Pool directions not dispatched for a while because their bundle simulations failed or came out short repeatedly.</p>
+    <div class="tablewrap"><table id="quarantine"></table></div>
   </section>
 
   <section class="cols">
@@ -236,6 +253,19 @@ async function refreshState() {
     $("svc").className = "pill " + (live && !m.arb_kill_switch ? "good" : st === "no systemd" ? "warn" : "bad");
     $("updated").textContent = s.scrape_error ? "metrics unavailable: " + s.scrape_error : "updated " + ago(s.sampled_at) + " · slot " + fmt(m.arb_slot) + " · up " + dur(m.arb_uptime_seconds);
     const age = m.arb_feed_update_age_ms;
+    // Outage banner: quota exhausted, or no stream up / no update for 30 s.
+    const issues = [];
+    if (m.arb_helius_quota_exhausted === 1) issues.push(`Helius quota exhausted for ${dur(m.arb_helius_quota_exhausted_seconds)}: RPC answers 429 "max usage reached"; polling is backed off to once a minute.`);
+    if (m.arb_feed_shards_up === 0) issues.push("No LaserStream stream is up: the bot sees no account updates.");
+    else if (age > 30000) issues.push(`Newest account update is ${dur(age / 1000)} old.`);
+    $("alert").hidden = issues.length === 0;
+    $("alert").innerHTML = issues.map((t) => `<div>${esc(t)}</div>`).join("");
+    const usageRows = (prefix, label) => Object.keys(m).filter((k) => k.startsWith(prefix)).map((k) => k.slice(prefix.length)).sort((a, b) => (m[prefix + b] || 0) - (m[prefix + a] || 0));
+    const perHour = (k) => r[k] == null ? "–" : fmt(r[k] * 3600);
+    $("usage_rpc").innerHTML = `<tr><th>RPC method</th><th class="num">Calls / h</th><th class="num">Calls</th><th class="num">MB in</th><th class="num">429s</th></tr>` +
+      usageRows("arb_rpc_calls_").map((x) => `<tr><td class="mono">${esc(x)}</td><td class="num">${perHour("arb_rpc_calls_" + x)}</td><td class="num">${fmt(m["arb_rpc_calls_" + x])}</td><td class="num">${fmt((m["arb_rpc_bytes_in_" + x] || 0) / 1e6, 1)}</td><td class="num">${fmt(m["arb_rpc_rate_limited_" + x] || 0)}</td></tr>`).join("");
+    $("usage_feed").innerHTML = `<tr><th>Stream account kind</th><th class="num">MB / h</th><th class="num">Updates / h</th><th class="num">GB total</th></tr>` +
+      usageRows("arb_feed_bytes_").map((x) => `<tr><td class="mono">${esc(x)}</td><td class="num">${r["arb_feed_bytes_" + x] == null ? "–" : fmt(r["arb_feed_bytes_" + x] * 3600 / 1e6, 1)}</td><td class="num">${perHour("arb_feed_updates_" + x)}</td><td class="num">${fmt((m["arb_feed_bytes_" + x] || 0) / 1e9, 2)}</td></tr>`).join("");
     $("tiles").innerHTML = [
       tile("Pools tracked", fmt(m.arb_pools), `${fmt(m.arb_pools_quotable)} quotable now`),
       tile("Cycles", fmt(m.arb_cycles), "2- and 3-hop"),
@@ -249,7 +279,11 @@ async function refreshState() {
            m.arb_sim_failed > m.arb_sim_ok ? "warnv" : ""),
       tile("Skip logs sampled", fmt(m.arb_decision_skip_logs_dropped), "all signed candidates and outcomes retained"),
       tile("Simulation jobs", fmt(m.arb_sim_submitted), `${fmt(m.arb_sim_terminal)} finished · ${fmt(m.arb_sim_queued)} queued · ${fmt(m.arb_sim_in_flight)} in progress`),
-      tile("Not simulated", fmt((m.arb_sim_dropped || 0) + (m.arb_sim_no_holder || 0) + (m.arb_sim_too_large || 0) + (m.arb_sim_rpc_error || 0) + (m.arb_sim_setup_error || 0) + (m.arb_sim_funding_changed || 0) + (m.arb_sim_intermediate_balance || 0)),
+      tile("State at simulation", `${fmt(m.arb_sim_state_matched)} / ${fmt(m.arb_sim_state_drifted)}`,
+           `matched / drifted vaults · ${fmt(m.arb_sim_quoter_suspect)} quoter suspects · ${fmt(m.arb_sim_per_leg)} leg by leg`,
+           (m.arb_sim_quoter_suspect || 0) > 0 ? "warnv" : ""),
+      tile("Held back", fmt(m.arb_quarantined_pools), `pools quarantined · ${fmt(m.arb_engine_implausible_profit)} implausible profits · ${fmt(m.arb_engine_no_room_memo)} no-room skips`),
+      tile("Not simulated", fmt((m.arb_sim_dropped || 0) + (m.arb_sim_no_holder || 0) + Math.max(0, (m.arb_sim_too_large || 0) - (m.arb_sim_per_leg || 0)) + (m.arb_sim_rpc_error || 0) + (m.arb_sim_setup_error || 0) + (m.arb_sim_funding_changed || 0) + (m.arb_sim_intermediate_balance || 0)),
            `${fmt(m.arb_sim_rpc_error)} RPC · ${fmt(m.arb_sim_setup_error)} setup · ${fmt(m.arb_sim_no_holder)} no holder · ${fmt(m.arb_sim_funding_changed)} holder moved · ${fmt(m.arb_sim_dropped)} capped`),
     ].join("");
     const ms = (us) => us == null || us < 0 ? null : us / 1000;
@@ -358,6 +392,17 @@ $("drange").addEventListener("click", (e) => {
   refreshDecisions();
 });
 refreshState(); refreshHistory(); refreshDecisions();
+async function refreshQuarantine() {
+  try {
+    const q = await getJSON("/api/quarantine");
+    $("quarantine").innerHTML = q.pools.length
+      ? `<tr><th>Pool</th><th>DEX</th><th>Direction</th><th class="num">Strikes</th><th>Until</th></tr>` +
+        q.pools.map((p) => `<tr><td class="mono"><a href="https://solscan.io/account/${esc(p.pool)}" target="_blank" rel="noopener" style="color:inherit">${esc(short(p.pool))}</a></td><td>${esc(p.dex)}</td><td>${esc(p.dir)}</td><td class="num">${fmt(p.strikes)}</td><td>${new Date(p.until_ms).toLocaleTimeString()}</td></tr>`).join("")
+      : `<tr><td class="empty sub">None quarantined.</td></tr>`;
+  } catch (e) {}
+}
+refreshQuarantine();
+setInterval(refreshQuarantine, 15000);
 setInterval(refreshState, 5000);
 setInterval(refreshHistory, 15000);
 setInterval(refreshDecisions, 30000);

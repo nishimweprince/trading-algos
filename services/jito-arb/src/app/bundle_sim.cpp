@@ -15,6 +15,7 @@
 #include "core/crypto.hpp"
 #include "core/programs.hpp"
 #include "core/rpc.hpp"
+#include "core/usage.hpp"
 #include "core/sys.hpp"
 #include "obs/log.hpp"
 #include "tx/builders.hpp"
@@ -221,6 +222,12 @@ void BundleSim::run() {
       n_.queued = queue_.size();
       n_.in_flight = 1;
     }
+    // While the Helius quota is exhausted every call fails: try one job a minute, drop the rest.
+    if (!usage::may_call(quota_try_ms_, wall_ms())) {
+      ++n_.dropped;
+      n_.in_flight = 0;
+      continue;
+    }
     process(j, rpc);
   }
 }
@@ -346,14 +353,134 @@ bool account_same(const std::optional<RpcAccount>& a, const std::optional<RpcAcc
 }
 }  // namespace
 
+void BundleSim::per_leg(SimJob& j, Rpc& rpc, std::span<const std::shared_ptr<const PoolState>> legs, uint8_t& flag_per_leg,
+                        uint8_t& flag_state, int64_t (&leg_short_bps)[3], std::vector<std::string>& logs, std::string& error,
+                        const std::function<void(obs::DecisionRecord)>& finish,
+                        const std::function<void(obs::SimFail, uint64_t, uint64_t)>& failed) {
+  flag_per_leg = 1;
+  ++n_.per_leg;
+  bool all_matched = true;
+  uint64_t last_out = 0, last_slot = 0, units = 0;
+  for (int i = 0; i < j.c.n; ++i) {
+    const PoolState& p = *legs[size_t(i)];
+    const engine::Leg& leg = j.c.legs[i];
+    const uint64_t in = i == 0 ? j.o.x : j.o.leg_out[i - 1];
+    const SimHolder* h = holder_for(leg.mint_in, in, rpc);
+    if (!h) {
+      ++n_.no_holder;
+      return failed(obs::SimFail::no_holder, last_slot, units);
+    }
+    const Pubkey owner = h->owner;
+    const Pubkey in_ata = tx::wallet_ata(owner, leg.mint_in, p), out_ata = tx::wallet_ata(owner, leg.mint_out, p);
+    std::vector<Pubkey> keys = {in_ata, out_ata, p.vault_a, p.vault_b, owner};
+    uint64_t pre_slot = 0;
+    auto pre = rpc.multiple_accounts_at(keys, pre_slot, "processed");
+    if (account_amount(pre[0]) < in || !pre[4] || pre[4]->owner != prog::SYSTEM || !pre[4]->data.empty() ||
+        pre[4]->lamports < cfg_.sim.min_payer_lamports) {
+      holders_.erase(leg.mint_in);  // stale holder list: re-read next time
+      ++n_.no_holder;
+      return failed(obs::SimFail::no_holder, pre_slot, units);
+    }
+    all_matched &= account_amount(pre[2]) == p.vault_a_amount && account_amount(pre[3]) == p.vault_b_amount;
+    flag_state = all_matched ? 1 : 2;
+    tx::IxList l;
+    if (!pre[1]) {
+      const Pubkey& tp = token_program_of(leg.mint_out, p);
+      l.add(prog::ATA).acc(owner, true, true).rw(out_ata).ro(owner).ro(leg.mint_out).ro(prog::SYSTEM).ro(tp).u8(1);
+    }
+    if (p.kind == DexKind::PumpSwap) {
+      auto volume = rpc.account(tx::dexix::pump_user_volume_accumulator(owner), "processed");
+      if (!volume) {
+        tx::dexix::pump_init_user_volume(l, owner);
+      } else {
+        simdjson::dom::parser rent_parser;
+        auto body = rpc.call("getMinimumBalanceForRentExemption", "[" + std::to_string(volume->data.size()) + "]");
+        uint64_t minimum = rent_parser.parse(body)["result"];
+        if (minimum > volume->lamports) tx::dexix::pump_fund_user_volume(l, owner, minimum - volume->lamports);
+      }
+    }
+    uint8_t first_swap = l.n;
+    tx::dexix::UserAccounts ua{owner, tx::wallet_ata(owner, p.mint_a, p), tx::wallet_ata(owner, p.mint_b, p)};
+    try {
+      tx::dexix::swap(l, p, leg.a_to_b, ua, in, 0);
+    } catch (const std::exception&) {
+      ++n_.setup_error;
+      return failed(obs::SimFail::setup, pre_slot, units);
+    }
+    std::string txb = unsigned_tx_b64(owner, l);
+    if (txb.empty()) return failed(obs::SimFail::too_large, pre_slot, units);  // one leg alone does not fit
+    Rpc::SimResult sim;
+    for (unsigned attempt = 0;; ++attempt) {
+      try {
+        sim = rpc.simulate_full(txb, {in_ata, out_ata}, std::max(j.cand.slot, pre_slot), "processed");
+        break;
+      } catch (const std::exception& e) {
+        if (attempt == 2 || std::string(e.what()).find("-32016") == std::string::npos) throw;
+        ++n_.context_retries;
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      }
+    }
+    logs.insert(logs.end(), sim.logs.begin(), sim.logs.end());
+    units += sim.units;
+    last_slot = sim.slot;
+    if (!sim.ok) {
+      error = sim.err;
+      auto why = classify_sim_error(sim.err, first_swap, 1);
+      if (why != obs::SimFail::leg1) {
+        ++n_.setup_error;
+        return failed(why, sim.slot, units);
+      }
+      ++n_.failed;
+      LOG_INFO("bundle sim (per leg) failed: cycle %u leg %d %s err %s", j.c.id, i + 1, dex_name(p.kind), sim.err.substr(0, 120).c_str());
+      return failed(obs::SimFail(uint8_t(i + 1)), sim.slot, units);
+    }
+    if (sim.accounts.size() != 2 || !sim.accounts[1]) {
+      ++n_.rpc_error;
+      return failed(obs::SimFail::rpc, sim.slot, units);
+    }
+    i128 out = i128(account_amount(sim.accounts[1])) - i128(account_amount(pre[1]));
+    if (out < 0) out = 0;
+    uint64_t quoted = j.o.leg_out[i];
+    leg_short_bps[i] = quoted ? int64_t((i128(quoted) - out) * 10'000 / i128(quoted)) : 0;
+    last_out = uint64_t(out);
+  }
+  auto r = sim_outcome(j, true, obs::SimFail::none, last_slot, last_out, units, wall_ms());
+  ++n_.ok;
+  if (r.net_lamports > 0) ++n_.profitable;
+  LOG_INFO("bundle sim (per leg) ok: cycle %u final_out %llu quoted %llu shortfall bps %lld/%lld/%lld", j.c.id,
+           (unsigned long long)r.final_out, (unsigned long long)r.min_out, (long long)leg_short_bps[0], (long long)leg_short_bps[1],
+           (long long)leg_short_bps[2]);
+  finish(r);
+}
+
 void BundleSim::process(SimJob& j, Rpc& rpc) {
   std::vector<std::string> logs;
   std::string error;
   std::vector<int64_t> residuals;
   std::span<const std::shared_ptr<const PoolState>> legs(j.legs.data(), j.c.n);
+  uint8_t flag_per_leg = 0, flag_state = 0;
+  int64_t leg_short_bps[3]{};
   auto finish = [&](obs::DecisionRecord r) {
     auto units = sim_leg_units(logs, legs);
     for (size_t i = 0; i < units.size(); ++i) r.leg_out[i] = units[i];
+    r.pad0[0] = flag_per_leg;
+    r.pad0[1] = flag_state;
+    if (flag_per_leg)
+      for (int i = 0; i < 3; ++i) r.state_seq[size_t(i)] = uint64_t(leg_short_bps[i]);
+    if (flag_state == 1) ++n_.state_matched;
+    if (flag_state == 2) ++n_.state_drifted;
+    // The chain held exactly the engine's vault balances, yet the route failed or paid short: suspect the quoter.
+    bool short_ok = r.outcome == uint8_t(obs::Outcome::SimulatedOk) && r.min_out &&
+                    (i128(r.min_out) - i128(r.final_out)) * 10'000 > i128(r.min_out) * cfg_.sim.short_bps;
+    bool leg_fail = r.outcome == uint8_t(obs::Outcome::SimulationFailed) && r.reason >= 1 && r.reason <= 3;
+    if (flag_state == 1 && (short_ok || leg_fail)) {
+      ++n_.quoter_suspect;
+      std::string pools;
+      for (int i = 0; i < j.c.n; ++i)
+        pools += std::string(i ? " " : "") + dex_name(legs[size_t(i)]->kind) + ":" + b58(legs[size_t(i)]->address).substr(0, 8);
+      LOG_WARN("bundle sim: quoter suspect (vaults matched the snapshot) cycle %u %s %s: quoted %llu simulated %llu",
+               j.c.id, pools.c_str(), leg_fail ? "failed" : "short", (unsigned long long)r.min_out, (unsigned long long)r.final_out);
+    }
     try {
       std::filesystem::create_directories(cfg_.obs.decision_log_dir);
       time_t t = time_t(r.wall_ms / 1000);
@@ -394,11 +521,26 @@ void BundleSim::process(SimJob& j, Rpc& rpc) {
       pre_keys = {acc.base_account};
       pre_keys.insert(pre_keys.end(), acc.intermediates.begin(), acc.intermediates.end());
       auto read_keys = pre_keys;
+      // The legs' vaults in the same read: equal to the engine's snapshot means the simulation ran on the state
+      // the route was priced on; different means the chain had moved (drift), not a quoter error.
+      for (const auto& p : legs) {
+        read_keys.push_back(p->vault_a);
+        read_keys.push_back(p->vault_b);
+      }
       read_keys.push_back(h->owner);
       pre = rpc.multiple_accounts_at(read_keys, pre_slot, "processed");
       auto& wallet = pre.back();
       if (account_amount(pre[0]) >= j.o.x && wallet && wallet->owner == prog::SYSTEM && wallet->data.empty() &&
-          wallet->lamports >= cfg_.sim.min_payer_lamports) { pre.pop_back(); break; }
+          wallet->lamports >= cfg_.sim.min_payer_lamports) {
+        pre.pop_back();
+        bool matched = true;
+        size_t v0 = pre_keys.size();
+        for (size_t i = 0; i < legs.size(); ++i)
+          matched &= account_amount(pre[v0 + 2 * i]) == legs[i]->vault_a_amount && account_amount(pre[v0 + 2 * i + 1]) == legs[i]->vault_b_amount;
+        flag_state = matched ? 1 : 2;
+        pre.resize(v0);
+        break;
+      }
       auto& list = holders_[j.c.base].list;
       list.erase(std::remove_if(list.begin(), list.end(), [&](const auto& x) { return x.owner == holder->owner; }), list.end());
       holder.reset();
@@ -429,7 +571,7 @@ void BundleSim::process(SimJob& j, Rpc& rpc) {
     std::string txb = unsigned_tx_b64(holder->owner, l);
     if (txb.empty()) {
       ++n_.too_large;
-      return failed(obs::SimFail::too_large, pre_slot, 0);
+      return per_leg(j, rpc, legs, flag_per_leg, flag_state, leg_short_bps, logs, error, finish, failed);
     }
     Rpc::SimResult sim;
     for (unsigned attempt = 0; ; ++attempt) {
