@@ -73,6 +73,9 @@ enum class Reason : uint8_t {
   tx_build_failed, sign_guard,
   // Why the sizer found no profitable size (appended: the values above are the on-disk encoding).
   sizer_no_room, sizer_no_profit, sizer_partial_fill, sizer_quote_error, sizer_zero_out,
+  // Appended: a sized profit too large to be real (stale or broken pool state), and a pool direction the
+  // bundle simulations keep rejecting.
+  implausible_profit, quarantined,
 };
 const char* reason_name(Reason r);
 

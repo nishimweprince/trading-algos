@@ -2,6 +2,7 @@
 #include <cstring>
 
 #include "app/bundle_sim.hpp"
+#include "core/sys.hpp"
 #include "core/usage.hpp"
 #include "dex/clmm_math.hpp"
 #include "core/crypto.hpp"
@@ -378,6 +379,7 @@ TEST(engine_finds_an_injected_cycle_on_fixture_pools) {
   TipPolicy tips;
   EngineConfig ec;
   ec.flash = true;
+  ec.max_profit_ppm = 1'000'000;  // the 3% injection below is far above the 2% plausibility cap
   Engine eng(store, idx, both_quoters(), ec, tips);
   // Flash reserve for wSOL from the fixture's Kamino reserve.
   bool have_reserve = false;
@@ -426,6 +428,29 @@ TEST(engine_finds_an_injected_cycle_on_fixture_pools) {
   if (!got && !skipped.empty()) std::printf("    skipped: %s\n", reason_name(skipped.back()));
   CHECK(got);
   if (!got) return;
+  {
+    // The same edge under the default 2% cap is skipped as implausible.
+    EngineConfig capped = ec;
+    capped.max_profit_ppm = EngineConfig{}.max_profit_ppm;
+    Engine engc(store, idx, both_quoters(), capped, tips);
+    engc.set_flash_reserve(mint::WSOL, wsol_reserve);
+    std::vector<Reason> why;
+    engc.on_skip([&](const Opportunity&, Reason r) { why.push_back(r); });
+    if (o.profit_base * 1'000'000 > int64_t(o.x) * int64_t(capped.max_profit_ppm)) {
+      CHECK(!engc.evaluate(pick->id, 1001));
+      CHECK(!why.empty() && why.back() == Reason::implausible_profit);
+      CHECK_EQ(engc.counters().implausible, uint64_t(1));
+    }
+    // Quarantine: three bad simulations on a leg stop the cycle; it returns after the quarantine.
+    Engine engq(store, idx, both_quoters(), ec, tips);
+    engq.set_flash_reserve(mint::WSOL, wsol_reserve);
+    int64_t now = wall_ms();
+    for (int k = 0; k < 3; ++k) engq.note_sim(pick->legs[0].pool, pick->legs[0].a_to_b, true, now);
+    CHECK_EQ(engq.quarantined(now).size(), size_t(1));
+    CHECK(!engq.evaluate(pick->id, 1001));
+    CHECK_EQ(engq.counters().quarantined, uint64_t(1));
+    CHECK(engq.quarantined(now + 2'000'000).empty());
+  }
   std::printf("    candidate x=%llu out=%llu profit=%lld tip=%llu net=%lld ev=%lld min_out=%llu\n",
               (unsigned long long)o.x, (unsigned long long)o.final_out, (long long)o.profit_base,
               (unsigned long long)o.pr.tip_lamports, (long long)o.pr.net_lamports, (long long)o.pr.ev_lamports,

@@ -160,6 +160,8 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
     return *it->second;
   };
   int64_t last_blockhash_try = 0, last_resync_try = 0, last_bank_resync_try = 0;
+  // Next to the decision logs (the data dir the dashboard reads).
+  std::string quarantine_path = cfg.obs.decision_log_dir + "/../quarantine.json";
   auto& g_decode = reg.gauge("arb_decode_failures", "account decode failures");
   auto& g_cand = reg.gauge("arb_engine_candidates", "candidates priced above min_ev");
   auto& g_dry = reg.gauge("arb_bundles_dry_run", "bundles built and signed in dry run");
@@ -215,6 +217,9 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   auto& g_sim_setup = reg.gauge("arb_sim_setup_error", "simulation setup or unclassified message errors; excludes failed swap legs");
   auto& g_sim_rpc = reg.gauge("arb_sim_rpc_error", "simulation RPC errors");
   auto& g_untradable = reg.gauge("arb_engine_untradable", "evaluations skipped: a leg the program rejects in that direction");
+  auto& g_quarantined = reg.gauge("arb_engine_quarantined", "evaluations skipped: a leg quarantined by failed or short simulations");
+  auto& g_implausible = reg.gauge("arb_engine_implausible_profit", "sized candidates skipped: profit above engine.max_profit_ratio");
+  auto& g_quarantine_pools = reg.gauge("arb_quarantined_pools", "pool directions quarantined now");
   auto& g_no_room_memo = reg.gauge("arb_engine_no_room_memo", "evaluations skipped: x_max was below min_trade and nothing changed since");
   auto& g_signed = reg.gauge("arb_bundles_signed", "bundles built and signed");
   auto& g_shards = reg.gauge("arb_feed_shards_up", "LaserStream streams currently up");
@@ -316,6 +321,8 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       g_skipped.set(int64_t(n.skipped));
       g_untradable.set(int64_t(n.untradable));
       g_no_room_memo.set(int64_t(n.no_room_memo));
+      g_quarantined.set(int64_t(n.quarantined));
+      g_implausible.set(int64_t(n.implausible));
       // Simulation outcomes: into the decision log, the quote-mismatch feed (record-only in dry run) and gauges.
       for (const obs::DecisionRecord& r : sim.drain()) {
         if (!dlog.write(r)) LOG_ERROR("cannot persist simulation outcome");
@@ -329,6 +336,22 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
           if (r.slot == r.state_slot[0] && same_dex) sim_limits.record_sim(r.dex[0], std::abs(mis) > 1000);
         }
         if (r.slot && r.state_slot[0]) sim_lag.add(mono_ns(), int64_t(r.slot) - int64_t(r.state_slot[0]));
+        // Feed the verdict back to dispatch: a route that failed at leg k marks legs 1..k (a short output from an
+        // earlier leg makes a later one fail), a short success marks every leg, a clean success clears them.
+        // Not-simulated outcomes (too large, no holder, RPC, setup) say nothing about the pools.
+        {
+          int bad_upto = -1;  // legs [0, bad_upto) are bad; 0 = all good; -1 = no verdict
+          if (r.outcome == uint8_t(obs::Outcome::SimulatedOk) && r.min_out) {
+            int64_t short_bps = int64_t((__int128(r.min_out) - __int128(r.final_out)) * 10'000 / __int128(r.min_out));
+            bad_upto = short_bps > cfg.sim.short_bps ? r.hops : 0;
+          } else if (r.outcome == uint8_t(obs::Outcome::SimulationFailed) && r.reason >= 1 && r.reason <= 3) {
+            bad_upto = r.reason;
+          }
+          if (bad_upto >= 0)
+            for (int i = 0; i < r.hops; ++i)
+              if (auto id = rt.store().pool_id(key_from(r.pools[i])))
+                rt.engine().note_sim(*id, (r.a_to_b_mask >> i) & 1, i < bad_upto, wall_ms());
+        }
         // Runtime errors are classified in the outcome/sidecar; they are not proof of an amount-out mismatch.
       }
       // Record-only: a separate Limits instance, so a mismatch rate (which here includes state drift between
@@ -410,6 +433,25 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       put(g_fprof, rt.engine().failed_profit_ppm(), tnow);
       const auto& dg = rt.engine().sizer_diag();
       for (auto& d : diag_gauges) d.g->set(int64_t(dg.*(d.field)));
+      {
+        // Quarantine list for the dashboard: <data dir>/quarantine.json, rewritten each second.
+        auto q = rt.engine().quarantined(wall_ms());
+        g_quarantine_pools.set(int64_t(q.size()));
+        std::string js = "{\"at_ms\":" + std::to_string(wall_ms()) + ",\"pools\":[";
+        for (size_t i = 0; i < q.size(); ++i) {
+          const PoolDef& d = rt.store().def(q[i].pool);
+          js += (i ? "," : "") + std::string("{\"pool\":\"") + b58(d.address) + "\",\"dex\":\"" + dex_name(d.kind) +
+                "\",\"dir\":\"" + (q[i].a_to_b ? "a>b" : "b>a") + "\",\"until_ms\":" + std::to_string(q[i].until_ms) +
+                ",\"strikes\":" + std::to_string(q[i].strikes) + "}";
+        }
+        js += "]}\n";
+        std::string qp = quarantine_path + ".tmp";
+        if (FILE* f = std::fopen(qp.c_str(), "w")) {
+          std::fwrite(js.data(), 1, js.size(), f);
+          std::fclose(f);
+          std::rename(qp.c_str(), quarantine_path.c_str());
+        }
+      }
       if (now - last_example >= std::chrono::seconds(30)) {
         last_example = now;
         // The largest predicted edge that sized to no profit: what the prefilter believed vs what quoting found.
