@@ -1,5 +1,7 @@
 #include "app/bundle_builder.hpp"
 
+#include "app/bundle_sim.hpp"
+
 #include <unistd.h>
 
 #include <cstring>
@@ -157,6 +159,14 @@ void BundleBuilder::operator()(const engine::Opportunity& o, const engine::Cycle
     case submit::SubmitOutcome::DryRun:
       ++n_.dry_run;
       rec.action = uint8_t(obs::Action::DryRun);
+      if (sim_) {
+        SimJob j;
+        j.o = o;
+        j.c = c;
+        for (int i = 0; i < c.n; ++i) j.legs[size_t(i)] = legs[i];
+        j.cand = rec;
+        sim_->submit(std::move(j));
+      }
       break;
     case submit::SubmitOutcome::Sent:
       ++n_.sent;

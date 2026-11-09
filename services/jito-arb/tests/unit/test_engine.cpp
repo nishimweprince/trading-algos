@@ -1,7 +1,9 @@
 // Phase 2: route graph, prefilter, sizer, cost model, tip policy, dispatcher and the engine loop.
 #include <cstring>
 
+#include "app/bundle_sim.hpp"
 #include "core/programs.hpp"
+#include "obs/replay_report.hpp"
 #include "engine/engine.hpp"
 #include "fixture.hpp"
 #include "flash/kamino.hpp"
@@ -588,4 +590,108 @@ TEST(dex_dispatch_names_programs_and_unsupported_kinds) {
     CHECK(threw);
     CHECK_EQ(store.pool_count(), uint32_t(0));
   }
+}
+
+TEST(bundle_sim_builds_direct_legs_and_scores_outcomes) {
+  StateStore store;
+  auto defs = load_fixture_pools(store, 1000);
+  std::vector<double> tvl(defs.size(), 1.0);
+  GraphConfig g;
+  g.base_mints = {mint::WSOL, mint::USDC};
+  CycleIndex idx;
+  idx.build(defs, tvl, g);
+  // A quotable 2-hop wSOL cycle (any DEX pair the fixtures have).
+  const Cycle* pick = nullptr;
+  ChainQuote ch;
+  for (auto& c : idx.all()) {
+    if (c.n != 2 || c.base != mint::WSOL) continue;
+    auto a = store.pool(c.legs[0].pool), b = store.pool(c.legs[1].pool);
+    if (!a->quotable(2) || !b->quotable(2)) continue;
+    ch = quote_chain(c, Snapshots{a, b, nullptr}, both_quoters(), 10'000'000);
+    if (!ch.ok) continue;
+    pick = &c;
+    break;
+  }
+  CHECK(pick != nullptr);
+  if (!pick) return;
+  std::shared_ptr<const PoolState> legs[2] = {store.pool(pick->legs[0].pool), store.pool(pick->legs[1].pool)};
+  Opportunity o;
+  o.cycle = pick->id;
+  o.x = 10'000'000;
+  o.leg_out[0] = ch.outs[0];
+  o.leg_out[1] = ch.outs[1];
+  o.final_out = ch.final_out;
+  Pubkey holder = parse_pubkey("9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM");
+  tx::IxList l;
+  auto lay = app::build_sim_ixs(l, *pick, std::span<const std::shared_ptr<const PoolState>>(legs, 2), o, holder, {true});
+  CHECK(lay.has_value());
+  if (!lay) return;
+  CHECK_EQ(int(l.n), 4);  // ATA create for the intermediate, then two swaps
+  CHECK_EQ(int(lay->first_swap), 2);
+  CHECK(l.ixs[0].program == prog::COMPUTE_BUDGET && l.ixs[1].program == prog::ATA);
+  CHECK(l.ixs[1].accounts[1].key == lay->intermediates[0]);
+  CHECK(l.ixs[2].program == *dex_program(legs[0]->kind) && l.ixs[3].program == *dex_program(legs[1]->kind));
+  // Amount in: after Raydium's 1-byte tag, after Whirlpool's 8-byte discriminator.
+  auto amount_at = [](const tx::Ix& ix, DexKind k) {
+    uint64_t v;
+    std::memcpy(&v, ix.data + (k == DexKind::RaydiumV4 ? 1 : 8), 8);
+    return v;
+  };
+  uint64_t in1 = amount_at(l.ixs[2], legs[0]->kind), in2 = amount_at(l.ixs[3], legs[1]->kind);
+  CHECK_EQ(in1, o.x);
+  CHECK_EQ(in2, o.leg_out[0]);  // leg 2 takes leg 1's quoted output
+  CHECK(lay->base_account == ata(holder, mint::WSOL, prog::TOKEN));
+  CHECK(!app::unsigned_tx_b64(holder, l).empty());  // fits 1,232 bytes without lookup tables
+  // No ATA create when the holder already has the intermediate account.
+  auto lay2 = app::build_sim_ixs(l, *pick, std::span<const std::shared_ptr<const PoolState>>(legs, 2), o, holder, {false});
+  CHECK(lay2 && lay2->first_swap == 1 && l.n == 3);
+
+  CHECK(app::classify_sim_error("{\"InstructionError\":[2,{\"Custom\":30}]}", 1, 2) == obs::SimFail::leg2);
+  CHECK(app::classify_sim_error("{\"InstructionError\":[1,\"InvalidAccountData\"]}", 1, 2) == obs::SimFail::leg1);
+  CHECK(app::classify_sim_error("{\"InstructionError\":[0,\"Custom\"]}", 1, 2) == obs::SimFail::setup);
+  CHECK(app::classify_sim_error("\"AccountNotFound\"", 1, 2) == obs::SimFail::other);
+
+  // Scoring: simulated final out 500 above x + flash fee; the candidate valued 1,000 base units at 2,000 lamports.
+  app::SimJob j;
+  j.o = o;
+  j.o.x = 1'000'000;
+  j.o.flash_fee = 10;
+  j.o.profit_base = 1000;
+  j.o.final_out = 1'001'010;
+  j.c = *pick;
+  j.cand.slot = 77;
+  j.cand.gross_lamports = 2000;
+  j.cand.tip_lamports = 300;
+  j.cand.fee_lamports = 5000;
+  j.cand.signature[0] = 0xab;
+  auto r = app::sim_outcome(j, true, obs::SimFail::none, 80, 1'000'510, 123'456, 5);
+  CHECK_EQ(int(r.kind), int(obs::RecordKind::Outcome));
+  CHECK_EQ(int(r.outcome), int(obs::Outcome::SimulatedOk));
+  CHECK_EQ(r.profit_base, int64_t(500));
+  CHECK_EQ(r.gross_lamports, uint64_t(1000));
+  CHECK_EQ(r.net_lamports, int64_t(1000 - 300 - 5000));
+  CHECK_EQ(r.min_out, uint64_t(1'001'010));
+  CHECK_EQ(r.slot, uint64_t(80));
+  CHECK_EQ(r.state_slot[0], uint64_t(77));
+  CHECK_EQ(r.cu_limit, uint32_t(123'456));
+  CHECK_EQ(int(r.signature[0]), 0xab);
+  auto f = app::sim_outcome(j, false, obs::SimFail::leg2, 81, 0, 9, 6);
+  CHECK_EQ(int(f.outcome), int(obs::Outcome::SimulationFailed));
+  CHECK_EQ(int(f.reason), int(obs::SimFail::leg2));
+  CHECK_EQ(f.net_lamports, int64_t(0));
+
+  // Outcome records sit in the same log; the replay report reads candidates only.
+  std::string path = std::string(ARB_SOURCE_DIR) + "/build/test-sim-outcome.bin";
+  {
+    obs::DecisionLog log("", 0);
+    CHECK(log.open_path(path));
+    obs::DecisionRecord cand = j.cand;
+    CHECK(log.write(cand));
+    CHECK(log.write(r));
+    log.close();
+  }
+  auto recs = obs::read_records({path});
+  CHECK_EQ(recs.size(), size_t(2));
+  CHECK_EQ(obs::aggregate(recs, 0, 0).records, uint64_t(1));
+  std::remove(path.c_str());
 }

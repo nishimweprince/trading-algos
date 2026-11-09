@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "app/bundle_builder.hpp"
+#include "app/bundle_sim.hpp"
 #include "app/pools_file.hpp"
 #include "app/runtime.hpp"
 #include "core/base58.hpp"
@@ -131,6 +132,11 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   Pubkey executor = cfg.keys.executor_program_id == "VERIFY" ? dry_run_executor() : parse_pubkey(cfg.keys.executor_program_id);
   BundleBuilder builder(cfg, rt, wallet, executor, alts, blockhash, limits, submitter);
   builder.set_virtual_tables(true);
+  BundleSim sim(cfg, stop);
+  if (!recorder && cfg.sim.enabled) {
+    builder.set_simulator(&sim);
+    sim.start();
+  }
   obs::DecisionLog dlog(cfg.obs.decision_log_dir, cfg.obs.decision_log_rotate_s);
   feed::FrameWriter frames(cfg.recorder.dir, cfg.recorder.rotate_s);
   if (!recorder) {
@@ -166,6 +172,20 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   auto& g_sp_edge = reg.gauge("arb_engine_spread_edge", "spread-stale cycles past the spot-edge prefilter (shadow, never sent)");
   auto& g_sp_priced = reg.gauge("arb_engine_spread_priced", "spread-stale cycles that sized and priced as a candidate (shadow)");
   auto& g_sp_gross = reg.gauge("arb_engine_spread_gross_lamports", "gross of spread-stale priced cycles (shadow), lamports");
+  auto& g_sim_submitted = reg.gauge("arb_sim_submitted", "dry-run simulation jobs submitted since start");
+  auto& g_sim_queued = reg.gauge("arb_sim_queued", "simulation jobs waiting for RPC");
+  auto& g_sim_inflight = reg.gauge("arb_sim_in_flight", "simulation jobs doing RPC");
+  auto& g_sim_terminal = reg.gauge("arb_sim_terminal", "simulation terminal outcomes (all categories)");
+  auto& g_sim_funding = reg.gauge("arb_sim_funding_changed", "holder account movement invalidated diagnostic");
+  auto& g_sim_inventory = reg.gauge("arb_sim_intermediate_balance", "fixed-input route consumed holder inventory");
+  auto& g_sim_ok = reg.gauge("arb_sim_ok", "dry-run bundles whose legs simulated without error");
+  auto& g_sim_failed = reg.gauge("arb_sim_failed", "dry-run bundles whose legs failed in simulation");
+  auto& g_sim_profitable = reg.gauge("arb_sim_profitable", "simulated bundles still profitable after tip and fee");
+  auto& g_sim_dropped = reg.gauge("arb_sim_dropped", "dry-run bundles not simulated (rate cap or queue full)");
+  auto& g_sim_no_holder = reg.gauge("arb_sim_no_holder", "dry-run bundles with no public holder of the trade size");
+  auto& g_sim_too_large = reg.gauge("arb_sim_too_large", "dry-run bundles whose direct-swap message exceeds 1,232 bytes");
+  auto& g_sim_setup = reg.gauge("arb_sim_setup_error", "simulation setup or unclassified message errors; excludes failed swap legs");
+  auto& g_sim_rpc = reg.gauge("arb_sim_rpc_error", "simulation RPC errors");
   auto& g_untradable = reg.gauge("arb_engine_untradable", "evaluations skipped: a leg the program rejects in that direction");
   auto& g_signed = reg.gauge("arb_bundles_signed", "bundles built and signed");
   auto& g_shards = reg.gauge("arb_feed_shards_up", "LaserStream streams currently up");
@@ -180,6 +200,11 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   LatGauges g_lag = lat("arb_feed_lag_us", "account update received minus the server's created_at, us");
   LatGauges g_off = lat("arb_slot_offset_us", "account update received minus its slot's start, us");
   LatGauges g_det = lat("arb_detect_to_signed_us", "frame received to bundle signed, us");
+  LatGauges g_sim_mis = lat("arb_sim_mismatch_ppm", "simulated vs quoted final out, ppm (signed; 1 h window)");
+  LatGauges g_sim_lag = lat("arb_sim_lag_slots", "slots from the candidate to its simulation (1 h window)");
+  obs::LatencyWindow sim_mismatch(3600), sim_lag(3600);
+  risk::Limits sim_limits(risk::limits_config(cfg));
+  uint8_t sim_tripped = 0;
   LatGauges g_edge = lat("arb_sized_edge_ppm", "spot edge the prefilter saw on sized cycles, ppm");
   LatGauges g_fprof = lat("arb_failed_profit_ppm", "best realized profit / size on cycles that sized to no profit, ppm");
   struct DiagGauge {
@@ -261,6 +286,43 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       g_sized.set(int64_t(n.sized));
       g_skipped.set(int64_t(n.skipped));
       g_untradable.set(int64_t(n.untradable));
+      // Simulation outcomes: into the decision log, the quote-mismatch feed (record-only in dry run) and gauges.
+      for (const obs::DecisionRecord& r : sim.drain()) {
+        if (!dlog.write(r)) LOG_ERROR("cannot persist simulation outcome");
+        if (r.outcome == uint8_t(obs::Outcome::SimulatedOk) && r.min_out) {
+          int64_t mis = int64_t((__int128(r.final_out) - __int128(r.min_out)) * 1'000'000 / __int128(r.min_out));
+          sim_mismatch.add(mono_ns(), mis);
+          // Exact parity uses coherent snapshots. These delayed diagnostics include state drift, so record
+          // per-DEX mismatch policy only on same-slot single-DEX routes; never attribute a route delta to all legs.
+          bool same_dex = true;
+          for (int i = 1; i < r.hops; ++i) same_dex &= r.dex[i] == r.dex[0];
+          if (r.slot == r.state_slot[0] && same_dex) sim_limits.record_sim(r.dex[0], std::abs(mis) > 1000);
+        }
+        if (r.slot && r.state_slot[0]) sim_lag.add(mono_ns(), int64_t(r.slot) - int64_t(r.state_slot[0]));
+        // Runtime errors are classified in the outcome/sidecar; they are not proof of an amount-out mismatch.
+      }
+      // Record-only: a separate Limits instance, so a mismatch rate (which here includes state drift between
+      // the candidate and its simulation) never blocks dry-run bundles; logged once when a DEX would trip.
+      for (uint8_t d = 0; d < 8; ++d)
+        if (sim_limits.dex_disabled(d) && !(sim_tripped & (1u << d))) {
+          sim_tripped |= uint8_t(1u << d);
+          LOG_WARN("bundle sim: %s would be disabled by the quote-mismatch rate (record-only in dry run)", dex_name(DexKind(d)));
+        }
+      const auto& sc = sim.counters();
+      g_sim_submitted.set(int64_t(sc.submitted.load()));
+      g_sim_queued.set(int64_t(sc.queued.load()));
+      g_sim_inflight.set(int64_t(sc.in_flight.load()));
+      g_sim_terminal.set(int64_t(sc.terminal.load()));
+      g_sim_funding.set(int64_t(sc.funding_changed.load()));
+      g_sim_inventory.set(int64_t(sc.intermediate_balance.load()));
+      g_sim_ok.set(int64_t(sc.ok.load()));
+      g_sim_failed.set(int64_t(sc.failed.load()));
+      g_sim_profitable.set(int64_t(sc.profitable.load()));
+      g_sim_dropped.set(int64_t(sc.dropped.load()));
+      g_sim_no_holder.set(int64_t(sc.no_holder.load()));
+      g_sim_too_large.set(int64_t(sc.too_large.load()));
+      g_sim_setup.set(int64_t(sc.setup_error.load()));
+      g_sim_rpc.set(int64_t(sc.rpc_error.load()));
       g_st_incomplete.set(int64_t(n.stale_incomplete));
       g_st_resync.set(int64_t(n.stale_resync));
       g_st_spread.set(int64_t(n.stale_spread));
@@ -284,6 +346,8 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       put(g_lag, rt.feed().feed_lag_us(), tnow);
       put(g_off, rt.feed().slot_offset_us(), tnow);
       put(g_det, builder.detect_to_signed_us(), tnow);
+      put(g_sim_mis, sim_mismatch, tnow);
+      put(g_sim_lag, sim_lag, tnow);
       // Measured slot time, once a minute: chain.slot_ms should match it (slots went 400 -> 200 ms in Oct 2026).
       if (uint64_t sl = rt.clock().slot.load(); slot_mark == 0) {
         slot_mark = sl;
@@ -397,6 +461,9 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
     if (!any) std::this_thread::sleep_for(std::chrono::microseconds(50));
   }
   for (auto& s : shards) s.thread.join();
+  sim.shutdown();
+  for (const auto& r : sim.drain())
+    if (!dlog.write(r)) LOG_ERROR("cannot persist final simulation outcome");
   LOG_INFO("%s stopped: frames=%llu candidates=%llu dry_run_bundles=%llu recorder_bytes=%llu", recorder ? "recorder" : "live",
            (unsigned long long)rt.stats().frames, (unsigned long long)rt.engine().counters().candidates,
            (unsigned long long)builder.stats().dry_run, (unsigned long long)frames.bytes_written());

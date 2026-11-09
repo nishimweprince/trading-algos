@@ -262,8 +262,10 @@ std::string Rpc::simulate(const std::string& tx_b64) {
   return out;
 }
 
-Rpc::SimResult Rpc::simulate_full(const std::string& tx_b64, const std::vector<Pubkey>& accounts, uint64_t min_context_slot) {
-  std::string cfg = "{\"encoding\":\"base64\",\"sigVerify\":false,\"replaceRecentBlockhash\":true,\"commitment\":\"confirmed\"";
+Rpc::SimResult Rpc::simulate_full(const std::string& tx_b64, const std::vector<Pubkey>& accounts, uint64_t min_context_slot,
+                                  const char* commitment) {
+  std::string cfg = std::string("{\"encoding\":\"base64\",\"sigVerify\":false,\"replaceRecentBlockhash\":true,\"commitment\":\"") +
+                    commitment + "\"";
   if (min_context_slot) cfg += ",\"minContextSlot\":" + std::to_string(min_context_slot);
   if (!accounts.empty()) cfg += ",\"accounts\":{\"encoding\":\"base64\",\"addresses\":" + keys_json(accounts) + "}";
   cfg += "}";
