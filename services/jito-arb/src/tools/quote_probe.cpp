@@ -43,6 +43,7 @@ int main(int argc, char** argv) {
   std::vector<Pubkey> keys = {def->address, def->vault_a, def->vault_b, def->mint_a, def->mint_b};
   for (auto& [s, k] : def->tick_arrays) keys.push_back(k);
   if (!is_zero(def->config)) keys.push_back(def->config);
+  if (!is_zero(def->fee_config)) keys.push_back(def->fee_config);
   uint64_t slot = 0;
   auto accs = rpc.multiple_accounts_at(keys, slot);
   for (size_t i = 0; i < keys.size(); ++i) {
@@ -77,7 +78,8 @@ int main(int argc, char** argv) {
   dex::RaydiumV4Quoter rq;
   dex::WhirlpoolQuoter wq;
   dex::CpmmQuoter cq;
-  const dex::IQuoter* quoters[] = {&rq, &wq, &cq};
+  dex::PumpSwapQuoter pq;
+  const dex::IQuoter* quoters[] = {&rq, &wq, &cq, &pq};
   const dex::IQuoter* qp = nullptr;
   for (const dex::IQuoter* c : quoters)
     if (c->kind() == p->kind) qp = c;

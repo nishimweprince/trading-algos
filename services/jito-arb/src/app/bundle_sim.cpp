@@ -42,7 +42,7 @@ SimLayout sim_accounts(const engine::Cycle& c, std::span<const std::shared_ptr<c
 }
 
 Result<SimLayout> build_sim_ixs(tx::IxList& l, const engine::Cycle& c, std::span<const std::shared_ptr<const PoolState>> legs,
-                                const engine::Opportunity& o, const Pubkey& holder, const std::vector<bool>& need_ata) {
+                                const engine::Opportunity& o, const Pubkey& holder, const std::vector<bool>& need_ata, bool need_pump_volume, uint64_t pump_volume_topup) {
   if (c.n < 2 || c.n > engine::MAX_LEGS || legs.size() < c.n) return fail(Errc::unsupported, "route must have 2 or 3 legs");
   for (int i = 0; i < c.n; ++i)
     if (!legs[size_t(i)]) return fail(Errc::bad_data, "missing leg snapshot");
@@ -56,6 +56,8 @@ Result<SimLayout> build_sim_ixs(tx::IxList& l, const engine::Cycle& c, std::span
     // ATA program CreateIdempotent (1): payer, ata, owner, mint, system, token program.
     l.add(prog::ATA).acc(holder, true, true).rw(s.intermediates[size_t(i)]).ro(holder).ro(mint).ro(prog::SYSTEM).ro(tp).u8(1);
   }
+  if (need_pump_volume) tx::dexix::pump_init_user_volume(l, holder);
+  if (pump_volume_topup) tx::dexix::pump_fund_user_volume(l, holder, pump_volume_topup);
   s.first_swap = l.n;
   for (int i = 0; i < c.n; ++i) {
     const PoolState& p = *legs[size_t(i)];
@@ -409,7 +411,17 @@ void BundleSim::process(SimJob& j, Rpc& rpc) {
     std::vector<bool> need(pre_keys.size() - 1);
     for (size_t i = 0; i < need.size(); ++i) need[i] = !pre[i + 1];
     tx::IxList l;
-    auto lay = build_sim_ixs(l, j.c, legs, j.o, holder->owner, need);
+    bool uses_pump = false;
+    for (const auto& p : legs) uses_pump |= p && p->kind == DexKind::PumpSwap;
+    auto volume = uses_pump ? rpc.account(tx::dexix::pump_user_volume_accumulator(holder->owner), "processed") : std::nullopt;
+    uint64_t topup = 0;
+    if (volume) {
+      simdjson::dom::parser rent_parser;
+      auto body = rpc.call("getMinimumBalanceForRentExemption", "["+std::to_string(volume->data.size())+"]");
+      uint64_t minimum = rent_parser.parse(body)["result"];
+      if (minimum > volume->lamports) topup = minimum - volume->lamports;
+    }
+    auto lay = build_sim_ixs(l, j.c, legs, j.o, holder->owner, need, uses_pump && !volume, topup);
     if (!lay) {
       ++n_.setup_error;
       return failed(obs::SimFail::setup, pre_slot, 0);

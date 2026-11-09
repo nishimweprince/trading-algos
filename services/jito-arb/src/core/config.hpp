@@ -86,6 +86,8 @@ struct Config {
     uint32_t whirlpool_cu = 80000;
     bool cpmm_enabled = true;        // sim-parity 260/260 exact (tests/fixtures/parity_cpmm.json, 2026-11-06)
     uint32_t cpmm_cu = 50000;        // simulated swap_base_input: mean 36.8k, max 46.1k CU
+    bool pumpswap_enabled = true;    // sim-parity 530/530 exact, both directions (tests/fixtures/parity_pumpswap.json, 2026-11-06)
+    uint32_t pumpswap_cu = 90000;    // simulated sell_v2 / buy_exact_quote_in_v2: mean 67.8k, max 79.3k CU
   } dex;
 
   struct Discovery {
@@ -102,6 +104,9 @@ struct Config {
     // vault-floor path as Raydium v4, deepest first, up to cpmm_fetch_cap.
     bool track_cpmm = false;
     int cpmm_fetch_cap = 4000;
+    // PumpSwap has no shared vault authority to read balances from, and over a million pools. Discovery instead
+    // derives each candidate token's canonical (pump-migrated) wSOL pool and reads those that exist.
+    bool track_pumpswap = false;
   } discovery;
 
   struct Flash {
