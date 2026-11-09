@@ -219,6 +219,15 @@ std::vector<SpreadExample> Engine::take_spread_examples(size_t n) {
   return v;
 }
 
+uint64_t Engine::reserve_available(const Pubkey& base) const {
+  if (cfg_.flash) {
+    auto it = reserves_.find(base);
+    return it == reserves_.end() ? 0 : it->second.available;
+  }
+  auto it = own_balance_.find(base);
+  return it == own_balance_.end() ? 0 : it->second;
+}
+
 bool Engine::evaluate(uint32_t cycle, uint64_t slot, Opportunity* out) {
   const Cycle& c = idx_.cycle(cycle);
   if (disp_.cooling(cycle, slot)) {
@@ -255,6 +264,20 @@ bool Engine::evaluate(uint32_t cycle, uint64_t slot, Opportunity* out) {
       }
     }
   }
+  // A cycle whose x_max was below min_trade stays so until a leg's pool or the flash reserve changes.
+  if (!no_room_.empty()) {
+    auto it = no_room_.find(cycle);
+    if (it != no_room_.end()) {
+      // The flash reserve moves every slot: it only matters when it was what kept x_max below min_trade.
+      bool same = !it->second.reserve_bound || reserve_available(c.base) < it->second.min_trade;
+      for (int i = 0; i < c.n && same; ++i) same = it->second.seq[i] == s[i]->seq;
+      if (same) {
+        ++n_.no_room_memo;
+        return false;
+      }
+      no_room_.erase(it);
+    }
+  }
   u128 prod = spot_product_x64(c, s);
   if (prod < edge_x64_) return false;
   ++n_.prefilter_pass;
@@ -285,6 +308,15 @@ bool Engine::evaluate(uint32_t cycle, uint64_t slot, Opportunity* out) {
   sc.min_trade = std::max<uint64_t>(1, bp->from_lamports_ceil(cfg_.min_trade_lamports));
   sc.x_max = x_max;
   sc.max_evals = cfg_.sizer_max_evals;
+  if (sc.x_max < sc.min_trade) {
+    // No size can trade: do not run the sizer, and skip this cycle until its inputs change.
+    ++diag_.no_room;
+    NoRoom& nr = no_room_[cycle];
+    nr.min_trade = sc.min_trade;
+    nr.reserve_bound = reserve_available(c.base) < sc.min_trade;
+    for (int i = 0; i < c.n; ++i) nr.seq[i] = s[i]->seq;
+    return log_skip(Reason::sizer_no_room);
+  }
   SizeResult r = size_cycle(c, s, q_, fee, sc);
   ++n_.sized;
   uint64_t tnow = now_ns();

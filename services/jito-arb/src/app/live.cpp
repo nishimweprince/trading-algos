@@ -215,6 +215,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   auto& g_sim_setup = reg.gauge("arb_sim_setup_error", "simulation setup or unclassified message errors; excludes failed swap legs");
   auto& g_sim_rpc = reg.gauge("arb_sim_rpc_error", "simulation RPC errors");
   auto& g_untradable = reg.gauge("arb_engine_untradable", "evaluations skipped: a leg the program rejects in that direction");
+  auto& g_no_room_memo = reg.gauge("arb_engine_no_room_memo", "evaluations skipped: x_max was below min_trade and nothing changed since");
   auto& g_signed = reg.gauge("arb_bundles_signed", "bundles built and signed");
   auto& g_shards = reg.gauge("arb_feed_shards_up", "LaserStream streams currently up");
   // Latency windows (last 60 s), microseconds: p50 / p99 / max and the sample count.
@@ -314,6 +315,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       g_sized.set(int64_t(n.sized));
       g_skipped.set(int64_t(n.skipped));
       g_untradable.set(int64_t(n.untradable));
+      g_no_room_memo.set(int64_t(n.no_room_memo));
       // Simulation outcomes: into the decision log, the quote-mismatch feed (record-only in dry run) and gauges.
       for (const obs::DecisionRecord& r : sim.drain()) {
         if (!dlog.write(r)) LOG_ERROR("cannot persist simulation outcome");
