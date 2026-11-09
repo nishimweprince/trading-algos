@@ -128,8 +128,9 @@ DiscoveryResult discover(const std::vector<RawAccount>& pool_accounts, const Acc
       reject(c, "missing_accounts");
       continue;
     }
-    Pubkey dex = d->kind == DexKind::Whirlpool ? prog::WHIRLPOOL : prog::RAYDIUM_V4;
-    auto own = risk::check_pool_ownership(a.owner, dex, va->second.owner, vb->second.owner);
+    const Pubkey* dex = dex_program(d->kind);
+    if (!dex) { reject(c, "unsupported_dex"); continue; }
+    auto own = risk::check_pool_ownership(a.owner, *dex, va->second.owner, vb->second.owner);
     if (!own.ok) { reject(c, own.reason); continue; }
     auto ta = decode_token_account(va->second.data.data(), va->second.data.size(), va->second.owner);
     auto tb = decode_token_account(vb->second.data.data(), vb->second.data.size(), vb->second.owner);
@@ -137,17 +138,27 @@ DiscoveryResult discover(const std::vector<RawAccount>& pool_accounts, const Acc
     auto mib = decode_mint(mb->second.data.data(), mb->second.data.size(), mb->second.owner);
     if (!ta || !tb || !mia || !mib) { reject(c, "decode_dependent"); continue; }
     if (ta->mint != d->mint_a || tb->mint != d->mint_b) { reject(c, "vault_mint_mismatch"); continue; }
-    if (d->kind == DexKind::RaydiumV4) {
-      // Raydium v4 swaps only through the legacy token program.
-      if (va->second.owner != prog::TOKEN || vb->second.owner != prog::TOKEN) { reject(c, "token2022_raydium"); continue; }
-      auto r = decode_raydium_v4(a.data.data(), a.data.size(), a.owner);
-      if (!r->swap_permitted()) { reject(c, "pool_status"); continue; }
-    } else {
-      auto w = decode_whirlpool(a.data.data(), a.data.size(), a.owner);
-      if (w->adaptive_fee()) { reject(c, "adaptive_fee_unsupported"); continue; }
-      // The legacy `swap` instruction (the one the executor CPIs) takes the SPL token program only.
-      if (va->second.owner != prog::TOKEN || vb->second.owner != prog::TOKEN) { reject(c, "token2022_whirlpool"); continue; }
+    bool gate_ok = true;
+    switch (d->kind) {
+      case DexKind::RaydiumV4: {
+        // Raydium v4 swaps only through the legacy token program.
+        if (va->second.owner != prog::TOKEN || vb->second.owner != prog::TOKEN) { reject(c, "token2022_raydium"); gate_ok = false; break; }
+        auto r = decode_raydium_v4(a.data.data(), a.data.size(), a.owner);
+        if (!r->swap_permitted()) { reject(c, "pool_status"); gate_ok = false; }
+        break;
+      }
+      case DexKind::Whirlpool: {
+        auto w = decode_whirlpool(a.data.data(), a.data.size(), a.owner);
+        if (w->adaptive_fee()) { reject(c, "adaptive_fee_unsupported"); gate_ok = false; break; }
+        // The legacy `swap` instruction (the one the executor CPIs) takes the SPL token program only.
+        if (va->second.owner != prog::TOKEN || vb->second.owner != prog::TOKEN) { reject(c, "token2022_whirlpool"); gate_ok = false; }
+        break;
+      }
+      default:
+        reject(c, "unsupported_dex");
+        gate_ok = false;
     }
+    if (!gate_ok) continue;
     bool safe = true;
     for (auto [key, m] : {std::pair{d->mint_a, &*mia}, std::pair{d->mint_b, &*mib}}) {
       auto it = mint_verdicts.find(key);

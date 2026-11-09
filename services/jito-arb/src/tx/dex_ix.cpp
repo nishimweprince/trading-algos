@@ -1,6 +1,8 @@
 #include "tx/dex_ix.hpp"
 
 #include <cstring>
+#include <stdexcept>
+#include <string>
 
 #include "core/programs.hpp"
 #include "state/discovery.hpp"
@@ -33,7 +35,11 @@ std::array<Pubkey, 3> whirlpool_tick_arrays(const state::Whirlpool& w, const Pub
   return out;
 }
 
-const Pubkey& program_of(DexKind kind) { return kind == DexKind::Whirlpool ? prog::WHIRLPOOL : prog::RAYDIUM_V4; }
+const Pubkey& program_of(DexKind kind) {
+  const Pubkey* p = dex_program(kind);
+  if (!p) throw std::invalid_argument(std::string("swap: unsupported dex ") + dex_name(kind));
+  return *p;
+}
 
 std::vector<AccountMeta> swap_accounts(const PoolState& p, bool a_to_b, const UserAccounts& u) {
   std::vector<AccountMeta> v;
@@ -50,6 +56,9 @@ std::vector<AccountMeta> swap_accounts(const PoolState& p, bool a_to_b, const Us
     v.push_back({u.authority, true, false});
     return v;
   }
+  // New kinds must never fall through to Whirlpool.
+  if (p.kind != DexKind::Whirlpool)
+    throw std::invalid_argument(std::string("swap accounts: unsupported dex ") + dex_name(p.kind));
   // token_program, token_authority (signer), whirlpool (w), token_owner_account_a (w), token_vault_a (w),
   // token_owner_account_b (w), token_vault_b (w), tick_array_0..2 (w), oracle
   auto ta = whirlpool_tick_arrays(p.wp, p.address, a_to_b);
@@ -79,6 +88,8 @@ std::vector<uint8_t> swap_data(DexKind kind, bool a_to_b, uint64_t amount_in, ui
     put(&min_out, 8);
     return std::vector<uint8_t>(d, d + n);
   }
+  if (kind != DexKind::Whirlpool)
+    throw std::invalid_argument(std::string("swap data: unsupported dex ") + dex_name(kind));
   // swap(amount, other_amount_threshold, sqrt_price_limit, amount_specified_is_input, a_to_b)
   put(WHIRLPOOL_SWAP_DISC, 8);
   put(&amount_in, 8);

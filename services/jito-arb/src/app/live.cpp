@@ -320,6 +320,10 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
                             b58(p->address).substr(0, 8).c_str(), c.legs[i].a_to_b ? "a>b" : "b>a", (unsigned long long)uint64_t(p->wp.liquidity),
                             p->wp.tick_current_index, (unsigned long long)uint64_t(p->wp.sqrt_price >> 64), unsigned(p->wp.tick_spacing),
                             unsigned(p->wp.fee_rate), unsigned(p->n_ticks));
+            else if (p->kind != DexKind::RaydiumV4)
+              std::snprintf(buf, sizeof buf, " | %s%s %s %s a=%llu b=%llu", i == ex.fail_leg ? "*" : "", dex_name(p->kind),
+                            b58(p->address).substr(0, 8).c_str(), c.legs[i].a_to_b ? "a>b" : "b>a", (unsigned long long)p->vault_a_amount,
+                            (unsigned long long)p->vault_b_amount);
             else
               std::snprintf(buf, sizeof buf, " | %sray %s %s a=%llu b=%llu pnl=%llu/%llu status=%llu fee=%llu/%llu", i == ex.fail_leg ? "*" : "",
                             b58(p->address).substr(0, 8).c_str(), c.legs[i].a_to_b ? "a>b" : "b>a", (unsigned long long)p->vault_a_amount,
