@@ -91,10 +91,10 @@ struct Config {
     uint32_t cpmm_cu = 50000;        // simulated swap_base_input: mean 36.8k, max 46.1k CU
     bool dlmm_enabled = false;  // explicit opt-in; 246 exact swaps, see docs/DLMM-ACCEPTANCE.md
     uint32_t dlmm_cu = 140000;
-    bool clmm_enabled = false;       // explicit opt-in; 256 exact swaps (tests/fixtures/parity_clmm.json)
-    uint32_t clmm_cu = 120000;
     bool pumpswap_enabled = true;    // sim-parity 530/530 exact, both directions (tests/fixtures/parity_pumpswap.json, 2026-11-06)
     uint32_t pumpswap_cu = 90000;    // simulated sell_v2 / buy_exact_quote_in_v2: mean 67.8k, max 79.3k CU
+    bool clmm_enabled = false;       // explicit opt-in; 256 exact swaps (tests/fixtures/parity_clmm.json)
+    uint32_t clmm_cu = 120000;
   } dex;
 
   struct Discovery {

@@ -750,6 +750,97 @@ TEST(bundle_sim_builds_direct_legs_and_scores_outcomes) {
   std::remove(path.c_str());
 }
 
+TEST(cp_acceptance_transfer_fee_extension_even_zero) {
+  dex::CpmmQuoter cq; dex::PumpSwapQuoter pq;
+  for (DexKind kind : {DexKind::Cpmm, DexKind::PumpSwap}) {
+    PoolState p; p.kind = kind; p.complete = true;
+    CHECK(kind == DexKind::Cpmm ? cq.supports(p) : pq.supports(p));
+    auto m = std::make_shared<state::Mint>(); m->has_transfer_fee = true;
+    for (bool side : {false, true}) {
+      p.mint_a_info = side ? m : nullptr; p.mint_b_info = side ? nullptr : m;
+      CHECK(!(kind == DexKind::Cpmm ? cq.supports(p) : pq.supports(p)));
+      for (bool dir : {false, true}) {
+        auto q = kind == DexKind::Cpmm ? cq.quote_exact_in(p, dir, 1000) : pq.quote_exact_in(p, dir, 1000);
+        CHECK(!q && q.error().code == Errc::unsupported);
+      }
+    }
+  }
+}
+
+TEST(cp_acceptance_seed_fees_directions_and_exact_final) {
+  dex::CpmmQuoter cq; dex::PumpSwapQuoter pq;
+  Quoters qs; qs.by_kind[uint8_t(DexKind::Cpmm)] = &cq; qs.by_kind[uint8_t(DexKind::PumpSwap)] = &pq;
+  for (bool direction : {false, true}) for (uint8_t mode : {0, 1, 2}) {
+    auto a = std::make_shared<PoolState>(); auto b = std::make_shared<PoolState>();
+    a->kind = DexKind::Cpmm; b->kind = DexKind::Cpmm; a->complete = b->complete = true;
+    a->cpmm_cfg.trade_fee_rate = 2500; b->cpmm_cfg.trade_fee_rate = 2500; a->cpmm_cfg.creator_fee_rate = 1000;
+    a->cpmm.enable_creator_fee = true; a->cpmm.creator_fee_on = mode;
+    a->vault_a_amount = direction ? 1'000'000'000 : 2'000'000'000;
+    a->vault_b_amount = direction ? 2'000'000'000 : 1'000'000'000;
+    b->vault_a_amount = direction ? 1'100'000'000 : 2'000'000'000;
+    b->vault_b_amount = direction ? 2'000'000'000 : 1'100'000'000;
+    auto fees = std::make_shared<state::PumpFeeConfig>(); fees->flat_fees = {20, 5, 10}; b->pump_fees = fees;
+    b->pump.coin_creator = key_n(55);
+    Cycle c; c.n = 2; c.legs[0].a_to_b = direction; c.legs[1].a_to_b = !direction;
+    Snapshots snaps{}; snaps[0] = a; snaps[1] = b;
+    uint64_t seed = closed_form_2hop_cp(c, snaps); CHECK(seed > 0);
+    SizerConfig cfg; cfg.min_trade = 1000; cfg.x_max = 100'000'000; cfg.max_evals = 48;
+    auto sized = size_cycle(c, snaps, qs, FlashFeeFn{}, cfg);
+    CHECK(sized.ok);
+    auto exact = quote_chain(c, snaps, qs, sized.x);
+    CHECK(exact.ok); CHECK_EQ(exact.final_out, sized.chain.final_out);
+    CHECK_EQ(sized.profit, int64_t(exact.final_out - sized.x));
+    cfg.use_closed_form = false;
+    auto scan = size_cycle(c, snaps, qs, FlashFeeFn{}, cfg);
+    CHECK(scan.ok); CHECK(std::abs(sized.profit - scan.profit) < 100);
+
+  }
+}
+
+TEST(cp_acceptance_seed_pump_tiers_and_fallback) {
+  auto a = std::make_shared<PoolState>(); auto b = std::make_shared<PoolState>();
+  a->kind = b->kind = DexKind::PumpSwap; a->complete = b->complete = true;
+  a->vault_a_amount = b->vault_a_amount = 1'000'000;
+  a->vault_b_amount = 2'000'000; b->vault_b_amount = 1'000'000;
+  auto m = std::make_shared<state::Mint>(); m->supply = 1000;
+  a->mint_a_info = b->mint_a_info = m; a->mint_b = b->mint_b = mint::WSOL;
+  a->pump_canonical = b->pump_canonical = true;
+  auto f = std::make_shared<state::PumpFeeConfig>();
+  f->fee_tiers = {{0, {10, 10, 0}}, {2000, {100, 100, 0}}};
+  a->pump_fees = b->pump_fees = f;
+  Cycle c; c.n = 2; c.legs[0].a_to_b = true; c.legs[1].a_to_b = false;
+  Snapshots s{}; s[0] = a; s[1] = b;
+  const auto high_fee = closed_form_2hop_cp(c, s); CHECK(high_fee > 0);
+  f->fee_tiers[1].fees = {10, 10, 0};
+  CHECK(closed_form_2hop_cp(c, s) > high_fee);
+  f->fee_tiers.clear(); CHECK_EQ(closed_form_2hop_cp(c, s), uint64_t(0));
+  f->flat_fees = {10, 10, 0}; a->pump_canonical = b->pump_canonical = false;
+  CHECK(closed_form_2hop_cp(c, s) > 0);
+  a->pump_cfg.disable_flags = 16; CHECK_EQ(closed_form_2hop_cp(c, s), uint64_t(0));
+}
+
+TEST(cp_acceptance_seed_bit_extremes_fall_back_without_truncation) {
+  Cycle c; c.n = 2; c.legs[0].a_to_b = true; c.legs[1].a_to_b = false;
+  auto a = std::make_shared<PoolState>(); auto b = std::make_shared<PoolState>();
+  a->kind = b->kind = DexKind::RaydiumV4;
+  a->complete = b->complete = true;
+  a->vault_a_amount = b->vault_b_amount = UINT64_MAX / 2;
+  a->vault_b_amount = b->vault_a_amount = UINT64_MAX;
+  a->ray.swap_fee_denominator = b->ray.swap_fee_denominator = UINT64_MAX;
+  a->ray.swap_fee_numerator = b->ray.swap_fee_numerator = 1;
+  Snapshots s{}; s[0] = a; s[1] = b;
+  CHECK_EQ(closed_form_2hop_cp(c, s), uint64_t(0));  // n*n and d*d cannot be Q16 scaled
+  a->kind = b->kind = DexKind::Cpmm;
+  a->cpmm_cfg.trade_fee_rate = b->cpmm_cfg.trade_fee_rate = 2500;
+  CHECK_EQ(closed_form_2hop_cp(c, s), uint64_t(0));  // S>>16 exceeds u128
+  a->vault_a_amount = b->vault_b_amount = 1'000'000;
+  a->vault_b_amount = b->vault_a_amount = 2'000'000;
+  CHECK(closed_form_2hop_cp(c, s) > 0);
+  a->cpmm.creator_fee_on = 2; a->cpmm.enable_creator_fee = true;
+  a->cpmm_cfg.creator_fee_rate = 999999; a->vault_b_amount = 1;
+  CHECK_EQ(closed_form_2hop_cp(c, s), uint64_t(0));  // output reserve scales to zero
+}
+
 TEST(pumpswap_addresses_and_fee_tiers) {
   // Published addresses (pump-public-docs PUMP_SWAP_README.md, PUMP_SWAP_TRADE_V2.md).
   CHECK(tx::dexix::pump_global_config() == parse_pubkey("ADyA8hdefvWN2dbGGWFotbzWxrAvLW83WG6QCVXvJKqw"));
@@ -824,99 +915,6 @@ TEST(clmm_tick_math_matches_program_bounds_and_round_trips) {
   auto r = compute_swap_exact_in(u128(1) << 64, *sqrt_price_at_tick(-100), u128(1'000'000'000'000ULL), 1'000'000, 2500, true, true);
   CHECK(r.has_value() && r->amount_in + r->fee_amount == 1'000'000 && r->amount_out > 0 && r->amount_out < 1'000'000);
 }
-
-TEST(cp_acceptance_transfer_fee_extension_even_zero) {
-  dex::CpmmQuoter cq; dex::PumpSwapQuoter pq;
-  for (DexKind kind : {DexKind::Cpmm, DexKind::PumpSwap}) {
-    PoolState p; p.kind = kind; p.complete = true;
-    CHECK(kind == DexKind::Cpmm ? cq.supports(p) : pq.supports(p));
-    auto m = std::make_shared<state::Mint>(); m->has_transfer_fee = true;
-    for (bool side : {false, true}) {
-      p.mint_a_info = side ? m : nullptr; p.mint_b_info = side ? nullptr : m;
-      CHECK(!(kind == DexKind::Cpmm ? cq.supports(p) : pq.supports(p)));
-      for (bool dir : {false, true}) {
-        auto q = kind == DexKind::Cpmm ? cq.quote_exact_in(p, dir, 1000) : pq.quote_exact_in(p, dir, 1000);
-        CHECK(!q && q.error().code == Errc::unsupported);
-      }
-    }
-  }
-}
-
-TEST(cp_acceptance_seed_fees_directions_and_exact_final) {
-  dex::CpmmQuoter cq; dex::PumpSwapQuoter pq;
-  Quoters qs; qs.by_kind[uint8_t(DexKind::Cpmm)] = &cq; qs.by_kind[uint8_t(DexKind::PumpSwap)] = &pq;
-  for (bool direction : {false, true}) for (uint8_t mode : {0, 1, 2}) {
-    auto a = std::make_shared<PoolState>(); auto b = std::make_shared<PoolState>();
-    a->kind = DexKind::Cpmm; b->kind = DexKind::PumpSwap; a->complete = b->complete = true;
-    a->cpmm_cfg.trade_fee_rate = 2500; a->cpmm_cfg.creator_fee_rate = 1000;
-    a->cpmm.enable_creator_fee = true; a->cpmm.creator_fee_on = mode;
-    a->vault_a_amount = direction ? 1'000'000'000 : 2'000'000'000;
-    a->vault_b_amount = direction ? 2'000'000'000 : 1'000'000'000;
-    b->vault_a_amount = direction ? 1'100'000'000 : 2'000'000'000;
-    b->vault_b_amount = direction ? 2'000'000'000 : 1'100'000'000;
-    auto fees = std::make_shared<state::PumpFeeConfig>(); fees->flat_fees = {20, 5, 10}; b->pump_fees = fees;
-    b->pump.coin_creator = key_n(55);
-    Cycle c; c.n = 2; c.legs[0].a_to_b = direction; c.legs[1].a_to_b = !direction;
-    Snapshots snaps{}; snaps[0] = a; snaps[1] = b;
-    uint64_t seed = closed_form_2hop_cp(c, snaps); CHECK(seed > 0);
-    SizerConfig cfg; cfg.min_trade = 1000; cfg.x_max = 100'000'000; cfg.max_evals = 48;
-    auto sized = size_cycle(c, snaps, qs, FlashFeeFn{}, cfg);
-    CHECK(sized.ok);
-    auto exact = quote_chain(c, snaps, qs, sized.x);
-    CHECK(exact.ok); CHECK_EQ(exact.final_out, sized.chain.final_out);
-    CHECK_EQ(sized.profit, int64_t(exact.final_out - sized.x));
-    cfg.use_closed_form = false;
-    auto scan = size_cycle(c, snaps, qs, FlashFeeFn{}, cfg);
-    CHECK(scan.ok); CHECK(std::abs(sized.profit - scan.profit) < 100);
-    b->pump.is_cashback_coin = true; CHECK_EQ(closed_form_2hop_cp(c, snaps), uint64_t(0));
-    b->pump.is_cashback_coin = false; b->pump_fees.reset(); CHECK_EQ(closed_form_2hop_cp(c, snaps), uint64_t(0));
-  }
-}
-
-TEST(cp_acceptance_seed_pump_tiers_and_fallback) {
-  auto a = std::make_shared<PoolState>(); auto b = std::make_shared<PoolState>();
-  a->kind = b->kind = DexKind::PumpSwap; a->complete = b->complete = true;
-  a->vault_a_amount = b->vault_a_amount = 1'000'000;
-  a->vault_b_amount = 2'000'000; b->vault_b_amount = 1'000'000;
-  auto m = std::make_shared<state::Mint>(); m->supply = 1000;
-  a->mint_a_info = b->mint_a_info = m; a->mint_b = b->mint_b = mint::WSOL;
-  a->pump_canonical = b->pump_canonical = true;
-  auto f = std::make_shared<state::PumpFeeConfig>();
-  f->fee_tiers = {{0, {10, 10, 0}}, {2000, {100, 100, 0}}};
-  a->pump_fees = b->pump_fees = f;
-  Cycle c; c.n = 2; c.legs[0].a_to_b = true; c.legs[1].a_to_b = false;
-  Snapshots s{}; s[0] = a; s[1] = b;
-  const auto high_fee = closed_form_2hop_cp(c, s); CHECK(high_fee > 0);
-  f->fee_tiers[1].fees = {10, 10, 0};
-  CHECK(closed_form_2hop_cp(c, s) > high_fee);
-  f->fee_tiers.clear(); CHECK_EQ(closed_form_2hop_cp(c, s), uint64_t(0));
-  f->flat_fees = {10, 10, 0}; a->pump_canonical = b->pump_canonical = false;
-  CHECK(closed_form_2hop_cp(c, s) > 0);
-  a->pump_cfg.disable_flags = 16; CHECK_EQ(closed_form_2hop_cp(c, s), uint64_t(0));
-}
-
-TEST(cp_acceptance_seed_bit_extremes_fall_back_without_truncation) {
-  Cycle c; c.n = 2; c.legs[0].a_to_b = true; c.legs[1].a_to_b = false;
-  auto a = std::make_shared<PoolState>(); auto b = std::make_shared<PoolState>();
-  a->kind = b->kind = DexKind::RaydiumV4;
-  a->complete = b->complete = true;
-  a->vault_a_amount = b->vault_b_amount = UINT64_MAX / 2;
-  a->vault_b_amount = b->vault_a_amount = UINT64_MAX;
-  a->ray.swap_fee_denominator = b->ray.swap_fee_denominator = UINT64_MAX;
-  a->ray.swap_fee_numerator = b->ray.swap_fee_numerator = 1;
-  Snapshots s{}; s[0] = a; s[1] = b;
-  CHECK_EQ(closed_form_2hop_cp(c, s), uint64_t(0));  // n*n and d*d cannot be Q16 scaled
-  a->kind = b->kind = DexKind::Cpmm;
-  a->cpmm_cfg.trade_fee_rate = b->cpmm_cfg.trade_fee_rate = 2500;
-  CHECK_EQ(closed_form_2hop_cp(c, s), uint64_t(0));  // S>>16 exceeds u128
-  a->vault_a_amount = b->vault_b_amount = 1'000'000;
-  a->vault_b_amount = b->vault_a_amount = 2'000'000;
-  CHECK(closed_form_2hop_cp(c, s) > 0);
-  a->cpmm.creator_fee_on = 2; a->cpmm.enable_creator_fee = true;
-  a->cpmm_cfg.creator_fee_rate = 999999; a->vault_b_amount = 1;
-  CHECK_EQ(closed_form_2hop_cp(c, s), uint64_t(0));  // output reserve scales to zero
-}
-
 TEST(helius_quota_flag_and_backoff) {
   usage::set_quota(false, 0);
   CHECK(usage::is_quota_body("{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32429,\"message\":\"max usage reached\"}}"));
