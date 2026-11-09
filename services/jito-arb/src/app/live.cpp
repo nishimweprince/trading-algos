@@ -205,6 +205,10 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   auto& g_sim_queued = reg.gauge("arb_sim_queued", "simulation jobs waiting for RPC");
   auto& g_sim_inflight = reg.gauge("arb_sim_in_flight", "simulation jobs doing RPC");
   auto& g_sim_terminal = reg.gauge("arb_sim_terminal", "simulation terminal outcomes (all categories)");
+  auto& g_sim_per_leg = reg.gauge("arb_sim_per_leg", "routes too large for one message, simulated leg by leg");
+  auto& g_sim_matched = reg.gauge("arb_sim_state_matched", "simulations whose legs' vaults equalled the engine's snapshot");
+  auto& g_sim_drifted = reg.gauge("arb_sim_state_drifted", "simulations whose legs' vaults had moved since the snapshot (state drift)");
+  auto& g_sim_suspect = reg.gauge("arb_sim_quoter_suspect", "failed or short simulations on matched state (quoter suspect)");
   auto& g_sim_funding = reg.gauge("arb_sim_funding_changed", "holder account movement invalidated diagnostic");
   auto& g_sim_inventory = reg.gauge("arb_sim_intermediate_balance", "fixed-input route consumed holder inventory");
   auto& g_sim_ok = reg.gauge("arb_sim_ok", "dry-run bundles whose legs simulated without error");
@@ -347,10 +351,16 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
           } else if (r.outcome == uint8_t(obs::Outcome::SimulationFailed) && r.reason >= 1 && r.reason <= 3) {
             bad_upto = r.reason;
           }
+          bool per_leg = r.pad0[0] == 1;  // legs simulated alone: each verdict is that leg's own
           if (bad_upto >= 0)
-            for (int i = 0; i < r.hops; ++i)
+            for (int i = 0; i < r.hops; ++i) {
+              bool bad = i < bad_upto;
+              if (per_leg)
+                bad = r.outcome == uint8_t(obs::Outcome::SimulationFailed) ? i == r.reason - 1
+                                                                          : int64_t(r.state_seq[i]) > cfg.sim.short_bps;
               if (auto id = rt.store().pool_id(key_from(r.pools[i])))
-                rt.engine().note_sim(*id, (r.a_to_b_mask >> i) & 1, i < bad_upto, wall_ms());
+                rt.engine().note_sim(*id, (r.a_to_b_mask >> i) & 1, bad, wall_ms());
+            }
         }
         // Runtime errors are classified in the outcome/sidecar; they are not proof of an amount-out mismatch.
       }
@@ -366,6 +376,10 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       g_sim_queued.set(int64_t(sc.queued.load()));
       g_sim_inflight.set(int64_t(sc.in_flight.load()));
       g_sim_terminal.set(int64_t(sc.terminal.load()));
+      g_sim_per_leg.set(int64_t(sc.per_leg.load()));
+      g_sim_matched.set(int64_t(sc.state_matched.load()));
+      g_sim_drifted.set(int64_t(sc.state_drifted.load()));
+      g_sim_suspect.set(int64_t(sc.quoter_suspect.load()));
       g_sim_funding.set(int64_t(sc.funding_changed.load()));
       g_sim_inventory.set(int64_t(sc.intermediate_balance.load()));
       g_sim_ok.set(int64_t(sc.ok.load()));

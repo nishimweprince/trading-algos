@@ -279,7 +279,11 @@ async function refreshState() {
            m.arb_sim_failed > m.arb_sim_ok ? "warnv" : ""),
       tile("Skip logs sampled", fmt(m.arb_decision_skip_logs_dropped), "all signed candidates and outcomes retained"),
       tile("Simulation jobs", fmt(m.arb_sim_submitted), `${fmt(m.arb_sim_terminal)} finished · ${fmt(m.arb_sim_queued)} queued · ${fmt(m.arb_sim_in_flight)} in progress`),
-      tile("Not simulated", fmt((m.arb_sim_dropped || 0) + (m.arb_sim_no_holder || 0) + (m.arb_sim_too_large || 0) + (m.arb_sim_rpc_error || 0) + (m.arb_sim_setup_error || 0) + (m.arb_sim_funding_changed || 0) + (m.arb_sim_intermediate_balance || 0)),
+      tile("State at simulation", `${fmt(m.arb_sim_state_matched)} / ${fmt(m.arb_sim_state_drifted)}`,
+           `matched / drifted vaults · ${fmt(m.arb_sim_quoter_suspect)} quoter suspects · ${fmt(m.arb_sim_per_leg)} leg by leg`,
+           (m.arb_sim_quoter_suspect || 0) > 0 ? "warnv" : ""),
+      tile("Held back", fmt(m.arb_quarantined_pools), `pools quarantined · ${fmt(m.arb_engine_implausible_profit)} implausible profits · ${fmt(m.arb_engine_no_room_memo)} no-room skips`),
+      tile("Not simulated", fmt((m.arb_sim_dropped || 0) + (m.arb_sim_no_holder || 0) + Math.max(0, (m.arb_sim_too_large || 0) - (m.arb_sim_per_leg || 0)) + (m.arb_sim_rpc_error || 0) + (m.arb_sim_setup_error || 0) + (m.arb_sim_funding_changed || 0) + (m.arb_sim_intermediate_balance || 0)),
            `${fmt(m.arb_sim_rpc_error)} RPC · ${fmt(m.arb_sim_setup_error)} setup · ${fmt(m.arb_sim_no_holder)} no holder · ${fmt(m.arb_sim_funding_changed)} holder moved · ${fmt(m.arb_sim_dropped)} capped`),
     ].join("");
     const ms = (us) => us == null || us < 0 ? null : us / 1000;
