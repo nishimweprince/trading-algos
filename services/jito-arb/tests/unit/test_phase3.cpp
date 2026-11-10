@@ -8,6 +8,7 @@
 #include <cstring>
 
 #include "app/bundle_builder.hpp"
+#include "app/live_plan.hpp"
 #include "feed/frames.hpp"
 #include "core/programs.hpp"
 #include "fixture.hpp"
@@ -586,4 +587,49 @@ TEST(landing_watcher_reports_jito_verdicts_off_thread) {
   CHECK(done.size() == 1 && done[0].bundle_id == "b2" && done[0].result == submit::BundleTracker::Result::NotLanded);
   CHECK_EQ(w.pending(), size_t(0));
   CHECK(w.drain().empty());
+}
+
+TEST(live_plan_ranks_guard_passing_pools_and_prices_the_rent) {
+  CHECK_EQ(app::rent_exempt_lamports(app::TOKEN_ACCOUNT_BYTES), uint64_t(2'039'280));  // the chain's ATA rent
+  Loaded L;
+  CHECK(L.pf.pools.size() >= 3);
+  auto rec = [&](uint8_t kind, uint8_t sig, uint64_t slot, int64_t net, uint8_t outcome, std::initializer_list<size_t> pools) {
+    obs::DecisionRecord r{};
+    r.kind = kind;
+    r.action = uint8_t(obs::Action::DryRun);
+    r.outcome = outcome;
+    r.slot = slot;
+    r.net_lamports = net;
+    r.signature[0] = sig;
+    for (size_t p : pools) std::memcpy(r.pools[r.hops++], L.pf.pools[p].address.data(), 32);
+    return r;
+  };
+  const uint8_t C = uint8_t(obs::RecordKind::Candidate), O = uint8_t(obs::RecordKind::Outcome);
+  const uint8_t OK = uint8_t(obs::Outcome::SimulatedOk), FAILED = uint8_t(obs::Outcome::SimulationFailed);
+  std::vector<obs::DecisionRecord> recs{
+      rec(C, 1, 100, 0, 0, {0, 1}), rec(O, 1, 102, 50'000, OK, {}),      // passes: pools 0, 1
+      rec(C, 2, 100, 0, 0, {0, 2}), rec(O, 2, 103, 20'000, OK, {}),      // passes: pools 0, 2
+      rec(C, 3, 100, 0, 0, {1, 2}), rec(O, 3, 101, 5'000, OK, {}),       // below the guard's margin
+      rec(C, 4, 100, 0, 0, {1, 2}), rec(O, 4, 160, 90'000, OK, {}),      // simulated 60 slots late
+      rec(C, 5, 100, 0, 0, {1, 2}), rec(O, 5, 101, 0, FAILED, {}),       // failed
+      rec(O, 9, 101, 90'000, OK, {}),                                    // outcome with no candidate
+  };
+  auto ranking = app::rank_pools(recs, 10'000, 20);
+  CHECK_EQ(ranking.size(), size_t(3));
+  CHECK(ranking[0].pool == L.pf.pools[0].address && ranking[0].passes == 2 && ranking[0].net_lamports == 70'000);
+  CHECK(ranking[1].pool == L.pf.pools[1].address && ranking[1].passes == 1);  // 50,000 beats pool 2's 20,000
+  std::vector<Pubkey> bases{mint::WSOL};
+  app::LivePlan two = app::size_plan(L.pf, ranking, 2, bases, 40);
+  CHECK_EQ(two.armed.size(), size_t(2));
+  CHECK(two.tables == 1 && two.table_keys > 40 && two.table_keys <= 256);
+  CHECK_EQ(two.table_rent_lamports, app::rent_exempt_lamports(56 + 32 * two.table_keys));
+  CHECK_EQ(two.token_rent_lamports, two.token_accounts * uint64_t(2'039'280));
+  app::ArmedSet armed;
+  CHECK(armed.load_json(app::armed_to_json(two.armed)) && armed.contains(L.pf.pools[0].address) && !armed.contains(L.pf.pools[2].address));
+  Pubkey gone{};
+  gone[0] = 0xEE;
+  ranking.insert(ranking.begin(), app::PoolScore{gone, 9, 0});  // ranked, but no longer in pools.json
+  app::LivePlan p = app::size_plan(L.pf, ranking, 250, bases);
+  CHECK(p.dropped == 1 && p.armed.size() == 3);
+  CHECK(app::plan_report(p, ranking.size(), 250).find("total rent") != std::string::npos);
 }
