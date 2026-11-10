@@ -17,7 +17,7 @@ Measured on the Frankfurt VM, 13:01 to 16:51 UTC (3.8 h), 8,000 pools from 15:21
 | Kamino flash fee | 0.1 bps of the amount borrowed |
 | 3-hop share of passing routes | 36 of 48 |
 | Pools on passing routes / on all simulated routes | 60 / 151 |
-| Detect to signed | 11 ms to 30 ms p50 (one engine thread, at about 100% CPU) |
+| Detect to signed | 11 ms to 73 ms p50, 100 ms p99 after the settle change (one engine thread, at 100% to 120% CPU) |
 
 So the measurable edge is about 0.005 SOL an hour before competition. The live test is an experiment, not income.
 
