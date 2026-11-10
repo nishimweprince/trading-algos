@@ -275,6 +275,11 @@ async function refreshState() {
       tile("Decode failures", fmt(m.arb_decode_failures), "since start"),
       tile("Candidates", fmt(m.arb_engine_candidates), "priced above min EV"),
       tile("Bundles (dry run)", fmt(m.arb_bundles_dry_run), `${fmt(m.arb_bundles_signed)} signed`),
+      tile("Armed pools", m.arb_armed_pools ? fmt(m.arb_armed_pools) : "all", m.arb_armed_pools
+           ? `${fmt(m.arb_bundles_not_armed)} dry-run routes used a pool outside the set (skipped when live)`
+           : "no armed set loaded"),
+      tile("Hot wallet", m.arb_wallet_lamports >= 0 ? fmt(m.arb_wallet_lamports / 1e9, 4) + " SOL" : "–",
+           `${fmt(m.arb_bundles_landed || 0)} landed · ${fmt(m.arb_bundles_not_landed || 0)} not landed · ${fmt(m.arb_bundles_rejected || 0)} rejected`),
       tile("Simulated OK", fmt(m.arb_sim_ok), `${fmt(m.arb_sim_profitable)} would land · the rest revert at no cost · ${fmt(m.arb_sim_failed)} failed`,
            m.arb_sim_failed > m.arb_sim_ok ? "warnv" : ""),
       tile("Skip logs sampled", fmt(m.arb_decision_skip_logs_dropped), "all signed candidates and outcomes retained"),

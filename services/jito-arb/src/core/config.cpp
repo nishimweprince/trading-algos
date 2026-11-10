@@ -117,9 +117,9 @@ Config load_config(const std::string& path) {
   }
   Reader r{kv, {}};
 #define G(sec, field) r.get(#sec "." #field, c.sec.field)
-  G(mode, dry_run); G(mode, funding_mode); G(mode, kill_file); G(mode, simulate_before_send);
+  G(mode, dry_run); G(mode, funding_mode); G(mode, kill_file); G(mode, simulate_before_send); G(mode, armed_path);
   G(helius, laserstream_endpoint); G(helius, rpc_url); G(helius, api_key_env); G(helius, max_grpc_connections);
-  G(helius, shard_size); G(helius, resync_lag_ms); G(helius, reconnect_min_ms); G(helius, reconnect_max_ms);
+  G(helius, shard_size); G(helius, max_frames_per_pass); G(helius, resync_lag_ms); G(helius, reconnect_min_ms); G(helius, reconnect_max_ms);
   G(helius, ping_interval_ms); G(helius, replay_from_slot); G(helius, rpc_timeout_ms);
   G(jito, regions); G(jito, block_engine_fmt); G(jito, tip_floor_url); G(jito, tip_min_lamports);
   G(jito, tip_max_lamports); G(jito, tip_floor_refresh_ms); G(jito, tip_accounts_refresh_s); G(jito, backoff_429_ms);
@@ -127,7 +127,7 @@ Config load_config(const std::string& path) {
   G(engine, base_mints); G(engine, max_hops); G(engine, min_spot_edge); G(engine, min_ev_lamports);
   G(engine, min_net_lamports); G(engine, max_trade_lamports); G(engine, min_trade_lamports);
   G(engine, max_input_fraction); G(engine, target_land_rate); G(engine, max_bundles_per_slot);
-  G(engine, max_cycles_per_pool); G(engine, max_send_lag_ms); G(engine, max_state_age_slots);
+  G(engine, max_cycles_per_pool); G(engine, max_send_lag_ms); G(engine, max_state_age_slots); G(engine, settle_slots);
   G(engine, cooldown_ms); G(chain, slot_ms); G(engine, sizer_max_evals); G(engine, alpha_init); G(engine, alpha_min);
   G(engine, alpha_max); G(engine, alpha_step); G(engine, alpha_window); G(engine, p_land_init);
   G(engine, cu_overhead); G(engine, max_route_cu); G(engine, cu_headroom); G(engine, base_fee_lamports);

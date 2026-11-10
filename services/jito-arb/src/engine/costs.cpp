@@ -12,7 +12,7 @@ const char* reason_name(Reason r) {
                                 "send_lag", "sizer_failed", "boundary", "flash_disabled", "risk_block",
                                 "tx_build_failed", "sign_guard", "sizer_no_room", "sizer_no_profit",
                                 "sizer_partial_fill", "sizer_quote_error", "sizer_zero_out", "implausible_profit",
-                                "quarantined"};
+                                "quarantined", "not_armed"};
   size_t i = size_t(r);
   return i < sizeof names / sizeof *names ? names[i] : "unknown";
 }

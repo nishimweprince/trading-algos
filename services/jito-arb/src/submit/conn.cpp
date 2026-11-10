@@ -291,7 +291,9 @@ void format_request(std::string& out, const char* method, const Url& url, std::s
   out.append("\r\nConnection: keep-alive\r\nAccept: application/json\r\n");
   out.append(headers);
   if (!body.empty() || std::strcmp(method, "POST") == 0) {
-    out.append("Content-Type: application/json\r\nContent-Length: ").append(std::to_string(body.size())).append("\r\n");
+    // Exactly one Content-Type: a caller that passes its own keeps it.
+    if (headers.find("Content-Type:") == std::string_view::npos) out.append("Content-Type: application/json\r\n");
+    out.append("Content-Length: ").append(std::to_string(body.size())).append("\r\n");
   }
   out.append("\r\n").append(body);
 }

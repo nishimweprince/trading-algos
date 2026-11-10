@@ -131,6 +131,14 @@ void BundleBuilder::operator()(const engine::Opportunity& o, const engine::Cycle
     legs[i] = rt_.store().pool(c.legs[i].pool);
     dex_mask |= uint8_t(1u << uint8_t(legs[i]->kind));
   }
+  if (armed_) {
+    bool all = true;
+    for (int i = 0; i < c.n; ++i) all &= armed_->contains(legs[i]->address);
+    if (!all) {
+      ++n_.not_armed;
+      if (enforce_armed_) return skip(engine::Reason::not_armed);
+    }
+  }
   uint64_t slot = std::max(o.slot, rt_.clock().slot.load(std::memory_order_relaxed));
   // §10 limits: kill switch, fee cap, float, reject pause, feed lag, disabled quoters.
   limits_.set_kill(::access(cfg_.mode.kill_file.c_str(), F_OK) == 0 || limits_.killed());
@@ -180,9 +188,12 @@ void BundleBuilder::operator()(const engine::Opportunity& o, const engine::Cycle
   if (uint64_t t0 = rt_.frame_recv_ns(); t0) {
     uint64_t t1 = now_ns();
     detect_us_.add(t1, int64_t(t1 - std::min(t1, t0)) / 1000);
+    // The part spent pricing this pool and building the bundle; the rest is frames queued ahead of it.
+    if (uint64_t e = rt_.eval_start_ns(); e && e >= t0) compute_us_.add(t1, int64_t(t1 - std::min(t1, e)) / 1000);
   }
   std::memcpy(rec.signature, last_.sig.data(), 64);
-  switch (submitter_.submit(last_, slot, rt_.clock().slot.load(std::memory_order_relaxed), rec.wall_ms)) {
+  std::vector<submit::RegionResult> regions;
+  switch (submitter_.submit(last_, slot, rt_.clock().slot.load(std::memory_order_relaxed), rec.wall_ms, &regions)) {
     case submit::SubmitOutcome::DryRun:
       ++n_.dry_run;
       rec.action = uint8_t(obs::Action::DryRun);
@@ -198,6 +209,13 @@ void BundleBuilder::operator()(const engine::Opportunity& o, const engine::Cycle
     case submit::SubmitOutcome::Sent:
       ++n_.sent;
       rec.action = uint8_t(obs::Action::Sent);
+      // Every region returns the same id for the same bundle: track the first accepted one.
+      if (sent_hook_)
+        for (const auto& r : regions)
+          if (!r.bundle_id.empty()) {
+            sent_hook_(r.bundle_id, last_.sig, c.route_class, rec.wall_ms);
+            break;
+          }
       break;
     case submit::SubmitOutcome::Stale:
       ++n_.stale;

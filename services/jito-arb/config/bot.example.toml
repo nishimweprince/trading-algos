@@ -20,6 +20,8 @@ tip_min_lamports = 1000
 tip_max_lamports = 50000000
 
 [engine]
+# A pool account/vault slot spread is accepted once the newest write is settle_slots old (0: never).
+settle_slots = 2
 base_mints = ["So11111111111111111111111111111111111111112", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"]
 max_hops = 3
 min_spot_edge = 0.0005

@@ -7,16 +7,18 @@ pools_path = "/var/lib/jito-arb/pools.json"
 dry_run = true
 funding_mode = "flash"
 kill_file = "/var/lib/jito-arb/KILL"
+armed_path = "/var/lib/jito-arb/armed.json"   # written by live-plan; dry run only counts routes outside it
 
 [helius]
 laserstream_endpoint = "VERIFY"   # overridden by LASERSTREAM_ENDPOINT
 rpc_url = "https://mainnet.helius-rpc.com"
 api_key_env = "HELIUS_API_KEY"
 max_grpc_connections = 8          # plus one wallet/reserve connection; the plan allows 10
+resync_lag_ms = 1800000           # RPC refresh of quiet pools is a safety net only (engine.settle_slots keeps them quotable)
 shard_size = 6000                 # 8 x 6000 keys: 8,000 pools need ~46,000 (spec suggests 300; not a Helius limit)
 
 [engine]
-max_cycles_per_pool = 64          # cycles one pool's update re-prices; 256 saturated the engine at 8,000 pools
+max_cycles_per_pool = 256         # cycles one pool's update re-prices; 64 was a stopgap before the DLMM clock fix
 # A bundle that does not land costs nothing, and dry run never learns p_land (it stays at p_land_init 0.1), so the
 # 20k EV default meant net >= 200k. 1k x 0.1 makes min_net (10k) the binding floor: 80 -> 197 slots on Nov 4-5 logs.
 min_ev_lamports = 1000
@@ -59,3 +61,12 @@ dir = "/var/lib/jito-arb/frames"
 enabled = true
 max_per_s = 5
 holder_seed_path = "/opt/jito-arb/share/holders_seed.json"
+
+# Stage 3 (docs/LIVE-READINESS.md): limits for the first live test. Left commented so dry run keeps measuring
+# every size; the owner uncomments them together with the dry_run change.
+# [engine]
+#   max_trade_lamports = 2000000000   # 2 SOL per trade while on flash loans
+#   max_bundles_per_slot = 1
+# [risk]
+#   max_daily_fee_spend_sol = 0.02
+#   min_sol_float = 0.3

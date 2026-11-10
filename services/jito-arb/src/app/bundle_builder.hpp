@@ -5,6 +5,8 @@
 // Submitter holds no client: the signed bundle is recorded in the decision log and nothing is sent.
 #include <random>
 
+#include <functional>
+#include "app/live_send.hpp"
 #include "app/runtime.hpp"
 #include "obs/latency.hpp"
 #include "risk/limits.hpp"
@@ -32,6 +34,7 @@ void seed_virtual_tables(tx::AltManager& alts, const StateStore& store, const Pu
 
 struct BuilderStats {
   uint64_t built = 0, signed_ok = 0, too_large = 0, guard_blocked = 0, risk_blocked = 0, build_failed = 0, dry_run = 0, sent = 0, stale = 0;
+  uint64_t not_armed = 0;  // routes through an unarmed pool (counted in dry run, skipped live)
 };
 
 class BundleBuilder {
@@ -51,14 +54,26 @@ class BundleBuilder {
    */
   void set_offline(bool on) { virtual_tables_ = placeholder_blockhash_ = on; }
   void set_tip_accounts(std::vector<Pubkey> v) { guard_.tip_accounts = std::move(v); }
+  /**
+   * The pools the bot may trade (null: every pool). With enforce, a route through an unarmed pool is skipped as
+   * not_armed; without it (dry run) the route is only counted, so dry run keeps measuring every pool.
+   */
+  void set_armed(const ArmedSet* a, bool enforce) { armed_ = a; enforce_armed_ = enforce; }
+  /** Called for each bundle Jito accepted: (bundle id, signature, route class, wall ms). */
+  using SentHook = std::function<void(const std::string&, const Signature&, uint16_t, int64_t)>;
+  void set_sent_hook(SentHook h) { sent_hook_ = std::move(h); }
   const BuilderStats& stats() const { return n_; }
   const tx::SignedTx& last_tx() const { return last_; }
   const risk::SignGuard& guard() const { return guard_; }
   /** Frame received -> bundle signed (everything before the HTTP write), microseconds. */
   obs::LatencyWindow& detect_to_signed_us() { return detect_us_; }
+  obs::LatencyWindow& eval_to_signed_us() { return compute_us_; }
 
  private:
   BundleSim* sim_ = nullptr;
+  const ArmedSet* armed_ = nullptr;
+  bool enforce_armed_ = false;
+  SentHook sent_hook_;
   const Config& cfg_;
   Runtime& rt_;
   Keypair wallet_;
@@ -74,7 +89,7 @@ class BundleBuilder {
   tx::IxList ixs_;
   tx::SignedTx last_;
   BuilderStats n_;
-  obs::LatencyWindow detect_us_;
+  obs::LatencyWindow detect_us_, compute_us_;
 };
 
 }  // namespace arb::app

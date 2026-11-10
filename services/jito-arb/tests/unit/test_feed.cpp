@@ -398,3 +398,29 @@ TEST(alpenglow_competing_banks_suspect_then_resync_losers) {
   CHECK(h.take_resync().empty());
   CHECK(store.pool(id)->quotable(2));
 }
+
+TEST(feed_handler_watch_sees_wallet_accounts_the_store_does_not_model) {
+  StateStore store;
+  feed::SlotClock clock;
+  feed::FeedHandler h(store, clock);
+  Pubkey wallet{}, other{}, system{};
+  wallet[0] = 9;
+  other[0] = 8;
+  uint64_t seen_lamports = 0, seen_amount = 0, seen_slot = 0;
+  int calls = 0;
+  h.watch(wallet, [&](uint64_t lamports, const uint8_t* data, size_t len, uint64_t slot) {
+    ++calls;
+    seen_lamports = lamports;
+    seen_slot = slot;
+    if (len >= 72) std::memcpy(&seen_amount, data + 64, 8);
+  });
+  uint8_t token[165]{};
+  uint64_t amount = 123456789;
+  std::memcpy(token + 64, &amount, 8);
+  std::string f = feed::encode_account_frame(wallet, system, token, sizeof token, 777, 42, 1);
+  CHECK(h.on_frame(reinterpret_cast<const uint8_t*>(f.data()), f.size(), 1000));
+  CHECK(calls == 1 && seen_lamports == 777 && seen_amount == amount && seen_slot == 42);
+  std::string g = feed::encode_account_frame(other, system, token, sizeof token, 5, 43, 1);
+  CHECK(h.on_frame(reinterpret_cast<const uint8_t*>(g.data()), g.size(), 2000));
+  CHECK_EQ(calls, 1);  // an unwatched key is untouched
+}

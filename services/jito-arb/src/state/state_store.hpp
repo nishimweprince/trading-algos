@@ -132,9 +132,20 @@ class StateStore {
   struct PoolSlot {
     PoolDef def;
     RcuPtr<PoolState> snap;
+    Pubkey clmm_bitmap_key{};    // CLMM: the pool's bitmap-extension PDA, derived once at add_pool
     int8_t pump_canonical = -1;  // PumpSwap: pool.creator is the base mint's pump pool-authority PDA (-1 = not yet known)
   };
   AccountEntry& entry(const Pubkey& k, AccountKind kind);
+  /**
+   * The account's decoded parent is one of the pools this key was registered for. Keys are PDAs derived from the
+   * pool (or verified against it) once in add_pool, so this replaces re-deriving the PDA on every update, which
+   * was ~36% of the engine thread's samples at 8,000 pools.
+   */
+  bool owned_by(const AccountEntry& e, const Pubkey& pool) const {
+    for (uint32_t id : e.pools)
+      if (pools_[id]->def.address == pool) return true;
+    return false;
+  }
   void rebuild(uint32_t id);
 
   std::vector<std::unique_ptr<PoolSlot>> pools_;

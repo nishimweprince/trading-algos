@@ -20,6 +20,9 @@ struct Config {
     std::string funding_mode = "flash";  // flash | own
     std::string kill_file = "KILL";      // relative to the run directory
     bool simulate_before_send = true;    // pre-send simulateTransaction (spec §9)
+    // {"pools":[..]} written by the live-plan tool: the pools whose lookup tables and token accounts exist.
+    // Empty: no armed set (every pool). Dry run only counts routes outside it; live skips them (not_armed).
+    std::string armed_path;
   } mode;
 
   struct Helius {
@@ -28,6 +31,7 @@ struct Config {
     std::string api_key_env = "HELIUS_API_KEY";
     int max_grpc_connections = 4;  // pool shards; plus one wallet/reserve connection
     int shard_size = 300;
+    int max_frames_per_pass = 64;  // frames read per shard before the engine prices the batch (latency vs dedupe)
     int resync_lag_ms = 60000;  // resync a pool whose snapshot lags the slot clock by this long (was 150 x 400 ms slots)
     int reconnect_min_ms = 1000;
     int reconnect_max_ms = 30000;
@@ -69,6 +73,7 @@ struct Config {
     int max_cycles_per_pool = 64;
     int max_send_lag_ms = 400;  // drop a candidate whose triggering update is this old at dispatch
     int max_state_age_slots = 2;
+    int settle_slots = 2;       // pool account/vault spread accepted once the newest write is this old (0: never)
     int cooldown_ms = 800;      // a dispatched cycle is not re-sent for this long
     int sizer_max_evals = 24;
     double alpha_init = 0.5;

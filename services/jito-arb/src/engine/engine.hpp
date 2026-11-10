@@ -18,6 +18,7 @@ namespace arb::engine {
 
 struct EngineConfig {
   uint64_t max_state_age_slots = 2;
+  uint64_t settle_slots = 2;     // a component spread is fine once the newest write is this many slots old
   uint64_t max_slot_lag = 150;  // a leg whose snapshot is this far behind the slot clock waits for resync
   uint32_t min_edge_ppm = 500;
   uint32_t max_input_fraction_ppm = 200'000;
@@ -182,7 +183,8 @@ class Engine {
     std::vector<int64_t> at_ms;
     int64_t until_ms = 0;
   };
-  std::unordered_map<uint64_t, Strikes> strikes_;  // (pool << 1 | a_to_b)
+  std::unordered_map<uint64_t, Strikes> strikes_;
+  int64_t eval_now_ms_ = 0;  // wall clock for the pool update being evaluated  // (pool << 1 | a_to_b)
   // cycle -> the inputs that gave x_max < min_trade
   uint64_t reserve_available(const Pubkey& base) const;
 };

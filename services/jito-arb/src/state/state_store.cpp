@@ -56,12 +56,13 @@ AccountKind pool_account_kind(DexKind k) {
 
 }  // namespace
 
-bool PoolState::quotable(uint64_t max_age) const {
+bool PoolState::quotable(uint64_t max_age, uint64_t now_slot, uint64_t settle_slots) const {
   if (!complete || awaiting_push) return false;
   if (kind == DexKind::Dlmm && (dlmm_clock_slot < pool_slot)) return false;
   uint64_t lo = std::min({pool_slot, vault_a_slot, vault_b_slot});
   uint64_t hi = std::max({pool_slot, vault_a_slot, vault_b_slot});
-  return hi - lo <= max_age;
+  if (hi - lo <= max_age) return true;
+  return settle_slots && now_slot >= hi + settle_slots;
 }
 
 StateStore::StateStore() = default;
@@ -81,6 +82,9 @@ uint32_t StateStore::add_pool(const PoolDef& def) {
       if (index < -6656 || index >= 6656 || key != state::dlmm_bin_array_pda(def.address, index))
         throw std::invalid_argument("DLMM invalid bin-array PDA/index");
   }
+  if (def.kind == DexKind::Clmm)
+    for (auto& [start, key] : def.tick_arrays)
+      if (key != state::clmm_tick_array_pda(def.address, start)) throw std::invalid_argument("CLMM invalid tick-array PDA/start");
   pool_account_kind(def.kind);  // throws for a kind this build cannot decode, before anything is registered
   uint32_t id = uint32_t(pools_.size());
   auto slot = std::make_unique<PoolSlot>();
@@ -106,8 +110,10 @@ uint32_t StateStore::add_pool(const PoolDef& def) {
                       : def.kind == DexKind::Clmm   ? AccountKind::ClmmConfig
                                                     : AccountKind::CpmmConfig)
         .pools.push_back(id);
-  if (def.kind == DexKind::Clmm)
-    entry(state::clmm_bitmap_extension_pda(def.address), AccountKind::ClmmBitmapExtension).pools.push_back(id);
+  if (def.kind == DexKind::Clmm) {
+    pools_[id]->clmm_bitmap_key = state::clmm_bitmap_extension_pda(def.address);
+    entry(pools_[id]->clmm_bitmap_key, AccountKind::ClmmBitmapExtension).pools.push_back(id);
+  }
   if (!is_zero(def.fee_config)) entry(def.fee_config, AccountKind::PumpFeeConfig).pools.push_back(id);
   for (auto& [start, key] : def.tick_arrays) {
     AccountEntry& e = entry(key, def.kind == DexKind::Clmm ? AccountKind::ClmmTickArray : AccountKind::TickArray);
@@ -187,14 +193,14 @@ bool StateStore::apply(const AccountUpdate& u) {
       }
       case AccountKind::DlmmArray: {
         auto r = state::decode_dlmm_bin_array(u.data, u.len, u.owner);
-        if (r && r->index == e.tick_start && state::dlmm_bin_array_pda(r->pair, r->index) == u.key)
+        if (r && r->index == e.tick_start && owned_by(e, r->pair))
           e.dlmm_array = std::make_shared<const state::DlmmBinArray>(*r);
         else ok = false;
         break;
       }
       case AccountKind::DlmmBitmap: {
         auto r = state::decode_dlmm_bitmap(u.data, u.len, u.owner);
-        if (r && state::dlmm_bitmap_pda(r->pair) == u.key) e.dlmm_bitmap = std::make_shared<const state::DlmmBitmapExtension>(*r);
+        if (r && owned_by(e, r->pair)) e.dlmm_bitmap = std::make_shared<const state::DlmmBitmapExtension>(*r);
         else ok = false;
         break;
       }
@@ -235,14 +241,14 @@ bool StateStore::apply(const AccountUpdate& u) {
       }
       case AccountKind::ClmmBitmapExtension: {
         auto r = state::decode_clmm_bitmap_extension(u.data, u.len, u.owner);
-        if (r && state::clmm_bitmap_extension_pda(r->pool) == u.key)
+        if (r && owned_by(e, r->pool))
           e.clmm_bitmap = std::make_shared<const state::ClmmBitmapExtension>(*r);
         else ok = false;
         break;
       }
       case AccountKind::ClmmTickArray: {
         auto r = state::decode_clmm_tick_array(u.data, u.len, u.owner);
-        if (r && r->start_tick_index == e.tick_start && state::clmm_tick_array_pda(r->pool, e.tick_start) == u.key) e.clmm_tick_array = std::make_shared<const state::ClmmTickArray>(*r);
+        if (r && r->start_tick_index == e.tick_start && owned_by(e, r->pool)) e.clmm_tick_array = std::make_shared<const state::ClmmTickArray>(*r);
         else ok = false;
         break;
       }
@@ -311,9 +317,13 @@ bool StateStore::apply(const AccountUpdate& u) {
   e.slot = u.slot;
   e.write_version = u.write_version;
   e.awaiting_push = u.from_resync;
+  // The clock sysvar changes every slot and belongs to every DLMM pool. Their snapshots are rebuilt so the next
+  // quote uses the current time, but the clock alone is not a market event: waking the engine for it re-priced
+  // every DLMM pool five times a second (345k cycle evaluations a second at 8,000 pools).
+  const bool wake = e.kind != AccountKind::DlmmClock;
   for (uint32_t id : e.pools) {
     rebuild(id);
-    changed_.push(id);  // a full queue drops the wake-up; the snapshot itself is still current
+    if (wake) changed_.push(id);  // a full queue drops the wake-up; the snapshot itself is still current
   }
   return true;
 }
@@ -389,7 +399,7 @@ void StateStore::rebuild(uint32_t id) {
           s->clmm_cfg = *cc;
           if (cfg->awaiting_push) s->awaiting_push = true;
         } else complete = false;
-        const AccountEntry* bm = find(state::clmm_bitmap_extension_pda(d.address));
+        const AccountEntry* bm = find(pools_[id]->clmm_bitmap_key);
         if (bm && bm->seen && !bm->missing) {
           s->clmm_bitmap = bm->clmm_bitmap;
           if (bm->awaiting_push) s->awaiting_push = true;

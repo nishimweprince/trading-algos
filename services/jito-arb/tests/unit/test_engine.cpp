@@ -936,3 +936,20 @@ TEST(helius_quota_flag_and_backoff) {
     if (m == "getSlot") found = s.calls >= 3 && s.rate_limited >= 2;
   CHECK(found);
 }
+
+TEST(pool_spread_is_quotable_once_settled) {
+  PoolState p;
+  p.kind = DexKind::RaydiumV4;
+  p.complete = true;
+  p.pool_slot = 100;   // a v4 swap writes only the vaults: the pool account keeps its old slot
+  p.vault_a_slot = 500;
+  p.vault_b_slot = 500;
+  CHECK(!p.quotable(2));                  // strict rule: spread 400 > 2
+  CHECK(!p.quotable(2, 501, 2));          // newest write one slot old: its pushes may still be arriving
+  CHECK(p.quotable(2, 502, 2));           // settled
+  CHECK(!p.quotable(2, 502, 0));          // 0 disables settling
+  p.vault_b_slot = 499;                   // one vault behind the other: the same rule, the newest write decides
+  CHECK(p.quotable(2, 502, 2));
+  p.awaiting_push = true;
+  CHECK(!p.quotable(2, 9999, 2));         // a resync read awaiting its push is never quotable
+}

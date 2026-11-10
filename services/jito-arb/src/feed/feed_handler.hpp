@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstdint>
 
+#include <functional>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -32,6 +33,12 @@ class FeedHandler {
   FeedHandler(StateStore& store, SlotClock& clock) : store_(store), clock_(clock) {}
   /** Parse and apply one raw frame. False when malformed or undecodable. */
   bool on_frame(const uint8_t* data, size_t len, uint64_t recv_ns);
+  /**
+   * Call `fn(lamports, data, len, slot)` for every update of `key`, before the store sees it. For accounts the
+   * store does not model: the hot wallet (SOL float) and its base-token accounts (own-capital balance).
+   */
+  using Watch = std::function<void(uint64_t lamports, const uint8_t* data, size_t len, uint64_t slot)>;
+  void watch(const Pubkey& key, Watch fn) { watches_[key] = std::move(fn); }
   uint64_t frames() const { return frames_; }
   uint64_t bad_frames() const { return bad_; }
   uint64_t account_updates() const { return accounts_; }
@@ -74,6 +81,7 @@ class FeedHandler {
   void note_bank(uint64_t slot, uint64_t bank);
   void resolve(uint64_t slot, uint64_t winner);
   std::unordered_map<uint64_t, SlotBanks> slot_banks_;
+  std::unordered_map<Pubkey, Watch, PubkeyHash> watches_;
   std::vector<Pubkey> resync_;
   BankCounters bank_n_;
   std::unordered_map<uint64_t, uint64_t> slot_start_ns_;  // slot -> earliest interslot status time (monotonic)

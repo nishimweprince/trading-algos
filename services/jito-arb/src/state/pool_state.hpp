@@ -117,8 +117,12 @@ struct PoolState {
    * Quotable (spec §4): every component seen, and the pool account and both vaults within
    * max_age slots of each other (a swap writes all three in one slot). Tick arrays change only
    * when crossed, so any received copy is current until the next push.
+   *
+   * Settled: an account the stream has not pushed again is unchanged, so a Raydium v4 pool account last written
+   * long before its vaults is still current. Once the slot clock is settle_slots past the newest component, every
+   * push of that write has arrived and the spread no longer means a half-applied swap. 0 disables this.
    */
-  bool quotable(uint64_t max_age) const;
+  bool quotable(uint64_t max_age, uint64_t now_slot = 0, uint64_t settle_slots = 0) const;
   const TickArraySlot* tick_slot(int32_t start) const {
     for (uint8_t i = 0; i < n_ticks; ++i)
       if (ticks[i].start == start) return &ticks[i];

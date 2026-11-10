@@ -8,6 +8,7 @@
 #include <cstring>
 
 #include "app/bundle_builder.hpp"
+#include "app/live_plan.hpp"
 #include "feed/frames.hpp"
 #include "core/programs.hpp"
 #include "fixture.hpp"
@@ -510,4 +511,141 @@ TEST(runtime_batched_frames_price_each_changed_pool_once) {
     CHECK_EQ(pa ? pa->seq : 0, pb ? pb->seq : 0);
   }
   CHECK_EQ(b.rt->evaluate_changed(), size_t(0));  // nothing left after the batch
+}
+
+TEST(armed_set_counts_in_dry_run_and_skips_when_enforced) {
+  app::ArmedSet none;
+  std::string err;
+  CHECK(!none.load_json("{\"pools\":[\"not base58!\"]}", &err) && !err.empty() && none.size() == 0);
+  CHECK(!none.load_json("[]", &err));
+  Pubkey a{};
+  a[0] = 7;
+  app::ArmedSet one;
+  CHECK(one.load_json(app::armed_to_json({a})) && one.contains(a) && one.size() == 1);
+
+  // The replay's routes go through fixture pools, none of which is `a`: every candidate is outside the set.
+  for (bool enforce : {false, true}) {
+    Loaded L;
+    Keypair kp = app::dry_run_keypair();
+    tx::AltManager alts;
+    tx::BlockhashCache bh;
+    risk::Limits limits(risk::limits_config(L.cfg));
+    submit::Submitter sub(true, nullptr);
+    app::BundleBuilder bb(L.cfg, *L.rt, kp, app::dry_run_executor(), alts, bh, limits, sub);
+    bb.set_offline(true);
+    bb.set_armed(&one, enforce);
+    std::vector<obs::DecisionRecord> recs;
+    L.rt->set_send_hook([&](const engine::Opportunity& o, const engine::Cycle& c, obs::DecisionRecord& r) {
+      bb(o, c, r);
+      recs.push_back(r);
+    });
+    CHECK(L.rt->replay_file(fixture_path("frames.bin")));
+    const auto& s = bb.stats();
+    CHECK(s.built > 0 && s.not_armed == s.built);
+    if (enforce) {
+      CHECK(s.signed_ok == 0 && s.dry_run == 0);
+      for (auto& r : recs) CHECK(r.action == uint8_t(obs::Action::Skipped) && r.reason == uint8_t(engine::Reason::not_armed));
+    } else {
+      CHECK(s.dry_run == s.built);  // dry run keeps measuring every pool
+    }
+  }
+  CHECK(std::string(engine::reason_name(engine::Reason::not_armed)) == "not_armed");
+}
+
+TEST(landing_watcher_reports_jito_verdicts_off_thread) {
+  int calls = 0;
+  std::string body = "{\"jsonrpc\":\"2.0\",\"result\":{\"context\":{\"slot\":1},\"value\":["
+                     "{\"bundle_id\":\"b0\",\"status\":\"Landed\",\"landed_slot\":77},"
+                     "{\"bundle_id\":\"b1\",\"status\":\"Failed\",\"landed_slot\":null},"
+                     "{\"bundle_id\":\"b2\",\"status\":\"Pending\",\"landed_slot\":null}]},\"id\":1}";
+  auto client = std::make_unique<submit::JitoClient>(
+      std::vector<std::string>{"frankfurt"}, "https://%s.x",
+      [&](const std::string&) { return std::unique_ptr<submit::HttpPost>(new MockHttp(&calls, 200, body)); });
+  app::LandingWatcher w(std::move(client), 500, 30'000);  // not started: poll_once is driven by hand
+  Signature s3{};
+  s3[0] = 3;
+  w.track("b0", Signature{}, 0x0201, 0);
+  w.track("b1", Signature{}, 0x0201, 0);
+  w.track("b2", Signature{}, 0x0301, 0);
+  w.track("b3", s3, 0x0301, 0);
+  CHECK_EQ(w.pending(), size_t(4));
+  w.poll_once(100);  // nothing is due before poll_ms
+  CHECK_EQ(calls, 0);
+  w.signature_seen(s3, 80);  // the wallet stream saw b3 land before any poll
+  w.poll_once(600);
+  CHECK_EQ(calls, 1);
+  auto done = w.drain();
+  CHECK_EQ(done.size(), size_t(3));
+  std::map<std::string, app::LandingWatcher::Done> by;
+  for (auto& d : done) by[d.bundle_id] = d;
+  CHECK(by["b0"].result == submit::BundleTracker::Result::Landed && by["b0"].landed_slot == 77 && by["b0"].route_class == 0x0201);
+  CHECK(by["b1"].result == submit::BundleTracker::Result::Rejected);
+  CHECK(by["b3"].result == submit::BundleTracker::Result::Landed && by["b3"].landed_slot == 80);
+  CHECK_EQ(w.pending(), size_t(1));
+  w.poll_once(31'000);  // b2 never landed
+  done = w.drain();
+  CHECK(done.size() == 1 && done[0].bundle_id == "b2" && done[0].result == submit::BundleTracker::Result::NotLanded);
+  CHECK_EQ(w.pending(), size_t(0));
+  CHECK(w.drain().empty());
+}
+
+TEST(live_plan_ranks_guard_passing_pools_and_prices_the_rent) {
+  CHECK_EQ(app::rent_exempt_lamports(app::TOKEN_ACCOUNT_BYTES), uint64_t(2'039'280));  // the chain's ATA rent
+  Loaded L;
+  CHECK(L.pf.pools.size() >= 3);
+  auto rec = [&](uint8_t kind, uint8_t sig, uint64_t slot, int64_t net, uint8_t outcome, std::initializer_list<size_t> pools) {
+    obs::DecisionRecord r{};
+    r.kind = kind;
+    r.action = uint8_t(obs::Action::DryRun);
+    r.outcome = outcome;
+    r.slot = slot;
+    r.net_lamports = net;
+    r.signature[0] = sig;
+    for (size_t p : pools) std::memcpy(r.pools[r.hops++], L.pf.pools[p].address.data(), 32);
+    return r;
+  };
+  const uint8_t C = uint8_t(obs::RecordKind::Candidate), O = uint8_t(obs::RecordKind::Outcome);
+  const uint8_t OK = uint8_t(obs::Outcome::SimulatedOk), FAILED = uint8_t(obs::Outcome::SimulationFailed);
+  std::vector<obs::DecisionRecord> recs{
+      rec(C, 1, 100, 0, 0, {0, 1}), rec(O, 1, 102, 50'000, OK, {}),      // passes: pools 0, 1
+      rec(C, 2, 100, 0, 0, {0, 2}), rec(O, 2, 103, 20'000, OK, {}),      // passes: pools 0, 2
+      rec(C, 3, 100, 0, 0, {1, 2}), rec(O, 3, 101, 5'000, OK, {}),       // below the guard's margin
+      rec(C, 4, 100, 0, 0, {1, 2}), rec(O, 4, 160, 90'000, OK, {}),      // simulated 60 slots late
+      rec(C, 5, 100, 0, 0, {1, 2}), rec(O, 5, 101, 0, FAILED, {}),       // failed
+      rec(O, 9, 101, 90'000, OK, {}),                                    // outcome with no candidate
+  };
+  auto ranking = app::rank_pools(recs, 10'000, 20);
+  CHECK_EQ(ranking.size(), size_t(3));
+  CHECK(ranking[0].pool == L.pf.pools[0].address && ranking[0].passes == 2 && ranking[0].net_lamports == 70'000);
+  CHECK(ranking[1].pool == L.pf.pools[1].address && ranking[1].passes == 1);  // 50,000 beats pool 2's 20,000
+  std::vector<Pubkey> bases{mint::WSOL};
+  app::LivePlan two = app::size_plan(L.pf, ranking, 2, bases, 40);
+  CHECK_EQ(two.armed.size(), size_t(2));
+  CHECK(two.tables == 1 && two.table_keys > 40 && two.table_keys <= 256);
+  CHECK_EQ(two.table_rent_lamports, app::rent_exempt_lamports(56 + 32 * two.table_keys));
+  CHECK_EQ(two.token_rent_lamports, two.token_accounts * uint64_t(2'039'280));
+  app::ArmedSet armed;
+  CHECK(armed.load_json(app::armed_to_json(two.armed)) && armed.contains(L.pf.pools[0].address) && !armed.contains(L.pf.pools[2].address));
+  Pubkey gone{};
+  gone[0] = 0xEE;
+  ranking.insert(ranking.begin(), app::PoolScore{gone, 9, 0});  // ranked, but no longer in pools.json
+  app::LivePlan p = app::size_plan(L.pf, ranking, 250, bases);
+  CHECK(p.dropped == 1 && p.armed.size() == 3);
+  CHECK(app::plan_report(p, ranking.size(), 250).find("total rent") != std::string::npos);
+}
+
+TEST(http_request_carries_exactly_one_content_type) {
+  auto count = [](const std::string& s, const std::string& what) {
+    size_t n = 0;
+    for (size_t at = s.find(what); at != std::string::npos; at = s.find(what, at + 1)) ++n;
+    return n;
+  };
+  Url url = parse_url("https://frankfurt.mainnet.block-engine.jito.wtf");
+  std::string req;
+  format_request(req, "POST", url, "/api/v1/bundles", "{}", {});
+  CHECK_EQ(count(req, "Content-Type:"), size_t(1));
+  CHECK(req.find("Content-Length: 2\r\n\r\n{}") != std::string::npos);
+  // Jito rejects a doubled header with 400 "Invalid content type": a caller's own header replaces the default.
+  format_request(req, "POST", url, "/api/v1/bundles", "{}", "Content-Type: application/json\r\n");
+  CHECK_EQ(count(req, "Content-Type:"), size_t(1));
 }
