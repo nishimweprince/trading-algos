@@ -7,6 +7,7 @@
 #include <cmath>
 #include <fstream>
 #include <map>
+#include <set>
 #include <memory>
 #include <sstream>
 #include <thread>
@@ -115,8 +116,9 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
     std::vector<uint32_t> ids(rt.store().pool_count());
     for (uint32_t i = 0; i < ids.size(); ++i) ids[i] = i;
     std::vector<Pubkey> keys = feed::pool_ordered_keys(rt.store(), ids);
+    std::set<Pubkey> have(keys.begin(), keys.end());  // a linear find here was quadratic: ~40 s at 46k keys
     for (const Pubkey& k : pool_keys)  // reserves and anything else subscribed
-      if (std::find(keys.begin(), keys.end(), k) == keys.end()) keys.push_back(k);
+      if (have.insert(k).second) keys.push_back(k);
     bool live = all_up();
     try {
       auto st = feed::resync(rpc, rt.store(), keys, live);
