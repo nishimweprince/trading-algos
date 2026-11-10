@@ -76,6 +76,7 @@ struct Config {
     int settle_slots = 2;       // pool account/vault spread accepted once the newest write is this old (0: never)
     int cooldown_ms = 800;      // a dispatched cycle is not re-sent for this long
     int sizer_max_evals = 24;
+    int max_sized_per_update = 4;  // cycles sized per pool update, largest spot edge first (0: all)
     double alpha_init = 0.5;
     double alpha_min = 0.2, alpha_max = 0.95, alpha_step = 0.05;
     int alpha_window = 50;

@@ -228,7 +228,19 @@ Result<Quote> WhirlpoolQuoter::quote_exact_in(const PoolState& p, bool a_to_b, u
   return q;
 }
 
+static u128 spot_rate_compute(const PoolState& p, bool a_to_b);
+
 u128 spot_rate_x64(const PoolState& p, bool a_to_b) {
+  // A pool sits in up to 256 cycles, each re-priced on its update: compute its rate once per snapshot.
+  const uint8_t bit = a_to_b ? 2 : 1;
+  if (!(p.spot_known & bit)) {
+    p.spot_x64[a_to_b] = spot_rate_compute(p, a_to_b);
+    p.spot_known |= bit;
+  }
+  return p.spot_x64[a_to_b];
+}
+
+static u128 spot_rate_compute(const PoolState& p, bool a_to_b) {
   if (p.kind == DexKind::Dlmm) return dlmm::spot(p, a_to_b);
   if (p.kind == DexKind::Cpmm) {
     uint64_t rin = 0, rout = 0;

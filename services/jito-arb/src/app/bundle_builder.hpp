@@ -68,6 +68,8 @@ class BundleBuilder {
   /** Frame received -> bundle signed (everything before the HTTP write), microseconds. */
   obs::LatencyWindow& detect_to_signed_us() { return detect_us_; }
   obs::LatencyWindow& eval_to_signed_us() { return compute_us_; }
+  /** Builder entry (after the engine chose the candidate) to signed: instructions, guard, compile, sign. */
+  obs::LatencyWindow& build_sign_us() { return build_us_; }
 
  private:
   BundleSim* sim_ = nullptr;
@@ -89,7 +91,7 @@ class BundleBuilder {
   tx::IxList ixs_;
   tx::SignedTx last_;
   BuilderStats n_;
-  obs::LatencyWindow detect_us_, compute_us_;
+  obs::LatencyWindow detect_us_, compute_us_, build_us_;
 };
 
 }  // namespace arb::app

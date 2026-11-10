@@ -78,6 +78,10 @@ struct DlmmArraySlot {
   std::shared_ptr<const state::DlmmBinArray> array;
 };
 struct PoolState {
+  // Marginal (spot) rate after fees per direction, computed on first use by dex::spot_rate_x64. A snapshot never
+  // changes after it is published, so the value holds for its lifetime. Engine thread only: nothing else prices.
+  mutable u128 spot_x64[2]{};
+  mutable uint8_t spot_known = 0;  // bit 0: b->a, bit 1: a->b
   DexKind kind = DexKind::RaydiumV4;
   Pubkey address{};
   uint32_t id = 0;

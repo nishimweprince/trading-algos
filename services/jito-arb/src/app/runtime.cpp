@@ -152,6 +152,7 @@ size_t Runtime::evaluate_changed() {
     ++stats_.updates;
     ++n;
     eval_start_ns_ = now_ns();
+    engine_->set_eval_start_ns(eval_start_ns_);
     engine_->on_pool_update(id, slot);
   }
   return n;

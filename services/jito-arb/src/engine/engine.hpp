@@ -25,6 +25,7 @@ struct EngineConfig {
   uint64_t max_trade_lamports = 500'000'000'000ULL;
   uint64_t min_trade_lamports = 1'000'000;
   int sizer_max_evals = 24;
+  int max_sized_per_update = 4;  // cycles sized per pool update, largest spot edge first (0: all)
   uint32_t max_profit_ppm = 20'000;  // engine.max_profit_ratio
   int quarantine_strikes = 3;
   int64_t quarantine_window_ms = 600'000, quarantine_ms = 1'800'000;
@@ -70,6 +71,7 @@ struct EngineCounters {
   uint64_t quarantined = 0, implausible = 0;  // evaluations skipped: a quarantined leg / a too-large profit  // skipped: x_max was below min_trade and no leg or reserve changed since
   uint64_t updates = 0, cycles_seen = 0, stale = 0, unsupported = 0, cooling = 0, prefilter_pass = 0, sized = 0, candidates = 0,
            sent = 0, skipped = 0;
+  uint64_t deferred = 0;  // passed the prefilter but not sized: below the update's top max_sized_per_update
   // `stale` by cause (first failing leg): a component not yet seen, a resync read awaiting its push, the pool
   // account and vaults written more than max_state_age_slots apart, or the snapshot behind the slot clock.
   uint64_t stale_incomplete = 0, stale_resync = 0, stale_spread = 0, stale_lag = 0;
@@ -111,6 +113,11 @@ class Engine {
   void dispatch_best(uint64_t current_slot);
   /** Evaluate one cycle now (tests, replay tools). Returns false when it produced no candidate. */
   bool evaluate(uint32_t cycle, uint64_t slot, Opportunity* out = nullptr);
+  /** Monotonic ns when the current pool update reached the engine (Runtime sets it): the prefilter timer's start. */
+  void set_eval_start_ns(uint64_t t) { eval_start_ns_ = t; }
+  /** Per pool update with a cycle past the prefilter: time in the prefilter stage, and in sizing and pricing, us. */
+  obs::LatencyWindow& prefilter_us() { return prefilter_us_; }
+  obs::LatencyWindow& size_us() { return size_us_; }
 
   const EngineCounters& counters() const { return n_; }
   const SizerDiag& sizer_diag() const { return diag_; }
@@ -167,7 +174,11 @@ class Engine {
   LogFn skip_;
   EngineCounters n_;
   SizerDiag diag_;
-  obs::LatencyWindow edge_ppm_, failed_profit_ppm_;
+  obs::LatencyWindow edge_ppm_, failed_profit_ppm_, prefilter_us_, size_us_;
+  std::vector<std::pair<u128, uint32_t>> passed_;  // on_pool_update scratch: (spot product, cycle)
+  uint64_t eval_start_ns_ = 0;
+  bool prefilter(uint32_t cycle, uint64_t slot, u128& prod);
+  bool size_and_price(uint32_t cycle, uint64_t slot, u128 prod, Opportunity* out);
   SizerExample examples_[32];  // by Reason
   // (pool id << 1 | a_to_b) -> snapshot seq at which every size failed with a program error (e.g. Whirlpool
   // LiquidityUnderflow, which the chain returns too). Skipped until the pool's state changes.

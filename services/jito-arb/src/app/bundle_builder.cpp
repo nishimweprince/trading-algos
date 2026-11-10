@@ -118,6 +118,7 @@ void BundleBuilder::operator()(const engine::Opportunity& o, const engine::Cycle
     rec.reason = uint8_t(r);
   };
   ++n_.built;
+  const uint64_t t_enter = now_ns();
   if (virtual_tables_ && !seeded_) {
     std::vector<flash::FlashReserve> rs;
     for (const std::string& m : cfg_.engine.base_mints)
@@ -187,6 +188,7 @@ void BundleBuilder::operator()(const engine::Opportunity& o, const engine::Cycle
   ++n_.signed_ok;
   if (uint64_t t0 = rt_.frame_recv_ns(); t0) {
     uint64_t t1 = now_ns();
+    build_us_.add(t1, int64_t(t1 - t_enter) / 1000);
     detect_us_.add(t1, int64_t(t1 - std::min(t1, t0)) / 1000);
     // The part spent pricing this pool and building the bundle; the rest is frames queued ahead of it.
     if (uint64_t e = rt_.eval_start_ns(); e && e >= t0) compute_us_.add(t1, int64_t(t1 - std::min(t1, e)) / 1000);

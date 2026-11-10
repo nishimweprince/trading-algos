@@ -58,6 +58,7 @@ EngineConfig engine_config(const Config& c) {
   e.max_trade_lamports = c.engine.max_trade_lamports;
   e.min_trade_lamports = c.engine.min_trade_lamports;
   e.sizer_max_evals = c.engine.sizer_max_evals;
+  e.max_sized_per_update = c.engine.max_sized_per_update;
   e.max_profit_ppm = ppm(c.engine.max_profit_ratio);
   e.quarantine_strikes = c.sim.quarantine_strikes;
   e.quarantine_window_ms = int64_t(c.sim.quarantine_window_s) * 1000;
@@ -260,6 +261,11 @@ uint64_t Engine::reserve_available(const Pubkey& base) const {
 }
 
 bool Engine::evaluate(uint32_t cycle, uint64_t slot, Opportunity* out) {
+  u128 prod = 0;
+  return prefilter(cycle, slot, prod) && size_and_price(cycle, slot, prod, out);
+}
+
+bool Engine::prefilter(uint32_t cycle, uint64_t slot, u128& prod) {
   const Cycle& c = idx_.cycle(cycle);
   if (disp_.cooling(cycle, slot)) {
     ++n_.cooling;
@@ -319,9 +325,17 @@ bool Engine::evaluate(uint32_t cycle, uint64_t slot, Opportunity* out) {
       no_room_.erase(it);
     }
   }
-  u128 prod = spot_product_x64(c, s);
+  prod = spot_product_x64(c, s);
   if (prod < edge_x64_) return false;
   ++n_.prefilter_pass;
+  return true;
+}
+
+bool Engine::size_and_price(uint32_t cycle, uint64_t slot, u128 prod, Opportunity* out) {
+  const Cycle& c = idx_.cycle(cycle);
+  Snapshots s;
+  uint64_t spread_mask = 0;
+  if (load(c, s, slot, &spread_mask) != StaleCause::fresh) return false;  // passed the prefilter on this thread: never
   Opportunity o;
   o.cycle = cycle;
   o.slot = slot;
@@ -431,10 +445,29 @@ void Engine::on_pool_update(uint32_t pool, uint64_t slot) {
   // One clock read per pool update, not per cycle: on the VM's xen clock source clock_gettime is a real syscall
   // and the per-cycle read was ~40% of the engine thread's samples.
   if (!strikes_.empty()) eval_now_ms_ = wall_ms();
+  // Two stages. The prefilter is cheap (spot rates are cached per snapshot) and runs on every cycle of the pool;
+  // the sizer is not, so only the cycles with the largest spot edge are sized. Every cycle here shares this pool,
+  // and the dispatcher sends at most one bundle per pool per slot, so sizing the rest would only delay the one
+  // that is sent.
+  passed_.clear();
   for (uint32_t c : idx_.cycles_of(pool)) {
     ++n_.cycles_seen;
-    evaluate(c, slot);
+    u128 prod = 0;
+    if (prefilter(c, slot, prod)) passed_.emplace_back(prod, c);
   }
+  if (passed_.empty()) return;
+  const uint64_t t_pre = now_ns();
+  size_t k = passed_.size();
+  if (cfg_.max_sized_per_update > 0 && k > size_t(cfg_.max_sized_per_update)) {
+    k = size_t(cfg_.max_sized_per_update);
+    std::partial_sort(passed_.begin(), passed_.begin() + long(k), passed_.end(),
+                      [](const auto& a, const auto& b) { return a.first > b.first; });
+    n_.deferred += passed_.size() - k;
+  }
+  for (size_t i = 0; i < k; ++i) size_and_price(passed_[i].second, slot, passed_[i].first, nullptr);
+  const uint64_t t_size = now_ns();
+  if (eval_start_ns_ && t_pre >= eval_start_ns_) prefilter_us_.add(t_size, int64_t(t_pre - eval_start_ns_) / 1000);
+  size_us_.add(t_size, int64_t(t_size - t_pre) / 1000);
   dispatch_best(slot);
 }
 

@@ -84,13 +84,16 @@ Result<uint64_t> fee_rate(state::DlmmPair& p, int32_t id) {
   u128 variable = ceildiv(u128(p.variable_fee_control) * v * v, 100'000'000'000ULL);
   return uint64_t(std::min<u128>(100'000'000, base + variable));
 }
+static u128 mid_of(u128 px, bool down) {
+  if (!px) return 0;
+  if (down) return px;
+  U256 q, r;
+  U256::from_words(0, 1, 0, 0).divmod(U256::from_u128(px), q, r);
+  return q.fits_u128() ? q.lo128() : ~u128(0);
+}
 u128 mid(const PoolState& p, bool down) {
   auto px = price(p.dlmm.active_id, p.dlmm.bin_step);
-  if (!px || !*px) return 0;
-  if (down) return *px;
-  U256 q, r;
-  U256::from_words(0, 1, 0, 0).divmod(U256::from_u128(*px), q, r);
-  return q.fits_u128() ? q.lo128() : ~u128(0);
+  return px ? mid_of(*px, down) : 0;
 }
 u128 spot(const PoolState& p, bool down) {
   if (!DlmmQuoter{}.supports(p)) return 0;
@@ -106,11 +109,10 @@ u128 spot(const PoolState& p, bool down) {
     if (!(down ? b.amount_y : b.amount_x) && !(c->supports_limit_orders() && b.limit_order_ask_side != down &&
         (b.open_order_amount || b.processed_order_remaining))) continue;
     auto f = fee_rate(*c, id);
-    auto px = price(id, c->bin_step);
+    auto px = price(id, c->bin_step);  // one pow, reused (was computed again inside mid on a PoolState copy)
     if (!f || !px) return 0;
-    PoolState copy; copy.dlmm.active_id = id; copy.dlmm.bin_step = c->bin_step;
     U256 q, r;
-    U256::mul(mid(copy, down), DEN - *f).divmod(U256::from_u128(DEN), q, r);
+    U256::mul(mid_of(*px, down), DEN - *f).divmod(U256::from_u128(DEN), q, r);
     return q.fits_u128() ? q.lo128() : ~u128(0);
   }
   return 0;

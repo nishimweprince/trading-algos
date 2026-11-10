@@ -328,6 +328,10 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   LatGauges g_off = lat("arb_slot_offset_us", "account update received minus its slot's start, us");
   LatGauges g_det = lat("arb_detect_to_signed_us", "frame received to bundle signed, us");
   LatGauges g_eval = lat("arb_eval_to_signed_us", "engine starts pricing the pool to bundle signed, us (detect minus queueing)");
+  LatGauges g_pre = lat("arb_engine_prefilter_us", "per pool update with a cycle past the prefilter: prefilter stage, us");
+  LatGauges g_size = lat("arb_engine_size_us", "per pool update with a cycle past the prefilter: sizing and pricing, us");
+  LatGauges g_build = lat("arb_build_sign_us", "builder entry to signed bundle (instructions, guard, compile, sign), us");
+  auto& g_deferred = reg.gauge("arb_engine_deferred", "cycles past the prefilter not sized: below their update's top max_sized_per_update");
   LatGauges g_sim_mis = lat("arb_sim_mismatch_ppm", "simulated vs quoted final out, ppm (signed; 1 h window)");
   LatGauges g_sim_lag = lat("arb_sim_lag_slots", "slots from the candidate to its simulation (1 h window)");
   obs::LatencyWindow sim_mismatch(3600), sim_lag(3600);
@@ -561,6 +565,10 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       put(g_off, rt.feed().slot_offset_us(), tnow);
       put(g_det, builder.detect_to_signed_us(), tnow);
       put(g_eval, builder.eval_to_signed_us(), tnow);
+      put(g_pre, rt.engine().prefilter_us(), tnow);
+      put(g_size, rt.engine().size_us(), tnow);
+      put(g_build, builder.build_sign_us(), tnow);
+      g_deferred.set(int64_t(rt.engine().counters().deferred));
       put(g_sim_mis, sim_mismatch, tnow);
       put(g_sim_lag, sim_lag, tnow);
       // Measured slot time, once a minute: chain.slot_ms should match it (slots went 400 -> 200 ms in Oct 2026).

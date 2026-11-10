@@ -256,6 +256,7 @@ int main(int argc, char** argv) {
       auto q1 = q.quote_exact_in(*best, sol_is_a, amount);
       // State after leg 1: input vault +amount, output vault -out (the program's transfers).
       PoolState after = *best;
+      after.spot_known = 0;  // the copy is modified below: drop the cached spot rates
       if (q1) {
         if (sol_is_a) { after.vault_a_amount += amount; after.vault_b_amount -= q1->amount_out; }
         else { after.vault_b_amount += amount; after.vault_a_amount -= q1->amount_out; }

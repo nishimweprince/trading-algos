@@ -9,6 +9,7 @@
 
 #include "app/bundle_builder.hpp"
 #include "app/live_plan.hpp"
+#include "dex/quoter.hpp"
 #include "feed/frames.hpp"
 #include "core/programs.hpp"
 #include "fixture.hpp"
@@ -648,4 +649,42 @@ TEST(http_request_carries_exactly_one_content_type) {
   // Jito rejects a doubled header with 400 "Invalid content type": a caller's own header replaces the default.
   format_request(req, "POST", url, "/api/v1/bundles", "{}", "Content-Type: application/json\r\n");
   CHECK_EQ(count(req, "Content-Type:"), size_t(1));
+}
+
+TEST(spot_rate_is_cached_per_snapshot_and_top_k_sizing_defers_the_rest) {
+  // Cached spot rates equal a fresh computation, and survive only on the snapshot they were computed for.
+  Loaded L;
+  CHECK(L.rt->replay_file(fixture_path("frames.bin")));
+  size_t checked = 0;
+  for (uint32_t id = 0; id < L.rt->store().pool_count(); ++id) {
+    auto p = L.rt->store().pool(id);
+    if (!p || !p->complete) continue;
+    for (bool dir : {false, true}) {
+      u128 first = dex::spot_rate_x64(*p, dir);
+      CHECK(p->spot_known & (dir ? 2 : 1));
+      PoolState fresh = *p;
+      fresh.spot_known = 0;
+      CHECK(dex::spot_rate_x64(fresh, dir) == first);
+      CHECK(dex::spot_rate_x64(*p, dir) == first);
+      ++checked;
+    }
+  }
+  CHECK(checked > 0);
+  // Sizing every passing cycle and sizing only the best one per update: the cap sizes no more, defers the rest.
+  Loaded all, one;
+  all.cfg.engine.max_sized_per_update = 0;
+  one.cfg.engine.max_sized_per_update = 1;
+  all.rt = std::make_unique<app::Runtime>(all.cfg, all.pf);
+  one.rt = std::make_unique<app::Runtime>(one.cfg, one.pf);
+  CHECK(all.rt->replay_file(fixture_path("frames.bin")));
+  CHECK(one.rt->replay_file(fixture_path("frames.bin")));
+  const auto& a = all.rt->engine().counters();
+  const auto& o = one.rt->engine().counters();
+  CHECK_EQ(a.prefilter_pass, o.prefilter_pass);
+  CHECK_EQ(a.deferred, uint64_t(0));
+  CHECK(o.sized + o.no_room_memo <= a.sized + a.no_room_memo);
+  CHECK(o.updates == a.updates);
+  std::printf("    sized all=%llu top1=%llu deferred=%llu candidates all=%llu top1=%llu\n", (unsigned long long)a.sized,
+              (unsigned long long)o.sized, (unsigned long long)o.deferred, (unsigned long long)a.candidates,
+              (unsigned long long)o.candidates);
 }
