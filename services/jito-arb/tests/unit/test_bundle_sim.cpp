@@ -71,3 +71,30 @@ TEST(pumpswap_sim_rent_topup_is_holder_funded_system_transfer) {
   uint32_t tag=0; uint64_t amount=0;std::memcpy(&tag,ix.data,4);std::memcpy(&amount,ix.data+4,8);
   CHECK_EQ(tag,uint32_t(2));CHECK_EQ(amount,uint64_t(166155));
 }
+
+TEST(bundle_sim_stale_jobs_are_dropped_and_late_verdicts_ignored) {
+  CHECK(!app::sim_job_stale(1'000, 1'900, 1'000));
+  CHECK(app::sim_job_stale(1'000, 2'001, 1'000));
+  CHECK(!app::sim_job_stale(1'000, 99'000, 0));  // 0 disables the check
+  CHECK(!app::sim_job_stale(0, 99'000, 1'000));  // never submitted through submit()
+
+  obs::DecisionRecord r{};
+  r.state_slot[0] = 100;
+  r.slot = 104;
+  CHECK(app::sim_verdict_usable(r, 4));
+  r.slot = 105;
+  CHECK(!app::sim_verdict_usable(r, 4));  // the 13:30 burst ran 58-155 slots late
+  CHECK(app::sim_verdict_usable(r, -1));  // negative disables the gate
+  r.slot = 0;
+  CHECK(!app::sim_verdict_usable(r, 4));  // not simulated: no verdict
+
+  Config cfg;
+  cfg.sim.holder_seed_path = std::string(ARB_SOURCE_DIR) + "/harness/holders_seed.json";
+  cfg.sim.max_per_s = 1000;
+  std::atomic<bool> stop{false};
+  app::BundleSim sim(cfg, stop);
+  CHECK(sim.submit(app::SimJob{}));
+  CHECK_EQ(sim.counters().stale.load(), uint64_t(0));
+  sim.shutdown();
+  for (auto& d : sim.drain()) CHECK(d.reason == uint8_t(obs::SimFail::shutdown));
+}

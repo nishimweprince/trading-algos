@@ -214,7 +214,8 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   auto& g_sim_ok = reg.gauge("arb_sim_ok", "dry-run bundles whose legs simulated without error");
   auto& g_sim_failed = reg.gauge("arb_sim_failed", "dry-run bundles whose legs failed in simulation");
   auto& g_sim_profitable = reg.gauge("arb_sim_profitable", "simulated bundles still profitable after tip and fee");
-  auto& g_sim_dropped = reg.gauge("arb_sim_dropped", "dry-run bundles not simulated (rate cap or queue full)");
+  auto& g_sim_dropped = reg.gauge("arb_sim_dropped", "dry-run bundles not simulated (rate cap, queue full or stale)");
+  auto& g_sim_stale = reg.gauge("arb_sim_stale", "dry-run bundles dropped at dequeue: queued longer than sim.max_wait_ms");
   auto& g_sim_no_holder = reg.gauge("arb_sim_no_holder", "dry-run bundles with no public holder of the trade size");
   auto& g_sim_too_large = reg.gauge("arb_sim_too_large", "dry-run bundles whose direct-swap message exceeds 1,232 bytes");
   auto& g_sim_context_retries = reg.gauge("arb_sim_context_retries", "bounded retries while the simulation bank catches up to the unchanged minimum context slot");
@@ -342,8 +343,9 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
         if (r.slot && r.state_slot[0]) sim_lag.add(mono_ns(), int64_t(r.slot) - int64_t(r.state_slot[0]));
         // Feed the verdict back to dispatch: a route that failed at leg k marks legs 1..k (a short output from an
         // earlier leg makes a later one fail), a short success marks every leg, a clean success clears them.
-        // Not-simulated outcomes (too large, no holder, RPC, setup) say nothing about the pools.
-        {
+        // Not-simulated outcomes (too large, no holder, RPC, setup) say nothing about the pools, and neither does
+        // a simulation that ran more than strike_max_lag_slots after the candidate.
+        if (app::sim_verdict_usable(r, cfg.sim.strike_max_lag_slots)) {
           int bad_upto = -1;  // legs [0, bad_upto) are bad; 0 = all good; -1 = no verdict
           if (r.outcome == uint8_t(obs::Outcome::SimulatedOk) && r.min_out) {
             int64_t short_bps = int64_t((__int128(r.min_out) - __int128(r.final_out)) * 10'000 / __int128(r.min_out));
@@ -386,6 +388,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       g_sim_failed.set(int64_t(sc.failed.load()));
       g_sim_profitable.set(int64_t(sc.profitable.load()));
       g_sim_dropped.set(int64_t(sc.dropped.load()));
+      g_sim_stale.set(int64_t(sc.stale.load()));
       g_sim_no_holder.set(int64_t(sc.no_holder.load()));
       g_sim_too_large.set(int64_t(sc.too_large.load()));
       g_sim_context_retries.set(int64_t(sc.context_retries.load()));

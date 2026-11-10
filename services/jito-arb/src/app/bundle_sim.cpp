@@ -195,6 +195,7 @@ bool BundleSim::submit(SimJob j) {
     return false;
   }
   tokens_ -= 1.0;
+  j.queued_ms = now;
   queue_.push_back(std::move(j));
   n_.queued = queue_.size();
   cv_.notify_one();
@@ -221,6 +222,13 @@ void BundleSim::run() {
       queue_.pop_front();
       n_.queued = queue_.size();
       n_.in_flight = 1;
+    }
+    // A burst queues jobs faster than the worker simulates them; past max_wait_ms the chain has moved on.
+    if (sim_job_stale(j.queued_ms, wall_ms(), cfg_.sim.max_wait_ms)) {
+      ++n_.dropped;
+      ++n_.stale;
+      n_.in_flight = 0;
+      continue;
     }
     // While the Helius quota is exhausted every call fails: try one job a minute, drop the rest.
     if (!usage::may_call(quota_try_ms_, wall_ms())) {
