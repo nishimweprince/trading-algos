@@ -296,7 +296,7 @@ bool Engine::evaluate(uint32_t cycle, uint64_t slot, Opportunity* out) {
     }
   }
   if (!strikes_.empty()) {
-    int64_t now = wall_ms();
+    int64_t now = eval_now_ms_ ? eval_now_ms_ : wall_ms();  // set by on_pool_update; direct callers (tests) read it
     for (int i = 0; i < c.n; ++i) {
       auto it = strikes_.find((uint64_t(c.legs[i].pool) << 1) | uint64_t(c.legs[i].a_to_b));
       if (it != strikes_.end() && it->second.until_ms > now) {
@@ -428,6 +428,9 @@ bool Engine::evaluate(uint32_t cycle, uint64_t slot, Opportunity* out) {
 
 void Engine::on_pool_update(uint32_t pool, uint64_t slot) {
   ++n_.updates;
+  // One clock read per pool update, not per cycle: on the VM's xen clock source clock_gettime is a real syscall
+  // and the per-cycle read was ~40% of the engine thread's samples.
+  if (!strikes_.empty()) eval_now_ms_ = wall_ms();
   for (uint32_t c : idx_.cycles_of(pool)) {
     ++n_.cycles_seen;
     evaluate(c, slot);

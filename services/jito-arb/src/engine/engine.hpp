@@ -183,7 +183,8 @@ class Engine {
     std::vector<int64_t> at_ms;
     int64_t until_ms = 0;
   };
-  std::unordered_map<uint64_t, Strikes> strikes_;  // (pool << 1 | a_to_b)
+  std::unordered_map<uint64_t, Strikes> strikes_;
+  int64_t eval_now_ms_ = 0;  // wall clock for the pool update being evaluated  // (pool << 1 | a_to_b)
   // cycle -> the inputs that gave x_max < min_trade
   uint64_t reserve_available(const Pubkey& base) const;
 };
