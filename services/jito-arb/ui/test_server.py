@@ -71,6 +71,31 @@ class DecisionTests(unittest.TestCase):
         self.assertEqual(self.day(result)['sim_ok'], 2)
         self.assertEqual(self.day(result)['sim_net_lamports'], 1700)
 
+    def test_guard_reverts_count_zero_not_losses(self):
+        def outcome(signature, net, outcome=5, reason=0, sim_slot=100):
+            v = list(ui.REC.unpack(record(kind=2, action=2, outcome=outcome, reason=reason, signature=signature)))
+            v[19] = net
+            v[11] = sim_slot
+            v[27] = 100  # candidate slot
+            return ui.REC.pack(*v)
+        for sig in (1, 2, 3, 4):
+            self.append(record(action=2, signature=sig))
+        self.append(outcome(1, 50_000))                    # passes the guard: lands
+        self.append(outcome(2, -900_000))                  # short: the guard reverts it at no cost
+        self.append(outcome(3, 0, outcome=4, reason=2))    # failed at leg 2: reverts
+        self.append(outcome(4, 20_000, sim_slot=150))      # lands, but simulated 50 slots late
+        result = self.read()
+        day = self.day(result)
+        self.assertEqual(day['sim_land'], 2)
+        self.assertEqual(day['sim_revert'], 2)
+        self.assertEqual(day['sim_landed_net_lamports'], 70_000)
+        self.assertEqual(day['sim_land_late'], 1)
+        self.assertEqual(day['sim_landed_net_late_lamports'], 20_000)
+        self.assertEqual(day['sim_net_lamports'], -830_000)  # unguarded reference keeps the loss
+        rows = {r['sim']: r for r in result['latest'] if r['action'] == 'dry_run'}
+        self.assertEqual(rows['ok: would revert']['sim_net_sol'], 0.0)
+        self.assertAlmostEqual(rows['ok: would revert']['sim_unguarded_net_sol'], -0.0009)
+
     def test_setup_errors_stay_separate_from_route_failures(self):
         for signature, reason in [(1, 0x10), (2, 2)]:
             self.append(record(action=2, signature=signature))
