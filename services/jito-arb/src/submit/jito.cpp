@@ -1,3 +1,4 @@
+#include "obs/log.hpp"
 #include "submit/jito.hpp"
 
 #include <simdjson.h>
@@ -160,7 +161,13 @@ std::vector<Pubkey> JitoClient::tip_accounts() {
   if (regions_.empty()) return {};
   std::string resp;
   int st = regions_[0].http->post("/api/v1/getTipAccounts", "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getTipAccounts\",\"params\":[]}", resp);
-  return st == 200 ? parse_tip_accounts(resp) : std::vector<Pubkey>{};
+  if (st != 200) {
+    LOG_WARN("getTipAccounts: http %d from %s: %s", st, regions_[0].name.c_str(), resp.substr(0, 160).c_str());
+    return {};
+  }
+  auto v = parse_tip_accounts(resp);
+  if (v.empty()) LOG_WARN("getTipAccounts: no accounts parsed from %s: %s", regions_[0].name.c_str(), resp.substr(0, 160).c_str());
+  return v;
 }
 
 Submitter::Submitter(bool dry_run, std::unique_ptr<JitoClient> client) {
