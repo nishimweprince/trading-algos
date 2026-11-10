@@ -93,7 +93,9 @@ class RpcHttp final : public HttpPost {
   int post(std::string_view path, std::string_view body, std::string& out) override {
     int status = 0;
     std::string full = path_ == "/" ? std::string(path) : path_ + std::string(path);
-    out = rpc_.http("POST", full, body, "Content-Type: application/json\r\n", status, "jito");
+    // No extra headers: format_request adds Content-Type itself, and Jito answers a request that carries the
+    // header twice with 400 "Invalid content type" (seen on getTipAccounts, 2026-11-10).
+    out = rpc_.http("POST", full, body, {}, status, "jito");
     return status;
   }
 

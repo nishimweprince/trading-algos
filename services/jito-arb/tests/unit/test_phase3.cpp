@@ -633,3 +633,19 @@ TEST(live_plan_ranks_guard_passing_pools_and_prices_the_rent) {
   CHECK(p.dropped == 1 && p.armed.size() == 3);
   CHECK(app::plan_report(p, ranking.size(), 250).find("total rent") != std::string::npos);
 }
+
+TEST(http_request_carries_exactly_one_content_type) {
+  auto count = [](const std::string& s, const std::string& what) {
+    size_t n = 0;
+    for (size_t at = s.find(what); at != std::string::npos; at = s.find(what, at + 1)) ++n;
+    return n;
+  };
+  Url url = parse_url("https://frankfurt.mainnet.block-engine.jito.wtf");
+  std::string req;
+  format_request(req, "POST", url, "/api/v1/bundles", "{}", {});
+  CHECK_EQ(count(req, "Content-Type:"), size_t(1));
+  CHECK(req.find("Content-Length: 2\r\n\r\n{}") != std::string::npos);
+  // Jito rejects a doubled header with 400 "Invalid content type": a caller's own header replaces the default.
+  format_request(req, "POST", url, "/api/v1/bundles", "{}", "Content-Type: application/json\r\n");
+  CHECK_EQ(count(req, "Content-Type:"), size_t(1));
+}
