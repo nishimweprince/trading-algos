@@ -317,9 +317,13 @@ bool StateStore::apply(const AccountUpdate& u) {
   e.slot = u.slot;
   e.write_version = u.write_version;
   e.awaiting_push = u.from_resync;
+  // The clock sysvar changes every slot and belongs to every DLMM pool. Their snapshots are rebuilt so the next
+  // quote uses the current time, but the clock alone is not a market event: waking the engine for it re-priced
+  // every DLMM pool five times a second (345k cycle evaluations a second at 8,000 pools).
+  const bool wake = e.kind != AccountKind::DlmmClock;
   for (uint32_t id : e.pools) {
     rebuild(id);
-    changed_.push(id);  // a full queue drops the wake-up; the snapshot itself is still current
+    if (wake) changed_.push(id);  // a full queue drops the wake-up; the snapshot itself is still current
   }
   return true;
 }
