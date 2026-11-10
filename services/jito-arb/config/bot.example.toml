@@ -74,5 +74,9 @@ holder_seed_path = "harness/holders_seed.json"
 # Read-only simulateTransaction of every dry-run bundle's swap legs, paid by a public holder of the base token.
 enabled = true
 max_per_s = 5
+# Drop a queued simulation after this wait instead of running it late; only outcomes within
+# strike_max_lag_slots of the candidate feed the quarantine.
+max_wait_ms = 1000
+strike_max_lag_slots = 4
 holder_refresh_s = 600
 min_payer_lamports = 20000000

@@ -42,7 +42,22 @@ struct SimJob {
   engine::Cycle c;
   std::array<std::shared_ptr<const PoolState>, engine::MAX_LEGS> legs{};
   obs::DecisionRecord cand;  // the dry-run candidate record (signature, tip, fee, gross)
+  int64_t queued_ms = 0;     // wall clock at submit (set by BundleSim::submit)
 };
+
+/** A queued job that waited longer than max_wait_ms would simulate a different chain: drop it, never run it late. */
+inline bool sim_job_stale(int64_t queued_ms, int64_t now_ms, int max_wait_ms) {
+  return max_wait_ms > 0 && queued_ms > 0 && now_ms - queued_ms > max_wait_ms;
+}
+
+/**
+ * Whether a simulation outcome may strike or clear quarantine: only when it ran within max_lag_slots of the
+ * candidate. A late simulation measures other traders' flow since detection, not the route the engine priced.
+ */
+inline bool sim_verdict_usable(const obs::DecisionRecord& r, int max_lag_slots) {
+  if (!r.slot || !r.state_slot[0] || r.slot < r.state_slot[0]) return false;
+  return max_lag_slots < 0 || r.slot - r.state_slot[0] <= uint64_t(max_lag_slots);
+}
 
 /** A public wallet used as payer and swap authority: its canonical ATA of the base token holds `balance`. */
 struct SimHolder {
@@ -89,6 +104,7 @@ class BundleSim {
     std::atomic<uint64_t> queued{0}, in_flight{0}, terminal{0}, funding_changed{0}, intermediate_balance{0};
     // Per-leg fallback for routes too large for one message; state at simulation vs the engine's snapshot.
     std::atomic<uint64_t> per_leg{0}, state_matched{0}, state_drifted{0}, quoter_suspect{0};
+    std::atomic<uint64_t> stale{0};  // dropped at dequeue: waited longer than sim.max_wait_ms (also counted in dropped)
   };
   BundleSim(const Config& cfg, std::atomic<bool>& stop);
   ~BundleSim();
