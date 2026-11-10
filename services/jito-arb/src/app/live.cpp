@@ -7,6 +7,7 @@
 #include <cmath>
 #include <fstream>
 #include <map>
+#include <set>
 #include <memory>
 #include <sstream>
 #include <thread>
@@ -46,6 +47,7 @@ struct Shard {
 };
 
 constexpr size_t RING_SLOTS = 1024, RING_SLOT_BYTES = 16 << 10;  // whirlpool tick arrays are ~10 KB
+constexpr int MAX_FRAMES_PER_PASS = 256;  // per shard, before the engine prices the batch's changed pools
 
 }  // namespace
 
@@ -114,8 +116,9 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
     std::vector<uint32_t> ids(rt.store().pool_count());
     for (uint32_t i = 0; i < ids.size(); ++i) ids[i] = i;
     std::vector<Pubkey> keys = feed::pool_ordered_keys(rt.store(), ids);
+    std::set<Pubkey> have(keys.begin(), keys.end());  // a linear find here was quadratic: ~40 s at 46k keys
     for (const Pubkey& k : pool_keys)  // reserves and anything else subscribed
-      if (std::find(keys.begin(), keys.end(), k) == keys.end()) keys.push_back(k);
+      if (have.insert(k).second) keys.push_back(k);
     bool live = all_up();
     try {
       auto st = feed::resync(rpc, rt.store(), keys, live);
@@ -292,13 +295,15 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       const uint8_t* data;
       uint32_t len;
       uint64_t recv;
-      while (s.ring->peek(s.next, data, len, recv)) {
+      // Bounded per shard per pass: shards take turns, and the once-a-second tick runs under any backlog.
+      for (int k = 0; k < MAX_FRAMES_PER_PASS && s.ring->peek(s.next, data, len, recv); ++k) {
         any = true;
         if (recorder) frames.write(data, len, recv, wall_ms());
-        else rt.on_frame(data, len, recv, wall_ms());
+        else rt.apply_frame(data, len, recv, wall_ms());
         s.ring->release(++s.next);
       }
     }
+    if (any && !recorder) rt.evaluate_changed();
     auto now = std::chrono::steady_clock::now();
     if (now - last_tick >= std::chrono::seconds(1)) {
       last_tick = now;
