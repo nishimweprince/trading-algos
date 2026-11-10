@@ -331,6 +331,10 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   LatGauges g_pre = lat("arb_engine_prefilter_us", "per pool update with a cycle past the prefilter: prefilter stage, us");
   LatGauges g_size = lat("arb_engine_size_us", "per pool update with a cycle past the prefilter: sizing and pricing, us");
   LatGauges g_build = lat("arb_build_sign_us", "builder entry to signed bundle (instructions, guard, compile, sign), us");
+  LatGauges g_step[4] = {lat("arb_build_step_setup_us", "build step over 1 h: limits and setup, us"),
+                         lat("arb_build_step_ixs_us", "build step over 1 h: route instructions and sign guard, us"),
+                         lat("arb_build_step_tables_us", "build step over 1 h: blockhash and lookup tables, us"),
+                         lat("arb_build_step_sign_us", "build step over 1 h: compile message and sign, us")};
   auto& g_deferred = reg.gauge("arb_engine_deferred", "cycles past the prefilter not sized: below their update's top max_sized_per_update");
   LatGauges g_sim_mis = lat("arb_sim_mismatch_ppm", "simulated vs quoted final out, ppm (signed; 1 h window)");
   LatGauges g_sim_lag = lat("arb_sim_lag_slots", "slots from the candidate to its simulation (1 h window)");
@@ -569,6 +573,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       put(g_pre, rt.engine().prefilter_us(), tnow);
       put(g_size, rt.engine().size_us(), tnow);
       put(g_build, builder.build_sign_us(), tnow);
+      for (int i = 0; i < 4; ++i) put(g_step[i], builder.build_step_us(i), tnow);
       g_deferred.set(int64_t(rt.engine().counters().deferred));
       put(g_sim_mis, sim_mismatch, tnow);
       put(g_sim_lag, sim_lag, tnow);

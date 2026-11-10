@@ -171,6 +171,7 @@ void BundleBuilder::operator()(const engine::Opportunity& o, const engine::Cycle
     ++n_.build_failed;
     return skip(engine::Reason::flash_disabled);
   }
+  const uint64_t t_ixs = now_ns();
   auto lay = tx::build_route_ixs(ixs_, p, c, std::span<const std::shared_ptr<const PoolState>>(legs, c.n));
   if (!lay) {
     ++n_.build_failed;
@@ -180,6 +181,7 @@ void BundleBuilder::operator()(const engine::Opportunity& o, const engine::Cycle
     ++n_.guard_blocked;
     return skip(engine::Reason::sign_guard);
   }
+  const uint64_t t_guarded = now_ns();
   if (placeholder_blockhash_) blockhash_.set(Hash{}, slot, rec.wall_ms);
   auto bh = blockhash_.get(slot);
   if (!bh) {
@@ -200,6 +202,7 @@ void BundleBuilder::operator()(const engine::Opportunity& o, const engine::Cycle
     tables = alts_.active(slot);
   }
   Pubkey statics[1] = {p.tip_account};
+  const uint64_t t_compile = now_ns();
   auto t = tx::build_tx(wallet_.pubkey(), &wallet_, ixs_, *bh, tables, last_, statics);
   if (!t) {
     if (t.error().code == Errc::tx_too_large) ++n_.too_large;
@@ -210,6 +213,12 @@ void BundleBuilder::operator()(const engine::Opportunity& o, const engine::Cycle
   if (uint64_t t0 = rt_.frame_recv_ns(); t0) {
     uint64_t t1 = now_ns();
     build_us_.add(t1, int64_t(t1 - t_enter) / 1000);
+    // Where the build time goes, over an hour (bundles are rare): limits and setup, instructions and guard,
+    // blockhash and tables, compile and sign.
+    step_us_[0].add(t1, int64_t(t_ixs - t_enter) / 1000);
+    step_us_[1].add(t1, int64_t(t_guarded - t_ixs) / 1000);
+    step_us_[2].add(t1, int64_t(t_compile - t_guarded) / 1000);
+    step_us_[3].add(t1, int64_t(t1 - t_compile) / 1000);
     detect_us_.add(t1, int64_t(t1 - std::min(t1, t0)) / 1000);
     // The part spent pricing this pool and building the bundle; the rest is frames queued ahead of it.
     if (uint64_t e = rt_.eval_start_ns(); e && e >= t0) compute_us_.add(t1, int64_t(t1 - std::min(t1, e)) / 1000);

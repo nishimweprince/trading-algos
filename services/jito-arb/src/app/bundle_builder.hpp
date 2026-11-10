@@ -76,6 +76,8 @@ class BundleBuilder {
   obs::LatencyWindow& eval_to_signed_us() { return compute_us_; }
   /** Builder entry (after the engine chose the candidate) to signed: instructions, guard, compile, sign. */
   obs::LatencyWindow& build_sign_us() { return build_us_; }
+  /** Build steps over 1 h: 0 limits/setup, 1 instructions + guard, 2 blockhash + tables, 3 compile + sign. */
+  obs::LatencyWindow& build_step_us(int i) { return step_us_[i]; }
 
  private:
   BundleSim* sim_ = nullptr;
@@ -98,6 +100,7 @@ class BundleBuilder {
   tx::SignedTx last_;
   BuilderStats n_;
   obs::LatencyWindow detect_us_, compute_us_, build_us_;
+  obs::LatencyWindow step_us_[4]{obs::LatencyWindow(3600), obs::LatencyWindow(3600), obs::LatencyWindow(3600), obs::LatencyWindow(3600)};
 };
 
 }  // namespace arb::app
