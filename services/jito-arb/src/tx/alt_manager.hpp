@@ -26,6 +26,8 @@ class AltManager {
   void upsert(const Pubkey& table, const AltAccount& a);
   /** Tables with only their active prefix at `slot`, for the compiler. */
   std::vector<LookupTable> active(uint64_t slot) const;
+  /** The same, for just these tables (in this order; unknown or inactive ones are left out). */
+  std::vector<LookupTable> active(std::span<const Pubkey> tables, uint64_t slot) const;
   /** True when every key is an active entry of some table (or is a signer/tip that stays static). */
   bool ready(std::span<const Pubkey> keys, uint64_t slot) const;
   /** Keys not in any table (active or pending). */

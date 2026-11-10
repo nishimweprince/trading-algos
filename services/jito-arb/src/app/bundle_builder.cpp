@@ -27,14 +27,18 @@ Keypair dry_run_keypair() {
   return Keypair::from_seed(seed);
 }
 
+namespace {
+/** Virtual table n: 0 is the shared table, pool id i is table i + 1. */
+Pubkey table_key(uint32_t n) {
+  Pubkey k{};
+  std::memcpy(k.data(), "virtual-alt", 11);
+  std::memcpy(k.data() + 28, &n, 4);
+  return k;
+}
+}  // namespace
+
 void seed_virtual_tables(tx::AltManager& alts, const StateStore& store, const Pubkey& wallet,
                          std::span<const flash::FlashReserve> reserves, const Pubkey& executor) {
-  auto table_key = [](uint32_t n) {
-    Pubkey k{};
-    std::memcpy(k.data(), "virtual-alt", 11);
-    std::memcpy(k.data() + 28, &n, 4);
-    return k;
-  };
   tx::AltAccount shared;
   shared.has_authority = true;
   shared.authority = wallet;
@@ -112,6 +116,17 @@ BundleBuilder::BundleBuilder(const Config& cfg, Runtime& rt, Keypair wallet, Pub
   guard_.tip_max_lamports = cfg.jito.tip_max_lamports;
 }
 
+void BundleBuilder::warm(bool force) {
+  if (!virtual_tables_ || seeded_) return;
+  std::vector<flash::FlashReserve> rs;
+  for (const std::string& m : cfg_.engine.base_mints)
+    if (auto r = rt_.engine().flash_reserve(parse_pubkey(m))) rs.push_back(*r);
+  // Off the hot path, wait until every base's flash reserve is known so the shared table is complete.
+  if (!force && rt_.engine().flash_mode() && rs.size() < cfg_.engine.base_mints.size()) return;
+  seed_virtual_tables(alts_, rt_.store(), wallet_.pubkey(), rs, executor_);
+  seeded_ = true;
+}
+
 void BundleBuilder::operator()(const engine::Opportunity& o, const engine::Cycle& c, obs::DecisionRecord& rec) {
   auto skip = [&](engine::Reason r) {
     rec.action = uint8_t(obs::Action::Skipped);
@@ -119,13 +134,7 @@ void BundleBuilder::operator()(const engine::Opportunity& o, const engine::Cycle
   };
   ++n_.built;
   const uint64_t t_enter = now_ns();
-  if (virtual_tables_ && !seeded_) {
-    std::vector<flash::FlashReserve> rs;
-    for (const std::string& m : cfg_.engine.base_mints)
-      if (auto r = rt_.engine().flash_reserve(parse_pubkey(m))) rs.push_back(*r);
-    seed_virtual_tables(alts_, rt_.store(), wallet_.pubkey(), rs, executor_);
-    seeded_ = true;
-  }
+  if (virtual_tables_ && !seeded_) warm(true);
   uint8_t dex_mask = 0;
   std::shared_ptr<const PoolState> legs[engine::MAX_LEGS];
   for (int i = 0; i < c.n; ++i) {
@@ -177,7 +186,19 @@ void BundleBuilder::operator()(const engine::Opportunity& o, const engine::Cycle
     ++n_.build_failed;
     return skip(engine::Reason::tx_build_failed);
   }
-  auto tables = alts_.active(slot);
+  // Virtual tables are one per pool (8,000+): handing the compiler all of them meant copying every table and
+  // scanning each for every account, ~10 ms a bundle. A route only ever uses the shared table and its own
+  // pools' tables. Real tables (live) are few and shared across pools, so they all go to the compiler.
+  std::vector<tx::LookupTable> tables;
+  if (virtual_tables_) {
+    Pubkey keys[1 + engine::MAX_LEGS];
+    size_t n = 0;
+    keys[n++] = table_key(0);
+    for (int i = 0; i < c.n; ++i) keys[n++] = table_key(c.legs[i].pool + 1);
+    tables = alts_.active(std::span<const Pubkey>(keys, n), slot);
+  } else {
+    tables = alts_.active(slot);
+  }
   Pubkey statics[1] = {p.tip_account};
   auto t = tx::build_tx(wallet_.pubkey(), &wallet_, ixs_, *bh, tables, last_, statics);
   if (!t) {

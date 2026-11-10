@@ -52,6 +52,7 @@ struct SizerConfig {
   uint64_t min_trade = 1;
   uint64_t x_max = 0;  // already the min of reserve liquidity, depth fraction and max_trade (in base units)
   int max_evals = 24;
+  uint32_t tol_ppm = 1000;  // stop refining once the bracket is within 0.1% of the size
   bool use_closed_form = true;  // seed 2-hop CP routes with the closed form (tests turn it off)
 };
 

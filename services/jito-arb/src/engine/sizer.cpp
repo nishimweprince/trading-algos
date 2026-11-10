@@ -1,5 +1,6 @@
 #include "engine/sizer.hpp"
 
+#include <cmath>
 #include <algorithm>
 
 #include "core/u256.hpp"
@@ -264,25 +265,54 @@ SizeResult size_cycle(const Cycle& c, const Snapshots& s, const Quoters& q, cons
       hi = u128(best_probe) * f >= cfg.x_max ? cfg.x_max : uint64_t(u128(best_probe) * f);
     }
   }
-  // Golden-section on integers: 0.381966 / 0.618034 interior points, one new evaluation per step.
-  auto at = [](uint64_t a, uint64_t b, uint64_t ppm) { return a + uint64_t(u128(b - a) * ppm / 1'000'000); };
-  uint64_t x1 = at(lo, hi, 381'966), x2 = at(lo, hi, 618'034);
-  int64_t f1 = eval(x1), f2 = eval(x2);
-  while (evals < cfg.max_evals && hi - lo > 2) {
-    if (f1 >= f2) {
-      hi = x2;
-      x2 = x1;
-      f2 = f1;
-      x1 = at(lo, hi, 381'966);
-      if (x1 >= x2) x1 = x2 > lo ? x2 - 1 : lo;
-      f1 = eval(x1);
+  // Refine around the best point: successive parabolic interpolation through the three best-bracketing points,
+  // with a golden-section step whenever the parabola is unusable (an invalid point, a vertex outside the
+  // bracket, or one that does not shrink it). Profit is smooth in x away from tick crossings, so this usually
+  // converges in a few evaluations where plain golden-section always spent the whole budget. It stops once the
+  // bracket is within tol_ppm of the size: near the optimum profit is flat, so a 0.1% size error costs nothing
+  // measurable. Every evaluated point competes for `best`, whatever the search does.
+  uint64_t a = lo, c_hi = hi;
+  uint64_t b = seed > 0 ? seed : 0;
+  if (!b) {
+    // The scan's best probe, or the middle when no probe was clean.
+    int64_t bv = INVALID;
+    for (int i = 0; i < n_memo; ++i)
+      if (memo[i].v != INVALID && memo[i].x > lo && memo[i].x < hi && (b == 0 || memo[i].v > bv)) { b = memo[i].x; bv = memo[i].v; }
+    if (!b) b = lo + (hi - lo) / 2;
+  }
+  if (b <= a || b >= c_hi) b = a + (c_hi - a) / 2;
+  int64_t fa = eval(a), fb = eval(b), fc = eval(c_hi);
+  auto golden = [&]() -> uint64_t {
+    // Into the larger side, 0.381966 of the way.
+    return (b - a) > (c_hi - b) ? b - uint64_t(u128(b - a) * 381'966 / 1'000'000)
+                                : b + uint64_t(u128(c_hi - b) * 381'966 / 1'000'000);
+  };
+  while (evals < cfg.max_evals && c_hi - a > 2) {
+    const uint64_t tol = std::max<uint64_t>(1, uint64_t(u128(b) * cfg.tol_ppm / 1'000'000));
+    if (c_hi - a <= 2 * tol) break;
+    uint64_t u = 0;
+    if (fa != INVALID && fb != INVALID && fc != INVALID) {
+      const long double xa = (long double)a, xb = (long double)b, xc = (long double)c_hi;
+      const long double p = (xb - xa) * (xb - xa) * (long double)(fb - fc) - (xb - xc) * (xb - xc) * (long double)(fb - fa);
+      const long double q = (xb - xa) * (long double)(fb - fc) - (xb - xc) * (long double)(fb - fa);
+      if (q != 0) {
+        const long double v = xb - 0.5L * p / q;
+        if (v > xa && v < xc && std::fabs(v - xb) <= 0.5L * (xc - xa)) u = uint64_t(v);
+      }
+    }
+    if (u == 0 || u <= a || u >= c_hi) u = golden();
+    if (u > b ? u - b < tol : b - u < tol) {
+      // Too close to the current best to learn anything: step tol toward the larger side instead.
+      u = (b - a) > (c_hi - b) ? b - std::min(tol, b - a - 1) : b + std::min(tol, c_hi - b - 1);
+    }
+    if (u <= a || u >= c_hi || u == b) break;
+    const int64_t fu = eval(u);
+    if (fu != INVALID && (fb == INVALID || fu >= fb)) {
+      if (u < b) { c_hi = b; fc = fb; } else { a = b; fa = fb; }
+      b = u;
+      fb = fu;
     } else {
-      lo = x1;
-      x1 = x2;
-      f1 = f2;
-      x2 = at(lo, hi, 618'034);
-      if (x2 <= x1) x2 = x1 < hi ? x1 + 1 : hi;
-      f2 = eval(x2);
+      if (u < b) { a = u; fa = fu; } else { c_hi = u; fc = fu; }
     }
   }
   if (!best.ok && boundary_at > 0) {  // spec §6.4 step 4: one retry at 70% of the boundary size

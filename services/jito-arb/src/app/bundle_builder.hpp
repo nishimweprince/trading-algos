@@ -46,6 +46,12 @@ class BundleBuilder {
   void set_wallet_lamports(uint64_t l) { wallet_lamports_ = l; }
   /** Seed the virtual lookup tables on first use (until discovery has created the real ones). */
   void set_virtual_tables(bool on) { virtual_tables_ = on; }
+  /**
+   * Seed the virtual tables now rather than on the first candidate: it derives two token-account addresses per
+   * pool, about half a second at 8,000 pools, which the first candidate otherwise waited for. The live loop
+   * calls it once a second until it has run (force: seed even without every flash reserve).
+   */
+  void warm(bool force = false);
   /** Simulate every dry-run bundle's legs (read-only, background thread). Null: off. */
   void set_simulator(BundleSim* s) { sim_ = s; }
   /**

@@ -413,6 +413,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       g_rec.set(int64_t(frames.bytes_written()));
       g_kill.set(::access(cfg.mode.kill_file.c_str(), F_OK) == 0 ? 1 : 0);
       g_risk_blocked.set(int64_t(builder.stats().risk_blocked));
+      if (!recorder) builder.warm();
       g_armed.set(int64_t(armed.size()));
       g_not_armed.set(int64_t(builder.stats().not_armed));
       // Jito's verdicts feed the tip controller (alpha and p_land per route class) and the reject pause.

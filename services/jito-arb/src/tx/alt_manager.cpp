@@ -26,6 +26,21 @@ std::vector<LookupTable> AltManager::active(uint64_t slot) const {
   return out;
 }
 
+std::vector<LookupTable> AltManager::active(std::span<const Pubkey> tables, uint64_t slot) const {
+  std::vector<LookupTable> out;
+  for (const Pubkey& k : tables) {
+    auto it = tables_.find(k);
+    if (it == tables_.end()) continue;
+    size_t n = active_len(it->second.acc, slot);
+    if (n == 0) continue;
+    LookupTable t;
+    t.key = k;
+    t.addresses.assign(it->second.acc.addresses.begin(), it->second.acc.addresses.begin() + long(n));
+    out.push_back(std::move(t));
+  }
+  return out;
+}
+
 bool AltManager::ready(std::span<const Pubkey> keys, uint64_t slot) const {
   std::set<Pubkey> act;
   for (auto& [k, e] : tables_) {
