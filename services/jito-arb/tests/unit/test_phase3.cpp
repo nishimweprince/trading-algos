@@ -511,3 +511,79 @@ TEST(runtime_batched_frames_price_each_changed_pool_once) {
   }
   CHECK_EQ(b.rt->evaluate_changed(), size_t(0));  // nothing left after the batch
 }
+
+TEST(armed_set_counts_in_dry_run_and_skips_when_enforced) {
+  app::ArmedSet none;
+  std::string err;
+  CHECK(!none.load_json("{\"pools\":[\"not base58!\"]}", &err) && !err.empty() && none.size() == 0);
+  CHECK(!none.load_json("[]", &err));
+  Pubkey a{};
+  a[0] = 7;
+  app::ArmedSet one;
+  CHECK(one.load_json(app::armed_to_json({a})) && one.contains(a) && one.size() == 1);
+
+  // The replay's routes go through fixture pools, none of which is `a`: every candidate is outside the set.
+  for (bool enforce : {false, true}) {
+    Loaded L;
+    Keypair kp = app::dry_run_keypair();
+    tx::AltManager alts;
+    tx::BlockhashCache bh;
+    risk::Limits limits(risk::limits_config(L.cfg));
+    submit::Submitter sub(true, nullptr);
+    app::BundleBuilder bb(L.cfg, *L.rt, kp, app::dry_run_executor(), alts, bh, limits, sub);
+    bb.set_offline(true);
+    bb.set_armed(&one, enforce);
+    std::vector<obs::DecisionRecord> recs;
+    L.rt->set_send_hook([&](const engine::Opportunity& o, const engine::Cycle& c, obs::DecisionRecord& r) {
+      bb(o, c, r);
+      recs.push_back(r);
+    });
+    CHECK(L.rt->replay_file(fixture_path("frames.bin")));
+    const auto& s = bb.stats();
+    CHECK(s.built > 0 && s.not_armed == s.built);
+    if (enforce) {
+      CHECK(s.signed_ok == 0 && s.dry_run == 0);
+      for (auto& r : recs) CHECK(r.action == uint8_t(obs::Action::Skipped) && r.reason == uint8_t(engine::Reason::not_armed));
+    } else {
+      CHECK(s.dry_run == s.built);  // dry run keeps measuring every pool
+    }
+  }
+  CHECK(std::string(engine::reason_name(engine::Reason::not_armed)) == "not_armed");
+}
+
+TEST(landing_watcher_reports_jito_verdicts_off_thread) {
+  int calls = 0;
+  std::string body = "{\"jsonrpc\":\"2.0\",\"result\":{\"context\":{\"slot\":1},\"value\":["
+                     "{\"bundle_id\":\"b0\",\"status\":\"Landed\",\"landed_slot\":77},"
+                     "{\"bundle_id\":\"b1\",\"status\":\"Failed\",\"landed_slot\":null},"
+                     "{\"bundle_id\":\"b2\",\"status\":\"Pending\",\"landed_slot\":null}]},\"id\":1}";
+  auto client = std::make_unique<submit::JitoClient>(
+      std::vector<std::string>{"frankfurt"}, "https://%s.x",
+      [&](const std::string&) { return std::unique_ptr<submit::HttpPost>(new MockHttp(&calls, 200, body)); });
+  app::LandingWatcher w(std::move(client), 500, 30'000);  // not started: poll_once is driven by hand
+  Signature s3{};
+  s3[0] = 3;
+  w.track("b0", Signature{}, 0x0201, 0);
+  w.track("b1", Signature{}, 0x0201, 0);
+  w.track("b2", Signature{}, 0x0301, 0);
+  w.track("b3", s3, 0x0301, 0);
+  CHECK_EQ(w.pending(), size_t(4));
+  w.poll_once(100);  // nothing is due before poll_ms
+  CHECK_EQ(calls, 0);
+  w.signature_seen(s3, 80);  // the wallet stream saw b3 land before any poll
+  w.poll_once(600);
+  CHECK_EQ(calls, 1);
+  auto done = w.drain();
+  CHECK_EQ(done.size(), size_t(3));
+  std::map<std::string, app::LandingWatcher::Done> by;
+  for (auto& d : done) by[d.bundle_id] = d;
+  CHECK(by["b0"].result == submit::BundleTracker::Result::Landed && by["b0"].landed_slot == 77 && by["b0"].route_class == 0x0201);
+  CHECK(by["b1"].result == submit::BundleTracker::Result::Rejected);
+  CHECK(by["b3"].result == submit::BundleTracker::Result::Landed && by["b3"].landed_slot == 80);
+  CHECK_EQ(w.pending(), size_t(1));
+  w.poll_once(31'000);  // b2 never landed
+  done = w.drain();
+  CHECK(done.size() == 1 && done[0].bundle_id == "b2" && done[0].result == submit::BundleTracker::Result::NotLanded);
+  CHECK_EQ(w.pending(), size_t(0));
+  CHECK(w.drain().empty());
+}

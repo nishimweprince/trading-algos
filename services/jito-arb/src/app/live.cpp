@@ -15,6 +15,9 @@
 
 #include "app/bundle_builder.hpp"
 #include "app/bundle_sim.hpp"
+#include "app/live_send.hpp"
+#include "core/crypto.hpp"
+#include "core/programs.hpp"
 #include "app/pools_file.hpp"
 #include "app/runtime.hpp"
 #include "core/base58.hpp"
@@ -80,6 +83,13 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   // Subscriptions: pool accounts over the pool shards; wallet and flash reserves on their own stream.
   std::vector<Pubkey> pool_keys = rt.store().subscribed_keys(), wallet_keys = pf.reserves;
   wallet_keys.push_back(wallet.pubkey());
+  // The wallet's base-token accounts: own-capital balances, and where profit accrues.
+  std::vector<std::pair<Pubkey, Pubkey>> wallet_base;  // (mint, the wallet's token account for it)
+  for (const std::string& m : cfg.engine.base_mints) {
+    Pubkey mint = parse_pubkey(m);
+    wallet_base.emplace_back(mint, ata(wallet.pubkey(), mint, prog::TOKEN));
+    wallet_keys.push_back(wallet_base.back().second);
+  }
   std::vector<Pubkey> only_pools;
   for (const Pubkey& k : pool_keys)
     if (std::find(wallet_keys.begin(), wallet_keys.end(), k) == wallet_keys.end()) only_pools.push_back(k);
@@ -132,10 +142,76 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   tx::AltManager alts;
   tx::BlockhashCache blockhash;
   risk::Limits limits(risk::limits_config(cfg));
-  submit::Submitter submitter(true, nullptr);
+  // The send path. A JitoClient exists only when dry_run = false, which run_live refuses above: until the owner
+  // removes that refusal nothing below can reach sendBundle.
+  auto jito_http = [&cfg](const std::string& url) { return submit::make_rpc_http(url, cfg.helius.rpc_timeout_ms); };
+  auto jito_client = [&](std::vector<std::string> regions) {
+    return std::make_unique<submit::JitoClient>(std::move(regions), cfg.jito.block_engine_fmt, jito_http, cfg.jito.backoff_429_ms);
+  };
+  const bool live_send = !cfg.mode.dry_run && !recorder;
+  submit::Submitter submitter(!live_send, live_send ? jito_client(cfg.jito.regions) : nullptr);
   Pubkey executor = cfg.keys.executor_program_id == "VERIFY" ? dry_run_executor() : parse_pubkey(cfg.keys.executor_program_id);
   BundleBuilder builder(cfg, rt, wallet, executor, alts, blockhash, limits, submitter);
   builder.set_virtual_tables(true);
+  // Armed set: the pools whose lookup tables and token accounts exist. Dry run only counts routes outside it.
+  ArmedSet armed;
+  if (!cfg.mode.armed_path.empty()) {
+    std::ifstream af(cfg.mode.armed_path);
+    std::stringstream as;
+    as << af.rdbuf();
+    std::string aerr;
+    if (af && armed.load_json(as.str(), &aerr)) {
+      builder.set_armed(&armed, live_send);
+      LOG_INFO("armed set: %zu pools from %s (%s)", armed.size(), cfg.mode.armed_path.c_str(), live_send ? "enforced" : "counted only in dry run");
+    } else if (live_send) {
+      LOG_ERROR("armed set %s unreadable (%s): refusing to trade every pool", cfg.mode.armed_path.c_str(), aerr.c_str());
+      return 1;
+    } else {
+      LOG_WARN("armed set %s unreadable (%s): not counting", cfg.mode.armed_path.c_str(), aerr.c_str());
+    }
+  }
+  // Landing feedback: Jito's verdict on each sent bundle, polled off the engine thread.
+  std::unique_ptr<LandingWatcher> watcher;
+  if (live_send) {
+    watcher = std::make_unique<LandingWatcher>(jito_client({cfg.jito.regions.front()}), cfg.jito.status_poll_ms, cfg.jito.status_timeout_ms);
+    watcher->start();
+    builder.set_sent_hook([&](const std::string& id, const Signature& sig, uint16_t rc, int64_t now_ms) { watcher->track(id, sig, rc, now_ms); });
+  }
+  // Wallet state from the wallet stream. Dry run signs with a key that holds nothing, so the values only reach
+  // the float check and own-capital sizing when sending is live; the gauges show them either way.
+  auto& g_wallet = reg.gauge("arb_wallet_lamports", "hot wallet SOL balance, lamports (-1 until seen)");
+  g_wallet.set(-1);
+  auto on_wallet = [&](uint64_t lamports, const uint8_t*, size_t, uint64_t) {
+    g_wallet.set(int64_t(lamports));
+    if (live_send) builder.set_wallet_lamports(lamports);
+  };
+  rt.feed().watch(wallet.pubkey(), on_wallet);
+  std::vector<feed::FeedHandler::Watch> on_base;
+  for (auto& [mint, account] : wallet_base) {
+    auto& g = reg.gauge("arb_wallet_base_units_" + b58(mint).substr(0, 4), "hot wallet balance of this base token, base units (-1 until seen)");
+    g.set(-1);
+    on_base.push_back([&g, &rt, mint, live_send](uint64_t, const uint8_t* data, size_t len, uint64_t) {
+      uint64_t amount = 0;
+      if (len >= 72) std::memcpy(&amount, data + 64, 8);  // SPL token account amount
+      g.set(int64_t(amount));
+      if (live_send) rt.engine().set_own_balance(mint, amount);
+    });
+    rt.feed().watch(account, on_base.back());
+  }
+  if (!recorder) {
+    try {
+      std::vector<Pubkey> wk{wallet.pubkey()};
+      for (auto& [mint, account] : wallet_base) wk.push_back(account);
+      auto accs = rpc.multiple_accounts(wk, "processed");
+      for (size_t i = 0; i < accs.size() && i < wk.size(); ++i) {
+        if (!accs[i]) continue;
+        if (i == 0) on_wallet(accs[i]->lamports, nullptr, 0, 0);
+        else on_base[i - 1](accs[i]->lamports, accs[i]->data.data(), accs[i]->data.size(), 0);
+      }
+    } catch (const std::exception& e) {
+      LOG_WARN("wallet read: %s", e.what());
+    }
+  }
   BundleSim sim(cfg, stop);
   if (!recorder && cfg.sim.enabled) {
     builder.set_simulator(&sim);
@@ -169,6 +245,15 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   auto& g_dry = reg.gauge("arb_bundles_dry_run", "bundles built and signed in dry run");
   auto& g_rec = reg.gauge("arb_recorder_bytes", "bytes written by the recorder");
   auto& g_kill = reg.gauge("arb_kill_switch", "1 while the KILL file is present");
+  auto& g_armed = reg.gauge("arb_armed_pools", "pools in the armed set (0: no armed set, every pool)");
+  auto& g_not_armed = reg.gauge("arb_bundles_not_armed", "routes through an unarmed pool (counted in dry run, skipped live)");
+  auto& g_tip_accounts = reg.gauge("arb_jito_tip_accounts", "tip accounts from the last getTipAccounts (0: the built-in list)");
+  auto& g_landed = reg.gauge("arb_bundles_landed", "sent bundles Jito reported landed");
+  auto& g_not_landed = reg.gauge("arb_bundles_not_landed", "sent bundles that did not land within the status timeout");
+  auto& g_rejected = reg.gauge("arb_bundles_rejected", "sent bundles Jito reported invalid or failed");
+  uint64_t n_landed = 0, n_not_landed = 0, n_rejected = 0;
+  std::unique_ptr<submit::JitoClient> tip_client;
+  int64_t next_tip_refresh_ms = wall_ms() + 5000;
   auto& g_skip_logs = reg.gauge("arb_decision_skip_logs_dropped", "skipped decision records sampled out; signed candidates and outcomes are never sampled here");
   auto& g_pools = reg.gauge("arb_pools", "tracked pools");
   auto& g_cycles = reg.gauge("arb_cycles", "indexed cycles");
@@ -322,6 +407,46 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       g_dry.set(int64_t(builder.stats().dry_run));
       g_rec.set(int64_t(frames.bytes_written()));
       g_kill.set(::access(cfg.mode.kill_file.c_str(), F_OK) == 0 ? 1 : 0);
+      g_armed.set(int64_t(armed.size()));
+      g_not_armed.set(int64_t(builder.stats().not_armed));
+      // Jito's verdicts feed the tip controller (alpha and p_land per route class) and the reject pause.
+      if (watcher)
+        for (const auto& d : watcher->drain()) {
+          const bool landed = d.result == submit::BundleTracker::Result::Landed;
+          const bool rejected = d.result == submit::BundleTracker::Result::Rejected;
+          rt.tips().record(d.route_class, landed);
+          limits.record_submit(wall_ms(), rejected);
+          ++(landed ? n_landed : rejected ? n_rejected : n_not_landed);
+          if (landed) LOG_INFO("bundle %s landed in slot %llu", d.bundle_id.c_str(), (unsigned long long)d.landed_slot);
+        }
+      g_landed.set(int64_t(n_landed));
+      g_not_landed.set(int64_t(n_not_landed));
+      g_rejected.set(int64_t(n_rejected));
+      // Tip accounts: read-only, so it runs in dry run too. Jito says the list is stable; a short or failed
+      // answer keeps the previous list.
+      if (!recorder && cfg.jito.tip_accounts_refresh_s > 0 && !cfg.jito.regions.empty() && wall_ms() >= next_tip_refresh_ms) {
+        next_tip_refresh_ms = wall_ms() + int64_t(cfg.jito.tip_accounts_refresh_s) * 1000;
+        try {
+          if (!tip_client) tip_client = jito_client({cfg.jito.regions.front()});
+          // Only accounts already in the built-in list are accepted: an answer naming any other address (a
+          // spoofed or compromised endpoint) must never redirect tips. A new real one needs a code change.
+          std::vector<Pubkey> v;
+          size_t unknown = 0;
+          const auto& known = risk::default_tip_accounts();
+          for (const Pubkey& k : tip_client->tip_accounts())
+            if (std::find(known.begin(), known.end(), k) != known.end()) v.push_back(k);
+            else ++unknown;
+          if (unknown) LOG_WARN("getTipAccounts named %zu accounts outside the built-in list: ignored", unknown);
+          if (v.size() >= 4) {
+            g_tip_accounts.set(int64_t(v.size()));
+            builder.set_tip_accounts(std::move(v));
+          } else {
+            LOG_WARN("getTipAccounts returned %zu accounts: keeping the current list", v.size());
+          }
+        } catch (const std::exception& e) {
+          LOG_WARN("getTipAccounts: %s", e.what());
+        }
+      }
       const auto& n = rt.engine().counters();
       g_updates.set(int64_t(n.updates));
       g_seen.set(int64_t(n.cycles_seen));
@@ -584,6 +709,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
     if (!any) std::this_thread::sleep_for(std::chrono::microseconds(50));
   }
   for (auto& s : shards) s.thread.join();
+  if (watcher) watcher->shutdown();
   sim.shutdown();
   for (const auto& r : sim.drain())
     if (!dlog.write(r)) LOG_ERROR("cannot persist final simulation outcome");

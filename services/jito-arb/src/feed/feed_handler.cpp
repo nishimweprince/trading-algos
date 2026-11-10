@@ -95,6 +95,11 @@ bool FeedHandler::on_frame(const uint8_t* data, size_t len, uint64_t recv_ns) {
     ++t.updates;
     t.bytes += u.len;
   }
+  if (!watches_.empty())
+    if (auto w = watches_.find(u.key); w != watches_.end()) {
+      w->second(a.lamports, u.data, u.len, u.slot);
+      if (!store_.kind_of(u.key)) return true;  // watched only: not an account the store models
+    }
   if (!store_.apply(u)) {
     ++bad_;
     return false;

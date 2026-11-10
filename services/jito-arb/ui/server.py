@@ -43,7 +43,7 @@ REASONS = ["none", "base_price_unknown", "no_profit", "cu_over_budget", "below_m
            "guard_above_quote", "below_min_ev", "pool_conflict", "slot_cap", "send_lag", "sizer_failed",
            "boundary", "flash_disabled", "risk_block", "tx_build_failed", "sign_guard", "sizer_no_room",
            "sizer_no_profit", "sizer_partial_fill", "sizer_quote_error", "sizer_zero_out", "implausible_profit",
-           "quarantined"]
+           "quarantined", "not_armed"]
 ACTIONS = {0: "skipped", 1: "sent", 2: "dry_run"}
 # Outcome records (kind 2) of a dry-run bundle's simulation: reason byte = the failing piece (obs::SimFail).
 SIM_FAIL = {0: "", 1: "leg 1", 2: "leg 2", 3: "leg 3", 0x10: "setup", 0x20: "too large", 0x21: "no holder", 0x22: "rpc",

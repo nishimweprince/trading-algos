@@ -20,6 +20,9 @@ struct Config {
     std::string funding_mode = "flash";  // flash | own
     std::string kill_file = "KILL";      // relative to the run directory
     bool simulate_before_send = true;    // pre-send simulateTransaction (spec §9)
+    // {"pools":[..]} written by the live-plan tool: the pools whose lookup tables and token accounts exist.
+    // Empty: no armed set (every pool). Dry run only counts routes outside it; live skips them (not_armed).
+    std::string armed_path;
   } mode;
 
   struct Helius {
