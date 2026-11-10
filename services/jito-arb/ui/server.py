@@ -172,12 +172,25 @@ def pools_summary(data_dir):
     }
 
 
+MIN_NET_LAMPORTS = 10_000  # engine.min_net_lamports; set by --min-net-lamports
+LATE_SLOTS = 20            # a simulation this many slots after its candidate measures later flow, not the route
+
+
+def sim_lands(s):
+    """True when a simulated-OK bundle would pass the executor's guard (sim net >= min_net) and land."""
+    return s is not None and s[5] == 5 and s[19] >= MIN_NET_LAMPORTS
+
+
+def sim_late(s):
+    return s is not None and s[11] and s[27] and s[11] - s[27] > LATE_SLOTS
+
+
 def sim_label(s):
     """A dry-run bundle's simulation result for the table: ok / failed at a leg / not simulated (and why)."""
     if s is None:
         return "not simulated"
     if s[5] == 5:
-        return "ok"
+        return "ok: would land" if sim_lands(s) else "ok: would revert"
     why = SIM_FAIL.get(s[3], str(s[3]))
     return ("not simulated: " if s[3] >= 0x10 else "failed: ") + why
 
@@ -185,7 +198,12 @@ def sim_label(s):
 def empty_day():
     return {"candidates": 0, "dispatched": 0, "gross_lamports": 0, "tip_lamports": 0,
             "net_lamports": 0, "ev_lamports": 0, "sim_ok": 0, "sim_failed": 0,
-            "sim_unsimulated": 0, "sim_profitable": 0, "sim_net_lamports": 0}
+            "sim_unsimulated": 0, "sim_profitable": 0, "sim_net_lamports": 0,
+            # The executor's on-chain guard reverts any bundle whose output misses repay + tip + min_net, and a
+            # reverted Jito bundle never lands: it costs nothing. So a simulation below the guard is a revert (0),
+            # not a loss. sim_net_lamports keeps the unguarded sum (min_out = 0 in the simulation) for reference.
+            "sim_land": 0, "sim_revert": 0, "sim_landed_net_lamports": 0,
+            "sim_land_late": 0, "sim_landed_net_late_lamports": 0}
 
 
 class DecisionCache:
@@ -289,8 +307,17 @@ class DecisionCache:
                     d["sim_ok"] += count
                     d["sim_net_lamports"] += s[19] * count
                     d["sim_profitable"] += int(s[19] > 0) * count
+                    if sim_lands(s):
+                        d["sim_land"] += count
+                        d["sim_landed_net_lamports"] += s[19] * count
+                        if sim_late(s):
+                            d["sim_land_late"] += count
+                            d["sim_landed_net_late_lamports"] += s[19] * count
+                    else:
+                        d["sim_revert"] += count
                 else:
                     d["sim_failed"] += count
+                    d["sim_revert"] += count
         rows = []
         for _, _, v in sorted(self.latest, reverse=True):
             if v[10] // 1000 < cutoff:
@@ -306,7 +333,10 @@ class DecisionCache:
                 "ev_sol": v[20] / 1e9, "action": ACTIONS.get(action, str(action)),
                 "reason": REASONS[reason] if action == 0 and reason < len(REASONS) else "",
                 "sim": sim_label(s) if action != 0 else "",
-                "sim_net_sol": s[19] / 1e9 if action != 0 and s is not None and s[5] == 5 else None,
+                # Guarded: what the bundle would make on chain (0 when the guard reverts it).
+                "sim_net_sol": (s[19] / 1e9 if sim_lands(s) else 0.0) if action != 0 and s is not None and s[5] == 5 else None,
+                "sim_unguarded_net_sol": s[19] / 1e9 if action != 0 and s is not None and s[5] == 5 else None,
+                "sim_late": bool(sim_late(s)) if action != 0 else False,
                 "sim_leg_units": list(s[24:27]) if action != 0 and s is not None else [],
                 "simulation_semantics": "fixed quoted inputs; excludes residual intermediate value",
             })
@@ -416,7 +446,9 @@ def main():
     ap.add_argument("--port", type=int, default=8088)
     ap.add_argument("--metrics", default="http://127.0.0.1:9100/metrics")
     ap.add_argument("--data", default="/var/lib/jito-arb")
+    ap.add_argument("--min-net-lamports", type=int, default=MIN_NET_LAMPORTS, help="engine.min_net_lamports (the guard's margin)")
     a = ap.parse_args()
+    globals()["MIN_NET_LAMPORTS"] = a.min_net_lamports
     Handler.sampler = Sampler(a.metrics)
     Handler.sampler.start()
     Handler.data_dir = a.data
