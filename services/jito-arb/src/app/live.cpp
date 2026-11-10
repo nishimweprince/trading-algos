@@ -416,7 +416,8 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       int64_t coverage_counts[6][5]{};
       for (uint32_t i = 0; i < rt.store().pool_count(); ++i) {
         auto p = rt.store().pool(i);
-        const bool ready = p && p->quotable(uint64_t(cfg.engine.max_state_age_slots));
+        const bool ready = p && p->quotable(uint64_t(cfg.engine.max_state_age_slots), rt.clock().slot.load(),
+                                            uint64_t(std::max(0, cfg.engine.settle_slots)));
         q += ready ? 1 : 0;
         if (p && uint8_t(p->kind)<6) {
           const uint8_t d=uint8_t(p->kind);

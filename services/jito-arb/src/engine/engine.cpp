@@ -49,8 +49,9 @@ bool mid_x64(const PoolState& p, const Pubkey& from, u128& out) {
 EngineConfig engine_config(const Config& c) {
   EngineConfig e;
   e.max_state_age_slots = uint64_t(c.engine.max_state_age_slots);
-  // Twice the resync threshold: live mode refreshes a quiet pool by RPC once it lags resync_lag_ms, well
-  // before the engine would call it stale.
+  e.settle_slots = uint64_t(std::max(0, c.engine.settle_slots));
+  // Twice the resync threshold. With settle_slots a quiet pool stays quotable on its stream alone, so the RPC
+  // refresh is only a safety net and resync_lag_ms can be long (the VM uses 30 min).
   e.max_slot_lag = 2 * ms_to_slots(c, c.helius.resync_lag_ms);
   e.min_edge_ppm = ppm(c.engine.min_spot_edge);
   e.max_input_fraction_ppm = ppm(c.engine.max_input_fraction);
@@ -137,7 +138,7 @@ StaleCause Engine::load(const Cycle& c, Snapshots& s, uint64_t slot, uint64_t* s
     if (!p || !p->complete) return StaleCause::incomplete;
     if (p->awaiting_push) return StaleCause::resync;
     if (slot > p->slot && slot - p->slot > cfg_.max_slot_lag) return StaleCause::lag;
-    if (!p->quotable(cfg_.max_state_age_slots)) {
+    if (!p->quotable(cfg_.max_state_age_slots, slot, cfg_.settle_slots)) {
       cause = StaleCause::spread;
       *spread_mask |= uint64_t(1) << i;
     }

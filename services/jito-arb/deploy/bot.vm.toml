@@ -13,6 +13,7 @@ laserstream_endpoint = "VERIFY"   # overridden by LASERSTREAM_ENDPOINT
 rpc_url = "https://mainnet.helius-rpc.com"
 api_key_env = "HELIUS_API_KEY"
 max_grpc_connections = 8          # plus one wallet/reserve connection; the plan allows 10
+resync_lag_ms = 1800000           # RPC refresh of quiet pools is a safety net only (engine.settle_slots keeps them quotable)
 shard_size = 6000                 # 8 x 6000 keys: 8,000 pools need ~46,000 (spec suggests 300; not a Helius limit)
 
 [engine]

@@ -127,7 +127,7 @@ Config load_config(const std::string& path) {
   G(engine, base_mints); G(engine, max_hops); G(engine, min_spot_edge); G(engine, min_ev_lamports);
   G(engine, min_net_lamports); G(engine, max_trade_lamports); G(engine, min_trade_lamports);
   G(engine, max_input_fraction); G(engine, target_land_rate); G(engine, max_bundles_per_slot);
-  G(engine, max_cycles_per_pool); G(engine, max_send_lag_ms); G(engine, max_state_age_slots);
+  G(engine, max_cycles_per_pool); G(engine, max_send_lag_ms); G(engine, max_state_age_slots); G(engine, settle_slots);
   G(engine, cooldown_ms); G(chain, slot_ms); G(engine, sizer_max_evals); G(engine, alpha_init); G(engine, alpha_min);
   G(engine, alpha_max); G(engine, alpha_step); G(engine, alpha_window); G(engine, p_land_init);
   G(engine, cu_overhead); G(engine, max_route_cu); G(engine, cu_headroom); G(engine, base_fee_lamports);

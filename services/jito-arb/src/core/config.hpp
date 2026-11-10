@@ -69,6 +69,7 @@ struct Config {
     int max_cycles_per_pool = 64;
     int max_send_lag_ms = 400;  // drop a candidate whose triggering update is this old at dispatch
     int max_state_age_slots = 2;
+    int settle_slots = 2;       // pool account/vault spread accepted once the newest write is this old (0: never)
     int cooldown_ms = 800;      // a dispatched cycle is not re-sent for this long
     int sizer_max_evals = 24;
     double alpha_init = 0.5;

@@ -56,12 +56,13 @@ AccountKind pool_account_kind(DexKind k) {
 
 }  // namespace
 
-bool PoolState::quotable(uint64_t max_age) const {
+bool PoolState::quotable(uint64_t max_age, uint64_t now_slot, uint64_t settle_slots) const {
   if (!complete || awaiting_push) return false;
   if (kind == DexKind::Dlmm && (dlmm_clock_slot < pool_slot)) return false;
   uint64_t lo = std::min({pool_slot, vault_a_slot, vault_b_slot});
   uint64_t hi = std::max({pool_slot, vault_a_slot, vault_b_slot});
-  return hi - lo <= max_age;
+  if (hi - lo <= max_age) return true;
+  return settle_slots && now_slot >= hi + settle_slots;
 }
 
 StateStore::StateStore() = default;

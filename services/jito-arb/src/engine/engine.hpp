@@ -18,6 +18,7 @@ namespace arb::engine {
 
 struct EngineConfig {
   uint64_t max_state_age_slots = 2;
+  uint64_t settle_slots = 2;     // a component spread is fine once the newest write is this many slots old
   uint64_t max_slot_lag = 150;  // a leg whose snapshot is this far behind the slot clock waits for resync
   uint32_t min_edge_ppm = 500;
   uint32_t max_input_fraction_ppm = 200'000;
