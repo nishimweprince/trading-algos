@@ -115,13 +115,33 @@ void Runtime::refresh_slot_inputs(uint64_t slot) {
 }
 
 void Runtime::on_frame(const uint8_t* data, size_t len, uint64_t recv_ns, int64_t wall_ms) {
+  apply_frame(data, len, recv_ns, wall_ms);
+  evaluate_changed();
+}
+
+void Runtime::apply_frame(const uint8_t* data, size_t len, uint64_t recv_ns, int64_t wall_ms) {
   ++stats_.frames;
   wall_ms_ = wall_ms;
-  frame_recv_ns_ = recv_ns;
+  if (!batch_recv_ns_ || recv_ns < batch_recv_ns_) batch_recv_ns_ = recv_ns;
   if (!handler_.on_frame(data, len, recv_ns)) ++stats_.bad_frames;
+}
+
+size_t Runtime::evaluate_changed() {
+  frame_recv_ns_ = batch_recv_ns_;
+  batch_recv_ns_ = 0;
+  if (seen_epoch_.size() < store_.pool_count()) seen_epoch_.resize(store_.pool_count(), 0);
+  if (++epoch_ == 0) {  // wrapped: reset so stale marks cannot collide
+    std::fill(seen_epoch_.begin(), seen_epoch_.end(), 0);
+    epoch_ = 1;
+  }
   uint32_t id;
   bool refreshed = false;
+  size_t n = 0;
   while (store_.pop_changed(id)) {
+    if (id < seen_epoch_.size()) {
+      if (seen_epoch_[id] == epoch_) continue;
+      seen_epoch_[id] = epoch_;
+    }
     auto snap = store_.pool(id);
     uint64_t slot = std::max(clock_.slot.load(std::memory_order_relaxed), snap ? snap->slot : 0);
     if (!refreshed) {
@@ -129,8 +149,10 @@ void Runtime::on_frame(const uint8_t* data, size_t len, uint64_t recv_ns, int64_
       refreshed = true;
     }
     ++stats_.updates;
+    ++n;
     engine_->on_pool_update(id, slot);
   }
+  return n;
 }
 
 bool Runtime::replay_file(const std::string& path) {

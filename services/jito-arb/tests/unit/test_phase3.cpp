@@ -8,6 +8,7 @@
 #include <cstring>
 
 #include "app/bundle_builder.hpp"
+#include "feed/frames.hpp"
 #include "core/programs.hpp"
 #include "fixture.hpp"
 #include "risk/limits.hpp"
@@ -486,4 +487,27 @@ TEST(cp_executor_route_ranges_directions_and_token_programs) {
     CHECK_EQ(offset, size_t(ix.n_accounts));
     CHECK_EQ(ix.data[18], args->legs[0].dex); CHECK_EQ(ix.data[22], args->legs[1].dex);
   }
+}
+
+TEST(runtime_batched_frames_price_each_changed_pool_once) {
+  // The same capture, replayed per frame and in one batch: the batch reaches the same store state and prices
+  // each changed pool at most once (live.cpp under a backlog), never more updates than the per-frame path.
+  Loaded a, b;
+  CHECK(a.rt->replay_file(fixture_path("frames.bin")));
+  feed::FrameReader rd;
+  CHECK(rd.open(fixture_path("frames.bin")));
+  feed::Frame f;
+  size_t frames = 0;
+  while (rd.next(f)) { b.rt->apply_frame(f.data.data(), f.data.size(), f.recv_ns, f.wall_ms); ++frames; }
+  size_t priced = b.rt->evaluate_changed();
+  CHECK(frames > 0);
+  CHECK(priced > 0);
+  CHECK(priced <= b.rt->store().pool_count());
+  CHECK(b.rt->stats().updates <= a.rt->stats().updates);
+  CHECK_EQ(b.rt->stats().frames, a.rt->stats().frames);
+  for (uint32_t id = 0; id < a.rt->store().pool_count(); ++id) {
+    auto pa = a.rt->store().pool(id), pb = b.rt->store().pool(id);
+    CHECK_EQ(pa ? pa->seq : 0, pb ? pb->seq : 0);
+  }
+  CHECK_EQ(b.rt->evaluate_changed(), size_t(0));  // nothing left after the batch
 }

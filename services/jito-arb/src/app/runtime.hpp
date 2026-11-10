@@ -34,6 +34,14 @@ class Runtime {
 
   /** One raw SubscribeUpdate frame (live or replayed); drains changed pools through the engine. */
   void on_frame(const uint8_t* data, size_t len, uint64_t recv_ns, int64_t wall_ms);
+  /**
+   * Batched form of on_frame: apply_frame updates the store only; evaluate_changed then prices each changed pool
+   * once, however many of the batch's frames touched it. Under a backlog this does the engine's work once per
+   * pool per batch instead of once per frame. Detect-to-send starts at the batch's oldest frame.
+   */
+  void apply_frame(const uint8_t* data, size_t len, uint64_t recv_ns, int64_t wall_ms);
+  /** Prices the pools changed since the last call, each once. Returns how many were evaluated. */
+  size_t evaluate_changed();
   /** Replay a recorded frame file through the same path. False when the file cannot be opened. */
   bool replay_file(const std::string& path);
 
@@ -73,6 +81,9 @@ class Runtime {
   int64_t skip_log_second_ = -1;
   uint32_t skip_logs_this_second_ = 0;
   uint64_t frame_recv_ns_ = 0;
+  uint64_t batch_recv_ns_ = 0;          // oldest receive time among frames applied since evaluate_changed
+  std::vector<uint32_t> seen_epoch_;    // per pool: the evaluate_changed pass that last priced it
+  uint32_t epoch_ = 0;
   uint64_t inputs_slot_ = 0;
 };
 
