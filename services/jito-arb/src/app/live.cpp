@@ -47,7 +47,6 @@ struct Shard {
 };
 
 constexpr size_t RING_SLOTS = 1024, RING_SLOT_BYTES = 16 << 10;  // whirlpool tick arrays are ~10 KB
-constexpr int MAX_FRAMES_PER_PASS = 256;  // per shard, before the engine prices the batch's changed pools
 
 }  // namespace
 
@@ -242,6 +241,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   LatGauges g_lag = lat("arb_feed_lag_us", "account update received minus the server's created_at, us");
   LatGauges g_off = lat("arb_slot_offset_us", "account update received minus its slot's start, us");
   LatGauges g_det = lat("arb_detect_to_signed_us", "frame received to bundle signed, us");
+  LatGauges g_eval = lat("arb_eval_to_signed_us", "engine starts pricing the pool to bundle signed, us (detect minus queueing)");
   LatGauges g_sim_mis = lat("arb_sim_mismatch_ppm", "simulated vs quoted final out, ppm (signed; 1 h window)");
   LatGauges g_sim_lag = lat("arb_sim_lag_slots", "slots from the candidate to its simulation (1 h window)");
   obs::LatencyWindow sim_mismatch(3600), sim_lag(3600);
@@ -286,6 +286,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   g_pools.set(int64_t(pf.pools.size()));
   g_cycles.set(int64_t(rt.cycles().size()));
 
+  const int frames_per_pass = std::max(1, cfg.helius.max_frames_per_pass);
   auto t0 = std::chrono::steady_clock::now();
   auto last_tick = t0, last_resync = t0;
   std::vector<uint8_t> buf(RING_SLOT_BYTES);
@@ -296,7 +297,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       uint32_t len;
       uint64_t recv;
       // Bounded per shard per pass: shards take turns, and the once-a-second tick runs under any backlog.
-      for (int k = 0; k < MAX_FRAMES_PER_PASS && s.ring->peek(s.next, data, len, recv); ++k) {
+      for (int k = 0; k < frames_per_pass && s.ring->peek(s.next, data, len, recv); ++k) {
         any = true;
         if (recorder) frames.write(data, len, recv, wall_ms());
         else rt.apply_frame(data, len, recv, wall_ms());
@@ -432,6 +433,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       put(g_lag, rt.feed().feed_lag_us(), tnow);
       put(g_off, rt.feed().slot_offset_us(), tnow);
       put(g_det, builder.detect_to_signed_us(), tnow);
+      put(g_eval, builder.eval_to_signed_us(), tnow);
       put(g_sim_mis, sim_mismatch, tnow);
       put(g_sim_lag, sim_lag, tnow);
       // Measured slot time, once a minute: chain.slot_ms should match it (slots went 400 -> 200 ms in Oct 2026).

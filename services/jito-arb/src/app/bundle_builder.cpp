@@ -180,6 +180,8 @@ void BundleBuilder::operator()(const engine::Opportunity& o, const engine::Cycle
   if (uint64_t t0 = rt_.frame_recv_ns(); t0) {
     uint64_t t1 = now_ns();
     detect_us_.add(t1, int64_t(t1 - std::min(t1, t0)) / 1000);
+    // The part spent pricing this pool and building the bundle; the rest is frames queued ahead of it.
+    if (uint64_t e = rt_.eval_start_ns(); e && e >= t0) compute_us_.add(t1, int64_t(t1 - std::min(t1, e)) / 1000);
   }
   std::memcpy(rec.signature, last_.sig.data(), 64);
   switch (submitter_.submit(last_, slot, rt_.clock().slot.load(std::memory_order_relaxed), rec.wall_ms)) {

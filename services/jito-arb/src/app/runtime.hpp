@@ -55,6 +55,8 @@ class Runtime {
   uint64_t last_update_ns() const { return handler_.last_update_ns(); }
   /** Receive time (monotonic ns) of the frame being processed: the start of detect-to-send. */
   uint64_t frame_recv_ns() const { return frame_recv_ns_; }
+  /** Monotonic ns when the engine started pricing the current pool: splits detect-to-signed into queue and compute. */
+  uint64_t eval_start_ns() const { return eval_start_ns_; }
   feed::FeedHandler& feed() { return handler_; }
 
  private:
@@ -81,7 +83,8 @@ class Runtime {
   int64_t skip_log_second_ = -1;
   uint32_t skip_logs_this_second_ = 0;
   uint64_t frame_recv_ns_ = 0;
-  uint64_t batch_recv_ns_ = 0;          // oldest receive time among frames applied since evaluate_changed
+  uint64_t batch_recv_ns_ = 0;
+  uint64_t eval_start_ns_ = 0;          // oldest receive time among frames applied since evaluate_changed
   std::vector<uint32_t> seen_epoch_;    // per pool: the evaluate_changed pass that last priced it
   uint32_t epoch_ = 0;
   uint64_t inputs_slot_ = 0;

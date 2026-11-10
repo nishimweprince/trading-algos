@@ -28,6 +28,7 @@ struct Config {
     std::string api_key_env = "HELIUS_API_KEY";
     int max_grpc_connections = 4;  // pool shards; plus one wallet/reserve connection
     int shard_size = 300;
+    int max_frames_per_pass = 64;  // frames read per shard before the engine prices the batch (latency vs dedupe)
     int resync_lag_ms = 60000;  // resync a pool whose snapshot lags the slot clock by this long (was 150 x 400 ms slots)
     int reconnect_min_ms = 1000;
     int reconnect_max_ms = 30000;

@@ -3,6 +3,7 @@
 #include <cstring>
 
 #include "core/base58.hpp"
+#include "core/sys.hpp"
 #include "feed/frames.hpp"
 
 namespace arb::app {
@@ -150,6 +151,7 @@ size_t Runtime::evaluate_changed() {
     }
     ++stats_.updates;
     ++n;
+    eval_start_ns_ = now_ns();
     engine_->on_pool_update(id, slot);
   }
   return n;

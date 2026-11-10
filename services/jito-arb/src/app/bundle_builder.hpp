@@ -56,6 +56,7 @@ class BundleBuilder {
   const risk::SignGuard& guard() const { return guard_; }
   /** Frame received -> bundle signed (everything before the HTTP write), microseconds. */
   obs::LatencyWindow& detect_to_signed_us() { return detect_us_; }
+  obs::LatencyWindow& eval_to_signed_us() { return compute_us_; }
 
  private:
   BundleSim* sim_ = nullptr;
@@ -74,7 +75,7 @@ class BundleBuilder {
   tx::IxList ixs_;
   tx::SignedTx last_;
   BuilderStats n_;
-  obs::LatencyWindow detect_us_;
+  obs::LatencyWindow detect_us_, compute_us_;
 };
 
 }  // namespace arb::app
