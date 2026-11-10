@@ -7,6 +7,7 @@ pools_path = "/var/lib/jito-arb/pools.json"
 dry_run = true
 funding_mode = "flash"
 kill_file = "/var/lib/jito-arb/KILL"
+armed_path = "/var/lib/jito-arb/armed.json"   # written by live-plan; dry run only counts routes outside it
 
 [helius]
 laserstream_endpoint = "VERIFY"   # overridden by LASERSTREAM_ENDPOINT
@@ -60,3 +61,12 @@ dir = "/var/lib/jito-arb/frames"
 enabled = true
 max_per_s = 5
 holder_seed_path = "/opt/jito-arb/share/holders_seed.json"
+
+# Stage 3 (docs/LIVE-READINESS.md): limits for the first live test. Left commented so dry run keeps measuring
+# every size; the owner uncomments them together with the dry_run change.
+# [engine]
+#   max_trade_lamports = 2000000000   # 2 SOL per trade while on flash loans
+#   max_bundles_per_slot = 1
+# [risk]
+#   max_daily_fee_spend_sol = 0.02
+#   min_sol_float = 0.3

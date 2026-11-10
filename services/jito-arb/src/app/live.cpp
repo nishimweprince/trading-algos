@@ -245,6 +245,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   auto& g_dry = reg.gauge("arb_bundles_dry_run", "bundles built and signed in dry run");
   auto& g_rec = reg.gauge("arb_recorder_bytes", "bytes written by the recorder");
   auto& g_kill = reg.gauge("arb_kill_switch", "1 while the KILL file is present");
+  auto& g_risk_blocked = reg.gauge("arb_bundles_risk_blocked", "candidates stopped by a limit: kill switch, fee cap, float, reject pause, feed lag");
   auto& g_armed = reg.gauge("arb_armed_pools", "pools in the armed set (0: no armed set, every pool)");
   auto& g_not_armed = reg.gauge("arb_bundles_not_armed", "routes through an unarmed pool (counted in dry run, skipped live)");
   auto& g_tip_accounts = reg.gauge("arb_jito_tip_accounts", "tip accounts from the last getTipAccounts (0: the built-in list)");
@@ -407,6 +408,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       g_dry.set(int64_t(builder.stats().dry_run));
       g_rec.set(int64_t(frames.bytes_written()));
       g_kill.set(::access(cfg.mode.kill_file.c_str(), F_OK) == 0 ? 1 : 0);
+      g_risk_blocked.set(int64_t(builder.stats().risk_blocked));
       g_armed.set(int64_t(armed.size()));
       g_not_armed.set(int64_t(builder.stats().not_armed));
       // Jito's verdicts feed the tip controller (alpha and p_land per route class) and the reject pause.
