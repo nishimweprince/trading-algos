@@ -1,0 +1,4 @@
+"ts","txSig","txSigIndex","slot","recordId","marketIndex","symbol","fundingRate","fundingRateLong","fundingRateShort","cumulativeFundingRateLong","cumulativeFundingRateShort","oraclePriceTwap","markPriceTwap","periodRevenue","baseAssetAmountWithAmm","baseAssetAmountWithUnsettledLp"
+1793570461,"5HmYAfRPGN51nNaFbcNNSyyFswKGEVULFGkjGGCoYS2T2qEQBdgyZhj3qJzaJYGJ6LMyfrbr4nKs7oSL1HXpDqax",0,464252391,"2849",0,"SOL-PERP","0.001177916","0.001177916","0.001177916","5.006574526","5.006574526","94.225772","94.254270","0.000000","57.730000000","0.000000000"
+1793574062,"2vG7WpjmUrqBc7BuvkXsXxnRQZXXXxrniV44ecac2caWa5eVGuAHUT6ZPchjSbk3hfMiiGUqQaBbCpHHwHT3pSNJ",0,464269180,"2850",0,"SOL-PERP","0.001173916","0.001173916","0.001173916","5.007748442","5.007748442","93.905053","93.933486","0.000000","57.730000000","0.000000000"
+1790895606,"x",0,1,"100",0,"SOL-PERP","0.001537875","0.001537875","0.001537875","1.0","1.0","118.008869","118.0","0","0","0"

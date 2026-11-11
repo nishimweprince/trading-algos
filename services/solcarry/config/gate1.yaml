@@ -1,0 +1,99 @@
+# solcarry Gate 1 configuration.
+# `thresholds`, `variants` and `windows.alpha` are pre-registered: run `solcarry lock`
+# once you are happy with them, BEFORE looking at any results.
+run:
+  start: null            # null = earliest available per source
+  end: null              # null = today (UTC)
+  evidence_tier: reconstructed
+
+sources:
+  binance_vision_base: https://data.binance.vision/data
+  binance_s3_list: https://s3-ap-northeast-1.amazonaws.com/data.binance.vision
+  velocity_base: https://data.velocity.exchange
+  defillama_base: https://yields.llama.fi
+  fred_series: DTB3
+  fred_base: https://fred.stlouisfed.org/graph/fredgraph.csv
+  jupiter_quote: https://lite-api.jup.ag/swap/v1/quote
+  okx_base: https://www.okx.com
+
+velocity:
+  symbol: SOL-PERP
+  empty_days_stop: 14
+  funding_floor_annual: 0.1095
+
+binance:
+  perp_symbol: SOLUSDT
+  coinm_pair: SOLUSD
+  expiry_hour_utc: 8
+  include_current_month_daily: true   # fill the unpublished current month from daily files
+
+staking:
+  lst_pool_id: 0e7d0722-9054-4907-8593-567b353c0900   # jitoSOL
+  pool_fee: 0.04                                      # native approx
+  max_ffill_days: 3
+
+lending:
+  aave_usdc_pool_id: aa70268e-4b52-42bf-a116-608b370f9501
+  kamino_usdc_pool_id: 8c4bbc10-5763-5d5b-8450-05ddd24b1c33
+  reserve_yield_source: none     # none | aave | kamino
+
+margin:                          # VERIFY against venue docs before locking
+  perp_im: 0.10
+  perp_mm: 0.05
+  coinm_im: 0.10
+  coinm_mm: 0.05
+
+windows:
+  T_lst_h: 1
+  T_native_h: 120
+  T_transfer_h: 24
+  T_hold_h: 2160
+  runup_windows_h: [1, 24, 120, 2160]
+  rolling_days: [7, 30, 90]
+  alpha: [0.95, 0.99]           # the gate scores at the highest alpha (most conservative)
+
+costs:
+  perp_round_trip_bps: 20
+  hold_years_assumed: 0.5
+  resize_bps_per_year: 10
+  coinm_fee_bps: 5
+  roll_slippage_bps: 5
+  lst_swap_bps: 10
+
+dated:
+  dte_min: 14
+  dte_max: 100
+
+depth:
+  mints:
+    jitoSOL: J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn
+    mSOL: mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So
+  sizes: [1, 10, 100, 1000, 5000]
+  target_size: 1000
+  gate_lst: jitoSOL
+
+validate:
+  # Median minute-matched |F/I - 1| over the final 30 min before expiry. Spec default was
+  # 0.002 on hourly closes; real 2024-26 SOL contracts show last-trade noise up to 0.6% on
+  # hourly bars and <=0.13% on 1m (one contract, SOLUSD_250926, at 0.47%). 0.005 still
+  # catches a wrong expiry or contract mapping, whose error is the size of the basis.
+  convergence_tol: 0.005
+  velocity_cum_tol: 1.5e-9      # 1e-9 plus CSV rounding slack (9 dp)
+
+thresholds:
+  excess_median_min: 0.03
+  excess_p5_min: -0.05
+  share_negative_max: 0.25
+  neg_run_max_days: 90
+  depth_impact_max: -0.005
+  min_sample_days: 180
+
+sizing:
+  target_per_quarter_usd: 1000
+
+http:
+  timeout_s: 30
+  max_parallel_per_host: 4
+  user_agent: solcarry-research/0.1
+
+variants: [P-LST-VEL, P-LST-BIN, P-NAT-VEL, P-NAT-BIN, D1-BASIS, D2-STATIC, D2-MANAGED]
