@@ -85,6 +85,14 @@ def test_jupiter_quote_failure(cfg):
 
 
 @respx.mock
+def test_jupiter_429_is_soft(cfg):
+    cfg.depth.min_interval_s = 0
+    respx.get(url__startswith="https://lite-api.jup.ag/").mock(return_value=httpx.Response(429))
+    jup = Jupiter(cfg, Http(cfg.http, max_attempts=2, backoff_max_s=0.01))
+    assert jup.quote("x", 1) is None
+
+
+@respx.mock
 def test_http_retries_on_5xx(cfg):
     route = respx.get("https://example.test/x").mock(
         side_effect=[httpx.Response(503), httpx.Response(200, text="ok")]

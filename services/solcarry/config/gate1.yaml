@@ -71,6 +71,7 @@ depth:
   sizes: [1, 10, 100, 1000, 5000]
   target_size: 1000
   gate_lst: jitoSOL
+  min_interval_s: 1.0           # pacing between Jupiter quotes (keyless API rate-limits per IP)
 
 validate:
   # Median minute-matched |F/I - 1| over the final 30 min before expiry. Spec default was

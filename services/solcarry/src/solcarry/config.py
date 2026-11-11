@@ -113,6 +113,7 @@ class DepthCfg(_M):
     sizes: list[float] = Field(default_factory=lambda: [1.0, 10.0, 100.0, 1000.0, 5000.0])
     target_size: float = 1000
     gate_lst: str = "jitoSOL"
+    min_interval_s: float = 1.0
 
 
 class ValidateCfg(_M):
