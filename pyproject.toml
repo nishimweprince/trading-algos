@@ -54,6 +54,8 @@ exclude = [
   "services/hyperliquid-arb",
   "services/pk-maker-cpp",
   "services/jito-arb",
+  # solcarry is a standalone research package with its own venv (services/solcarry/.venv).
+  "services/solcarry",
 ]
 
 [tool.ruff]
