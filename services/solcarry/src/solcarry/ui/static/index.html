@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>solcarry Gate 1</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f4f3f0; --surface-1: #fcfcfb; --border: #e2e0da;
+  --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #7a7973;
+  --grid: #e8e6e0;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --other: #b9b7b0;
+  --good: #1a7f37; --good-bg: #e6f4ea; --bad: #c4302b; --bad-bg: #fbe9e8;
+  --warn: #9a6700; --warn-bg: #fff4d6;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #121211; --surface-1: #1a1a19; --border: #2e2e2c;
+    --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
+    --grid: #2a2a28;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --other: #4a4945;
+    --good: #57c27a; --good-bg: #16301f; --bad: #f07470; --bad-bg: #3a1a19;
+    --warn: #e0b04a; --warn-bg: #352a10;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #121211; --surface-1: #1a1a19; --border: #2e2e2c;
+  --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
+  --grid: #2a2a28;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --other: #4a4945;
+  --good: #57c27a; --good-bg: #16301f; --bad: #f07470; --bad-bg: #3a1a19;
+  --warn: #e0b04a; --warn-bg: #352a10;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text-primary);
+  font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between;
+  padding: 16px 24px; border-bottom: 1px solid var(--border); background: var(--surface-1); }
+header h1 { font-size: 17px; margin: 0; font-weight: 600; }
+header .meta { color: var(--text-secondary); font-size: 12px; }
+select, button { font: inherit; color: var(--text-primary); background: var(--surface-1);
+  border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; }
+main { max-width: 1240px; margin: 0 auto; padding: 20px 16px 60px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; min-width: 0; }
+.card h2 { font-size: 14px; margin: 0 0 4px; font-weight: 600; }
+.card .sub { color: var(--text-secondary); font-size: 12px; margin: 0 0 12px; }
+.grid2 { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr)); }
+.banner { display: flex; gap: 18px; flex-wrap: wrap; align-items: center; }
+.verdict { font-size: 28px; font-weight: 700; letter-spacing: .02em; }
+.pill { display: inline-flex; gap: 4px; align-items: center; border-radius: 999px; padding: 2px 9px;
+  font-size: 12px; font-weight: 600; white-space: nowrap; }
+.pill.PASS, .pill.ok { color: var(--good); background: var(--good-bg); }
+.pill.FAIL, .pill.bad { color: var(--bad); background: var(--bad-bg); }
+.pill.INSUFFICIENT_DATA, .pill.warn { color: var(--warn); background: var(--warn-bg); }
+.tier { color: var(--text-secondary); font-size: 12px; }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+th, td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+th { color: var(--text-secondary); font-weight: 600; }
+td.l { text-align: left; white-space: normal; }
+.x { color: var(--bad); } .v { color: var(--good); } .muted { color: var(--text-muted); }
+.chart { position: relative; height: 300px; }
+ul.cav { margin: 0; padding-left: 18px; color: var(--text-secondary); }
+.empty { color: var(--text-muted); padding: 40px 0; text-align: center; }
+a { color: var(--s1); }
+main > *, .grid2 > * { min-width: 0; }
+select { max-width: 100%; text-overflow: ellipsis; }
+@media (max-width: 600px) {
+  header { padding: 12px 16px; } header > div { min-width: 0; max-width: 100%; }
+  .verdict { font-size: 22px; } .banner .pill { white-space: normal; }
+  #run { width: 100%; }
+}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>solcarry · Gate 1</h1>
+    <div class="meta" id="meta">loading…</div>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <label class="meta" for="run">Run</label>
+    <select id="run"></select>
+    <a id="mdlink" class="meta" href="#" target="_blank">report.md</a>
+    <button id="theme" type="button" title="Toggle theme">◐</button>
+  </div>
+</header>
+<main id="main"><div class="empty">Loading runs…</div></main>
+<script>
+const $ = (s, r = document) => r.querySelector(s);
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const pct = (x, d = 2) => (x === null || x === undefined || Number.isNaN(x)) ? "n/a" : (x * 100).toFixed(d) + "%";
+const num = (x, d = 0) => (x === null || x === undefined) ? "n/a" : Number(x).toLocaleString(undefined, {maximumFractionDigits: d, minimumFractionDigits: d});
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const ICON = {PASS: "✓", FAIL: "✕", INSUFFICIENT_DATA: "…", CONTINUE: "✓", KILL: "✕"};
+let charts = [], current = null;
+
+function theme() {
+  const saved = (() => { try { return localStorage.getItem("solcarry-theme"); } catch { return null; } })();
+  if (saved) document.documentElement.dataset.theme = saved;
+  $("#theme").onclick = () => {
+    const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+    const cur = document.documentElement.dataset.theme || (dark ? "dark" : "light");
+    const next = cur === "dark" ? "light" : "dark";
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem("solcarry-theme", next); } catch {}
+    if (current) render(current);
+  };
+}
+
+async function init() {
+  theme();
+  const runs = await fetch("/api/runs").then(r => r.json());
+  if (!runs.length) { $("#main").innerHTML = '<div class="empty">No runs with a report yet. Run <code>solcarry run-all</code>.</div>'; $("#meta").textContent = ""; return; }
+  $("#run").innerHTML = runs.map(r => `<option value="${esc(r.run_id)}">${esc(r.run_id)}${r.result ? " · " + r.result : ""}${r.unlocked ? " (unlocked)" : ""}</option>`).join("");
+  $("#run").onchange = () => load($("#run").value);
+  load(runs[0].run_id);
+}
+
+async function load(id) {
+  current = await fetch(`/runs/${id}/ui.json`).then(r => r.json());
+  $("#mdlink").href = `/runs/${id}/report.md`;
+  render(current);
+}
+
+function baseOpts(yfmt, xtype = "category") {
+  const grid = css("--grid"), muted = css("--text-muted"), text = css("--text-secondary");
+  return {
+    responsive: true, maintainAspectRatio: false, animation: false,
+    interaction: { mode: "index", intersect: false },
+    elements: { point: { radius: 0, hoverRadius: 4 }, line: { borderWidth: 2, tension: 0 } },
+    plugins: { legend: { labels: { color: text, boxWidth: 12, boxHeight: 2 } },
+      tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${yfmt(c.parsed.y)}` } } },
+    scales: {
+      x: { type: xtype, ticks: { color: muted, maxTicksLimit: 7, autoSkip: true, maxRotation: 0,
+             callback: xtype === "category" ? function (v) { return String(this.getLabelForValue(v)).slice(0, 7); } : undefined },
+           grid: { display: false }, border: { color: grid } },
+      y: { ticks: { color: muted, callback: yfmt }, grid: { color: grid }, border: { display: false } },
+    },
+  };
+}
+const zeroLine = { id: "zero", afterDraw(ch) { const y = ch.scales.y; if (!y || y.min > 0 || y.max < 0) return;
+  const c = ch.ctx, py = y.getPixelForValue(0); c.save(); c.strokeStyle = css("--text-muted"); c.lineWidth = 1;
+  c.beginPath(); c.moveTo(ch.chartArea.left, py); c.lineTo(ch.chartArea.right, py); c.stroke(); c.restore(); } };
+
+function mk(canvas, cfg) { const ch = new Chart(canvas, { ...cfg, plugins: [zeroLine] }); charts.push(ch); }
+
+function render(d) {
+  charts.forEach(c => c.destroy()); charts = [];
+  const g = d.gate, s = d.summary;
+  $("#meta").textContent = `EVIDENCE TIER: ${d.evidence_tier} · generated ${String(s.generated_at).slice(0, 16).replace("T", " ")} UTC · α = ${s.gate_alpha}`;
+  const series = [css("--s1"), css("--s2"), css("--s3"), css("--s4")];
+  const lock = g ? (g.unlocked ? `<span class="pill bad">UNLOCKED: thresholds not pre-registered</span>` : `<span class="pill ok">✓ locked ${esc((g.lock.locked_at || "").slice(0, 10))}</span>`) : "";
+  const val = d.validation ? (d.validation.ok ? `<span class="pill ok">✓ validation ok</span>` : `<span class="pill bad">✕ validation failed</span>`) : "";
+  const verdict = g ? `<span class="pill ${g.result === "CONTINUE" ? "PASS" : "FAIL"} verdict">${ICON[g.result]} ${g.result}</span>` : `<span class="muted">gate not run</span>`;
+
+  const crit = (sc, k, isPct = true) => {
+    const c = sc.criteria.find(x => x.key === k); if (!c) return '<span class="muted">—</span>';
+    const v = isPct ? pct(c.value) : num(c.value);
+    const cls = c.ok === null ? "muted" : (c.ok ? "v" : "x");
+    return `<span class="${cls}">${v}${c.ok === null ? "" : (c.ok ? " ✓" : " ✕")}</span>`;
+  };
+  const scoreRows = g ? g.scores.map(sc => `<tr><td>${esc(sc.variant)}</td><td><span class="pill ${sc.status}">${ICON[sc.status]} ${sc.status}</span></td>
+    <td>${crit(sc, "excess_median")}</td><td>${crit(sc, "excess_p5")}</td><td>${crit(sc, "share_negative")}</td>
+    <td>${crit(sc, "neg_run_days", false)}</td><td>${crit(sc, "depth_impact")}</td><td>${crit(sc, "sample_days", false)}</td>
+    <td class="l muted">${esc(sc.flags.join(", "))}${sc.note ? " · " + esc(sc.note) : ""}</td></tr>`).join("") : "";
+
+  const fd = d.funding_daily;
+  const diag = s.funding_diagnostics.map(x => `<tr><td>${esc(x.source)}</td><td>${num(x.hours)}</td><td>${pct(x.share_positive, 1)}</td><td>${pct(x.median_annual)}</td><td>${pct(x.mean_annual)}</td><td>${pct(x.p5_annual)}</td><td>${pct(x.p95_annual)}</td><td>${num(x.longest_negative_run_days_7d, 1)}</td><td>${x.share_at_floor == null ? "—" : pct(x.share_at_floor, 1)}</td></tr>`).join("");
+
+  const cyc = d.cycles.map(c => `<tr><td>${esc(c.variant)}</td><td>${esc(c.contract)}</td><td>${esc(String(c.entry_ts).slice(0, 10))}</td><td>${num(c.dte_entry, 1)}</td><td>${pct(c.basis_cycle, 3)}</td><td>${pct(c.a_cycle)}</td><td>${pct(c.staking_contrib)}</td><td>${pct(c.cost)}</td><td>${pct(c.R)}</td><td class="${c.X < 0 ? "x" : ""}">${pct(c.X)}</td><td class="l muted">${esc(c.status)}${c.scored ? "" : " · unscored"}</td></tr>`).join("");
+
+  const res = s.reserves;
+  const rup = d.runups.map(r => `<tr><td>${r.window_h} h</td><td>${num(r.n)}</td>${Object.keys(r).filter(k => k.startsWith("q")).map(k => `<td>${pct(r[k])}</td>`).join("")}<td>${pct(r.max)}</td></tr>`).join("");
+  const qkeys = d.runups.length ? Object.keys(d.runups[0]).filter(k => k.startsWith("q")) : [];
+  const resv = Object.entries(res).filter(([k, v]) => v && v.beta_P !== undefined).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v.T_h} h</td><td>${pct(v.q_runup)}</td><td>${pct(v.beta_P)}</td><td>${num(v.k_P, 3)}</td></tr>`).join("");
+  const cm = res.coinm;
+  const sizing = d.sizing.map(r => `<tr><td>${esc(r.variant)}</td><td>${pct(r.R_median)}</td><td>${pct(r.R_p25)}</td><td>${r.capital_at_median == null ? "∞" : "$" + num(r.capital_at_median)}</td><td>${r.capital_at_p25 == null ? "∞" : "$" + num(r.capital_at_p25)}</td></tr>`).join("");
+  const depth = d.depth.map(r => `<tr><td>${esc(r.lst)}</td><td>${num(r.size)}</td><td>${num(r.out_sol, 3)}</td><td>${num(r.px, 5)}</td><td class="${r.impact < -0.005 ? "x" : ""}">${pct(r.impact, 3)}</td><td class="l muted">${esc(r.routes)}</td></tr>`).join("");
+  const vrows = d.validation ? d.validation.checks.map(c => `<tr><td>${esc(c.name)}</td><td>${c.level}</td><td><span class="pill ${c.ok ? "ok" : (c.level === "hard" ? "bad" : "warn")}">${c.ok ? "✓ ok" : (c.level === "hard" ? "✕ fail" : "! warn")}</span></td><td class="l">${esc(c.detail)}</td></tr>`).join("") : "";
+  const regime = d.regime.map(r => `<tr><td>${esc(r.variant)}</td><td>${esc(r.tercile)}</td><td>${pct(r.ret_lo, 0)} … ${pct(r.ret_hi, 0)}</td><td>${r.n}</td><td>${pct(r.X_median)}</td><td>${pct(r.share_neg, 0)}</td></tr>`).join("");
+
+  $("#main").innerHTML = `
+  <section class="card"><div class="banner">${verdict}${lock}${val}
+    <span class="tier">A PASS means “proceed to paper trading”, never “go live”.${g && g.depth_impact != null ? ` Depth gate: ${esc(g.depth_target.lst)} @ ${num(g.depth_target.size)} → ${pct(g.depth_impact, 3)}.` : ""}</span></div></section>
+  <section class="card"><h2>Scorecard</h2><p class="sub">Excess over T-bill hurdle, annualized. P = 30-day rolling windows; D = hold-to-expiry cycles.</p>
+    <div class="tablewrap"><table><thead><tr><th>variant</th><th>status</th><th>median X</th><th>p5 X</th><th>share X&lt;0</th><th>neg run d</th><th>depth</th><th>sample d</th><th style="text-align:left">flags</th></tr></thead><tbody>${scoreRows}</tbody></table></div></section>
+  <section class="grid2">
+    <div class="card"><div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><h2>Funding, annualized (7-day rolling)</h2>
+      <select id="fundRange" aria-label="Funding chart range"><option value="2025-03-26">Since staking data (2025-03)</option><option value="">All history</option></select></div>
+      <p class="sub">Positive = the short receives. Binance is a proxy; full history includes the Nov 2022 FTX spike.</p><div class="chart"><canvas id="cFund"></canvas></div></div>
+    <div class="card"><h2>Variant P: 30-day excess X<sub>W</sub></h2><p class="sub">Return on total capital (long + margin + reserve) minus hurdle.</p><div class="chart"><canvas id="cXw"></canvas></div></div>
+  </section>
+  <section class="card"><h2>Funding diagnostics</h2><div class="tablewrap"><table><thead><tr><th>source</th><th>hours</th><th>share +</th><th>median</th><th>mean</th><th>p5</th><th>p95</th><th>longest neg run d</th><th>at floor</th></tr></thead><tbody>${diag}</tbody></table></div>
+    ${regime ? `<h2 style="margin-top:14px">Regime split</h2><p class="sub">30-day X<sub>W</sub> by tercile of trailing 30-day SOL return.</p><div class="tablewrap"><table><thead><tr><th>variant</th><th>tercile</th><th>SOL return</th><th>n</th><th>median X</th><th>share X&lt;0</th></tr></thead><tbody>${regime}</tbody></table></div>` : ""}</section>
+  <section class="grid2">
+    <div class="card"><h2>COIN-M basis vs days to expiry</h2><p class="sub">Annualized ln(F/I)·365/dte. Latest four contracts coloured; earlier ones grey.</p><div class="chart"><canvas id="cBasis"></canvas></div></div>
+    <div class="card"><h2>Run-ups and reserves</h2><p class="sub">U<sub>T</sub> = max high over next T hours / close − 1.</p>
+      <div class="tablewrap"><table><thead><tr><th>T</th><th>n</th>${qkeys.map(k => `<th>${k}</th>`).join("")}<th>max</th></tr></thead><tbody>${rup}</tbody></table></div>
+      <div class="tablewrap" style="margin-top:10px"><table><thead><tr><th>perp variant</th><th>T</th><th>q<sub>α</sub>(U<sub>T</sub>)</th><th>β<sub>P</sub></th><th>k<sub>P</sub></th></tr></thead><tbody>${resv}</tbody></table></div>
+      ${cm ? `<p class="sub" style="margin-top:10px">Inverse margin φ(U) = (U+mm)/(1+U): static φ = ${pct(cm.phi["D2-STATIC"])} (U = ${pct(cm.q_U_hold)}), managed φ = ${pct(cm.phi["D2-MANAGED"])} (U = ${pct(cm.q_U_transfer)}).</p>` : ""}
+    </div>
+  </section>
+  <section class="card"><h2>Variant D cycles</h2><p class="sub">Enter next quarterly at previous expiry, hold to expiry. D2-MANAGED is optimistic.</p>
+    <div class="tablewrap"><table><thead><tr><th>variant</th><th>contract</th><th>entry</th><th>dte</th><th>basis</th><th>annualized</th><th>staking</th><th>costs</th><th>net R</th><th>excess X</th><th style="text-align:left">status</th></tr></thead><tbody>${cyc}</tbody></table></div></section>
+  <section class="grid2">
+    <div class="card"><h2>Capital sizing</h2><p class="sub">Capital for $${num(d.sizing[0]?.target_per_quarter_usd ?? 1000)}/quarter. Reconstructed.</p><div class="tablewrap"><table><thead><tr><th>variant</th><th>median R</th><th>p25 R</th><th>capital @ median</th><th>capital @ p25</th></tr></thead><tbody>${sizing}</tbody></table></div></div>
+    <div class="card"><h2>LST exit depth (Jupiter)</h2><p class="sub">${d.depth.length ? "Snapshot " + esc(String(d.depth[0].ts).slice(0, 16)) : "No snapshot"} · impact vs 1-token quote.</p><div class="tablewrap"><table><thead><tr><th>LST</th><th>size</th><th>out SOL</th><th>SOL/LST</th><th>impact</th><th style="text-align:left">route</th></tr></thead><tbody>${depth}</tbody></table></div></div>
+  </section>
+  <section class="card"><h2>Validation</h2><div class="tablewrap"><table><thead><tr><th>check</th><th>level</th><th>result</th><th style="text-align:left">detail</th></tr></thead><tbody>${vrows}</tbody></table></div></section>
+  <section class="card"><h2>Caveats</h2><ul class="cav">${d.caveats.map(c => `<li>${esc(c)}</li>`).join("")}</ul></section>`;
+
+  const fp = (x) => x == null ? "n/a" : (x * 100).toFixed(1) + "%";
+  const drawFunding = () => {
+    const from = $("#fundRange").value; const keep = fd.t.map(t => !from || t >= from);
+    const ds = [["binance_7d", "Binance SOLUSDT (proxy)", series[0]], ["velocity_7d", "Velocity SOL-PERP", series[1]]]
+      .filter(([k]) => (fd[k] || []).some(v => v != null))
+      .map(([k, lab, col]) => ({ label: lab, data: fd[k].filter((_, j) => keep[j]), borderColor: col, backgroundColor: col, spanGaps: false }));
+    const old = charts.find(c => c.canvas.id === "cFund"); if (old) { old.destroy(); charts = charts.filter(c => c !== old); }
+    mk($("#cFund"), { type: "line", data: { labels: fd.t.filter((_, j) => keep[j]), datasets: ds }, options: baseOpts(fp) });
+  };
+  try { const saved = localStorage.getItem("solcarry-fund-range"); if (saved !== null) $("#fundRange").value = saved; } catch {}
+  $("#fundRange").onchange = () => { try { localStorage.setItem("solcarry-fund-range", $("#fundRange").value); } catch {} drawFunding(); };
+  drawFunding();
+
+  const vs = Object.keys(d.xw30);
+  const allT = [...new Set(vs.flatMap(v => d.xw30[v].t))].sort();
+  const xds = vs.map((v, i) => { const m = new Map(d.xw30[v].t.map((t, j) => [t, d.xw30[v].x[j]]));
+    return { label: v, data: allT.map(t => m.has(t) ? m.get(t) : null), borderColor: series[i % 4], backgroundColor: series[i % 4], spanGaps: false }; });
+  mk($("#cXw"), { type: "line", data: { labels: allT, datasets: xds }, options: baseOpts(fp) });
+
+  const syms = Object.keys(d.basis).sort(); const recent = syms.slice(-4);
+  const bds = syms.map(sym => { const k = recent.indexOf(sym); const col = k >= 0 ? series[k] : css("--other");
+    return { label: sym, data: d.basis[sym].dte.map((x, j) => ({ x, y: d.basis[sym].a[j] })), borderColor: col, backgroundColor: col,
+      borderWidth: k >= 0 ? 2 : 1, order: k >= 0 ? 0 : 1 }; });
+  const bo = baseOpts(fp, "linear"); bo.scales.x.reverse = true; bo.scales.x.title = { display: true, text: "days to expiry", color: css("--text-muted") };
+  bo.interaction = { mode: "nearest", intersect: false }; bo.plugins.tooltip.callbacks.label = (c) => `${c.dataset.label}: ${fp(c.parsed.y)} at ${c.parsed.x.toFixed(1)} d`;
+  bo.plugins.legend.labels.filter = (item) => recent.includes(item.text);
+  mk($("#cBasis"), { type: "line", data: { datasets: bds }, options: bo });
+}
+init().catch(e => { $("#main").innerHTML = `<div class="empty">Failed to load: ${esc(e)}</div>`; });
+</script>
+</body>
+</html>
