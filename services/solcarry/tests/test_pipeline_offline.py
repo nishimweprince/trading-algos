@@ -99,6 +99,7 @@ def test_end_to_end(cfg, paths):
         )
     )
     cfg.lending.reserve_yield_source = "aave"
+    cfg.depth.min_interval_s = 0
     run = pipeline.new_run(cfg, paths)
     snap = pipeline.depth_snapshot(cfg, paths, run)
     assert (snap["impact"].abs() < 1e-9).all()
