@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+# Standalone research package with its own venv (fuzzy-osc/.venv), like services/solcarry.
+# It is not a uv workspace member: the root globs don't match top-level fuzzy-osc/.
+[project]
+name = "fuzzy-osc"
+version = "0.1.0"
+description = "Kill test of the fuzzy RSI/CCI/Stochastic vote from arXiv 2507.06383. Research only."
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+dependencies = [
+  "pandas>=2.2",
+  "numpy>=1.26",
+  "tzdata>=2024.1",
+]
+
+[project.scripts]
+fuzzy-osc = "fuzzy_osc.run:main"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3,<9",
+  "ruff>=0.8,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fuzzy_osc"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
