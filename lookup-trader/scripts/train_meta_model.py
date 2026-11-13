@@ -3,6 +3,7 @@
 
     ./scripts/train_meta_model.py --dry-run   # fold sizes and leakage check only
     ./scripts/train_meta_model.py             # full run, writes the report
+    ./scripts/train_meta_model.py --gate trend_aligned   # gate events first
 
 Offline by design: this writes a JSON report and nothing else. No artifact is
 installed and no endpoint is wired, so the Evidence panel keeps reporting no
@@ -27,6 +28,7 @@ sys.path.insert(0, str(_REPO_ROOT / "server"))
 
 from app.config import settings  # noqa: E402
 from app.ml.meta.folds import assert_no_overlap, audit_split, year_folds  # noqa: E402
+from app.ml.meta.gates import GATES, apply_gate  # noqa: E402
 from app.ml.meta.training import run  # noqa: E402
 from app.services.meta_events import event_path  # noqa: E402
 
@@ -35,12 +37,13 @@ LAST_TEST_YEAR = 2024
 AUDIT_FROM_YEAR = 2025
 
 
-def report_path(symbol: str, timeframe: str) -> Path:
-    return settings.data_dir / "reports" / f"meta-baseline-{symbol}-{timeframe}-v1.json"
+def report_path(symbol: str, timeframe: str, gate: str = "none") -> Path:
+    suffix = "" if gate == "none" else f"-gate-{gate}"
+    return settings.data_dir / "reports" / f"meta-baseline-{symbol}-{timeframe}{suffix}-v1.json"
 
 
-def _load(symbol: str, timeframe: str) -> pd.DataFrame:
-    path = event_path()
+def _load(symbol: str, timeframe: str, path: Path | None = None) -> pd.DataFrame:
+    path = path or event_path()
     if not path.exists():
         raise SystemExit(f"No meta-event export at {path} — run the exporter first.")
     frame = pd.read_parquet(path)
@@ -76,6 +79,21 @@ def _describe(frame: pd.DataFrame) -> None:
     print("\nno training trade was still open when its test year began.")
 
 
+def _gate_summary(ungated: pd.DataFrame, gated: pd.DataFrame, gate: str) -> dict:
+    """What the gate removed, so a gated lift can be read against the ungated one."""
+    development, audit = audit_split(ungated, audit_from_year=AUDIT_FROM_YEAR)
+    return {
+        "name": gate,
+        "kept": int(len(gated)),
+        "of": int(len(ungated)),
+        "kept_share": float(len(gated) / len(ungated)) if len(ungated) else 0.0,
+        "ungated_take_all": {
+            "development": float(ungated.iloc[development].net_r_3.mean()),
+            "audit": float(ungated.iloc[audit].net_r_3.mean()),
+        },
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--symbol", default="XAUUSD")
@@ -83,10 +101,31 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="fold audit only")
     parser.add_argument("--no-tune", action="store_true", help="skip the Optuna search")
     parser.add_argument("--trials", type=int, default=40)
+    parser.add_argument(
+        "--events",
+        type=Path,
+        default=None,
+        help="meta-event parquet (default: the canonical v1 export)",
+    )
+    parser.add_argument(
+        "--gate",
+        choices=sorted(GATES),
+        default="none",
+        help="rule-based event gate applied before folds and training",
+    )
     args = parser.parse_args()
 
     symbol, timeframe = args.symbol.upper(), args.timeframe.upper()
-    frame = _load(symbol, timeframe)
+    ungated = _load(symbol, timeframe, args.events)
+    frame = apply_gate(ungated, args.gate)
+    gate_info = _gate_summary(ungated, frame, args.gate)
+    if args.gate != "none":
+        print(
+            f"gate {args.gate}: kept {len(frame):,}/{len(ungated):,} events "
+            f"({gate_info['kept_share']:.1%}); ungated take-all development "
+            f"{gate_info['ungated_take_all']['development']:+.4f}R, "
+            f"audit {gate_info['ungated_take_all']['audit']:+.4f}R"
+        )
     _describe(frame)
     if args.dry_run:
         return 0
@@ -129,7 +168,8 @@ def main() -> int:
     if ci["lo"] is not None:
         print(f"audit net R 95% CI   [{ci['lo']:+.4f}, {ci['hi']:+.4f}]")
 
-    out = report_path(symbol, timeframe)
+    result["gate"] = gate_info
+    out = report_path(symbol, timeframe, args.gate)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(result, indent=2, sort_keys=True, default=str) + "\n")
     print(f"\nWrote {out}")

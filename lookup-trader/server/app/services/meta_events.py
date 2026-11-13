@@ -515,7 +515,10 @@ def export_meta_events(symbol: str, timeframe: str, path: Path | None = None) ->
         "feature_profile": _feature_profile(persisted),
         "setup_profile": setup_profile,
     }
-    event_manifest_path().write_text(
+    # Next to the parquet it describes. For the default path this is exactly
+    # `event_manifest_path()`; a research export elsewhere (another timeframe)
+    # must not overwrite the canonical H1 manifest that v2 verifies against.
+    path.with_suffix(".manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8"
     )
     report = {
