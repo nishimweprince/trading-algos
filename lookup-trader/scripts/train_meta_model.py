@@ -39,8 +39,8 @@ def report_path(symbol: str, timeframe: str) -> Path:
     return settings.data_dir / "reports" / f"meta-baseline-{symbol}-{timeframe}-v1.json"
 
 
-def _load(symbol: str, timeframe: str) -> pd.DataFrame:
-    path = event_path()
+def _load(symbol: str, timeframe: str, path: Path | None = None) -> pd.DataFrame:
+    path = path or event_path()
     if not path.exists():
         raise SystemExit(f"No meta-event export at {path} — run the exporter first.")
     frame = pd.read_parquet(path)
@@ -83,10 +83,16 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="fold audit only")
     parser.add_argument("--no-tune", action="store_true", help="skip the Optuna search")
     parser.add_argument("--trials", type=int, default=40)
+    parser.add_argument(
+        "--events",
+        type=Path,
+        default=None,
+        help="meta-event parquet (default: the canonical v1 export)",
+    )
     args = parser.parse_args()
 
     symbol, timeframe = args.symbol.upper(), args.timeframe.upper()
-    frame = _load(symbol, timeframe)
+    frame = _load(symbol, timeframe, args.events)
     _describe(frame)
     if args.dry_run:
         return 0

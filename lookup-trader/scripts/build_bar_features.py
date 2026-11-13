@@ -253,6 +253,111 @@ def _bars_to_build(
     return [i for i in eligible if candles["ts"].iloc[i] not in done]
 
 
+class _RowContext:
+    """Everything one feature row depends on. Picklable, so worker processes
+    compute exactly the rows the serial loop would."""
+
+    def __init__(
+        self,
+        candles: pd.DataFrame,
+        symbol: str,
+        timeframe: str,
+        pip: float,
+        depth: int,
+        exclusion_intervals: list,
+        boundary: pd.Timestamp | None,
+    ) -> None:
+        self.candles = candles
+        self.symbol = symbol
+        self.timeframe = timeframe
+        self.pip = pip
+        self.depth = depth
+        self.exclusion_intervals = exclusion_intervals
+        self.boundary = boundary
+        self.ohlc = candles[["ts", "open", "high", "low", "close", "volume"]]
+
+    def row(self, idx: int) -> dict:
+        ohlc = self.ohlc
+        window = ohlc.iloc[max(0, idx - settings.warmup_bars + 1) : idx + 1]
+        forward = ohlc.iloc[idx + 1 : idx + 1 + self.depth]
+        htf = {
+            "trend_state": self.candles["htf_trend_state"].iloc[idx],
+            "atr_bucket": self.candles["htf_atr_bucket"].iloc[idx],
+            "range_pct": self.candles["htf_range_pct"].iloc[idx],
+        }
+        row = bf.compute_bar_row(window, forward, self.symbol, self.timeframe, self.pip, htf)
+        row["data_quality_reliable"] = is_reliable(row["ts"], self.exclusion_intervals)
+        row["source_provider"] = (
+            "histdata"
+            if self.boundary is None or pd.Timestamp(row["ts"]) <= self.boundary
+            else "capital"
+        )
+        row["level_touch"] = json.dumps(row["level_touch"], separators=(",", ":"))
+        row["bar_tags"] = json.dumps(row["bar_tags"], separators=(",", ":"))
+        return row
+
+
+def _finalize_frame(rows: list[dict]) -> pd.DataFrame:
+    frame = _coerce_dtypes(pd.DataFrame(rows))
+    # A string column missing from _STRING_COLUMNS falls through to the numeric
+    # branch and silently becomes NaN for every row: the column still exists,
+    # still binds, and nothing raises. Cheap to assert, expensive to discover.
+    for col in ("bar_tags", "tag_setup_ids", "tag_primary_setup_id"):
+        assert frame[col].dtype == object, f"{col} was coerced away from string"
+    frame["ts"] = pd.to_datetime(frame["ts"])
+    frame["year"] = frame["ts"].dt.year
+    frame["month"] = frame["ts"].dt.month
+    return frame
+
+
+_WORKER_CONTEXT: _RowContext | None = None
+
+
+def _init_worker(context: _RowContext) -> None:
+    global _WORKER_CONTEXT
+    _WORKER_CONTEXT = context
+
+
+def _build_month(job: tuple[int, int, list[int], Path]) -> tuple[int, int, int]:
+    """Compute and write one calendar month. Each month has exactly one writer."""
+    year, month, indices, output_dir = job
+    context = _WORKER_CONTEXT
+    assert context is not None
+    frame = _finalize_frame([context.row(idx) for idx in indices])
+    columns = [c for c in frame.columns if c not in _PARTITION_COLUMNS]
+    out_path = month_partition_path(output_dir, context.symbol, context.timeframe, year, month)
+    write_month_partition(out_path, frame, columns)
+    return year, month, len(frame)
+
+
+def _build_parallel(
+    context: _RowContext, targets: list[int], output_dir: Path, workers: int
+) -> int:
+    """Same rows as the serial loop, split by calendar month across processes.
+
+    Rows depend only on a fixed backward window and the forward window, never on
+    neighbouring rows, so the split cannot change any value. Months are the unit
+    because they are also the partition unit: no two workers touch one file.
+    """
+    from concurrent.futures import ProcessPoolExecutor
+
+    ts = pd.to_datetime(context.candles["ts"], utc=True)
+    by_month: dict[tuple[int, int], list[int]] = {}
+    for idx in targets:
+        stamp = ts.iloc[idx]
+        by_month.setdefault((stamp.year, stamp.month), []).append(idx)
+    jobs = [(y, m, idx, output_dir) for (y, m), idx in sorted(by_month.items())]
+
+    written = 0
+    with ProcessPoolExecutor(
+        max_workers=workers, initializer=_init_worker, initargs=(context,)
+    ) as pool:
+        for n, (year, month, count) in enumerate(pool.map(_build_month, jobs), start=1):
+            written += count
+            print(f"  [{n}/{len(jobs)}] {year}-{month:02d} {count} rows")
+    return written
+
+
 def build(
     symbol: str,
     timeframe: str,
@@ -261,6 +366,7 @@ def build(
     since: datetime | None = None,
     rebuild: bool = False,
     dry_run: bool = False,
+    workers: int = 1,
 ) -> int:
     # In-memory: the builder reads the candle parquet and writes feature parquet,
     # so it never needs engine.duckdb — and taking that file's exclusive lock
@@ -288,9 +394,7 @@ def build(
 
     pip = pip_size(symbol)
     depth = bf.max_horizon()
-    ohlc = candles[["ts", "open", "high", "low", "close", "volume"]]
 
-    rows = []
     exclusion_intervals = load_exclusions(symbol, timeframe)
     boundary_path = settings.data_dir / "candle_sources" / "capital_boundary.json"
     boundary = None
@@ -298,34 +402,30 @@ def build(
         boundary_payload = json.loads(boundary_path.read_text(encoding="utf-8"))
         if boundary_payload.get("symbol") == symbol:
             boundary = pd.Timestamp(boundary_payload["histdata_cutoff"])
+
+    context = _RowContext(
+        candles=candles[
+            ["ts", "open", "high", "low", "close", "volume"]
+            + ["htf_trend_state", "htf_atr_bucket", "htf_range_pct"]
+        ],
+        symbol=symbol,
+        timeframe=timeframe,
+        pip=pip,
+        depth=depth,
+        exclusion_intervals=exclusion_intervals,
+        boundary=boundary,
+    )
+
+    if workers > 1 and not dry_run:
+        return _build_parallel(context, targets, output_dir, workers)
+
+    rows = []
     for n, idx in enumerate(targets, start=1):
-        window = ohlc.iloc[max(0, idx - settings.warmup_bars + 1) : idx + 1]
-        forward = ohlc.iloc[idx + 1 : idx + 1 + depth]
-        htf = {
-            "trend_state": candles["htf_trend_state"].iloc[idx],
-            "atr_bucket": candles["htf_atr_bucket"].iloc[idx],
-            "range_pct": candles["htf_range_pct"].iloc[idx],
-        }
-        row = bf.compute_bar_row(window, forward, symbol, timeframe, pip, htf)
-        row["data_quality_reliable"] = is_reliable(row["ts"], exclusion_intervals)
-        row["source_provider"] = (
-            "histdata" if boundary is None or pd.Timestamp(row["ts"]) <= boundary else "capital"
-        )
-        row["level_touch"] = json.dumps(row["level_touch"], separators=(",", ":"))
-        row["bar_tags"] = json.dumps(row["bar_tags"], separators=(",", ":"))
-        rows.append(row)
+        rows.append(context.row(idx))
         if n % 500 == 0:
             print(f"  {n}/{len(targets)}")
 
-    frame = _coerce_dtypes(pd.DataFrame(rows))
-    # A string column missing from _STRING_COLUMNS falls through to the numeric
-    # branch and silently becomes NaN for every row: the column still exists,
-    # still binds, and nothing raises. Cheap to assert, expensive to discover.
-    for col in ("bar_tags", "tag_setup_ids", "tag_primary_setup_id"):
-        assert frame[col].dtype == object, f"{col} was coerced away from string"
-    frame["ts"] = pd.to_datetime(frame["ts"])
-    frame["year"] = frame["ts"].dt.year
-    frame["month"] = frame["ts"].dt.month
+    frame = _finalize_frame(rows)
     columns = [c for c in frame.columns if c not in _PARTITION_COLUMNS]
 
     if dry_run:
@@ -368,6 +468,12 @@ def main() -> None:
     parser.add_argument("--from", dest="since", type=datetime.fromisoformat, default=None)
     parser.add_argument("--rebuild", action="store_true", help="Rebuild every eligible bar.")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Processes for the per-bar loop, split by calendar month (identical rows).",
+    )
     args = parser.parse_args()
 
     build(
@@ -378,6 +484,7 @@ def main() -> None:
         since=args.since,
         rebuild=args.rebuild,
         dry_run=args.dry_run,
+        workers=args.workers,
     )
 
 
