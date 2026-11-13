@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import SettingsConfigDict
@@ -72,6 +73,10 @@ class Settings(NotificationSettings):
         default=15.0, gt=0, validation_alias="POLL_INTERVAL_SECONDS"
     )
 
+    # Which entry trades: "reversal" (RSI Buy/Sell Chance, the default) or "ipda"
+    # (ICT model, docs/ipda-model.md). The supertrend port stays code-only.
+    strategy: Literal["reversal", "ipda"] = Field(default="reversal", validation_alias="STRATEGY")
+
     target_tf_minutes: int = Field(default=3, gt=0, validation_alias="TARGET_TF_MINUTES")
     bucket_offset_minutes: int = Field(default=0, ge=0, validation_alias="BUCKET_OFFSET_MINUTES")
 
@@ -98,6 +103,18 @@ class Settings(NotificationSettings):
     take_profit_pips: float = Field(default=50.0, gt=0, validation_alias="TAKE_PROFIT_PIPS")
     price_digits: int = Field(default=5, ge=0, le=10, validation_alias="PRICE_DIGITS")
     pip_size_override: float | None = Field(default=None, gt=0, validation_alias="PIP_SIZE")
+
+    # IPDA model (STRATEGY=ipda). Pip settings are converted with each instrument's pip size.
+    ipda_range_days: int = Field(default=20, ge=5, le=60, validation_alias="IPDA_RANGE_DAYS")
+    ipda_pd_filter: bool = Field(default=True, validation_alias="IPDA_PD_FILTER")
+    ipda_killzones_csv: str = Field(default="london,ny_am", validation_alias="IPDA_KILLZONES")
+    ipda_risk_reward: float = Field(default=2.0, gt=0, validation_alias="IPDA_RISK_REWARD")
+    ipda_target: Literal["rr", "liquidity"] = Field(default="rr", validation_alias="IPDA_TARGET")
+    ipda_stop_buffer_pips: float = Field(
+        default=0.0, ge=0, validation_alias="IPDA_STOP_BUFFER_PIPS"
+    )
+    ipda_min_risk_pips: float = Field(default=10.0, gt=0, validation_alias="IPDA_MIN_RISK_PIPS")
+    ipda_max_risk_pips: float = Field(default=150.0, gt=0, validation_alias="IPDA_MAX_RISK_PIPS")
 
     trading_sessions_csv: str = Field(default="tokyo,new_york", validation_alias="TRADING_SESSIONS")
     session_tokyo: str = Field(
@@ -203,11 +220,34 @@ class Settings(NotificationSettings):
             raise ValueError("REVERSAL_OVERSOLD must be below REVERSAL_OVERBOUGHT")
         return self
 
+    @property
+    def ipda_killzones(self) -> list[str]:
+        return [t.strip().lower() for t in self.ipda_killzones_csv.split(",") if t.strip()]
+
+    @model_validator(mode="after")
+    def validate_ipda(self) -> Settings:
+        if self.strategy != "ipda":
+            return self
+        from .ipda_model import DEFAULT_KILLZONES
+
+        known = {z.name for z in DEFAULT_KILLZONES}
+        unknown = [z for z in self.ipda_killzones if z not in known]
+        if unknown or not self.ipda_killzones:
+            raise ValueError(f"IPDA_KILLZONES must be a subset of {sorted(known)}, got {unknown}")
+        if self.ipda_min_risk_pips >= self.ipda_max_risk_pips:
+            raise ValueError("IPDA_MIN_RISK_PIPS must be below IPDA_MAX_RISK_PIPS")
+        if self.data_lookback < 1440:
+            raise ValueError(
+                "STRATEGY=ipda needs DATA_LOOKBACK >= 1440 so the warm-up covers the Asian range"
+            )
+        return self
+
     @model_validator(mode="after")
     def validate_hard_targets(self) -> Settings:
         # RSI produces no price level, so the reversal trigger has no indicator-derived
         # stop to fall back on. Without hard targets it would send orders with no risk.
-        if not self.use_hard_targets:
+        # The IPDA model sets absolute levels from the sweep, so it is exempt.
+        if self.strategy == "reversal" and not self.use_hard_targets:
             raise ValueError(
                 "USE_HARD_TARGETS must be true: the reversal trigger has no "
                 "indicator-derived stop level, so SL/TP must be fixed pip distances"

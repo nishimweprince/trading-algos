@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IPDA Backtest</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f6f6f4; --surface: #fcfcfb; --border: #e4e3df; --grid: #ecebe7;
+  --text: #0b0b0b; --text-2: #52514e; --muted: #85837d;
+  --s1: #2a78d6; --s2: #eb6834; --pos: #2a78d6; --neg: #e34948; --mid: #f0efec;
+  --accent-bg: #e8f1fc;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #121211; --surface: #1a1a19; --border: #2e2e2b; --grid: #262624;
+    --text: #f0efec; --text-2: #c3c2b7; --muted: #8f8d85;
+    --s1: #3987e5; --s2: #d95926; --pos: #3987e5; --neg: #e66767; --mid: #383835;
+    --accent-bg: #1c2a3c;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #121211; --surface: #1a1a19; --border: #2e2e2b; --grid: #262624;
+  --text: #f0efec; --text-2: #c3c2b7; --muted: #8f8d85;
+  --s1: #3987e5; --s2: #d95926; --pos: #3987e5; --neg: #e66767; --mid: #383835;
+  --accent-bg: #1c2a3c;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; }
+main { max-width: 1240px; margin: 0 auto; padding: 24px 16px 64px; }
+h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -0.01em; }
+h2 { font-size: 15px; margin: 0 0 10px; }
+.sub { color: var(--text-2); margin: 0 0 18px; }
+.bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 16px; }
+select, button { font: inherit; color: var(--text); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; }
+button.on { background: var(--accent-bg); border-color: var(--s1); }
+.desc { color: var(--text-2); flex: 1 1 320px; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 16px; }
+.kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+.kpi .l { color: var(--muted); font-size: 12px; }
+.kpi .v { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 480px), 1fr)); gap: 14px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; min-width: 0; }
+.card .note { color: var(--muted); font-size: 12px; margin-top: 6px; }
+svg { display: block; width: 100%; height: auto; overflow: visible; }
+svg text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.tbl { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 13px; }
+.tbl th, .tbl td { padding: 6px 8px; border-bottom: 1px solid var(--grid); text-align: right; white-space: nowrap; }
+.tbl th:first-child, .tbl td:first-child { text-align: left; }
+.tbl th { color: var(--text-2); font-weight: 600; position: sticky; top: 0; background: var(--surface); }
+.tbl tr.sel td { background: var(--accent-bg); }
+.tbl tr.click { cursor: pointer; }
+.scroll { overflow: auto; max-height: 420px; }
+.neg { color: var(--neg); } .pos { color: var(--pos); }
+.tip { position: fixed; pointer-events: none; background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; font-size: 12px;
+  box-shadow: 0 4px 14px rgba(0,0,0,.15); display: none; z-index: 10; white-space: nowrap; }
+.legend { display: flex; gap: 14px; color: var(--text-2); font-size: 12px; margin-bottom: 6px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+ul.ass { color: var(--text-2); margin: 6px 0 0; padding-left: 18px; }
+.verdict { border-radius: 10px; padding: 10px 14px; margin: 0 0 16px; border: 1px solid var(--border); background: var(--surface); }
+.verdict b { font-size: 15px; }
+.heat td { padding: 0; border: 2px solid var(--surface); text-align: center; font-size: 11px; height: 22px; min-width: 34px; }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="title">IPDA reversal on XAUUSD: backtest</h1>
+  <p class="sub" id="meta"></p>
+  <div id="verdict"></div>
+  <div class="bar">
+    <select id="variant" aria-label="Variant"></select>
+    <span class="desc" id="vdesc"></span>
+  </div>
+  <div class="kpis" id="kpis"></div>
+
+  <div class="card">
+    <div class="bar" style="margin-bottom:6px">
+      <h2 style="margin:0;flex:1">Cumulative P&amp;L</h2>
+      <button data-unit="r" class="on">R</button><button data-unit="usd">$ @ 0.01 lot</button>
+    </div>
+    <div id="equity"></div>
+    <h2 style="margin-top:14px">Drawdown (R)</h2>
+    <div id="dd"></div>
+  </div>
+
+  <div class="grid2">
+    <div class="card"><h2>Net R by year</h2><div id="year"></div>
+      <div class="note">Hover a bar for trades, expectancy and the median 3M ATR, which shows how a fixed $4 stop shrinks relative to volatility.</div></div>
+    <div class="card"><h2>Monthly net R</h2><div class="scroll" style="max-height:340px" id="month"></div></div>
+  </div>
+  <div class="grid2">
+    <div class="card"><h2>Expectancy by entry hour (UTC)</h2><div id="hour"></div></div>
+    <div class="card" id="minutecard"><h2>Expectancy by minute of the 3M bucket at entry</h2><div id="minute"></div>
+      <div class="note">Minute 1 and 2 entries fire on a forming bar that may repaint; minute 3 equals close-confirmed.</div></div>
+  </div>
+  <div class="grid2">
+    <div class="card"><h2>Breakdown</h2><div id="breakdown"></div></div>
+    <div class="card"><h2>Spread sensitivity (first variant)</h2><div id="spread"></div>
+      <div class="note">The baseline's expectancy per trade at each assumed bid/ask spread.</div></div>
+  </div>
+
+  <div class="card"><h2>Variant comparison</h2>
+    <div class="scroll"><table class="tbl" id="cmp"></table></div>
+    <div class="note">IS = 2009–2019 (used to pick parameters), OOS = 2020 onward. Click a row to load that variant.</div></div>
+
+  <div class="card" id="funnelcard" hidden><h2>Setup funnel</h2><div class="scroll"><table class="tbl" id="funnel"></table></div>
+    <div class="note">Counts per variant across the whole sample: sweeps, structure shifts, rejections by rule, orders placed and orders filled.</div></div>
+
+  <div class="card" id="atrcard"><h2>ATR-scaled exits grid: expectancy (R)</h2>
+    <div class="grid2" id="atrgrid"></div>
+    <div class="note">SL and TP as multiples of ATR(14) on 3M bars. The highlighted cell was picked on IS only.</div></div>
+
+  <div class="card"><h2>Last 400 trades (first variant)</h2><div class="scroll"><table class="tbl" id="trades"></table></div></div>
+
+  <div class="card"><h2>Assumptions</h2><ul class="ass" id="ass"></ul></div>
+</main>
+<div class="tip" id="tip"></div>
+<script>
+const R = /*__RESULTS__*/null;
+const $ = (id) => document.getElementById(id);
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const fmt = (x, d = 2) => x == null ? "–" : Number(x).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+const sgn = (x, d = 2) => x == null ? "–" : (x > 0 ? "+" : "") + fmt(x, d);
+const cls = (x) => x == null ? "" : x < 0 ? "neg" : "pos";
+const tip = $("tip");
+function showTip(e, html) { tip.innerHTML = html; tip.style.display = "block";
+  const w = tip.offsetWidth; tip.style.left = Math.min(e.clientX + 14, innerWidth - w - 8) + "px"; tip.style.top = (e.clientY + 14) + "px"; }
+function hideTip() { tip.style.display = "none"; }
+const NS = "http://www.w3.org/2000/svg";
+function el(tag, attrs, parent) { const n = document.createElementNS(NS, tag); for (const k in attrs) n.setAttribute(k, attrs[k]); if (parent) parent.appendChild(n); return n; }
+function niceTicks(lo, hi, n = 5) { const span = hi - lo || 1; const step0 = span / n; const mag = 10 ** Math.floor(Math.log10(step0));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= step0); const out = []; for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(+v.toFixed(10)); return out; }
+
+let state = { v: 0, unit: "r" };
+
+function lineChart(host, xs, ys, { h = 260, area = false, color = css("--s1"), unit = "R" } = {}) {
+  host.innerHTML = ""; const W = host.clientWidth || 800, H = h, m = { l: 52, r: 10, t: 8, b: 22 };
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}` }, host);
+  let lo = Math.min(0, ...ys), hi = Math.max(0, ...ys); if (lo === hi) hi = lo + 1;
+  const ticks = niceTicks(lo, hi); lo = Math.min(lo, ticks[0]); hi = Math.max(hi, ticks[ticks.length - 1]);
+  const X = (i) => m.l + (i / Math.max(1, xs.length - 1)) * (W - m.l - m.r);
+  const Y = (v) => m.t + (1 - (v - lo) / (hi - lo)) * (H - m.t - m.b);
+  ticks.forEach(t => { el("line", { x1: m.l, x2: W - m.r, y1: Y(t), y2: Y(t), stroke: t === 0 ? css("--muted") : css("--grid"), "stroke-width": 1 }, svg);
+    el("text", { x: m.l - 6, y: Y(t) + 4, "text-anchor": "end" }, svg).textContent = fmt(t, Math.abs(t) < 10 && t % 1 ? 1 : 0); });
+  let lastYear = null; xs.forEach((d, i) => { const y = d.slice(0, 4); if (y !== lastYear && (+y % 2 === 0 || xs.length < 800)) { lastYear = y;
+    el("text", { x: X(i), y: H - 6, "text-anchor": "middle" }, svg).textContent = y; } else if (y !== lastYear) lastYear = y; });
+  const pts = ys.map((v, i) => `${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(" ");
+  if (area) el("polygon", { points: `${X(0)},${Y(0)} ${pts} ${X(ys.length - 1)},${Y(0)}`, fill: color, opacity: 0.25 }, svg);
+  el("polyline", { points: pts, fill: "none", stroke: color, "stroke-width": 2, "stroke-linejoin": "round" }, svg);
+  const cross = el("line", { y1: m.t, y2: H - m.b, stroke: css("--muted"), "stroke-dasharray": "3 3", visibility: "hidden" }, svg);
+  const dot = el("circle", { r: 4, fill: color, stroke: css("--surface"), "stroke-width": 2, visibility: "hidden" }, svg);
+  const hit = el("rect", { x: m.l, y: m.t, width: W - m.l - m.r, height: H - m.t - m.b, fill: "transparent" }, svg);
+  hit.addEventListener("mousemove", (e) => { const r = svg.getBoundingClientRect(); const px = (e.clientX - r.left) * (W / r.width);
+    const i = Math.max(0, Math.min(xs.length - 1, Math.round((px - m.l) / (W - m.l - m.r) * (xs.length - 1))));
+    cross.setAttribute("x1", X(i)); cross.setAttribute("x2", X(i)); cross.setAttribute("visibility", "visible");
+    dot.setAttribute("cx", X(i)); dot.setAttribute("cy", Y(ys[i])); dot.setAttribute("visibility", "visible");
+    showTip(e, `<b>${xs[i]}</b><br>${sgn(ys[i])} ${unit}`); });
+  hit.addEventListener("mouseleave", () => { hideTip(); cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); });
+}
+
+function barChart(host, rows, { val = "exp_r", h = 220, label = (r) => r.key, tipf, unit = "R" } = {}) {
+  host.innerHTML = ""; const W = host.clientWidth || 600, H = h, m = { l: 48, r: 6, t: 8, b: 22 };
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}` }, host);
+  const vs = rows.map(r => r[val] ?? 0); let lo = Math.min(0, ...vs), hi = Math.max(0, ...vs); if (lo === hi) hi = 1;
+  const ticks = niceTicks(lo, hi, 4); lo = Math.min(lo, ticks[0]); hi = Math.max(hi, ticks[ticks.length - 1]);
+  const Y = (v) => m.t + (1 - (v - lo) / (hi - lo)) * (H - m.t - m.b);
+  const bw = (W - m.l - m.r) / rows.length;
+  ticks.forEach(t => { el("line", { x1: m.l, x2: W - m.r, y1: Y(t), y2: Y(t), stroke: t === 0 ? css("--muted") : css("--grid") }, svg);
+    el("text", { x: m.l - 6, y: Y(t) + 4, "text-anchor": "end" }, svg).textContent = fmt(t, Math.abs(hi - lo) < 2 ? 2 : 0); });
+  const every = Math.ceil(rows.length / Math.max(1, Math.floor((W - m.l) / 34)));
+  rows.forEach((r, i) => { const v = r[val] ?? 0, x = m.l + i * bw, w = Math.max(2, bw - 2);
+    const y0 = Y(0), y1 = Y(v); const top = Math.min(y0, y1), ht = Math.max(1, Math.abs(y1 - y0));
+    const rad = Math.min(4, w / 2, ht);
+    // rounded data-end, square at baseline
+    const d = v >= 0
+      ? `M${x + 1},${y0} V${top + rad} Q${x + 1},${top} ${x + 1 + rad},${top} H${x + 1 + w - rad} Q${x + 1 + w},${top} ${x + 1 + w},${top + rad} V${y0} Z`
+      : `M${x + 1},${y0} V${top + ht - rad} Q${x + 1},${top + ht} ${x + 1 + rad},${top + ht} H${x + 1 + w - rad} Q${x + 1 + w},${top + ht} ${x + 1 + w},${top + ht - rad} V${y0} Z`;
+    el("path", { d, fill: v >= 0 ? css("--pos") : css("--neg") }, svg);
+    if (i % every === 0) el("text", { x: x + bw / 2, y: H - 6, "text-anchor": "middle" }, svg).textContent = label(r);
+    const hit = el("rect", { x, y: m.t, width: bw, height: H - m.t - m.b, fill: "transparent" }, svg);
+    hit.addEventListener("mousemove", (e) => showTip(e, tipf ? tipf(r) : `<b>${label(r)}</b><br>${sgn(v, 3)} ${unit}<br>${r.n ?? ""} trades`));
+    hit.addEventListener("mouseleave", hideTip); });
+}
+
+function divColor(v, max) { const t = Math.max(-1, Math.min(1, v / (max || 1)));
+  const a = Math.abs(t); return t >= 0 ? `color-mix(in oklab, var(--pos) ${a * 85}%, var(--mid))` : `color-mix(in oklab, var(--neg) ${a * 85}%, var(--mid))`; }
+
+function render() {
+  const V = R.variants[state.v], S = V.summary;
+  $("vdesc").textContent = V.desc;
+  const k = [
+    ["Trades", fmt(S.trades, 0) + ` <span style="font-size:12px;color:var(--muted)">${fmt(S.per_year, 0)}/yr</span>`],
+    ["Win rate", fmt(S.win_rate * 100, 1) + "%"],
+    ["Expectancy", `<span class="${cls(S.exp_r)}">${sgn(S.exp_r, 3)} R</span>`],
+    ["Net", `<span class="${cls(S.net_usd)}">${sgn(S.net_usd, 0)} $</span>`],
+    ["Net R", `<span class="${cls(S.net_r)}">${sgn(S.net_r, 0)}</span>`],
+    ["Profit factor", fmt(S.pf, 2)],
+    ["Max DD", `${fmt(S.max_dd_r, 0)} R`],
+    ["Sharpe (daily)", fmt(S.sharpe, 2)],
+    ["OOS expectancy", `<span class="${cls(S.oos_exp_r)}">${sgn(S.oos_exp_r, 3)} R</span>`],
+    ["Median hold", fmt(S.med_hold_min, 0) + " min"],
+  ];
+  $("kpis").innerHTML = k.map(([l, v]) => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div></div>`).join("");
+  const eq = V.equity; const u = state.unit;
+  lineChart($("equity"), eq.d, u === "r" ? eq.r : eq.usd, { unit: u === "r" ? "R" : "$" });
+  lineChart($("dd"), eq.d, eq.dd, { h: 140, area: true, color: css("--neg"), unit: "R" });
+  barChart($("year"), V.year, { val: "net_r", label: (r) => "'" + String(r.key).slice(2),
+    tipf: (r) => `<b>${r.key}</b><br>${sgn(r.net_r, 1)} R · ${sgn(r.net_usd, 0)} $<br>${r.n} trades · win ${fmt(r.win * 100, 1)}%<br>exp ${sgn(r.exp_r, 3)} R<br>median 3M ATR $${fmt(r.atr)}` });
+  barChart($("hour"), V.hour, { val: "exp_r", label: (r) => r.key });
+  $("minutecard").hidden = !V.minute.length;
+  if (V.minute.length) barChart($("minute"), V.minute, { val: "exp_r", h: 160, label: (r) => r.key });
+  // month heatmap
+  const ys = [...new Set(V.month.map(x => x.y))]; const mx = Math.max(...V.month.map(x => Math.abs(x.r)), 1);
+  const map = new Map(V.month.map(x => [x.y + "-" + x.m, x.r]));
+  $("month").innerHTML = `<table class="heat" style="border-collapse:collapse;width:100%"><tr><td></td>${"JFMAMJJASOND".split("").map(c => `<td style="color:var(--muted)">${c}</td>`).join("")}<td style="color:var(--muted)">Σ</td></tr>` +
+    ys.map(y => { let tot = 0; const cells = Array.from({ length: 12 }, (_, i) => { const v = map.get(y + "-" + (i + 1)); if (v == null) return `<td></td>`; tot += v;
+      return `<td title="${y}-${String(i + 1).padStart(2, "0")}: ${sgn(v, 1)} R" style="background:${divColor(v, mx)};color:var(--text)">${Math.round(v)}</td>`; }).join("");
+      return `<tr><td style="color:var(--muted);text-align:left;padding-right:6px">${y}</td>${cells}<td class="${cls(tot)}" style="font-weight:600">${Math.round(tot)}</td></tr>`; }).join("") + `</table>`;
+  // breakdown
+  const sec = (title, rows) => `<tr><th colspan="5" style="text-align:left;padding-top:10px">${title}</th></tr>` + rows.map(r =>
+    `<tr><td>${r.key}</td><td>${fmt(r.n, 0)}</td><td>${fmt(r.win * 100, 1)}%</td><td class="${cls(r.exp_r)}">${sgn(r.exp_r, 3)}</td><td class="${cls(r.net_usd)}">${sgn(r.net_usd, 0)}</td></tr>`).join("");
+  $("breakdown").innerHTML = `<table class="tbl"><tr><th></th><th>Trades</th><th>Win</th><th>Exp R</th><th>Net $</th></tr>${sec("Session", V.session)}${sec("Direction", V.dir)}${sec("Exit", V.reason)}</table>`;
+  barChart($("spread"), R.spreads.map(s => ({ key: "$" + s.spread.toFixed(2), exp_r: s.exp_r, n: null })), { val: "exp_r", h: 160,
+    tipf: (r) => `<b>spread ${r.key}</b><br>${sgn(r.exp_r, 3)} R/trade` });
+  // comparison
+  $("cmp").innerHTML = `<tr><th>Variant</th><th>Trades</th><th>Win</th><th>Exp R</th><th>IS exp</th><th>OOS exp</th><th>Net $</th><th>PF</th><th>Max DD R</th><th>Sharpe</th></tr>` +
+    R.variants.map((x, i) => { const s = x.summary; return `<tr class="click ${i === state.v ? "sel" : ""}" data-i="${i}"><td>${x.key}</td><td>${fmt(s.trades, 0)}</td><td>${fmt(s.win_rate * 100, 1)}%</td>
+      <td class="${cls(s.exp_r)}">${sgn(s.exp_r, 3)}</td><td class="${cls(s.is_exp_r)}">${sgn(s.is_exp_r, 3)}</td><td class="${cls(s.oos_exp_r)}">${sgn(s.oos_exp_r, 3)}</td>
+      <td class="${cls(s.net_usd)}">${sgn(s.net_usd, 0)}</td><td>${fmt(s.pf)}</td><td>${fmt(s.max_dd_r, 0)}</td><td>${fmt(s.sharpe)}</td></tr>`; }).join("");
+  $("cmp").querySelectorAll("tr.click").forEach(tr => tr.onclick = () => { state.v = +tr.dataset.i; $("variant").value = state.v; render(); });
+}
+
+function staticParts() {
+  if (R.title) { $("title").textContent = R.title; document.title = R.title.split(":")[0]; }
+  if (R.verdict) { const v = R.verdict; const ok = v.pass;
+    $("verdict").innerHTML = `<div class="verdict"><b>${ok ? "✔ PASS" : "✘ FAIL"}</b> pre-registered test on <code>${v.key}</code>: in-sample ${sgn(v.is_exp_r, 3)} R ${v.is_ci95 ? `[${sgn(v.is_ci95[0], 3)}, ${sgn(v.is_ci95[1], 3)}]` : ""}, out-of-sample ${sgn(v.oos_exp_r, 3)} R ${v.oos_ci95 ? `[${sgn(v.oos_ci95[0], 3)}, ${sgn(v.oos_ci95[1], 3)}]` : ""}. <span style="color:var(--muted)">${v.rule}</span></div>`; }
+  if (R.funnel) { $("funnelcard").hidden = false; const keys = [...new Set(Object.values(R.funnel).flatMap(Object.keys))];
+    const order = ["sweep_sell_side", "sweep_buy_side", "mss_bull", "mss_bear", "reject_no_fvg", "reject_pd", "reject_price_in_fvg", "reject_risk", "reject_target", "reject_no_range", "orders", "filled"].filter(k => keys.includes(k));
+    $("funnel").innerHTML = `<tr><th>Variant</th>${order.map(k => `<th>${k.replace(/_/g, " ")}</th>`).join("")}</tr>` +
+      Object.entries(R.funnel).map(([v, f]) => `<tr><td>${v}</td>${order.map(k => `<td>${fmt(f[k] ?? 0, 0)}</td>`).join("")}</tr>`).join(""); }
+  if (!R.atr_grid || !R.atr_grid.length) $("atrcard").hidden = true;
+  $("meta").textContent = `${R.data.source} · ${R.data.from} → ${R.data.to} UTC · ${R.data.minutes.toLocaleString()} minutes · generated ${R.generated}`;
+  $("variant").innerHTML = R.variants.map((v, i) => `<option value="${i}">${v.key}</option>`).join("");
+  $("variant").onchange = (e) => { state.v = +e.target.value; render(); };
+  document.querySelectorAll("button[data-unit]").forEach(b => b.onclick = () => { state.unit = b.dataset.unit;
+    document.querySelectorAll("button[data-unit]").forEach(x => x.classList.toggle("on", x === b)); render(); });
+  $("ass").innerHTML = R.assumptions.map(a => `<li>${a}</li>`).join("");
+  // ATR grid
+  const sls = [...new Set(R.atr_grid.map(g => g.sl_atr))], tps = [...new Set(R.atr_grid.map(g => g.tp_atr))];
+  const best = R.atr_grid.reduce((a, b) => (b.is_exp_r > a.is_exp_r ? b : a));
+  const mx = Math.max(...R.atr_grid.flatMap(g => [Math.abs(g.is_exp_r || 0), Math.abs(g.oos_exp_r || 0)]), 0.01);
+  const grid = (key, title) => `<div><div style="color:var(--text-2);margin-bottom:4px">${title}</div><table class="heat" style="border-collapse:collapse"><tr><td style="color:var(--muted)">SL↓ TP→</td>${tps.map(t => `<td style="color:var(--muted)">${t}×</td>`).join("")}</tr>` +
+    sls.map(s => `<tr><td style="color:var(--muted)">${s}×</td>${tps.map(t => { const g = R.atr_grid.find(x => x.sl_atr === s && x.tp_atr === t); const v = g[key];
+      const isB = g === best; return `<td title="SL ${s}×ATR, TP ${t}×ATR: ${sgn(v, 3)} R (${key.startsWith("is") ? g.is_n : g.oos_n} trades)" style="min-width:52px;background:${divColor(v || 0, mx)};color:var(--text);${isB ? "outline:2px solid var(--text);outline-offset:-2px;font-weight:700" : ""}">${sgn(v, 3)}</td>`; }).join("")}</tr>`).join("") + `</table></div>`;
+  $("atrgrid").innerHTML = grid("is_exp_r", "In-sample 2009–2019") + grid("oos_exp_r", "Out-of-sample 2020+");
+  $("trades").innerHTML = `<tr><th>Entry (UTC)</th><th>Side</th><th>Session</th><th>RSI</th><th>Entry</th><th>Exit</th><th>Reason</th><th>Hold m</th><th>$</th><th>R</th></tr>` +
+    R.trades.slice().reverse().map(t => `<tr><td>${t.ts}</td><td>${t.dir}</td><td>${t.session}</td><td>${fmt(t.rsi, 1)}</td><td>${fmt(t.entry)}</td><td>${fmt(t.exit)}</td><td>${t.reason}</td><td>${t.hold}</td><td class="${cls(t.pnl)}">${sgn(t.pnl)}</td><td class="${cls(t.r)}">${sgn(t.r)}</td></tr>`).join("");
+}
+
+staticParts(); render();
+let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(render, 150); });
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", render);
+</script>
+</body>
+</html>

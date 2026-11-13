@@ -1,7 +1,8 @@
 """Maps a strategy Decision to the mt5-trader SignalRequest payload.
 
 Market orders MUST NOT include entry_price or expires_at. ``source`` is "ipda".
-Hard targets travel as distances so mt5-trader anchors them to the fill price.
+Hard targets travel as distances so mt5-trader anchors them to the fill price. The IPDA
+model sends limit orders instead: entry_price, absolute stop/target and expires_at.
 """
 
 from __future__ import annotations
@@ -37,13 +38,17 @@ def build_signal_payload(
     payload: dict[str, Any] = {
         "signal_id": str(signal_id),
         "occurred_at": occurred.isoformat(),
-        "execution_type": "market",
+        "execution_type": decision.execution_type,
         "symbol": symbol,
         "direction": decision.direction,
         "volume": str(instrument.resolved_volume(settings)),
         "source": SOURCE,
         "ignore_signal_age": settings.ignore_signal_age,
     }
+    if decision.execution_type != "market":
+        payload["entry_price"] = str(_price(decision.entry, price_digits))
+        if decision.expires_at is not None:
+            payload["expires_at"] = decision.expires_at.astimezone(UTC).isoformat()
     if decision.stop_loss is not None:
         payload["stop_loss"] = str(_price(decision.stop_loss, price_digits))
     if decision.take_profit is not None:

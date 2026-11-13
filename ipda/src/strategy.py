@@ -38,6 +38,7 @@ from .indicators import constant_series, crossover, crossunder, rsi, sma, supert
 
 REVERSAL = "reversal"
 SUPERTREND = "supertrend"
+IPDA = "ipda"
 
 
 @dataclass(slots=True)
@@ -73,10 +74,12 @@ class Decision:
     entry: float
     stop_loss: float | None
     take_profit: float | None
-    trigger: str  # "reversal" | "supertrend"
-    trigger_value: float  # RSI reading, or the supertrend line
+    trigger: str  # "reversal" | "supertrend" | "ipda"
+    trigger_value: float  # RSI reading, the supertrend line, or the IPDA equilibrium
     stop_loss_distance: float | None = None
     take_profit_distance: float | None = None
+    execution_type: str = "market"  # "market" | "limit" (ipda rests at the FVG midpoint)
+    expires_at: datetime | None = None  # limit orders only: the killzone end
 
 
 def _hard_targets(

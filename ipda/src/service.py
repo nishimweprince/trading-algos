@@ -1,6 +1,10 @@
-"""Orchestrates one poll cycle: fetch 1M candles -> aggregate -> evaluate the IPDA
-Supertrend entry on the forming bar -> gate (fire once per candle) -> submit to
-mt5-trader when a configured trading session is open, otherwise notify only.
+"""Orchestrates one poll cycle: fetch 1M candles -> evaluate the configured entry -> gate
+(fire once per candle) -> submit to mt5-trader when a configured trading session is open,
+otherwise notify only.
+
+``STRATEGY=reversal`` (default) aggregates the minutes and evaluates the RSI Buy/Sell
+Chance on the forming bar. ``STRATEGY=ipda`` streams new minutes through the stateful
+IPDA model (docs/ipda-model.md), seeded once from D1 candles, and sends limit orders.
 
 The same cycle samples the current price for every trade already filled, so the
 break-even advisory (``position_tracker``) fires within one poll interval of the
@@ -21,13 +25,14 @@ from .candles import Aggregator
 from .config import Settings
 from .data_client import MarketDataClient, Tick
 from .instruments import InstrumentConfig
+from .ipda_model import DEFAULT_KILLZONES, IpdaModel, IpdaParams, Setup, trading_day
 from .logging_config import RuntimeLogs, log_event
 from .models import build_signal_payload
 from .mt5_client import Mt5TraderClient
 from .position_tracker import PositionTracker, TrackerUpdate, tracked_trade_from_fill
 from .sessions import active_session
 from .signal_gate import SignalGate
-from .strategy import Decision, ReversalParams, ReversalSignalStrategy
+from .strategy import IPDA, Decision, ReversalParams, ReversalSignalStrategy
 
 
 @dataclass(slots=True)
@@ -36,6 +41,12 @@ class _PendingSignal:
     decision: Decision
     bucket_start: Any
     payload: dict[str, Any]
+
+
+@dataclass(slots=True)
+class _IpdaInput:
+    minutes: list[Any]
+    daily: list[Any] | None
 
 
 class _InstrumentPipeline:
@@ -99,7 +110,10 @@ class SignalService:
         self._sessions = settings.session_windows()
         self._aggregator = Aggregator(settings.target_tf_minutes, settings.bucket_offset_minutes)
         self._pipelines = [
-            _InstrumentPipeline(instrument, settings) for instrument in settings.instruments
+            _IpdaPipeline(instrument, settings)
+            if settings.strategy == "ipda"
+            else _InstrumentPipeline(instrument, settings)
+            for instrument in settings.instruments
         ]
 
     async def tick(self) -> None:
@@ -212,7 +226,8 @@ class SignalService:
                     quote=signal.instrument.quote,
                     signal_id=signal.payload["signal_id"],
                 )
-            if outcome.kind == "success":
+            if outcome.kind == "success" and signal.decision.execution_type == "market":
+                # A resting limit has no fill yet, so there is nothing to track.
                 self._start_tracking(signal, outcome.detail)
 
     # -- session gate ------------------------------------------------------
@@ -255,8 +270,7 @@ class SignalService:
                 f"symbol: {symbol}",
                 f"direction: {signal.decision.direction}",
                 f"entry (bar close): {signal.decision.entry}",
-                f"would-be stop: {signal.instrument.resolved_stop_loss_pips(self._s)} pips",
-                f"would-be target: {signal.instrument.resolved_take_profit_pips(self._s)} pips",
+                *_target_lines(signal, self._s),
                 f"pip size: {pip_size}",
                 f"bucket_start: {signal.bucket_start.isoformat()}",
                 f"trading sessions: {session_names}",
@@ -363,6 +377,117 @@ class SignalService:
             signal_id=trade.signal_id,
         )
 
-    async def _fetch_for_pipeline(self, pipeline: _InstrumentPipeline) -> Any:
-        minutes = await self._data.fetch_minute_candles(pipeline.instrument.quote)
+    async def _fetch_for_pipeline(self, pipeline: _InstrumentPipeline | _IpdaPipeline) -> Any:
+        quote = pipeline.instrument.quote
+        minutes = await self._data.fetch_minute_candles(quote)
+        if isinstance(pipeline, _IpdaPipeline):
+            daily = None
+            if not pipeline.seeded:
+                daily = await self._data.fetch_daily_candles(quote, self._s.ipda_range_days + 5)
+            return _IpdaInput(minutes=minutes, daily=daily)
         return self._aggregator.build(minutes)
+
+
+def _target_lines(signal: _PendingSignal, settings: Settings) -> list[str]:
+    d = signal.decision
+    if d.stop_loss is not None and d.take_profit is not None:
+        return [
+            f"order: {d.execution_type} @ {d.entry}",
+            f"would-be stop: {d.stop_loss}",
+            f"would-be target: {d.take_profit}",
+        ]
+    return [
+        f"would-be stop: {signal.instrument.resolved_stop_loss_pips(settings)} pips",
+        f"would-be target: {signal.instrument.resolved_take_profit_pips(settings)} pips",
+    ]
+
+
+class _IpdaPipeline:
+    """Feeds each newly closed minute to a long-lived IpdaModel.
+
+    The first poll is a warm-up: it seeds the data range from D1 candles and replays the
+    lookback window so the Asian range and structure are known, but any setup it finds is
+    history and is dropped. Afterwards only minutes newer than the last one seen are fed,
+    so every setup is produced by the poll that observed its confirming bar.
+    """
+
+    def __init__(self, instrument: InstrumentConfig, settings: Settings) -> None:
+        self.instrument = instrument
+        self._gate = SignalGate()
+        pip = instrument.resolved_pip_size(settings)
+        zones = tuple(z for z in DEFAULT_KILLZONES if z.name in settings.ipda_killzones)
+        self.model = IpdaModel(
+            IpdaParams(
+                tf_minutes=settings.target_tf_minutes,
+                range_days=settings.ipda_range_days,
+                pd_filter=settings.ipda_pd_filter,
+                killzones=zones,
+                risk_reward=settings.ipda_risk_reward,
+                target_mode=settings.ipda_target,
+                stop_buffer=settings.ipda_stop_buffer_pips * pip,
+                min_risk=settings.ipda_min_risk_pips * pip,
+                max_risk=settings.ipda_max_risk_pips * pip,
+            )
+        )
+        self.seeded = False
+
+    def evaluate(self, data: _IpdaInput, settings: Settings) -> _PendingSignal | None:
+        now = datetime.now(UTC)
+        warm_up = not self.seeded
+        if warm_up:
+            if not data.daily:
+                log_event("ipda_seed_missing", level=logging.WARNING, quote=self.instrument.quote)
+                return None
+            today = trading_day(now)
+            days = [(trading_day(c.start), c.high, c.low) for c in data.daily]
+            self.model.seed_daily([d for d in days if d[0] < today])
+            self.seeded = True
+            log_event(
+                "ipda_seeded",
+                quote=self.instrument.quote,
+                days=len(days),
+                equilibrium=self.model.equilibrium(),
+            )
+
+        latest: Setup | None = None
+        for minute in data.minutes:
+            setup = self.model.on_minute(minute)
+            if setup is not None:
+                latest = setup
+        if warm_up or latest is None or latest.expires_at <= now:
+            return None
+
+        symbol = self.instrument.resolved_mt5_symbol()
+        if self._gate.is_locked(symbol, latest.bucket_start):
+            return None
+        self._gate.lock(symbol, latest.bucket_start)
+        decision = Decision(
+            direction=latest.direction,
+            bucket_start=latest.bucket_start,
+            entry=latest.entry,
+            stop_loss=latest.stop_loss,
+            take_profit=latest.take_profit,
+            trigger=IPDA,
+            trigger_value=latest.equilibrium if latest.equilibrium is not None else 0.0,
+            execution_type="limit",
+            expires_at=latest.expires_at,
+        )
+        log_event(
+            "ipda_setup",
+            quote=self.instrument.quote,
+            direction=latest.direction,
+            killzone=latest.killzone,
+            entry=latest.entry,
+            stop_loss=latest.stop_loss,
+            take_profit=latest.take_profit,
+            sweep_extreme=latest.sweep_extreme,
+            fvg=[latest.fvg_bottom, latest.fvg_top],
+            equilibrium=latest.equilibrium,
+            expires_at=latest.expires_at.isoformat(),
+        )
+        return _PendingSignal(
+            instrument=self.instrument,
+            decision=decision,
+            bucket_start=latest.bucket_start,
+            payload=build_signal_payload(decision, self.instrument, settings),
+        )
