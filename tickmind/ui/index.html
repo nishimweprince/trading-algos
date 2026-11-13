@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tickmind Monitor</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f4f4f2; --surface-1: #fcfcfb; --surface-2: #f0efec; --border: #e2e1dc;
+  --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #7a7974;
+  --grid: #e8e7e2;
+  --series-1: #2a78d6;  /* replay */
+  --series-2: #eb6834;  /* site claim */
+  --good: #0ca30c; --warning: #fab219; --critical: #d03b3b;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --bg: #111110; --surface-1: #1a1a19; --surface-2: #232321; --border: #2f2f2c;
+    --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
+    --grid: #2a2a27; --series-1: #3987e5; --series-2: #d95926;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #111110; --surface-1: #1a1a19; --surface-2: #232321; --border: #2f2f2c;
+  --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
+  --grid: #2a2a27; --series-1: #3987e5; --series-2: #d95926;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text-primary);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 1120px; margin: 0 auto; padding: 20px 16px 60px; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin-bottom: 18px; }
+h1 { font-size: 18px; margin: 0; letter-spacing: -.01em; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-secondary);
+  margin: 0 0 12px; font-weight: 600; }
+.spacer { flex: 1; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--surface-1); font-size: 12px; color: var(--text-secondary); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); }
+.dot.good { background: var(--good); } .dot.warn { background: var(--warning); } .dot.bad { background: var(--critical); }
+button { font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--surface-1); color: var(--text-primary); cursor: pointer; }
+button:hover { background: var(--surface-2); }
+button[aria-pressed="true"] { background: var(--text-primary); color: var(--surface-1); border-color: var(--text-primary); }
+.card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; min-width: 0; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } }
+.muted { color: var(--text-muted); } .sec { color: var(--text-secondary); }
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+/* active + events */
+.sig { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; align-items: baseline; }
+.side { font-weight: 700; font-size: 12px; padding: 2px 8px; border-radius: 6px; border: 1px solid var(--border); }
+.levels { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 8px; }
+.levels div span { display: block; font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; }
+.levels div b { font-family: var(--mono); font-size: 16px; font-weight: 600; }
+.feed { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow: auto; }
+.feed li { display: grid; grid-template-columns: 92px 1fr; gap: 10px; padding: 7px 0; border-top: 1px solid var(--grid); font-size: 13px; }
+.feed li:first-child { border-top: 0; }
+
+/* comparison hero */
+.vs { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.vs > div { padding: 14px 16px; min-width: 0; }
+.vs > div + div { border-left: 1px solid var(--border); }
+.vs .lab { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); font-weight: 600; margin-bottom: 8px; }
+.sw { width: 12px; height: 3px; border-radius: 2px; }
+.stat { display: flex; flex-wrap: wrap; gap: 6px 22px; }
+.stat div span { display: block; font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; }
+.stat div b { font-size: 26px; font-weight: 650; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+@media (max-width: 520px) { .vs { grid-template-columns: 1fr; } .vs > div + div { border-left: 0; border-top: 1px solid var(--border); } .stat div b { font-size: 22px; } }
+.findings { margin: 14px 0 0; padding: 0; list-style: none; display: grid; gap: 10px; }
+.findings li { padding: 10px 12px; background: var(--surface-2); border-radius: 8px; }
+.findings b { font-variant-numeric: tabular-nums; }
+
+/* chart */
+.chart-wrap { position: relative; }
+.legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--text-secondary); margin-bottom: 8px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+svg text { fill: var(--text-muted); font-size: 11px; font-family: system-ui, sans-serif; }
+.tip { position: absolute; pointer-events: none; background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.12); min-width: 170px; display: none; z-index: 2; }
+.tip .row { display: flex; justify-content: space-between; gap: 12px; }
+.tip .k { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); }
+
+/* tables */
+.tbl-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: right; padding: 7px 8px; border-top: 1px solid var(--grid); white-space: nowrap; }
+th { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); font-weight: 600; border-top: 0; }
+th:first-child, td:first-child { text-align: left; }
+td.l, th.l { text-align: left; }
+tbody tr:hover { background: var(--surface-2); }
+.tag { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 5px; border: 1px solid var(--border); }
+.tag.win::before { content: "▲ "; color: var(--good); } .tag.loss::before { content: "▼ "; color: var(--critical); }
+.filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+input[type=search] { font: inherit; font-size: 13px; padding: 5px 10px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--surface-1); color: var(--text-primary); min-width: 0; width: 160px; }
+.matrix { display: grid; grid-template-columns: auto 1fr 1fr; gap: 6px; font-size: 13px; }
+.matrix div { padding: 10px; border-radius: 8px; background: var(--surface-2); text-align: center; }
+.matrix .h { background: none; color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; padding: 4px; }
+.matrix b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; }
+.matrix .hl { outline: 2px solid var(--critical); outline-offset: -2px; }
+footer { font-size: 12px; color: var(--text-muted); margin-top: 8px; }
+footer code { font-family: var(--mono); }
+.empty { color: var(--text-muted); font-size: 13px; padding: 6px 0; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Tickmind monitor</h1>
+    <span class="pill" id="watchPill"><span class="dot"></span><span>watcher: …</span></span>
+    <span class="pill" id="refreshPill"><span class="dot"></span><span>backtest: …</span></span>
+    <span class="spacer"></span>
+    <button id="btnRefresh" title="Re-fetch signals from the site and re-run the replay">Refresh backtest</button>
+  </header>
+
+  <div class="grid2">
+    <section class="card">
+      <h2>Active signal</h2>
+      <div id="active"><div class="empty">Loading…</div></div>
+    </section>
+    <section class="card">
+      <h2>Watcher events</h2>
+      <ul class="feed" id="feed"><li class="empty">Loading…</li></ul>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>Site claims vs M1 replay — same signals</h2>
+    <div class="vs" id="vs"></div>
+    <ul class="findings" id="findings"></ul>
+  </section>
+
+  <section class="card">
+    <h2>Cumulative pips</h2>
+    <div class="legend">
+      <span><span class="sw" style="background:var(--series-2)"></span>Site claim</span>
+      <span><span class="sw" style="background:var(--series-1)"></span>Replay (order at stated entry, fixed SL/TP)</span>
+    </div>
+    <div class="chart-wrap" id="chartWrap"><svg id="chart" width="100%" height="300" role="img" aria-label="Cumulative pips: site claim versus replay"></svg><div class="tip" id="tip"></div></div>
+  </section>
+
+  <div class="grid2">
+    <section class="card">
+      <h2>Per-signal agreement</h2>
+      <div class="matrix" id="matrix"></div>
+      <p class="muted" style="font-size:12px;margin:10px 0 0">Rows: what the site reports. Columns: what the replay shows.</p>
+    </section>
+    <section class="card">
+      <h2>Fill models</h2>
+      <div class="tbl-wrap"><table id="models"></table></div>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>By month</h2>
+    <div class="tbl-wrap"><table id="monthly"></table></div>
+  </section>
+
+  <section class="card">
+    <h2>Signals</h2>
+    <div class="filters">
+      <button data-f="all" aria-pressed="true">All</button>
+      <button data-f="disputed" aria-pressed="false">Site win, replay loss</button>
+      <button data-f="agree" aria-pressed="false">Agree</button>
+      <span class="spacer"></span>
+      <input type="search" id="q" placeholder="Filter id / side / date">
+    </div>
+    <div class="tbl-wrap"><table id="signals"></table></div>
+  </section>
+
+  <footer id="foot"></footer>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const fmt = (n, d = 0) => (n == null || isNaN(n)) ? "—" : Number(n).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+const sgn = (n, d = 0) => (n > 0 ? "+" : n < 0 ? "−" : "") + fmt(Math.abs(n), d);
+const pct = n => fmt(n * 100, 1) + "%";
+const ago = iso => { if (!iso) return "never"; const s = (Date.now() - Date.parse(iso)) / 1000;
+  return s < 90 ? Math.round(s) + "s ago" : s < 5400 ? Math.round(s / 60) + "m ago" : s < 172800 ? Math.round(s / 3600) + "h ago" : Math.round(s / 86400) + "d ago"; };
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const utc = iso => iso ? iso.replace("T", " ").slice(0, 16) : "";
+
+let S = null, filter = "all";
+
+function pill(el, cls, text) { el.querySelector(".dot").className = "dot " + cls; el.lastElementChild.textContent = text; }
+
+function renderStatus(st) {
+  const w = st.watcher;
+  if (!w) pill($("#watchPill"), "", "watcher: not running");
+  else {
+    const age = (Date.now() - Date.parse(w.last_poll_utc)) / 1000;
+    if (!w.ok) pill($("#watchPill"), "bad", "watcher: error " + ago(w.last_poll_utc));
+    else if (age > 300) pill($("#watchPill"), "warn", "watcher: stale, last poll " + ago(w.last_poll_utc));
+    else pill($("#watchPill"), "good", "watcher: live, polled " + ago(w.last_poll_utc));
+    $("#watchPill").title = w.last_error || "";
+  }
+  const r = st.refresh, sm = st.summary;
+  if (r.running) pill($("#refreshPill"), "warn", "backtest: running…");
+  else if (r.ok === false) pill($("#refreshPill"), "bad", "backtest: refresh failed");
+  else pill($("#refreshPill"), sm ? "good" : "", "backtest: " + (sm ? "built " + ago(sm.generated_utc) : "none yet"));
+  $("#refreshPill").title = r.log || "";
+}
+
+function renderActive(st) {
+  const a = st.active;
+  if (!a.length) { $("#active").innerHTML = `<div class="empty">No active signal${st.watcher ? "" : " (watcher not running)"}.</div>`; return; }
+  $("#active").innerHTML = a.map(s => `
+    <div style="margin-bottom:12px">
+      <div class="sig"><span class="side">${esc(s.side)}</span><b>${esc(s.pair)}</b></div>
+      <div class="levels">
+        <div><span>Entry</span><b>${s.entry ? fmt(s.entry, 2) : "—"}</b></div>
+        <div><span>Stop</span><b>${s.stop ? fmt(s.stop, 2) : "—"}</b></div>
+        <div><span>Target</span><b>${s.target ? fmt(s.target, 2) : "—"}</b></div>
+        <div><span>Risk</span><b>${s.entry && s.stop ? fmt(Math.abs(s.entry - s.stop) * 10) + " p" : "—"}</b></div>
+      </div>
+      <div class="muted" style="font-size:12px;margin-top:6px">${esc(s.id)}</div>
+    </div>`).join("");
+}
+
+function renderFeed(st) {
+  const ev = st.events.filter(e => e.kind !== "new" || e.lag_s < 6 * 3600).slice(0, 60);
+  if (!ev.length) { $("#feed").innerHTML = `<li class="empty">No live events yet. History back-fill is recorded quietly.</li>`; return; }
+  $("#feed").innerHTML = ev.map(e => `<li><span class="muted mono" style="font-size:12px">${esc(utc(e.seen_utc).slice(5))}</span>
+    <span><b>${esc(e.kind)}</b> ${esc(e.side)} ${esc(e.pair)} · ${e.entry ? fmt(e.entry, 2) : "—"} / SL ${e.stop ? fmt(e.stop, 2) : "—"} / TP ${e.target ? fmt(e.target, 2) : "—"}
+    · ${esc(e.status)}${e.result ? " " + sgn(e.result) + " p" : ""} <span class="muted">· seen ${fmt(e.lag_s / 60)} min after post</span></span></li>`).join("");
+}
+
+function renderComparison(sm) {
+  const site = sm.site_tested, rep = sm.models[sm.primary_model || "touch_fixed"], a = sm.accounting, d = sm.disputed || {};
+  $("#vs").innerHTML = `
+    <div><div class="lab"><span class="sw" style="background:var(--series-2)"></span>Site claims</div>
+      <div class="stat"><div><span>Win rate</span><b>${pct(site.win_rate)}</b></div><div><span>Net pips</span><b>${sgn(site.net_pips)}</b></div>
+      <div><span>Signals</span><b>${site.n}</b></div></div></div>
+    <div><div class="lab"><span class="sw" style="background:var(--series-1)"></span>Replay on M1 bid + $${fmt(sm.spread_usd, 2)} spread</div>
+      <div class="stat"><div><span>Win rate</span><b>${pct(rep.win_rate)}</b></div><div><span>Net pips</span><b>${sgn(rep.net_pips)}</b></div>
+      <div><span>Per trade</span><b>${sgn(rep.mean_R, 2)}R</b></div></div>
+      <div class="muted" style="font-size:12px;margin-top:6px">t = ${fmt(rep.t_stat, 2)} · ${rep.n} trades · ${sgn(rep.sum_R, 1)}R total</div></div>`;
+  $("#findings").innerHTML = [
+    `<b>Losses are booked at ${a.site_loss_pips} pips</b> in the site's net-pips total, but the median posted stop is <b>${fmt(a.median_stop_pips)} pips</b> away. Every real stop-out costs about ${fmt(a.median_stop_pips / -a.site_loss_pips, 1)}× what the site counts.`,
+    `<b>${d.n ?? "—"} signals the site calls winners hit their stop first</b> in the replay (median ${fmt(d.median_minutes_to_stop)} min after entry). In <b>${d.tp_after_stop ?? "—"}</b> of them price reached the target only after the stop.`,
+    `<b>${a.wins_claiming_beyond_target} of ${a.wins_total} claimed wins</b> report more pips than the posted target allows (median claim ${fmt(a.median_claimed_win_pips)} pips vs median target ${fmt(a.median_target_pips)} pips).`,
+    `<b>${sm.past_level_at_post}</b> signals were timestamped after price had already traded through their stop or target, so the app's post time can lag the original call.`,
+  ].map(x => `<li>${x}</li>`).join("");
+}
+
+function renderChart(sm) {
+  const svg = $("#chart"), wrap = $("#chartWrap"), tip = $("#tip");
+  const site = sm.curves.site, rep = sm.curves[sm.primary_model || "touch_fixed"];
+  const n = Math.min(site.length, rep.length);
+  if (!n) { svg.innerHTML = ""; return; }
+  const W = wrap.clientWidth, H = 300, m = { l: 56, r: 14, t: 10, b: 26 };
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const cs = [], cr = []; let a = 0, b = 0;
+  for (let i = 0; i < n; i++) { a += site[i][1]; b += rep[i][1]; cs.push(a); cr.push(b); }
+  const ts = site.slice(0, n).map(p => Date.parse(p[0].replace(" ", "T") + "Z"));
+  const t0 = ts[0], t1 = ts[n - 1];
+  const ymin = Math.min(0, ...cs, ...cr), ymax = Math.max(...cs, ...cr);
+  const step = niceStep((ymax - ymin) / 5), y0 = Math.floor(ymin / step) * step, y1 = Math.ceil(ymax / step) * step;
+  const X = t => m.l + (t - t0) / (t1 - t0 || 1) * (W - m.l - m.r), Y = v => m.t + (y1 - v) / (y1 - y0) * (H - m.t - m.b);
+  let g = "";
+  for (let v = y0; v <= y1 + 1e-9; v += step) g += `<line x1="${m.l}" x2="${W - m.r}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--grid)" stroke-width="1"${v === 0 ? ' stroke-dasharray="0"' : ""}/><text x="${m.l - 8}" y="${Y(v) + 4}" text-anchor="end">${sgn(v)}</text>`;
+  const d0 = new Date(t0); d0.setUTCDate(1); d0.setUTCHours(0, 0, 0, 0);
+  for (let d = new Date(d0); d.getTime() <= t1; d.setUTCMonth(d.getUTCMonth() + 1)) {
+    if (d.getTime() < t0) continue;
+    g += `<text x="${X(d.getTime())}" y="${H - 8}" text-anchor="middle">${d.toLocaleString("en-US", { month: "short", timeZone: "UTC" })}</text>`;
+  }
+  const path = arr => arr.map((v, i) => `${i ? "L" : "M"}${X(ts[i]).toFixed(1)},${Y(v).toFixed(1)}`).join("");
+  svg.innerHTML = g +
+    `<path d="${path(cs)}" fill="none" stroke="var(--series-2)" stroke-width="2" stroke-linejoin="round"/>` +
+    `<path d="${path(cr)}" fill="none" stroke="var(--series-1)" stroke-width="2" stroke-linejoin="round"/>` +
+    `<text x="${X(t1) - 4}" y="${Y(cs[n - 1]) - 8}" text-anchor="end" style="fill:var(--text-secondary)">${sgn(cs[n - 1])}</text>` +
+    `<text x="${X(t1) - 4}" y="${Y(cr[n - 1]) - 8}" text-anchor="end" style="fill:var(--text-secondary)">${sgn(cr[n - 1])}</text>` +
+    `<line id="xh" y1="${m.t}" y2="${H - m.b}" stroke="var(--text-muted)" stroke-width="1" visibility="hidden"/>` +
+    `<circle id="h1" r="5" fill="var(--series-2)" stroke="var(--surface-1)" stroke-width="2" visibility="hidden"/>` +
+    `<circle id="h2" r="5" fill="var(--series-1)" stroke="var(--surface-1)" stroke-width="2" visibility="hidden"/>` +
+    `<rect x="${m.l}" y="0" width="${W - m.l - m.r}" height="${H}" fill="transparent" id="hit"/>`;
+  const rows = sm.signals.slice().reverse();
+  const hit = svg.querySelector("#hit");
+  const show = ev => {
+    const r = svg.getBoundingClientRect(), x = ev.clientX - r.left;
+    let i = 0, best = Infinity;
+    for (let k = 0; k < n; k++) { const dx = Math.abs(X(ts[k]) - x); if (dx < best) { best = dx; i = k; } }
+    const px = X(ts[i]);
+    svg.querySelector("#xh").setAttribute("x1", px); svg.querySelector("#xh").setAttribute("x2", px);
+    svg.querySelector("#xh").setAttribute("visibility", "visible");
+    for (const [id, arr] of [["#h1", cs], ["#h2", cr]]) { const c = svg.querySelector(id); c.setAttribute("cx", px); c.setAttribute("cy", Y(arr[i])); c.setAttribute("visibility", "visible"); }
+    const s = rows[i] || {};
+    tip.innerHTML = `<div style="font-weight:600;margin-bottom:4px">${esc(utc(site[i][0]))} · ${esc(s.side || "")} ${esc(s.id || "")}</div>
+      <div class="row"><span class="k"><span class="sw" style="background:var(--series-2)"></span>Site</span><span class="mono">${sgn(cs[i])} <span class="muted">(${sgn(site[i][1])})</span></span></div>
+      <div class="row"><span class="k"><span class="sw" style="background:var(--series-1)"></span>Replay</span><span class="mono">${sgn(cr[i])} <span class="muted">(${sgn(rep[i][1])})</span></span></div>`;
+    tip.style.display = "block";
+    const tw = tip.offsetWidth; tip.style.left = Math.min(Math.max(px + 12, 0), W - tw - 4) + "px"; tip.style.top = "8px";
+    if (px + 12 + tw > W) tip.style.left = Math.max(px - tw - 12, 0) + "px";
+  };
+  const hide = () => { tip.style.display = "none"; ["#xh", "#h1", "#h2"].forEach(id => svg.querySelector(id).setAttribute("visibility", "hidden")); };
+  hit.addEventListener("pointermove", show); hit.addEventListener("pointerleave", hide);
+}
+function niceStep(raw) { const p = Math.pow(10, Math.floor(Math.log10(raw || 1))), f = raw / p; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * p; }
+
+function renderMatrix(sm) {
+  const g = sm.agreement;
+  $("#matrix").innerHTML = `<div class="h"></div><div class="h">Replay win</div><div class="h">Replay loss</div>
+    <div class="h" style="text-align:left">Site win</div><div><b>${g.site_win_bt_win}</b>agree</div><div class="hl"><b>${g.site_win_bt_loss}</b>disputed</div>
+    <div class="h" style="text-align:left">Site loss</div><div><b>${g.site_loss_bt_win}</b></div><div><b>${g.site_loss_bt_loss}</b>agree</div>`;
+}
+
+function renderModels(sm) {
+  const keys = ["touch_fixed", "touch_be1r", "market_fixed", "market_be1r"];
+  $("#models").innerHTML = `<thead><tr><th>Model</th><th>n</th><th>Win</th><th>R / trade</th><th>t</th><th>Pips</th></tr></thead><tbody>` +
+    keys.filter(k => sm.models[k]).map(k => { const x = sm.models[k]; return `<tr><td class="l">${esc(x.label)}${k === sm.primary_model ? " ★" : ""}</td>
+      <td>${x.n}</td><td>${pct(x.win_rate)}</td><td>${sgn(x.mean_R, 2)}</td><td>${fmt(x.t_stat, 2)}</td><td>${sgn(x.net_pips)}</td></tr>`; }).join("") + "</tbody>";
+}
+
+function renderMonthly(sm) {
+  $("#monthly").innerHTML = `<thead><tr><th>Month</th><th>Signals</th><th>Site win</th><th>Replay win</th><th>Site pips</th><th>Replay pips</th><th>Replay R</th></tr></thead><tbody>` +
+    sm.monthly.map(r => `<tr><td>${r.month}</td><td>${r.n}</td><td>${pct(r.site_win_rate)}</td><td>${pct(r.bt_win_rate)}</td>
+      <td>${sgn(r.site_pips)}</td><td>${sgn(r.bt_pips)}</td><td>${sgn(r.bt_R, 1)}</td></tr>`).join("") + "</tbody>";
+}
+
+function renderSignals(sm) {
+  const q = $("#q").value.trim().toLowerCase();
+  let rows = sm.signals;
+  if (filter === "disputed") rows = rows.filter(r => r.site === "WIN" && r.bt_R <= 0);
+  if (filter === "agree") rows = rows.filter(r => (r.site === "WIN") === (r.bt_R > 0));
+  if (q) rows = rows.filter(r => (r.id + " " + r.side + " " + r.posted).toLowerCase().includes(q));
+  $("#signals").innerHTML = `<thead><tr><th>Posted (UTC)</th><th class="l">Id</th><th class="l">Side</th><th>Entry</th><th>Stop</th><th>Target</th><th>Risk p</th>
+    <th class="l">Site</th><th>Site p</th><th class="l">Replay</th><th>Replay p</th><th>R</th></tr></thead><tbody>` +
+    rows.map(r => `<tr><td class="mono">${esc(utc(r.posted))}</td><td class="l mono">${esc(r.id)}</td><td class="l">${esc(r.side)}</td>
+      <td class="mono">${fmt(r.entry, 2)}</td><td class="mono">${fmt(r.stop, 2)}</td><td class="mono">${fmt(r.target, 2)}</td><td>${r.risk_pips}</td>
+      <td class="l"><span class="tag ${r.site === "WIN" ? "win" : "loss"}">${r.site}</span></td><td>${sgn(r.site_pips)}</td>
+      <td class="l"><span class="tag ${r.bt_R > 0 ? "win" : "loss"}">${esc(r.bt)}</span></td><td>${sgn(r.bt_pips)}</td><td>${sgn(r.bt_R, 2)}</td></tr>`).join("") +
+    (rows.length ? "" : `<tr><td colspan="12" class="l muted">No signals match.</td></tr>`) + "</tbody>";
+}
+
+function renderFoot(sm) {
+  const un = sm.untested || [];
+  $("#foot").innerHTML = `Signals ${esc(utc(sm.signals_range[0]))} → ${esc(utc(sm.signals_range[1]))} UTC · price data ${esc(utc(sm.bars_range[0]))} → ${esc(utc(sm.bars_range[1]))} UTC (HistData M1 bid, EST+5h).
+    ${un.length ? `<br>${un.length} closed signal(s) after the data end are not replayed: ${un.map(u => esc(u.id)).join(", ")}.` : ""}
+    ${sm.data_notes.length ? `<br>Data fixes: ${sm.data_notes.map(esc).join("; ")}.` : ""}
+    <br>Same-bar stop+target counts as a stop. Max hold 5 days. Pips = $0.10. Site pips per signal = posted result for wins, ${sm.accounting.site_loss_pips} for losses (reproduces the site's own net-pips figure).`;
+}
+
+let lastSummaryAt = null;
+async function load() {
+  try {
+    const st = await (await fetch("api/state", { cache: "no-store" })).json();
+    S = st;
+    renderStatus(st); renderActive(st); renderFeed(st);
+    if (st.summary && st.summary.generated_utc !== lastSummaryAt) {
+      lastSummaryAt = st.summary.generated_utc;
+      const sm = st.summary;
+      renderComparison(sm); renderChart(sm); renderMatrix(sm); renderModels(sm); renderMonthly(sm); renderSignals(sm); renderFoot(sm);
+    }
+  } catch (e) { pill($("#watchPill"), "bad", "UI: cannot reach server"); }
+}
+document.querySelectorAll("[data-f]").forEach(b => b.addEventListener("click", () => {
+  filter = b.dataset.f; document.querySelectorAll("[data-f]").forEach(x => x.setAttribute("aria-pressed", x === b)); if (S?.summary) renderSignals(S.summary);
+}));
+$("#q").addEventListener("input", () => S?.summary && renderSignals(S.summary));
+$("#btnRefresh").addEventListener("click", async () => { await fetch("api/refresh", { method: "POST" }); setTimeout(load, 800); });
+let rz, lastW = 0;
+new ResizeObserver(() => { const w = $("#chartWrap").clientWidth; if (w === lastW) return; lastW = w;
+  clearTimeout(rz); rz = setTimeout(() => S?.summary && renderChart(S.summary), 120); }).observe($("#chartWrap"));
+load(); setInterval(load, 15000);
+</script>
+</body>
+</html>
