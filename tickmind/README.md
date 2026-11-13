@@ -62,6 +62,21 @@ The browser session is saved in `state/session.json`, so the watcher only signs 
 again when that session expires. `lag_s` in each event is the time between the site's
 `postedAt` and when the watcher saw it.
 
+### Amazon Linux 2023 (the jito FRA VM)
+
+`playwright install --with-deps` only knows apt, so on AL2023:
+
+```bash
+python3.12 -m venv .venv && .venv/bin/pip install pandas numpy playwright
+sudo dnf install -y libatomic nss atk at-spi2-atk cups-libs libdrm libxkbcommon libXcomposite \
+  libXdamage libXrandr libXfixes mesa-libgbm pango alsa-lib
+.venv/bin/playwright install chromium
+```
+
+Deployed 2026-11-13 on `ec2-user@ec2-3-65-33-160` in `~/tickmind` (systemd `tickmind-watch`,
+`tickmind-ui`; data in `~/data/XAUUSD`). Without `TICKMIND_EMAIL`/`TICKMIND_PASSWORD` the watcher
+runs **API-only**: new signals, closes and results are caught, but active entry/stop/target stay 0.
+
 ## Monitoring UI (for cloudflared)
 
 `ui_server.py` is stdlib-only and serves one page on `127.0.0.1:8077`. The page shows:

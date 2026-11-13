@@ -199,8 +199,9 @@ function renderStatus(st) {
     const age = (Date.now() - Date.parse(w.last_poll_utc)) / 1000;
     if (!w.ok) pill($("#watchPill"), "bad", "watcher: error " + ago(w.last_poll_utc));
     else if (age > 300) pill($("#watchPill"), "warn", "watcher: stale, last poll " + ago(w.last_poll_utc));
+    else if (w.signed_in === false) pill($("#watchPill"), "warn", "watcher: live, API only (not signed in), polled " + ago(w.last_poll_utc));
     else pill($("#watchPill"), "good", "watcher: live, polled " + ago(w.last_poll_utc));
-    $("#watchPill").title = w.last_error || "";
+    $("#watchPill").title = w.last_error || (w.signed_in === false ? "Set TICKMIND_EMAIL / TICKMIND_PASSWORD in tickmind.env to read active entry/stop/target" : "");
   }
   const r = st.refresh, sm = st.summary;
   if (r.running) pill($("#refreshPill"), "warn", "backtest: running…");
@@ -216,6 +217,7 @@ function renderActive(st) {
     <div style="margin-bottom:12px">
       <div class="sig"><span class="side">${esc(s.side)}</span><b>${esc(s.pair)}</b></div>
       <div class="levels">
+        ${s.entry ? "" : `<div class="muted" style="font-size:12px;flex-basis:100%">Levels are hidden by the site until the watcher is signed in.</div>`}
         <div><span>Entry</span><b>${s.entry ? fmt(s.entry, 2) : "—"}</b></div>
         <div><span>Stop</span><b>${s.stop ? fmt(s.stop, 2) : "—"}</b></div>
         <div><span>Target</span><b>${s.target ? fmt(s.target, 2) : "—"}</b></div>

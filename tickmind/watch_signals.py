@@ -11,7 +11,9 @@ Every event is appended to state/events.jsonl with our own `seen_utc`, so the
 delay between the site's postedAt and when we saw it is measurable.
 
 Env:
-  TICKMIND_EMAIL, TICKMIND_PASSWORD   sign-in (only used when the saved session expires)
+  TICKMIND_EMAIL, TICKMIND_PASSWORD   sign-in (only used when the saved session expires).
+                                      Unset = API-only mode: new signals, closes and results
+                                      are still caught; active entry/stop/target show as 0.
   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID  optional Telegram delivery
   NTFY_URL                            optional, e.g. https://ntfy.sh/<your-topic>
   POLL_SECONDS                        default 30
@@ -64,42 +66,66 @@ def notify(text: str) -> None:
         print(f"notify failed: {e}", file=sys.stderr)
 
 
-def login(page) -> None:
-    email, pw = os.environ.get("TICKMIND_EMAIL"), os.environ.get("TICKMIND_PASSWORD")
-    if not (email and pw):
-        raise SystemExit("session expired and TICKMIND_EMAIL / TICKMIND_PASSWORD not set")
-    page.goto(f"{BASE}/login", wait_until="networkidle")
-    page.fill('input[type="email"]', email)
-    page.fill('input[type="password"]', pw)
+def have_creds() -> bool:
+    return bool(os.environ.get("TICKMIND_EMAIL") and os.environ.get("TICKMIND_PASSWORD"))
+
+
+def login(page) -> bool:
+    """Sign in with env credentials. Returns False (API-only mode) when none are set."""
+    if not have_creds():
+        return False
+    page.goto(f"{BASE}/login", wait_until="domcontentloaded")
+    page.wait_for_selector('input[type="email"]', timeout=20_000)
+    page.fill('input[type="email"]', os.environ["TICKMIND_EMAIL"])
+    page.fill('input[type="password"]', os.environ["TICKMIND_PASSWORD"])
     page.click('form button[type="submit"]')
     page.wait_for_url(lambda u: "/login" not in u, timeout=20_000)
     page.context.storage_state(path=str(SESSION))
+    return True
 
 
-def active_cards(page) -> dict[tuple[str, str], dict]:
-    """Active signal levels from the signed-in home page, keyed by (pair, side)."""
+def open_home(page) -> None:
+    """Load the home page. The app polls continuously, so wait for content, not network idle."""
+    page.goto(BASE + "/", wait_until="domcontentloaded")
+    try:
+        page.wait_for_selector('article, input[type="email"]', timeout=15_000)
+        page.wait_for_timeout(1_500)   # let the signal cards hydrate
+    except PWTimeout:
+        pass
+
+
+def active_cards(page) -> tuple[dict[tuple[str, str], dict], bool]:
+    """Active signal levels from the signed-in home page, keyed by (pair, side).
+
+    Returns ({}, False) in API-only mode: no saved session and no credentials.
+    """
+    if not (SESSION.exists() or have_creds()):
+        return {}, False
+    open_home(page)
     if "/login" in page.url:
-        login(page)
-    page.goto(BASE + "/", wait_until="networkidle")
-    if "/login" in page.url:
-        login(page)
-        page.goto(BASE + "/", wait_until="networkidle")
+        if not login(page):
+            return {}, False
+        open_home(page)
     out = {}
     for txt in page.locator("article").all_inner_texts():
         m = CARD_RE.search(txt)
         if m:
             d = {k: float(m[k].replace(",", "")) for k in ("entry", "stop", "target")}
             out[(m["pair"], m["side"])] = d
-    return out
+    return out, True
 
 
-def poll(page, seen: dict) -> dict:
+def poll(page, seen: dict) -> tuple[dict, bool]:
     api = page.request.get(f"{BASE}/api/signals").json()["signals"]
-    cards = active_cards(page)
+    cards, signed_in = active_cards(page)
     for s in api:
-        if s["status"] == "active" and (s["pair"], s["side"]) in cards:
-            s.update(cards[(s["pair"], s["side"])])
         key = s["id"]
+        if s["status"] == "active":
+            if (s["pair"], s["side"]) in cards:
+                s.update(cards[(s["pair"], s["side"])])
+            elif not s.get("entry") and seen.get(key, {}).get("entry"):
+                # API masks active levels: keep the ones we already have instead of flapping to 0
+                s.update({k: seen[key][k] for k in ("entry", "stop", "target")})
         sig = {k: s.get(k) for k in ("pair", "side", "entry", "stop", "target", "status", "result")}
         prev = seen.get(key)
         if prev == sig:
@@ -115,12 +141,14 @@ def poll(page, seen: dict) -> dict:
         notify(f"{kind.upper()} {sig['pair']} {sig['side']} entry {sig['entry']} "
                f"SL {sig['stop']} TP {sig['target']} [{sig['status']}"
                f"{' ' + str(sig['result']) + ' pips' if sig.get('result') else ''}] lag {lag:.0f}s")
-    return seen
+    return seen, signed_in
 
 
-def heartbeat(ok: bool, err: str | None = None, active: int = 0) -> None:
+def heartbeat(ok: bool, err: str | None = None, active: int = 0, signed_in: bool | None = None) -> None:
     prev = json.loads(STATUS.read_text()) if STATUS.exists() else {}
     prev.update({"last_poll_utc": now(), "ok": ok, "active_cards": active})
+    if signed_in is not None:
+        prev["signed_in"] = signed_in
     if ok:
         prev["last_ok_utc"] = prev["last_poll_utc"]
         prev.pop("last_error", None)
@@ -142,10 +170,12 @@ def main() -> None:
         page = ctx.new_page()
         while True:
             try:
-                seen = poll(page, seen)
+                seen, signed_in = poll(page, seen)
                 SEEN.write_text(json.dumps(seen))
-                ctx.storage_state(path=str(SESSION))
-                heartbeat(True, active=sum(v["status"] == "active" for v in seen.values()))
+                if signed_in:
+                    ctx.storage_state(path=str(SESSION))
+                heartbeat(True, active=sum(v["status"] == "active" for v in seen.values()),
+                          signed_in=signed_in)
             except (PWTimeout, Exception) as e:
                 print(f"[{now()}] poll error: {e}", file=sys.stderr, flush=True)
                 heartbeat(False, str(e))
