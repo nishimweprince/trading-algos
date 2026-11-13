@@ -21,6 +21,9 @@ WEEKDAYS = frozenset({0, 1, 2, 3, 4})
 DEFAULT_SESSION_SPECS: dict[str, str] = {
     "tokyo": "Asia/Tokyo:09:00-18:00",
     "new_york": "America/New_York:08:00-17:00",
+    # ICT killzones, for STRATEGY=ipda (the model also gates on them internally).
+    "london_kz": "America/New_York:02:00-05:00",
+    "ny_am_kz": "America/New_York:07:00-10:00",
 }
 
 

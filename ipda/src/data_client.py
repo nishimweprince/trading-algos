@@ -59,6 +59,23 @@ class MarketDataClient:
             for bar in bars
         ]
 
+    async def fetch_daily_candles(self, quote: str, count: int) -> list[Candle]:
+        """Closed D1 bars, start-stamped. Seeds the IPDA data range at startup."""
+        bars = await self._service.candles(quote, Timeframe.D1, count=count)
+        day = timedelta(minutes=TIMEFRAME_MINUTES[Timeframe.D1])
+        return [
+            Candle(
+                start=bar.ts - day,
+                open=bar.open,
+                high=bar.high,
+                low=bar.low,
+                close=bar.close,
+                volume=bar.volume,
+                closed=True,
+            )
+            for bar in bars
+        ]
+
     async def fetch_tick(self, quote: str) -> Tick:
         """Current bid/ask. A provider that does not quote both sides is an error
         here, not a guess: break-even tracking compares against the real side."""

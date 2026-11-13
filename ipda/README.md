@@ -48,6 +48,31 @@ service refuses to start otherwise. `RISK_REWARD` is inert.
 
 No confluence overlays (Range Filter, SuperIchi, TBO, etc.) and no vetoes.
 
+### `STRATEGY=ipda` — the ICT IPDA model (opt-in, research)
+
+`STRATEGY=reversal` (the default above) is RSI, not IPDA. `STRATEGY=ipda` runs
+[`src/ipda_model.py`](src/ipda_model.py): a 20-day IPDA data range with premium/discount,
+Asian-range and previous-day liquidity, a sweep inside the London (02–05 NY) or NY AM
+(07–10 NY) killzone, a 3M fractal structure shift, and a **limit order** at the displacement
+FVG's midpoint with the stop beyond the sweep, a 2R target and expiry at the killzone end.
+Rules, live wiring and the pre-registered backtest verdict (**FAIL**, −0.136R/trade in and
+out of sample) are in [docs/ipda-model.md](docs/ipda-model.md). It needs `DATA_LOOKBACK>=1440`
+and D1 candles from market-data-service; the break-even advisory does not track its orders.
+
+```bash
+STRATEGY=ipda
+DATA_LOOKBACK=1440
+TRADING_SESSIONS=            # killzones gate inside the model
+IPDA_RANGE_DAYS=20
+IPDA_PD_FILTER=true
+IPDA_KILLZONES=london,ny_am
+IPDA_RISK_REWARD=2.0
+IPDA_TARGET=rr               # or liquidity
+IPDA_STOP_BUFFER_PIPS=0
+IPDA_MIN_RISK_PIPS=10
+IPDA_MAX_RISK_PIPS=150
+```
+
 ### The other trigger: IPDA Supertrend (`file.txt` Section 5)
 
 The ▲/▼ Supertrend×SMA entry is also ported and tested, but **is not what fires an
@@ -255,6 +280,8 @@ pytest
 | `file.txt`                                  | Full IPDA Pine v5 indicator                             |
 | `src/`                                      | Signal service modules (installed / imported as `ipda`) |
 | `src/sessions.py`                           | Exchange-local, DST-aware session windows               |
+| `src/ipda_model.py`                         | ICT IPDA model (`STRATEGY=ipda`), shared with the backtest |
+| `backtest/`                                 | XAUUSD M1 backtests + HTML report ([README](backtest/README.md)) |
 | `src/notifier.py`                           | notification-service client                             |
 | `src/position_tracker.py`                   | MFE watcher for the break-even advisory                 |
 | `.env.example.forex` / `.env.example.deriv` / `.env.example.ftmo` | Profile templates                    |
