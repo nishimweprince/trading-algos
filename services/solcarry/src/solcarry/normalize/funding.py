@@ -74,8 +74,49 @@ def binance_hourly(raw: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def hyperliquid_hourly(raw: pd.DataFrame, settle_hours: int = 24) -> pd.DataFrame:
+    """Hyperliquid fundingHistory -> hourly ``f_h`` (fraction per hour, short receives +).
+
+    The first weeks of history (May 2023) are 8-hourly snapshots whose period is
+    ambiguous; everything before the first run of ``settle_hours`` consecutive hourly
+    prints is dropped so only the regular hourly regime is used.
+    """
+    cols = ["f_h", "premium", "n_records"]
+    if raw.empty:
+        return pd.DataFrame(columns=cols, index=pd.DatetimeIndex([], tz="UTC", name="ts"))
+    df = raw.copy()
+    df["hour"] = pd.to_datetime(df["time"].astype("int64"), unit="ms", utc=True).dt.floor("h")
+    df = df.sort_values("hour").reset_index(drop=True)
+    hourly_step = df["hour"].diff().eq(pd.Timedelta(hours=1)).to_numpy()
+    start = 0
+    run = 0
+    for i, ok in enumerate(hourly_step):
+        run = run + 1 if ok else 0
+        if run >= settle_hours:
+            start = i - settle_hours
+            break
+    df = df.iloc[start:]
+    g = df.groupby("hour")
+    out = pd.DataFrame(
+        {
+            "f_h": g["fundingRate"].sum(),
+            "premium": g["premium"].mean(),
+            "n_records": g.size(),
+        }
+    )
+    out.index.name = "ts"
+    return out
+
+
 def annualize(f_h: pd.Series) -> pd.Series:
     return f_h * HOURS_PER_YEAR
 
 
-__all__ = ["HOUR", "HOURS_PER_YEAR", "annualize", "binance_hourly", "velocity_hourly"]
+__all__ = [
+    "HOUR",
+    "HOURS_PER_YEAR",
+    "annualize",
+    "binance_hourly",
+    "hyperliquid_hourly",
+    "velocity_hourly",
+]

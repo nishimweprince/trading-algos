@@ -25,13 +25,14 @@ from .normalize.funding import HOURS_PER_YEAR
 from .sources.binance_vision import BinanceVision
 from .sources.defillama import DefiLlama
 from .sources.fred import Fred
+from .sources.hyperliquid import Hyperliquid
 from .sources.jupiter import Jupiter
 from .sources.okx import Okx
 from .sources.velocity import Velocity
 from .validate import ValidationResult, run_validation
 
 log = logging.getLogger(__name__)
-SOURCES = ("velocity", "binance", "defillama", "fred", "jupiter", "okx")
+SOURCES = ("velocity", "binance", "hyperliquid", "defillama", "fred", "jupiter", "okx")
 
 
 def _json_default(o: Any) -> Any:
@@ -104,6 +105,8 @@ def fetch(cfg: Config, paths: Paths, source: str = "all") -> dict[str, Any]:
                 out[s] = {
                     k: len(v) for k, v in BinanceVision(cfg, http, paths.raw).sync_all().items()
                 }
+            elif s == "hyperliquid":
+                out[s] = Hyperliquid(cfg, http, paths.raw).sync()
             elif s == "defillama":
                 out[s] = DefiLlama(cfg, http, paths.raw).sync()
             elif s == "fred":
@@ -169,30 +172,30 @@ def analyze(
         return runups.q_alpha(rtab, T, a)
 
     # Funding diagnostics ----------------------------------------------------
-    diag = [
-        carry_perp.funding_diagnostics(
-            t.funding_velocity.get("f_h", pd.Series(dtype=float)), "velocity"
-        ),
-        carry_perp.funding_diagnostics(
-            t.funding_binance.get("f_h", pd.Series(dtype=float)), "binance"
-        ),
-    ]
-    fv_ann = t.funding_velocity.get("f_h", pd.Series(dtype=float)) * HOURS_PER_YEAR
-    if not fv_ann.dropna().empty:
-        floor = cfg.velocity.funding_floor_annual
-        diag[0]["share_at_floor"] = float(((fv_ann.dropna() - floor).abs() <= 1e-4).mean())
+    funding_tables = {
+        "velocity": t.funding_velocity,
+        "binance": t.funding_binance,
+        "hyperliquid": t.funding_hyperliquid,
+    }
+    diag = []
+    daily: dict[str, pd.Series] = {}
+    floor = cfg.velocity.funding_floor_annual
+    for name, ft in funding_tables.items():
+        f_h = ft["f_h"] if "f_h" in ft.columns else pd.Series(dtype=float)
+        dg = carry_perp.funding_diagnostics(f_h, name)
+        ann = (f_h * HOURS_PER_YEAR).dropna()
+        if name != "binance" and not ann.empty:
+            # Velocity and Hyperliquid both have a 0.01%/8h interest baseline (10.95%/yr).
+            dg["share_at_floor"] = float(((ann - floor).abs() <= 1e-4).mean())
+        diag.append(dg)
+        daily[name] = (
+            (f_h * HOURS_PER_YEAR).resample("D").mean() if len(f_h) else pd.Series(dtype=float)
+        )
     pd.DataFrame(diag).to_csv(run_dir / "funding_diagnostics.csv", index=False)
 
-    fund_daily = pd.DataFrame(
-        {
-            "velocity": fv_ann.resample("D").mean() if not fv_ann.empty else pd.Series(dtype=float),
-            "binance": (t.funding_binance["f_h"] * HOURS_PER_YEAR).resample("D").mean()
-            if not t.funding_binance.empty
-            else pd.Series(dtype=float),
-        }
-    )
-    fund_daily["velocity_7d"] = fund_daily["velocity"].rolling(7, min_periods=3).mean()
-    fund_daily["binance_7d"] = fund_daily["binance"].rolling(7, min_periods=3).mean()
+    fund_daily = pd.DataFrame(daily)
+    for name in funding_tables:
+        fund_daily[f"{name}_7d"] = fund_daily[name].rolling(7, min_periods=3).mean()
     fund_daily.index.name = "ts"
     fund_daily.to_parquet(run_dir / "funding_daily.parquet")
 
@@ -201,15 +204,18 @@ def analyze(
 
     # Variant P ---------------------------------------------------------------
     pw, comps, regimes = [], [], []
+    gates: list[dict[str, Any]] = []
     for v in [x for x in variants if x in carry_perp.PERP_VARIANTS]:
         long, source = carry_perp.PERP_VARIANTS[v]
         T = cfg.windows.T_lst_h if long == "lst" else cfg.windows.T_native_h
-        funding = t.funding_velocity if source == "velocity" else t.funding_binance
+        funding = funding_tables[source]
         res = carry_perp.run_perp(
             cfg, v, funding, t.staking, t.hurdle, t.lending, t.spot["close"], q(T)
         )
         summaries[v] = res.summary
         reserves[v] = {"T_h": T, "q_runup": res.q_runup, "beta_P": res.beta, "k_P": res.k}
+        if res.summary.get("gated"):
+            gates.append({"variant": v, **res.summary["gating"]})
         if not res.windows.empty:
             pw.append(res.windows.assign(variant=v))
         if not res.regime.empty:
@@ -224,6 +230,7 @@ def analyze(
     (pd.concat(regimes, ignore_index=True) if regimes else pd.DataFrame()).to_csv(
         run_dir / "perp_regime.csv", index=False
     )
+    pd.DataFrame(gates).to_csv(run_dir / "perp_gating.csv", index=False)
     comp_df = pd.concat(comps) if comps else pd.DataFrame()
     comp_df.index.name = "ts"
     comp_df.to_parquet(run_dir / "perp_components_daily.parquet")
@@ -264,6 +271,7 @@ def analyze(
         "spot",
         "funding_velocity",
         "funding_binance",
+        "funding_hyperliquid",
         "index",
         "staking",
         "hurdle",

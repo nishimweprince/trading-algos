@@ -74,6 +74,24 @@ class Http:
 
         return _do()
 
+    def post_json(self, url: str, body: dict[str, Any]) -> httpx.Response:
+        """POST a JSON body with the same retry/backoff/concurrency rules as ``get``."""
+
+        @retry(
+            retry=retry_if_exception(_is_retryable),
+            stop=stop_after_attempt(self._max_attempts),
+            wait=wait_exponential(multiplier=0.5, max=self._backoff_max),
+            reraise=True,
+        )
+        def _do() -> httpx.Response:
+            with self._sem(url):
+                r = self.client.post(url, json=body)
+            if r.status_code in RETRY_STATUS:
+                raise RetryableStatus(r.status_code, url)
+            return r
+
+        return _do()
+
     def close(self) -> None:
         self.client.close()
 

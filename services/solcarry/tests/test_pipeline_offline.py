@@ -81,7 +81,10 @@ def _tables() -> Tables:
     expiry_1m = pd.DataFrame(
         columns=["ts", "symbol", "expiry_ts", "f_close", "f_volume", "i_close"]
     )
-    return Tables(spot, fv, vrec, fb, index, quarterly, staking, hurdle, lending, expiry_1m)
+    fhl = pd.DataFrame(
+        {"f_h": rng.normal(0.10, 0.08, n) / 8760, "premium": 0.0, "n_records": 1}, index=idx
+    )
+    return Tables(spot, fv, vrec, fb, index, quarterly, staking, hurdle, lending, expiry_1m, fhl)
 
 
 @respx.mock
@@ -116,6 +119,8 @@ def test_end_to_end(cfg, paths):
     g = pipeline.gate(cfg, paths, run, check_lock(cfg, paths.lock_file))
     status = {s["variant"]: s["status"] for s in g["scores"]}
     assert status["P-LST-VEL"] == "INSUFFICIENT_DATA"
+    assert status["P-LST-HL"] in ("PASS", "FAIL") and status["P-LST-HL-G"] in ("PASS", "FAIL")
+    assert out["summaries"]["P-LST-HL-G"]["gating"]["on_share"] > 0.5
     assert status["D1-BASIS"] in ("PASS", "FAIL")
     assert g["result"] in ("CONTINUE", "KILL") and not g["unlocked"]
 
@@ -126,6 +131,8 @@ def test_end_to_end(cfg, paths):
         assert (run / png).exists()
     ui = json.loads((run / "ui.json").read_text())
     assert ui["gate"]["result"] == g["result"] and ui["xw30"] and ui["basis"] and ui["cycles"]
+    assert ui["gating"] and "hyperliquid_7d" in ui["funding_daily"]
+    assert "Funding gate (*-G)" in text
     assert pipeline.resolve_run(paths, None) == run
 
 

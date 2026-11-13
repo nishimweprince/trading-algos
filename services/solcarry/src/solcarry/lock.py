@@ -1,4 +1,4 @@
-"""Pre-registration lock: hash of thresholds + variants + alpha."""
+"""Pre-registration lock: hash of thresholds + variants + alpha + gating rule."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ def preregistered_payload(cfg: Config) -> dict[str, Any]:
         "thresholds": cfg.thresholds.model_dump(mode="json"),
         "variants": list(cfg.variants),
         "alpha": list(cfg.windows.alpha),
+        "gating": cfg.gating.model_dump(mode="json"),
     }
 
 
@@ -54,7 +55,7 @@ def check_lock(cfg: Config, lock_file: Path) -> LockStatus:
         return LockStatus(
             False,
             "MISMATCH",
-            "thresholds/variants/alpha changed since lock "
+            "thresholds/variants/alpha/gating changed since lock "
             f"(lock {str(rec.get('hash'))[:12]} vs config {want[:12]})",
             rec.get("locked_at"),
         )

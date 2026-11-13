@@ -205,7 +205,15 @@ def check_convergence(
 
 def check_grid(tables: Tables, now: pd.Timestamp) -> Check:
     problems = []
-    for name in ("spot", "funding_velocity", "funding_binance", "index", "staking", "hurdle"):
+    for name in (
+        "spot",
+        "funding_velocity",
+        "funding_binance",
+        "funding_hyperliquid",
+        "index",
+        "staking",
+        "hurdle",
+    ):
         df: pd.DataFrame = getattr(tables, name)
         ix = df.index
         if len(ix) == 0:
@@ -233,6 +241,7 @@ def check_gaps(tables: Tables) -> Check:
         ("spot", "close"),
         ("funding_velocity", "f_h"),
         ("funding_binance", "f_h"),
+        ("funding_hyperliquid", "f_h"),
         ("index", "close"),
         ("staking", "y_lst"),
         ("hurdle", "r_f"),

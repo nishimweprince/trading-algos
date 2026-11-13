@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pandas as pd
@@ -13,8 +13,9 @@ from ..http import Http
 from ..sources.binance_vision import BinanceVision, Dataset, datasets_for, quarterly_expiry
 from ..sources.defillama import DefiLlama
 from ..sources.fred import Fred
+from ..sources.hyperliquid import Hyperliquid
 from ..sources.velocity import Velocity
-from .funding import binance_hourly, velocity_hourly
+from .funding import binance_hourly, hyperliquid_hourly, velocity_hourly
 from .prices import klines_hourly, quarterly_long
 from .time import regrid
 from .yields import apy_to_continuous, daily_to_hourly
@@ -32,7 +33,14 @@ TABLES = (
     "hurdle",
     "lending",
     "expiry_1m",
+    "funding_hyperliquid",
 )
+# Added after the first deploy: an older normalized/ dir may lack these; load them empty.
+OPTIONAL_TABLES = ("funding_hyperliquid",)
+
+
+def _empty_hourly(cols: list[str]) -> pd.DataFrame:
+    return pd.DataFrame(columns=cols, index=pd.DatetimeIndex([], tz="UTC", name="ts"))
 
 
 @dataclass
@@ -47,6 +55,9 @@ class Tables:
     hurdle: pd.DataFrame
     lending: pd.DataFrame
     expiry_1m: pd.DataFrame
+    funding_hyperliquid: pd.DataFrame = field(
+        default_factory=lambda: _empty_hourly(["f_h", "premium", "n_records"])
+    )
 
     def save(self, out: Path) -> None:
         out.mkdir(parents=True, exist_ok=True)
@@ -55,12 +66,13 @@ class Tables:
 
     @classmethod
     def load(cls, out: Path) -> Tables:
-        missing = [n for n in TABLES if not (out / f"{n}.parquet").exists()]
+        present = {n for n in TABLES if (out / f"{n}.parquet").exists()}
+        missing = [n for n in TABLES if n not in present and n not in OPTIONAL_TABLES]
         if missing:
             raise FileNotFoundError(
                 f"normalized tables missing: {missing}; run `solcarry normalize` first"
             )
-        return cls(**{n: pd.read_parquet(out / f"{n}.parquet") for n in TABLES})
+        return cls(**{n: pd.read_parquet(out / f"{n}.parquet") for n in TABLES if n in present})
 
 
 def _clip(df: pd.DataFrame, cfg: Config) -> pd.DataFrame:
@@ -94,6 +106,8 @@ def build_tables(cfg: Config, paths: Paths) -> Tables:
     vel = Velocity(cfg, http, paths.raw)
     vrec = vel.load()
     fv = _clip(regrid(velocity_hourly(vrec)), cfg)
+
+    fhl = _clip(regrid(hyperliquid_hourly(Hyperliquid(cfg, http, paths.raw).load())), cfg)
 
     dl = DefiLlama(cfg, http, paths.raw)
     now = pd.Timestamp.now(tz="UTC").floor("h")
@@ -151,6 +165,7 @@ def build_tables(cfg: Config, paths: Paths) -> Tables:
         hurdle=hurdle,
         lending=lending,
         expiry_1m=expiry_1m,
+        funding_hyperliquid=fhl,
     )
 
 

@@ -3,6 +3,10 @@
 g_t = y_t + 8760 * f_h,t - c_P
 R_W = mean_W(g_t + beta_P * r_res,t) / k_P
 X_W = R_W - mean_W(r_f,t)
+
+Gated variants (``*-G``) hold the hedge only while a trailing funding signal says the
+carry beats the hurdle (see ``GatingCfg``); while OFF the capital earns r_f (X = 0), and
+each ON/OFF switch pays (perp_round_trip/2 + lst_swap) on notional.
 """
 
 from __future__ import annotations
@@ -24,13 +28,81 @@ PERP_VARIANTS: dict[str, tuple[str, str]] = {
     "P-LST-BIN": ("lst", "binance"),
     "P-NAT-VEL": ("native", "velocity"),
     "P-NAT-BIN": ("native", "binance"),
+    "P-LST-HL": ("lst", "hyperliquid"),
+    "P-NAT-HL": ("native", "hyperliquid"),
+    "P-LST-HL-G": ("lst", "hyperliquid"),
+    "P-LST-BIN-G": ("lst", "binance"),
 }
+GATED_VARIANTS = frozenset({"P-LST-HL-G", "P-LST-BIN-G"})
 MIN_WINDOW_COVERAGE = 0.9
 
 
 def perp_cost(cfg: Config) -> float:
     c = cfg.costs
     return (c.perp_round_trip_bps / c.hold_years_assumed + c.resize_bps_per_year) / 1e4
+
+
+def switch_cost(cfg: Config) -> float:
+    """One-way cost of opening or closing both legs, as a fraction of notional."""
+    c = cfg.costs
+    return (c.perp_round_trip_bps / 2 + c.lst_swap_bps) / 1e4
+
+
+def gate_signal(f_h: pd.Series, lookback_days: float, min_coverage: float) -> pd.Series:
+    """Trailing mean of annualized funding over the lookback, using hours < t only."""
+    hours = int(round(lookback_days * 24))
+    s = f_h.astype("float64") * HOURS_PER_YEAR
+    m = s.rolling(hours, min_periods=max(1, int(min_coverage * hours))).mean()
+    return m.shift(1)
+
+
+def gate_states(edge: pd.Series, band: float) -> np.ndarray:
+    """Hysteresis state machine: ON when edge > +band, OFF when edge < -band. Starts OFF."""
+    e = edge.to_numpy(dtype="float64")
+    on = np.zeros(len(e), dtype=bool)
+    state = False
+    for i, x in enumerate(e):
+        if np.isnan(x):
+            pass  # no signal: keep the current state
+        elif not state and x > band:
+            state = True
+        elif state and x < -band:
+            state = False
+        on[i] = state
+    return on
+
+
+def gated_carry(
+    hourly: pd.DataFrame,
+    signal: pd.Series,
+    band: float,
+    resize: float,
+    switch: float,
+    beta: float,
+    k: float,
+) -> pd.DataFrame:
+    """Apply the funding gate to an ``hourly_carry`` frame (recomputes R_h and x_h).
+
+    ON: (y + funding - resize + beta*r_res)/k. OFF: r_f. Switch hours pay ``switch/k``
+    of capital, booked as an annualized rate for that one hour.
+    """
+    df = hourly.copy()
+    if df.empty:
+        for c in ("signal", "edge", "on", "switch"):
+            df[c] = pd.Series(dtype="float64")
+        return df
+    df["signal"] = signal.reindex(df.index)
+    df["edge"] = df["signal"] + df["y"] - resize - df["r_f"]
+    on = gate_states(df["edge"], band)
+    prev = np.concatenate([[False], on[:-1]])
+    sw = on != prev
+    df["on"] = on
+    df["switch"] = sw
+    carry = (df["y"] + df["funding_ann"] - resize + beta * df["r_res"]) / k
+    df["g"] = np.where(on, df["y"] + df["funding_ann"] - resize, 0.0)
+    df["R_h"] = np.where(on, carry, df["r_f"]) - sw * (switch / k) * HOURS_PER_YEAR
+    df["x_h"] = df["R_h"] - df["r_f"]
+    return df
 
 
 @dataclass
@@ -110,7 +182,10 @@ def regime_split(windows: pd.DataFrame, D: int = 30) -> pd.DataFrame:
     w = windows[windows["window_days"] == D].dropna(subset=["sol_ret"])
     if len(w) < 3:
         return pd.DataFrame(columns=["tercile", "ret_lo", "ret_hi", "n", "X_median", "X_mean"])
-    w = w.assign(tercile=pd.qcut(w["sol_ret"], 3, labels=["down", "mid", "up"]))
+    try:
+        w = w.assign(tercile=pd.qcut(w["sol_ret"], 3, labels=["down", "mid", "up"]))
+    except ValueError:  # degenerate returns (e.g. flat price): no tercile split
+        return pd.DataFrame(columns=["tercile", "ret_lo", "ret_hi", "n", "X_median", "X_mean"])
     g = w.groupby("tercile", observed=True)
     return pd.DataFrame(
         {
@@ -135,10 +210,12 @@ def run_perp(
     q_runup: float,
 ) -> PerpResult:
     long, source = PERP_VARIANTS[variant]
+    gated = variant in GATED_VARIANTS
     T = cfg.windows.T_lst_h if long == "lst" else cfg.windows.T_native_h
     beta = beta_p(q_runup, cfg.margin.perp_mm)
     k = k_p(cfg.margin.perp_im, beta)
-    cost = perp_cost(cfg)
+    resize = cfg.costs.resize_bps_per_year / 1e4
+    cost = resize if gated else perp_cost(cfg)
     ycol = "y_lst" if long == "lst" else "y_native"
     src = cfg.lending.reserve_yield_source
     r_res: pd.Series | float = 0.0
@@ -154,6 +231,28 @@ def run_perp(
         k,
         cost,
     )
+    gating: dict[str, Any] = {}
+    if gated:
+        gc = cfg.gating
+        sig = gate_signal(
+            funding["f_h"] if "f_h" in funding.columns else pd.Series(dtype="float64"),
+            gc.lookback_days,
+            gc.min_coverage,
+        )
+        hourly = gated_carry(hourly, sig, gc.hysteresis_annual, resize, switch_cost(cfg), beta, k)
+        years = len(hourly) / HOURS_PER_YEAR if len(hourly) else float("nan")
+        n_sw = int(hourly["switch"].sum()) if not hourly.empty else 0
+        gating = {
+            "on_share": float(hourly["on"].mean()) if not hourly.empty else float("nan"),
+            "switches": n_sw,
+            "switches_per_year": n_sw / years if years and years > 0 else float("nan"),
+            "switch_cost": switch_cost(cfg),
+            "switch_drag": float((hourly["switch"] * switch_cost(cfg) / k * HOURS_PER_YEAR).mean())
+            if not hourly.empty
+            else 0.0,
+            "lookback_days": cfg.gating.lookback_days,
+            "hysteresis_annual": cfg.gating.hysteresis_annual,
+        }
     windows = rolling_windows(hourly, cfg.windows.rolling_days)
     if not windows.empty:
         windows["sol_ret"] = trailing_return(spot_close, 30, windows["end"])
@@ -164,6 +263,11 @@ def run_perp(
         (hourly.index.max() - hourly.index.min()).total_seconds() / 86400 + 1 / 24
         if not hourly.empty
         else 0.0
+    )
+    held = (
+        hourly["on"].astype("float64")
+        if gated and "on" in hourly.columns
+        else pd.Series(1.0, index=hourly.index)
     )
     res.summary = {
         "variant": variant,
@@ -183,14 +287,23 @@ def run_perp(
         "beta": beta,
         "k": k,
         "cost": cost,
+        # Gated: components are realized means (zero while OFF), costs include switches.
         "components": {
-            "y": float(hourly["y"].mean()) if not hourly.empty else float("nan"),
-            "funding": float(hourly["funding_ann"].mean()) if not hourly.empty else float("nan"),
-            "cost": -cost,
-            "reserve_yield": float((beta * hourly["r_res"]).mean()) if not hourly.empty else 0.0,
+            "y": float((hourly["y"] * held).mean()) if not hourly.empty else float("nan"),
+            "funding": float((hourly["funding_ann"] * held).mean())
+            if not hourly.empty
+            else float("nan"),
+            "cost": -(cost * (float(held.mean()) if gated and not hourly.empty else 1.0))
+            - (gating.get("switch_drag", 0.0) * k if gated else 0.0),
+            "reserve_yield": float((beta * hourly["r_res"] * held).mean())
+            if not hourly.empty
+            else 0.0,
             "r_f": float(hourly["r_f"].mean()) if not hourly.empty else float("nan"),
         },
-        "flags": ["PROXY"] if source == "binance" else [],
+        "source": source,
+        "gated": gated,
+        "gating": gating,
+        "flags": (["PROXY"] if source == "binance" else []) + (["GATED"] if gated else []),
     }
     res.regime = regime_split(windows) if not windows.empty else pd.DataFrame()
     return res

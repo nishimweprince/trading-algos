@@ -25,6 +25,10 @@ CAVEATS = [
     "Hurdle uses DTB3, a discount-basis T-bill yield, converted as ln(1 + DTB3/100): an approximation.",
     "Velocity history starts at the mid-2026 relaunch; Velocity-based results are SHORT_SAMPLE.",
     "Binance SOLUSDT funding is a PROXY for funding-regime behaviour, not the venue that would be traded.",
+    "Hyperliquid history starts 2023-05; its 8-hourly first weeks are dropped (ambiguous period). "
+    "HL margin is USDC only here: LST-as-collateral is not modelled.",
+    "Gated (*-G) variants: the rule is pre-registered in `gating` (part of the lock); OFF assumes both "
+    "legs close at the switch hour and the cash earns the T-bill rate.",
     "Reserve sizing is a single-margin-call closed form; repeated calls, funding paid during stress and "
     "correlated LST depeg are Gate 2.",
     "Venue/counterparty, smart-contract and custody risk are not modelled; they remain qualitative gates.",
@@ -84,6 +88,7 @@ def charts(run_dir: Path, summ: dict[str, Any]) -> list[str]:
         for col, lab, c in (
             ("binance_7d", "Binance SOLUSDT (proxy)", PALETTE[0]),
             ("velocity_7d", "Velocity SOL-PERP", PALETTE[1]),
+            ("hyperliquid_7d", "Hyperliquid SOL", PALETTE[2]),
         ):
             if col in fd and fd[col].notna().any():
                 ax.plot(fd.index, fd[col] * 100, label=lab, color=c, lw=1.2)
@@ -438,6 +443,35 @@ def build_report(cfg: Config, paths: Paths, run_dir: Path) -> Path:
                     ],
                 )
             )
+        gt = _read_csv(run_dir / "perp_gating.csv")
+        if not gt.empty:
+            gc = cfg.gating
+            L.append(
+                f"\nFunding gate (*-G): hedge ON while trailing {gc.lookback_days:g}-day funding + "
+                f"staking − resize − r_f > +{_pct(gc.hysteresis_annual, 1)}, OFF below "
+                f"−{_pct(gc.hysteresis_annual, 1)}; OFF = cash at r_f.\n\n"
+            )
+            L.append(
+                md_table(
+                    [
+                        {
+                            "v": r["variant"],
+                            "on": _pct(r["on_share"], 1),
+                            "n": int(r["switches"]),
+                            "py": _num(r["switches_per_year"], 1),
+                            "d": _pct(r["switch_drag"]),
+                        }
+                        for _, r in gt.iterrows()
+                    ],
+                    [
+                        ("v", "variant"),
+                        ("on", "time ON"),
+                        ("n", "switches"),
+                        ("py", "per year"),
+                        ("d", "switch drag /yr"),
+                    ],
+                )
+            )
     else:
         L.append("_no P windows (insufficient overlapping data)_\n")
     for img, cap in (("chart_perp_components.png", "components"), ("chart_excess.png", "excess")):
@@ -633,7 +667,13 @@ def build_ui_bundle(
         "summary": summ,
         "gate": gate,
         "validation": val,
-        "funding_daily": _series(fd, ["binance_7d", "velocity_7d", "binance", "velocity"]),
+        "funding_daily": _series(
+            fd,
+            ["binance_7d", "velocity_7d", "hyperliquid_7d", "binance", "velocity", "hyperliquid"],
+        ),
+        "gating": _read_csv(run_dir / "perp_gating.csv")
+        .replace({np.inf: None, np.nan: None})
+        .to_dict("records"),
         "xw30": xw,
         "basis": basis,
         "cycles": cyc.replace({np.nan: None}).to_dict("records") if not cyc.empty else [],

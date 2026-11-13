@@ -8,6 +8,10 @@ native stake) hedged with an equal short. It compares two hedges:
 | **P** (perp carry) | USD-margined perpetual short | staking + funding received by shorts − costs; needs a USD reserve for margin calls |
 | **D** (dated basis) | Binance COIN-M inverse quarterly short, held to expiry | basis locked at entry + staking on SOL not posted as margin − costs |
 
+P variants by funding source: `-VEL` Velocity SOL-PERP (the venue; short history), `-BIN`
+Binance SOLUSDT (regime proxy only), `-HL` Hyperliquid SOL (tradable, hourly history from
+2023-06). `-G` variants are **funding-gated** (see below).
+
 **Gate 1 asks:** is there enough carry, on *total deployed capital* and above a risk-free
 hurdle (3-month T-bill), to justify building the full model?
 
@@ -39,7 +43,7 @@ files, tens of MB), so it is fine to run on a laptop. Re-runs only fetch what is
 ## Commands
 
 ```
-solcarry fetch [--source all|velocity|binance|defillama|fred|jupiter|okx] [--start] [--end]
+solcarry fetch [--source all|velocity|binance|hyperliquid|defillama|fred|jupiter|okx] [--start] [--end]
 solcarry normalize
 solcarry validate
 solcarry lock
@@ -56,14 +60,14 @@ Global options: `--config path/to/gate1.yaml`, `--data-dir path`, `-v`.
 Exit codes: `0` ok, `1` unexpected error, `2` validation failed, `3` lock missing/mismatch.
 
 Each run writes `data/results/<UTC timestamp>-<config hash>/` with the effective
-`config.yaml`, `validation.json`, `summaries.json`, `gate.json`, `scorecard.csv`,
+`config.yaml`, `validation.json`, `summaries.json`, `gate.json`, `scorecard.csv`, `perp_gating.csv`,
 `funding_diagnostics.csv`, `runups.csv`, `perp_windows.parquet`, `perp_regime.csv`,
 `dated_cycles.csv`, `dated_entries.parquet`, `dated_entry_quantiles.csv`, `sizing.csv`,
 `depth.csv`, `report.md`, PNG charts and `ui.json` (the dashboard bundle).
 
 ### Pre-registration
 
-`solcarry lock` hashes the canonical JSON of `thresholds` + `variants` + `windows.alpha`
+`solcarry lock` hashes the canonical JSON of `thresholds` + `variants` + `windows.alpha` + `gating`
 into `config/gate1.lock`. `gate` and `run-all` refuse to run (exit 3) if the lock is
 missing or stale. `--unlocked` runs anyway and stamps every output
 **UNLOCKED: thresholds not pre-registered**. Lock *before* you look at results;
@@ -119,6 +123,21 @@ validation and caveats. Pick any past run from the selector. Chart.js loads from
   to study a later regime (it also clips other sources).
 - **D cycles:** the first contract is entered at the first hour with dte ≤ `dte_max`;
   each later contract at the first bar at/after the previous expiry (08:00 UTC).
+
+- **Hyperliquid funding** comes from `POST /info {"type":"fundingHistory"}` (500 records
+  per call, paged), cached one JSON file per month. Each print is an hourly payment and
+  positive = shorts receive. The first weeks (May 2023) are 8-hourly snapshots with an
+  ambiguous period; normalization drops everything before the first 24 consecutive hourly
+  prints. Like Velocity, HL funding has a 0.01%/8h interest baseline (10.95%/yr), so
+  `share_at_floor` is reported for it too.
+- **Funding gate (`*-G`):** each hour, `edge = mean_7d(funding, hours < t) + y − resize − r_f`.
+  The hedge turns ON when `edge > +hysteresis` and OFF when `edge < −hysteresis` (starts
+  OFF, holds state through missing signal). OFF means both legs are closed and the capital
+  earns `r_f` (X = 0). Each switch pays `perp_round_trip/2 + lst_swap` on notional; the
+  amortized round trip in the ungated cost is replaced by these explicit switch costs.
+  `perp_gating.csv` reports time ON, switches and switch drag.
+- **Drift** was considered as a source: `data.api.drift.trade` no longer resolves and the
+  public historical bucket is empty (2026-11). Velocity is the Drift v2 fork.
 
 ## Known limitations
 

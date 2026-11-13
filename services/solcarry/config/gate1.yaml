@@ -1,5 +1,5 @@
 # solcarry Gate 1 configuration.
-# `thresholds`, `variants` and `windows.alpha` are pre-registered: run `solcarry lock`
+# `thresholds`, `variants`, `windows.alpha` and `gating` are pre-registered: run `solcarry lock`
 # once you are happy with them, BEFORE looking at any results.
 run:
   start: null            # null = earliest available per source
@@ -15,11 +15,17 @@ sources:
   fred_base: https://fred.stlouisfed.org/graph/fredgraph.csv
   jupiter_quote: https://lite-api.jup.ag/swap/v1/quote
   okx_base: https://www.okx.com
+  hyperliquid_info: https://api.hyperliquid.xyz/info
 
 velocity:
   symbol: SOL-PERP
   empty_days_stop: 14
   funding_floor_annual: 0.1095
+
+hyperliquid:
+  coin: SOL
+  page_limit: 500           # fundingHistory returns at most 500 records per call
+  min_interval_s: 0.25
 
 binance:
   perp_symbol: SOLUSDT
@@ -89,6 +95,11 @@ thresholds:
   depth_impact_max: -0.005
   min_sample_days: 180
 
+gating:                         # *-G variants; pre-registered (in the lock hash)
+  lookback_days: 7              # trailing funding mean, hours < t only
+  hysteresis_annual: 0.02       # ON when funding_7d + y - resize - r_f > +2%/yr, OFF below -2%/yr
+  min_coverage: 0.9
+
 sizing:
   target_per_quarter_usd: 1000
 
@@ -97,4 +108,15 @@ http:
   max_parallel_per_host: 4
   user_agent: solcarry-research/0.1
 
-variants: [P-LST-VEL, P-LST-BIN, P-NAT-VEL, P-NAT-BIN, D1-BASIS, D2-STATIC, D2-MANAGED]
+variants:
+  - P-LST-VEL
+  - P-LST-BIN
+  - P-NAT-VEL
+  - P-NAT-BIN
+  - D1-BASIS
+  - D2-STATIC
+  - D2-MANAGED
+  - P-LST-HL      # Hyperliquid SOL perp funding (tradable venue, history from 2023-05)
+  - P-NAT-HL
+  - P-LST-HL-G    # funding-gated: hedge only while trailing funding pays (see gating)
+  - P-LST-BIN-G

@@ -183,6 +183,7 @@ function render(d) {
   const sizing = d.sizing.map(r => `<tr><td>${esc(r.variant)}</td><td>${pct(r.R_median)}</td><td>${pct(r.R_p25)}</td><td>${r.capital_at_median == null ? "∞" : "$" + num(r.capital_at_median)}</td><td>${r.capital_at_p25 == null ? "∞" : "$" + num(r.capital_at_p25)}</td></tr>`).join("");
   const depth = d.depth.map(r => `<tr><td>${esc(r.lst)}</td><td>${num(r.size)}</td><td>${num(r.out_sol, 3)}</td><td>${num(r.px, 5)}</td><td class="${r.impact < -0.005 ? "x" : ""}">${pct(r.impact, 3)}</td><td class="l muted">${esc(r.routes)}</td></tr>`).join("");
   const vrows = d.validation ? d.validation.checks.map(c => `<tr><td>${esc(c.name)}</td><td>${c.level}</td><td><span class="pill ${c.ok ? "ok" : (c.level === "hard" ? "bad" : "warn")}">${c.ok ? "✓ ok" : (c.level === "hard" ? "✕ fail" : "! warn")}</span></td><td class="l">${esc(c.detail)}</td></tr>`).join("") : "";
+  const gating = (d.gating || []).map(r => `<tr><td>${esc(r.variant)}</td><td>${pct(r.on_share, 1)}</td><td>${r.switches}</td><td>${num(r.switches_per_year)}</td><td>${pct(r.switch_drag)}</td></tr>`).join("");
   const regime = d.regime.map(r => `<tr><td>${esc(r.variant)}</td><td>${esc(r.tercile)}</td><td>${pct(r.ret_lo, 0)} … ${pct(r.ret_hi, 0)}</td><td>${r.n}</td><td>${pct(r.X_median)}</td><td>${pct(r.share_neg, 0)}</td></tr>`).join("");
 
   $("#main").innerHTML = `
@@ -197,7 +198,8 @@ function render(d) {
     <div class="card"><h2>Variant P: 30-day excess X<sub>W</sub></h2><p class="sub">Return on total capital (long + margin + reserve) minus hurdle.</p><div class="chart"><canvas id="cXw"></canvas></div></div>
   </section>
   <section class="card"><h2>Funding diagnostics</h2><div class="tablewrap"><table><thead><tr><th>source</th><th>hours</th><th>share +</th><th>median</th><th>mean</th><th>p5</th><th>p95</th><th>longest neg run d</th><th>at floor</th></tr></thead><tbody>${diag}</tbody></table></div>
-    ${regime ? `<h2 style="margin-top:14px">Regime split</h2><p class="sub">30-day X<sub>W</sub> by tercile of trailing 30-day SOL return.</p><div class="tablewrap"><table><thead><tr><th>variant</th><th>tercile</th><th>SOL return</th><th>n</th><th>median X</th><th>share X&lt;0</th></tr></thead><tbody>${regime}</tbody></table></div>` : ""}</section>
+    ${regime ? `<h2 style="margin-top:14px">Regime split</h2><p class="sub">30-day X<sub>W</sub> by tercile of trailing 30-day SOL return.</p><div class="tablewrap"><table><thead><tr><th>variant</th><th>tercile</th><th>SOL return</th><th>n</th><th>median X</th><th>share X&lt;0</th></tr></thead><tbody>${regime}</tbody></table></div>` : ""}
+    ${gating ? `<h2 style="margin-top:14px">Funding gate</h2><p class="sub">*-G variants hold the hedge only while trailing ${num(d.gating[0].lookback_days)}-day funding + staking − resize beats the T-bill by more than ±${pct(d.gating[0].hysteresis_annual, 1)}; OFF = cash in T-bills.</p><div class="tablewrap"><table><thead><tr><th>variant</th><th>time ON</th><th>switches</th><th>per year</th><th>switch drag /yr</th></tr></thead><tbody>${gating}</tbody></table></div>` : ""}</section>
   <section class="grid2">
     <div class="card"><h2>COIN-M basis vs days to expiry</h2><p class="sub">Annualized ln(F/I)·365/dte. Latest four contracts coloured; earlier ones grey.</p><div class="chart"><canvas id="cBasis"></canvas></div></div>
     <div class="card"><h2>Run-ups and reserves</h2><p class="sub">U<sub>T</sub> = max high over next T hours / close − 1.</p>
@@ -218,7 +220,7 @@ function render(d) {
   const fp = (x) => x == null ? "n/a" : (x * 100).toFixed(1) + "%";
   const drawFunding = () => {
     const from = $("#fundRange").value; const keep = fd.t.map(t => !from || t >= from);
-    const ds = [["binance_7d", "Binance SOLUSDT (proxy)", series[0]], ["velocity_7d", "Velocity SOL-PERP", series[1]]]
+    const ds = [["binance_7d", "Binance SOLUSDT (proxy)", series[0]], ["velocity_7d", "Velocity SOL-PERP", series[1]], ["hyperliquid_7d", "Hyperliquid SOL", series[2]]]
       .filter(([k]) => (fd[k] || []).some(v => v != null))
       .map(([k, lab, col]) => ({ label: lab, data: fd[k].filter((_, j) => keep[j]), borderColor: col, backgroundColor: col, spanGaps: false }));
     const old = charts.find(c => c.canvas.id === "cFund"); if (old) { old.destroy(); charts = charts.filter(c => c !== old); }

@@ -71,7 +71,7 @@ def _apply_range(start: date | None, end: date | None) -> None:
 @app.command()
 def fetch(
     source: Annotated[
-        str, typer.Option(help="all|velocity|binance|defillama|fred|jupiter|okx")
+        str, typer.Option(help="all|velocity|binance|hyperliquid|defillama|fred|jupiter|okx")
     ] = "all",
     start: Annotated[str | None, typer.Option(help="YYYY-MM-DD")] = None,
     end: Annotated[str | None, typer.Option(help="YYYY-MM-DD")] = None,
@@ -93,6 +93,7 @@ def normalize() -> None:
         "spot",
         "funding_velocity",
         "funding_binance",
+        "funding_hyperliquid",
         "index",
         "staking",
         "hurdle",

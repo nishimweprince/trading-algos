@@ -19,6 +19,10 @@ VARIANT_IDS = (
     "D1-BASIS",
     "D2-STATIC",
     "D2-MANAGED",
+    "P-LST-HL",
+    "P-NAT-HL",
+    "P-LST-HL-G",
+    "P-LST-BIN-G",
 )
 
 
@@ -41,12 +45,19 @@ class SourcesCfg(_M):
     fred_base: str = "https://fred.stlouisfed.org/graph/fredgraph.csv"
     jupiter_quote: str = "https://lite-api.jup.ag/swap/v1/quote"
     okx_base: str = "https://www.okx.com"
+    hyperliquid_info: str = "https://api.hyperliquid.xyz/info"
 
 
 class VelocityCfg(_M):
     symbol: str = "SOL-PERP"
     empty_days_stop: int = 14
     funding_floor_annual: float = 0.1095
+
+
+class HyperliquidCfg(_M):
+    coin: str = "SOL"
+    page_limit: int = 500  # records per fundingHistory response (API cap)
+    min_interval_s: float = 0.25  # pacing between paged requests
 
 
 class BinanceCfg(_M):
@@ -130,6 +141,20 @@ class Thresholds(_M):
     min_sample_days: float = 180
 
 
+class GatingCfg(_M):
+    """Funding-gated P variants (``*-G``). Pre-registered: part of the lock hash.
+
+    Each hour the hedge is ON if the trailing ``lookback_days`` mean of annualized funding
+    (data up to the previous hour only) plus staking minus the resize cost beats the hurdle:
+    edge = mean_7d(funding) + y - resize - r_f. Enter when edge > +hysteresis, exit when
+    edge < -hysteresis. OFF = both legs closed, capital in T-bills (X = 0).
+    """
+
+    lookback_days: float = 7
+    hysteresis_annual: float = 0.02
+    min_coverage: float = 0.9  # share of lookback hours with data before the signal counts
+
+
 class SizingCfg(_M):
     target_per_quarter_usd: float = 1000
 
@@ -145,6 +170,7 @@ class Config(_M):
     sources: SourcesCfg = Field(default_factory=SourcesCfg)
     velocity: VelocityCfg = Field(default_factory=VelocityCfg)
     binance: BinanceCfg = Field(default_factory=BinanceCfg)
+    hyperliquid: HyperliquidCfg = Field(default_factory=HyperliquidCfg)
     staking: StakingCfg = Field(default_factory=StakingCfg)
     lending: LendingCfg = Field(default_factory=LendingCfg)
     margin: MarginCfg = Field(default_factory=MarginCfg)
@@ -154,6 +180,7 @@ class Config(_M):
     depth: DepthCfg = Field(default_factory=DepthCfg)
     validate_: ValidateCfg = Field(default_factory=ValidateCfg, alias="validate")
     thresholds: Thresholds = Field(default_factory=Thresholds)
+    gating: GatingCfg = Field(default_factory=GatingCfg)
     sizing: SizingCfg = Field(default_factory=SizingCfg)
     http: HttpCfg = Field(default_factory=HttpCfg)
     variants: list[str] = Field(default_factory=lambda: list(VARIANT_IDS))
