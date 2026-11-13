@@ -1,6 +1,6 @@
 """Replay Tickmind AI XAUUSD signals on HistData M1 bars.
 
-HistData timestamps are EST with no DST (fixed UTC-5), bid prices.
+HistData bid bars; these files are labelled in New York local time (DST-aware).
 Each signal is replayed from its posting time (postedAtUnix, UTC) with the
 stated stop and target. Same-bar SL+TP ambiguity resolves to SL (conservative).
 
@@ -37,8 +37,13 @@ def load_bars(data_dir: str, start: pd.Timestamp) -> pd.DataFrame:
         df = pd.read_csv(f, sep=";", header=None, names=["ts", "o", "h", "l", "c", "v"])
         frames.append(df)
     df = pd.concat(frames, ignore_index=True)
-    df["ts"] = pd.to_datetime(df["ts"], format="%Y%m%d %H%M%S") + pd.Timedelta(hours=5)
-    df = df.set_index("ts").sort_index()
+    # These files are labelled in New York local time WITH daylight saving: the daily
+    # gold break ends at 18:00 on the label all year (verified Jan-Nov 2026). A fixed
+    # UTC-5 shift puts every Mar-Nov bar one hour late.
+    ts = pd.to_datetime(df["ts"], format="%Y%m%d %H%M%S")
+    ts = ts.dt.tz_localize("America/New_York", ambiguous="NaT", nonexistent="NaT")
+    df["ts"] = ts.dt.tz_convert("UTC").dt.tz_localize(None)
+    df = df.dropna(subset=["ts"]).drop_duplicates("ts").set_index("ts").sort_index()
     return df.loc[start - pd.Timedelta(days=1):, ["o", "h", "l", "c"]]
 
 
@@ -226,6 +231,26 @@ def build_summary(sig, bars, trades: dict, spread: float) -> dict:
                                median_minutes_to_stop=float(mins.median()) if len(mins) else None)
     mk = trades["market_fixed"]
     summary["past_level_at_post"] = int((mk.outcome == "past_level_at_post").sum())
+
+    # price move in the signal's direction during the 30 min BEFORE the post, and 2 h after it
+    c, idx = bars["c"], bars.index
+    pre, post = [], []
+    for _, s in sig[sig.status == "closed"].iterrows():
+        i0 = idx.searchsorted(s.posted.ceil("min"))
+        if i0 >= len(bars) or idx[i0] - s.posted > MAX_POST_GAP:
+            continue
+        sg = 1 if s.side == "BUY" else -1
+        tb, ta = s.posted - pd.Timedelta(minutes=30), s.posted + pd.Timedelta(minutes=120)
+        jb = min(idx.searchsorted(tb), len(c) - 1)
+        ja = min(idx.searchsorted(ta), len(c) - 1)
+        if abs((idx[jb] - tb).total_seconds()) < 900:
+            pre.append(sg * (c.iat[i0] - c.iat[jb]))
+        if abs((idx[ja] - ta).total_seconds()) < 900:
+            post.append(sg * (c.iat[ja] - c.iat[i0]))
+    pre, post = np.array(pre), np.array(post)
+    summary["timing"] = dict(pre30_mean_usd=float(pre.mean()), pre30_share_with=float((pre > 0).mean()),
+                             post120_mean_usd=float(post.mean()), post120_share_with=float((post > 0).mean()),
+                             n=int(len(pre)))
     summary["primary_model"] = "touch_fixed"
 
     # cumulative pips through time: site claim vs each model

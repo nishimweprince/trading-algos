@@ -245,7 +245,10 @@ function renderComparison(sm) {
       <div class="stat"><div><span>Win rate</span><b>${pct(rep.win_rate)}</b></div><div><span>Net pips</span><b>${sgn(rep.net_pips)}</b></div>
       <div><span>Per trade</span><b>${sgn(rep.mean_R, 2)}R</b></div></div>
       <div class="muted" style="font-size:12px;margin-top:6px">t = ${fmt(rep.t_stat, 2)} · ${rep.n} trades · ${sgn(rep.sum_R, 1)}R total</div></div>`;
+  const tm = sm.timing;
+  const timing = tm ? [`<b>Signals are posted after the move.</b> In the 30 min before a post, price had already moved <b>$${fmt(tm.pre30_mean_usd, 2)}</b> in the signal's direction (${pct(tm.pre30_share_with)} of signals). In the 2 h after it: <b>${sgn(tm.post120_mean_usd, 2)} $</b> (${pct(tm.post120_share_with)} moved the right way).`] : [];
   $("#findings").innerHTML = [
+    ...timing,
     `<b>Losses are booked at ${a.site_loss_pips} pips</b> in the site's net-pips total, but the median posted stop is <b>${fmt(a.median_stop_pips)} pips</b> away. Every real stop-out costs about ${fmt(a.median_stop_pips / -a.site_loss_pips, 1)}× what the site counts.`,
     `<b>${d.n ?? "—"} signals the site calls winners hit their stop first</b> in the replay (median ${fmt(d.median_minutes_to_stop)} min after entry). In <b>${d.tp_after_stop ?? "—"}</b> of them price reached the target only after the stop.`,
     `<b>${a.wins_claiming_beyond_target} of ${a.wins_total} claimed wins</b> report more pips than the posted target allows (median claim ${fmt(a.median_claimed_win_pips)} pips vs median target ${fmt(a.median_target_pips)} pips).`,

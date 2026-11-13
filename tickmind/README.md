@@ -134,3 +134,26 @@ of the post. The site's net-pips figure is reproduced by booking every loss at �
 
 `signals_raw.csv` is a snapshot of `/api/signals`. As of 2026-11-13 it has two target
 typos (fixed by dividing by 100), and one 0.5-dollar stop (tg-7772) that is excluded.
+
+## Risk-management search (2026-11-13): verdict NO EDGE
+
+`optimize_rm.py` keeps only each signal's direction (and optionally its stated entry) and searches
+our own exits: fixed or capped stops ($4–20), single targets 0.5–3R, 50/50 partials, breakeven,
+trailing stops, and max holds of 2 h–5 d. That is 4,488 configs across market-on-alert and
+stated-entry fills, with settings chosen on the first half of the signals and checked on the second.
+`analyze_rm.py` adds spread/delay stress, a bootstrap, and random-direction null tests.
+
+On correctly aligned data:
+
+- Best full-sample config: t = 1.33 (market, $20 SL, 3R, 24 h). Train vs test mean R correlation
+  across configs is 0.07 (noise). 0 % of stated-entry configs and 24 % of market configs are > 0.
+- With random BUY/SELL at the same times, the best of the same sub-grid beats the real best in
+  37 % of runs. Reversed signals do about as well as real ones.
+- **The signals are posted after the move.** In the 30 min before a post, price moved $6.93 in the
+  signal's direction (95 % of signals, t −13.9 measured from post). Afterwards the drift is
+  ≈ 0 out to 8 h. No exit rule turns that into an edge.
+
+**Timezone bug (fixed):** this folder first converted HistData with a fixed +5 h. The gold files
+are New York local time **with** DST, so Mar–Nov bars sat 1 h late. That made market entries
+look like +0.3–0.5 R/trade (t 3–6) because each post appeared to come right before a move.
+`load_bars` now localises to America/New_York, matching `ipda/backtest/data.py`.
