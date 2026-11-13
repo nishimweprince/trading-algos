@@ -96,8 +96,11 @@ thresholds:
   min_sample_days: 180
 
 gating:                         # *-G variants; pre-registered (in the lock hash)
-  lookback_days: 7              # trailing funding mean, hours < t only
-  hysteresis_annual: 0.02       # ON when funding_7d + y - resize - r_f > +2%/yr, OFF below -2%/yr
+  # 2026-11-13 rule v2, fixed before running it: v1 (7d, ±2%) switched ~10x/yr and the
+  # 0.2% switch cost ate the tail gain. v2 trades responsiveness for fewer switches.
+  # Chosen on that reasoning alone, with no grid search; evaluated once under the lock.
+  lookback_days: 30             # trailing funding mean, hours < t only
+  hysteresis_annual: 0.04       # ON when funding_30d + y - resize - r_f > +4%/yr, OFF below -4%/yr
   min_coverage: 0.9
 
 sizing:
