@@ -61,6 +61,7 @@ button[aria-pressed="true"] { background: var(--text-primary); color: var(--surf
 .feed { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow: auto; }
 .feed li { display: grid; grid-template-columns: 92px 1fr; gap: 10px; padding: 7px 0; border-top: 1px solid var(--grid); font-size: 13px; }
 .feed li:first-child { border-top: 0; }
+.feed li.empty { display: block; }
 
 /* comparison hero */
 .vs { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
