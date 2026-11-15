@@ -152,3 +152,22 @@ own entries look strong (+3,928, t 4.4), but a follower arrives about 48 pips la
 roughly a quarter of that. The SL 80 / no-trail defaults were fitted to one week and failed
 on the three weeks before it. Detection speed (seconds, not minutes) and entering near the
 stated entry would matter more than any SL/TP choice.
+
+## Defaults changed again (2026-11-15, after the month run)
+The defaults are now `SL_PIPS=120`, `TP_PIPS=150`, `TRAIL_START_PIPS=50`,
+`TRAIL_DISTANCE_PIPS=30` and `TRAIL_STEP_PIPS=10`. These replace SL 80 / no trailing, which
+failed the out-of-sample check above.
+
+Month with the new defaults: 64 trades, 75% win rate, **+822 pips**, t 1.23, worst trade −120.
+By week (net / BUY / SELL):
+| week | trades | net | BUY | SELL |
+|---|---|---|---|---|
+| Oct 12 | 4 | −166 | −69 | −96 |
+| Oct 19 | 13 | +319 | +394 | −75 |
+| Oct 26 | 13 | +350 | +153 | +197 |
+| Nov 2 | 17 | +37 | +108 | −71 |
+| Nov 9 | 17 | +282 | −286 | +567 |
+
+4 of 5 weeks are positive and the profit is spread across weeks rather than coming from a
+single one, unlike SL 80 / no trail, which had +940 in one week and +150 in the rest.
+It is still not significant.
