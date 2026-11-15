@@ -26,7 +26,7 @@ Env (callisto/.env)
   CTRADER_ACCOUNT_ID                         ctid account id (skips the lookup)
   CTRADER_SYMBOLS={"XAUUSD": "XAUUSD"}       signal ticker -> broker symbol name
   EXECUTION_ENABLED=false  LIVE_TRADING_ENABLED=false
-  LOTS=0.01  MAX_OPEN_POSITIONS=1  MAX_SIGNAL_AGE_SECONDS=180
+  LOTS=0.2  MAX_OPEN_POSITIONS=1  MAX_SIGNAL_AGE_SECONDS=180
 """
 from __future__ import annotations
 
@@ -93,7 +93,7 @@ class ExecSettings:
         os.getenv("CTRADER_SYMBOLS") or '{"XAUUSD": "XAUUSD"}'))
     execution_enabled: bool = _env_bool("EXECUTION_ENABLED")
     live_trading_enabled: bool = _env_bool("LIVE_TRADING_ENABLED")
-    lots: float = float(os.getenv("LOTS") or 0.01)
+    lots: float = float(os.getenv("LOTS") or 0.2)
     max_open: int = int(os.getenv("MAX_OPEN_POSITIONS") or 1)
     max_signal_age_s: float = float(os.getenv("MAX_SIGNAL_AGE_SECONDS") or 180)
 
