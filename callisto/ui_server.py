@@ -51,6 +51,18 @@ def read_events(limit: int = 5000) -> list[dict]:
     return out
 
 
+def read_jsonl(p: Path, limit: int = 2000) -> list[dict]:
+    if not p.exists():
+        return []
+    out = []
+    for line in p.read_text().splitlines()[-limit:]:
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return out
+
+
 def state() -> dict:
     events = read_events()
     signals = [e for e in events if e.get("event") in ("signal", "too_old")]
@@ -76,6 +88,8 @@ def state() -> dict:
         "open_ideas": mon.get("ideas", [])[::-1],
         "activity": activity[::-1],
         "backtest": read_json(DATA / "results" / "summary.json", None),
+        "executor": read_json(DATA / "executor_heartbeat.json", None),
+        "executions": read_jsonl(DATA / "executions.jsonl")[-60:][::-1],
     }
 
 

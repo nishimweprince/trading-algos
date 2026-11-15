@@ -94,3 +94,32 @@ The UI binds to localhost only. Reach it with
 `ssh -i jito.pem -N -L 8079:127.0.0.1:8079 ec2-user@<host>` and open http://localhost:8079,
 or publish it through the host's cloudflared tunnel by adding a public hostname in the
 Cloudflare dashboard that points at `http://127.0.0.1:8079`.
+
+## cTrader execution (`executor.py`)
+`callisto-executor` reads `signal` events from `data/events.jsonl` and sends cTrader market
+orders: volume from `LOTS`, `relativeStopLoss`/`relativeTakeProfit` from `SL_PIPS`/`TP_PIPS`,
+label `callisto`. It then trails the stop client-side from spot prices with the backtest
+rule (`TRAIL_*`), using `ProtoOAAmendPositionSLTPReq`. After a restart it reconciles and
+picks up open `callisto` positions again.
+
+Safety switches:
+- `EXECUTION_ENABLED=false` (the default) only logs `would_place`.
+- A live account also needs `LIVE_TRADING_ENABLED=true`.
+- Signals older than `MAX_SIGNAL_AGE_SECONDS` are skipped.
+- `MAX_OPEN_POSITIONS` caps open positions.
+- The first start begins at the end of the event log and never replays old signals.
+
+```bash
+.venv/bin/python executor.py check                 # auth, account, XAUUSD spec, quote; no order
+.venv/bin/python executor.py test-order --side BUY # min-size order with SL/TP, then close it
+                                                   # (live account: also LIVE_TRADING_ENABLED=true
+                                                   #  and --confirm-live)
+```
+
+Needs `CTRADER_CLIENT_ID` / `CTRADER_CLIENT_SECRET` (openapi.ctrader.com → Applications) plus
+the OAuth token pair. The refresh token rotates and the newest pair lives in
+`data/ctrader_tokens.json`, so run the executor on one host only. `deploy.sh` ships the
+workspace packages it imports (`ta-core`, `ta-contracts`, `ta-plugin-api`, `plugins/ctrader`)
+into `vendor/`. It enables `callisto-executor` only once the app credentials are in `.env`.
+Tests: `test_executor.py` runs the order, fill, trail, close, reconcile and token-refresh
+paths over the plugin's wire-level `FakeCTraderServer`.
