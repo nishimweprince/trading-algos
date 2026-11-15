@@ -7,6 +7,7 @@ SL amendments and closes positions, so the whole order path runs over real frami
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
@@ -81,6 +82,7 @@ class Broker:
             takeProfit=round(px + sgn * req.relativeTakeProfit / 1e5, 2),
             tradeData=M.ProtoOATradeData(symbolId=req.symbolId, volume=req.volume,
                                          tradeSide=req.tradeSide, label=req.label,
+                                         comment=req.comment,
                                          openTimestamp=1_763_200_000_000))
         self.positions[pid] = pos
         filled = P.ProtoOAExecutionEvent(
@@ -117,7 +119,9 @@ def settings(**kw) -> X.ExecSettings:
     s = X.ExecSettings(client_id="cid", client_secret="sec", access_token="tok",
                        refresh_token="ref", account_id=ACC, is_live=False,
                        execution_enabled=True, live_trading_enabled=False, lots=0.01,
-                       max_open=1, max_signal_age_s=180)
+                       max_open=1, max_signal_age_s=180, tm_events="", tm_enabled=True,
+                       tm_lots=0.2, tm_max_open=1, tm_max_age_s=300, tm_max_slip_pips=50,
+                       tm_follow_close=True)
     for k, v in kw.items():
         setattr(s, k, v)
     return s
@@ -256,3 +260,94 @@ async def test_expired_token_is_refreshed(tmp_path):
     assert tok.access == "new-access" and tok.refresh == "new-refresh"
     assert (tmp_path / "tokens.json").stat().st_mode & 0o777 == 0o600
     await ex.close()
+
+
+# -- Tickmind source ---------------------------------------------------------------------
+def tm(status="active", entry=4000.0, stop=4013.0, target=3981.0, side="SELL", age_s=20,
+       sid="tg-1", kind="update"):
+    return {"seen_utc": datetime.now(UTC).isoformat(), "kind": kind, "id": sid,
+            "posted_unix": time.time() - age_s, "pair": "XAUUSD", "side": side,
+            "entry": entry, "stop": stop, "target": target, "status": status, "result": None}
+
+
+async def test_tickmind_waits_for_levels_then_uses_its_stop_and_target(tmp_path):
+    b, ex = await make(tmp_path)
+    decided: set[str] = set()
+    assert await ex.on_tickmind(tm(entry=0, stop=0, target=0, kind="new"), decided) is None
+    assert b.orders == []
+    out = await ex.on_tickmind(tm(), decided)              # SELL at bid 4000.00
+    assert out["event"] == "placed" and out["source"] == "tickmind"
+    o = b.orders[0]
+    assert o.label == "tickmind" and o.comment == "tickmind tg-1"
+    assert o.volume == 2000                                  # 0.2 lots
+    assert o.relativeStopLoss == round(13.0 * 1e5)           # 4013 - 4000
+    assert o.relativeTakeProfit == round(19.0 * 1e5)         # 4000 - 3981
+    assert await ex.on_tickmind(tm(), decided) is None       # decided once
+    assert len(b.orders) == 1
+    await ex.close()
+
+
+async def test_tickmind_guards(tmp_path):
+    b, ex = await make(tmp_path)
+    d: set[str] = set()
+    stale = await ex.on_tickmind(tm(sid="a", age_s=900), d)
+    assert stale["event"] == "skipped" and "old" in stale["reason"]
+    late = await ex.on_tickmind(tm(sid="b", entry=4008.0, stop=4020.0, target=3990.0), d)
+    assert late["event"] == "skipped" and "pips from entry" in late["reason"]   # +80 pips
+    beyond = await ex.on_tickmind(tm(sid="c", entry=4002.0, stop=4013.0, target=4001.0), d)
+    assert beyond["event"] == "skipped" and "beyond" in beyond["reason"]
+    assert b.orders == []
+    await ex.close()
+
+
+async def test_tickmind_switch_is_independent(tmp_path):
+    b, ex = await make(tmp_path, tm_enabled=False, execution_enabled=True)
+    out = await ex.on_tickmind(tm(), set())
+    assert out["event"] == "would_place" and "TICKMIND_EXECUTION_ENABLED" in out["reason"]
+    assert (await ex.on_signal(signal("BUY")))["event"] == "placed"   # callisto unaffected
+    await ex.close()
+
+
+async def test_sources_have_separate_caps_and_only_callisto_trails(tmp_path, monkeypatch):
+    monkeypatch.setattr(X, "CFG", replace(CFG, trail_start_pips=50.0, trail_distance_pips=30.0,
+                                          trail_step_pips=10.0))
+    b, ex = await make(tmp_path)
+    assert (await ex.on_tickmind(tm(side="BUY", entry=4000.3, stop=3990.0, target=4020.0),
+                                 set()))["event"] == "placed"
+    assert (await ex.on_signal(signal("BUY")))["event"] == "placed"   # own cap
+    b.spot(4007.00, 4007.30)                                           # +67 pips
+    await asyncio.sleep(0.05)
+    labels = {m.position_id: m.label for m in ex.managed.values()}
+    assert [labels[a.positionId] for a in b.amends] == ["callisto"]
+    await ex.close()
+
+
+async def test_tickmind_close_is_followed_and_ids_survive_restart(tmp_path):
+    b, ex = await make(tmp_path)
+    await ex.on_tickmind(tm(sid="tg-9"), set())
+    await ex.close()
+    s = settings()
+    ex2 = X.Executor(s, connector=b.srv.connector(),
+                     tokens=X.TokenCache(s, path=tmp_path / "t2.json"))
+    await ex2.connect()
+    await ex2.reconcile()
+    (m,) = ex2.managed.values()
+    assert m.label == "tickmind" and m.post_id == "tg-9"
+    await ex2.on_tickmind(tm(sid="tg-9", status="closed"), set())
+    assert ex2.managed == {} and b.positions == {}
+    await ex2.close()
+
+
+def test_follower_reads_complete_lines_from_offset(tmp_path):
+    p = tmp_path / "events.jsonl"
+    p.write_text('{"a": 1}\n')
+    f = X.Follower(p, None)                 # first start: from the end
+    assert f.read() == []
+    with p.open("a") as fh:
+        fh.write('{"b": "é"}\n{"c": 3')     # second line incomplete
+    assert f.read() == [{"b": "é"}]
+    with p.open("a") as fh:
+        fh.write('}\n')
+    assert f.read() == [{"c": 3}]
+    g = X.Follower(p, f.offset)            # restart from the persisted offset
+    assert g.read() == []

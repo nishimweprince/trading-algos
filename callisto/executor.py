@@ -1,4 +1,14 @@
-"""cTrader execution for Callisto signals (Open API, protobuf over TLS).
+"""cTrader execution for Callisto and Tickmind signals (Open API, protobuf over TLS).
+
+One process, one connection, one token store for both sources: cTrader rotates the refresh
+token on every refresh, so two processes on the same account would lock each other out.
+Positions are labelled `callisto` or `tickmind`; each source has its own switch, size and cap.
+
+Tickmind (TICKMIND_EVENTS_PATH = tickmind/state/events.jsonl): a signal is traded once, when it
+is `active` and its entry/stop/target are known, if it was posted within
+TICKMIND_MAX_SIGNAL_AGE_SECONDS and price is within TICKMIND_MAX_ENTRY_SLIP_PIPS of its entry.
+The order uses Tickmind's own stop and target (as distances from the fill), no trailing.
+When Tickmind marks the signal closed, the position is closed too (TICKMIND_FOLLOW_CLOSE).
 
 Reads the monitor's `signal` events from data/events.jsonl and turns each into a market
 order with stop loss and take profit, then trails the stop client-side with the same rule
@@ -27,6 +37,9 @@ Env (callisto/.env)
   CTRADER_SYMBOLS={"XAUUSD": "XAUUSD"}       signal ticker -> broker symbol name
   EXECUTION_ENABLED=false  LIVE_TRADING_ENABLED=false
   LOTS=0.2  MAX_OPEN_POSITIONS=1  MAX_SIGNAL_AGE_SECONDS=180
+  TICKMIND_EVENTS_PATH=/home/ec2-user/tickmind/state/events.jsonl
+  TICKMIND_EXECUTION_ENABLED=false  TICKMIND_LOTS=0.2  TICKMIND_MAX_OPEN_POSITIONS=1
+  TICKMIND_MAX_SIGNAL_AGE_SECONDS=300  TICKMIND_MAX_ENTRY_SLIP_PIPS=50  TICKMIND_FOLLOW_CLOSE=true
 """
 from __future__ import annotations
 
@@ -68,7 +81,9 @@ from ta_plugin_ctrader.protocol import CTraderProtocolClient, tls_connector
 
 HOSTS = {"demo": "demo.ctraderapi.com", "live": "live.ctraderapi.com"}
 PRICE_SCALE = 100_000  # spot prices and relative SL/TP are in 1/100000 of a price unit
-LABEL = "callisto"
+LABEL = "callisto"            # Callisto positions (trailed)
+TM_LABEL = "tickmind"         # Tickmind positions (its own stop/target, no trailing)
+LABELS = (LABEL, TM_LABEL)
 EXEC_LOG = CFG.data_dir / "executions.jsonl"
 EXEC_STATE = CFG.data_dir / "executor_state.json"
 TOKEN_CACHE = CFG.data_dir / "ctrader_tokens.json"
@@ -96,6 +111,14 @@ class ExecSettings:
     lots: float = float(os.getenv("LOTS") or 0.2)
     max_open: int = int(os.getenv("MAX_OPEN_POSITIONS") or 1)
     max_signal_age_s: float = float(os.getenv("MAX_SIGNAL_AGE_SECONDS") or 180)
+    # Tickmind source (tickmind/watch_signals.py writes state/events.jsonl)
+    tm_events: str = os.getenv("TICKMIND_EVENTS_PATH", "")
+    tm_enabled: bool = _env_bool("TICKMIND_EXECUTION_ENABLED")
+    tm_lots: float = float(os.getenv("TICKMIND_LOTS") or 0.2)
+    tm_max_open: int = int(os.getenv("TICKMIND_MAX_OPEN_POSITIONS") or 1)
+    tm_max_age_s: float = float(os.getenv("TICKMIND_MAX_SIGNAL_AGE_SECONDS") or 300)
+    tm_max_slip_pips: float = float(os.getenv("TICKMIND_MAX_ENTRY_SLIP_PIPS") or 50)
+    tm_follow_close: bool = _env_bool("TICKMIND_FOLLOW_CLOSE", True)
 
     def missing(self) -> list[str]:
         need = {"CTRADER_CLIENT_ID": self.client_id, "CTRADER_CLIENT_SECRET": self.client_secret,
@@ -125,7 +148,7 @@ class SymbolSpec:
 
 @dataclass
 class Managed:
-    """A Callisto position whose stop we trail."""
+    """A position this executor opened (label callisto or tickmind)."""
     position_id: int
     symbol_id: int
     side: str
@@ -134,8 +157,9 @@ class Managed:
     stop_loss: float | None
     take_profit: float | None
     best: float
-    post_id: int | None = None
+    post_id: int | str | None = None   # Callisto post id or Tickmind signal id
     opened: str = ""
+    label: str = LABEL
 
 
 def log(ev: dict, quiet: bool = False) -> dict:
@@ -275,19 +299,26 @@ class Executor:
 
     # -- orders ---------------------------------------------------------------------------
     def build_order(self, spec: SymbolSpec, side: str, client_order_id: str,
-                    comment: str = "") -> ProtoOANewOrderReq:
+                    comment: str = "", *, lots: float | None = None,
+                    sl_distance: float | None = None, tp_distance: float | None = None,
+                    label: str = LABEL) -> ProtoOANewOrderReq:
+        """Market order; SL/TP are price distances from the fill (default: env pips)."""
         pip = CFG.pip(spec.name)
+        sl = sl_distance if sl_distance is not None else CFG.sl_pips * pip
+        tp = tp_distance if tp_distance is not None else CFG.tp_pips * pip
         return ProtoOANewOrderReq(
             ctidTraderAccountId=self.s.account_id, symbolId=spec.symbol_id,
             orderType=ProtoOAOrderType.Value("MARKET"),
             tradeSide=ProtoOATradeSide.Value(side),
-            volume=spec.volume_for(self.s.lots),
-            relativeStopLoss=int(round(CFG.sl_pips * pip * PRICE_SCALE)),
-            relativeTakeProfit=int(round(CFG.tp_pips * pip * PRICE_SCALE)),
-            label=LABEL, comment=comment[:100], clientOrderId=client_order_id)
+            volume=spec.volume_for(self.s.lots if lots is None else lots),
+            relativeStopLoss=int(round(sl * PRICE_SCALE)),
+            relativeTakeProfit=int(round(tp * PRICE_SCALE)),
+            label=label, comment=comment[:100], clientOrderId=client_order_id)
 
-    def can_send(self) -> tuple[bool, str]:
-        if not self.s.execution_enabled:
+    def can_send(self, source: str = LABEL) -> tuple[bool, str]:
+        if source == TM_LABEL and not self.s.tm_enabled:
+            return False, "TICKMIND_EXECUTION_ENABLED is false (dry run)"
+        if source == LABEL and not self.s.execution_enabled:
             return False, "EXECUTION_ENABLED is false (dry run)"
         if self.s.is_live and not self.s.live_trading_enabled:
             return False, "live account and LIVE_TRADING_ENABLED is false"
@@ -318,18 +349,22 @@ class Executor:
     async def reconcile(self):
         res = await self.client.request(ProtoOAReconcileReq(ctidTraderAccountId=self.s.account_id))
         for p in res.position:
-            if p.tradeData.label == LABEL and p.positionId not in self.managed:
+            if p.tradeData.label in LABELS and p.positionId not in self.managed:
                 self.managed[p.positionId] = self._managed_from(p)
         return res
 
     # -- events ---------------------------------------------------------------------------
     def _managed_from(self, p, post_id: int | None = None) -> Managed:
         side = ProtoOATradeSide.Name(p.tradeData.tradeSide)
+        if post_id is None and p.tradeData.comment:
+            # comments are "callisto post <id>" / "tickmind <id>": recover the id after restart
+            last = p.tradeData.comment.split()[-1]
+            post_id = int(last) if last.isdigit() else last
         return Managed(position_id=p.positionId, symbol_id=p.tradeData.symbolId, side=side,
                        entry=p.price, volume=p.tradeData.volume,
                        stop_loss=p.stopLoss if p.HasField("stopLoss") else None,
                        take_profit=p.takeProfit if p.HasField("takeProfit") else None,
-                       best=p.price, post_id=post_id,
+                       best=p.price, post_id=post_id, label=p.tradeData.label or LABEL,
                        opened=datetime.fromtimestamp(p.tradeData.openTimestamp / 1000, UTC)
                        .isoformat(timespec="seconds"))
 
@@ -357,7 +392,7 @@ class Executor:
                     f = self.closes.get(pos.positionId)
                     if f and not f.done():
                         f.set_result(True)
-                elif pos.tradeData.label == LABEL:
+                elif pos.tradeData.label in LABELS:
                     m = self._managed_from(pos)
                     self.managed[pos.positionId] = m
                     f = self.fills.get(coid)
@@ -378,7 +413,8 @@ class Executor:
             return
         bid, ask = self.quotes.get(symbol_id, (None, None))
         for m in list(self.managed.values()):
-            if m.symbol_id != symbol_id or m.position_id in self._amending:
+            if (m.symbol_id != symbol_id or m.position_id in self._amending
+                    or m.label != LABEL):
                 continue
             spec = next((s for s in self.symbols.values() if s.symbol_id == symbol_id), None)
             pip = CFG.pip(spec.name if spec else "XAUUSD")
@@ -421,13 +457,13 @@ class Executor:
     async def on_signal(self, sig: dict) -> dict:
         posted = datetime.fromisoformat(sig["posted_at"])
         age = (datetime.now(UTC) - posted).total_seconds()
-        base = {"post_id": sig.get("post_id"), "ticker": sig.get("ticker"),
+        base = {"source": LABEL, "post_id": sig.get("post_id"), "ticker": sig.get("ticker"),
                 "side": sig.get("direction"), "signal_age_s": round(age)}
         if age > self.s.max_signal_age_s:
             return log({"event": "skipped", "reason": f"signal {age:.0f}s old", **base})
         if sig.get("direction") not in ("BUY", "SELL"):
             return log({"event": "skipped", "reason": "no direction", **base})
-        mine = [m for m in self.managed.values()]
+        mine = [m for m in self.managed.values() if m.label == LABEL]
         if len(mine) >= self.s.max_open:
             return log({"event": "skipped", "reason": f"{len(mine)} open (max {self.s.max_open})",
                         **base})
@@ -440,7 +476,7 @@ class Executor:
         detail = {"symbol": spec.name, "volume": order.volume, "lots": self.s.lots,
                   "sl_pips": CFG.sl_pips, "tp_pips": CFG.tp_pips,
                   "quote": self.quotes.get(spec.symbol_id)}
-        ok, why = self.can_send()
+        ok, why = self.can_send(LABEL)
         if not ok:
             return log({"event": "would_place", "reason": why, **base, **detail})
         try:
@@ -448,6 +484,78 @@ class Executor:
         except Exception as e:  # noqa: BLE001
             return log({"event": "order_failed", "error": repr(e), **base, **detail})
         m.post_id = sig.get("post_id")
+        return log({"event": "placed", **base, **detail, "position": asdict(m)})
+
+    async def on_tickmind(self, ev: dict, decided: set[str]) -> dict | None:
+        """One Tickmind watcher event. A signal is decided once: when it is active and its
+        levels are known (the first `new` often has zeros until the card is read)."""
+        sid = str(ev.get("id"))
+        status = ev.get("status")
+        if status == "closed":
+            if not self.s.tm_follow_close:
+                return None
+            for m in [m for m in self.managed.values()
+                      if m.label == TM_LABEL and str(m.post_id) == sid]:
+                if not self.s.tm_enabled:
+                    log({"event": "would_close", "source": TM_LABEL, "post_id": sid,
+                         "position_id": m.position_id, "reason": "tickmind closed the signal"})
+                    continue
+                try:
+                    await self.close_position(m)
+                    log({"event": "closed_with_signal", "source": TM_LABEL, "post_id": sid,
+                         "position_id": m.position_id, "result_pips": ev.get("result")})
+                except Exception as e:  # noqa: BLE001
+                    log({"event": "close_failed", "source": TM_LABEL, "post_id": sid,
+                         "position_id": m.position_id, "error": repr(e)})
+            return None
+        if status != "active" or sid in decided:
+            return None
+        entry, stop, target = (float(ev.get(k) or 0) for k in ("entry", "stop", "target"))
+        if not (entry and stop and target):
+            return None  # levels not known yet; wait for the update
+        decided.add(sid)
+        side = ev.get("side")
+        age = time.time() - float(ev.get("posted_unix") or 0)
+        base = {"source": TM_LABEL, "post_id": sid, "ticker": ev.get("pair"), "side": side,
+                "signal_age_s": round(age), "entry": entry, "stop": stop, "target": target}
+        if side not in ("BUY", "SELL"):
+            return log({"event": "skipped", "reason": "no direction", **base})
+        if age > self.s.tm_max_age_s:
+            return log({"event": "skipped", "reason": f"signal {age:.0f}s old", **base})
+        mine = [m for m in self.managed.values() if m.label == TM_LABEL]
+        if len(mine) >= self.s.tm_max_open:
+            return log({"event": "skipped",
+                        "reason": f"{len(mine)} open (max {self.s.tm_max_open})", **base})
+        try:
+            spec = await self.symbol(ev.get("pair") or "XAUUSD")
+            bid, ask = await self.quote(spec, timeout=5)
+        except CTraderError as e:
+            return log({"event": "skipped", "reason": str(e), **base})
+        pip = CFG.pip(spec.name)
+        sgn = 1 if side == "BUY" else -1
+        px = ask if side == "BUY" else bid
+        slip = sgn * (px - entry) / pip          # >0: price already ran in the signal's favour
+        sl_dist, tp_dist = sgn * (px - stop), sgn * (target - px)
+        base.update(price=px, slip_pips=round(slip, 1))
+        if abs(slip) > self.s.tm_max_slip_pips:
+            return log({"event": "skipped", "reason": f"price {slip:+.0f} pips from entry "
+                        f"(max {self.s.tm_max_slip_pips:g})", **base})
+        if sl_dist <= 0 or tp_dist <= 0:
+            return log({"event": "skipped", "reason": "price already beyond stop or target",
+                        **base})
+        order = self.build_order(spec, side, f"tickmind-{sid}", comment=f"tickmind {sid}",
+                                 lots=self.s.tm_lots, sl_distance=sl_dist, tp_distance=tp_dist,
+                                 label=TM_LABEL)
+        detail = {"symbol": spec.name, "volume": order.volume, "lots": self.s.tm_lots,
+                  "sl_pips": round(sl_dist / pip, 1), "tp_pips": round(tp_dist / pip, 1)}
+        ok, why = self.can_send(TM_LABEL)
+        if not ok:
+            return log({"event": "would_place", "reason": why, **base, **detail})
+        try:
+            m = await self.place(order)
+        except Exception as e:  # noqa: BLE001
+            return log({"event": "order_failed", "error": repr(e), **base, **detail})
+        m.post_id = sid
         return log({"event": "placed", **base, **detail, "position": asdict(m)})
 
 
@@ -466,18 +574,66 @@ def _write_hb(ex: Executor, started: str, error: str | None = None):
         "environment": ex.environment, "account_id": ex.s.account_id,
         "account_number": ex.s.account_number, "execution_enabled": ex.s.execution_enabled,
         "live_trading_enabled": ex.s.live_trading_enabled, "lots": ex.s.lots,
+        "sources": {
+            LABEL: {"enabled": ex.s.execution_enabled, "lots": ex.s.lots,
+                    "max_open": ex.s.max_open, "sl_pips": CFG.sl_pips, "tp_pips": CFG.tp_pips,
+                    "trail": [CFG.trail_start_pips, CFG.trail_distance_pips,
+                              CFG.trail_step_pips]},
+            TM_LABEL: {"enabled": ex.s.tm_enabled, "watching": bool(ex.s.tm_events),
+                       "lots": ex.s.tm_lots, "max_open": ex.s.tm_max_open,
+                       "max_age_s": ex.s.tm_max_age_s,
+                       "max_slip_pips": ex.s.tm_max_slip_pips,
+                       "follow_close": ex.s.tm_follow_close}},
         "open_positions": [asdict(m) for m in ex.managed.values()],
         "quotes": {str(k): v for k, v in ex.quotes.items()}, "last_error": error}))
+
+
+class Follower:
+    """New complete lines of an append-only JSONL file, from a persisted byte offset."""
+
+    def __init__(self, path: Path, offset: int | None):
+        self.path = path
+        # first start: begin at the end, never trade history
+        self.offset = offset if offset is not None else (
+            path.stat().st_size if path.exists() else 0)
+
+    def read(self) -> list[dict]:
+        if not self.path.exists():
+            return []
+        size = self.path.stat().st_size
+        if size < self.offset:      # file was truncated or replaced
+            self.offset = 0
+        if size == self.offset:
+            return []
+        with self.path.open("rb") as f:
+            f.seek(self.offset)
+            chunk = f.read()
+        done = chunk.rfind(b"\n") + 1
+        self.offset += done
+        out = []
+        for line in chunk[:done].splitlines():
+            try:
+                out.append(json.loads(line))
+            except ValueError:
+                continue
+        return out
 
 
 async def run_service(s: ExecSettings):
     resolve_account(s)
     started = datetime.now(UTC).isoformat(timespec="seconds")
     st = _load_state()
-    events = CFG.data_dir / "events.jsonl"
-    offset = st.get("offset")
-    if offset is None:  # first start: begin at the end, never trade history
-        offset = events.stat().st_size if events.exists() else 0
+    callisto = Follower(CFG.data_dir / "events.jsonl", st.get("offset"))
+    tickmind = Follower(Path(s.tm_events), st.get("tickmind_offset")) if s.tm_events else None
+    decided: set[str] = set(st.get("tickmind_decided", []))
+
+    def save_state():
+        EXEC_STATE.write_text(json.dumps({
+            "offset": callisto.offset,
+            "tickmind_offset": tickmind.offset if tickmind else None,
+            "tickmind_decided": sorted(decided)[-500:]}))
+
+    save_state()
     backoff = 5
     while True:
         ex = Executor(s)
@@ -487,25 +643,22 @@ async def run_service(s: ExecSettings):
             for t in set(s.symbols):
                 await ex.symbol(t)
             log({"event": "executor_ready", "environment": ex.environment,
-                 "account_id": s.account_id, "execution_enabled": s.execution_enabled,
+                 "account_id": s.account_id, "callisto_enabled": s.execution_enabled,
+                 "tickmind_enabled": s.tm_enabled if tickmind else None,
                  "live_trading_enabled": s.live_trading_enabled,
                  "managed": len(ex.managed)})
             backoff = 5
             while ex.client.is_connected:
-                if events.exists() and events.stat().st_size > offset:
-                    with events.open() as f:
-                        f.seek(offset)
-                        chunk = f.read()
-                    done = chunk.rfind("\n") + 1
-                    for line in chunk[:done].splitlines():
-                        try:
-                            ev = json.loads(line)
-                        except ValueError:
-                            continue
-                        if ev.get("event") == "signal":
-                            await ex.on_signal(ev)
-                    offset += len(chunk[:done].encode())
-                    EXEC_STATE.write_text(json.dumps({"offset": offset}))
+                changed = False
+                for ev in callisto.read():
+                    changed = True
+                    if ev.get("event") == "signal":
+                        await ex.on_signal(ev)
+                for ev in (tickmind.read() if tickmind else []):
+                    changed = True
+                    await ex.on_tickmind(ev, decided)
+                if changed:
+                    save_state()
                 _write_hb(ex, started)
                 await asyncio.sleep(1)
             raise ConnectionError("cTrader connection closed")
@@ -537,7 +690,12 @@ async def cmd_check(s: ExecSettings):
         res = await ex.reconcile()
         print(f"open positions: {len(res.position)} (callisto: {len(ex.managed)}), "
               f"pending orders: {len(res.order)}")
-        print("would send orders:", ex.can_send())
+        print("would send callisto orders:", ex.can_send(LABEL))
+        print("tickmind source:", {"events": s.tm_events or None,
+              "readable": bool(s.tm_events) and os.access(s.tm_events, os.R_OK),
+              "lots": s.tm_lots, "max_open": s.tm_max_open, "max_age_s": s.tm_max_age_s,
+              "max_slip_pips": s.tm_max_slip_pips, "follow_close": s.tm_follow_close},
+              "would send:", ex.can_send(TM_LABEL))
     finally:
         await ex.close()
 

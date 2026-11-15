@@ -123,3 +123,17 @@ workspace packages it imports (`ta-core`, `ta-contracts`, `ta-plugin-api`, `plug
 into `vendor/`. It enables `callisto-executor` only once the app credentials are in `.env`.
 Tests: `test_executor.py` runs the order, fill, trail, close, reconcile and token-refresh
 paths over the plugin's wire-level `FakeCTraderServer`.
+
+### Tickmind source
+The same executor also trades Tickmind signals (`tickmind/watch_signals.py` writes
+`state/events.jsonl`; point `TICKMIND_EVENTS_PATH` at it). Both sources share one process,
+because cTrader rotates the refresh token and a second process on the account would lock the
+first one out.
+- A Tickmind signal is decided once, when it is `active` with entry/stop/target known.
+- It is skipped if it is older than `TICKMIND_MAX_SIGNAL_AGE_SECONDS` (300), if price is
+  more than `TICKMIND_MAX_ENTRY_SLIP_PIPS` (50) from its entry, or if price is already past
+  its stop or target.
+- The order uses Tickmind's stop and target as distances from the fill, with no trailing.
+- `TICKMIND_FOLLOW_CLOSE` closes the position when Tickmind marks the signal closed.
+- Positions are labelled `tickmind` and have their own switch (`TICKMIND_EXECUTION_ENABLED`),
+  size (`TICKMIND_LOTS`) and cap. A live account still needs `LIVE_TRADING_ENABLED`.
