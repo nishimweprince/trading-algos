@@ -1,0 +1,7 @@
+numpy>=1.26
+pandas>=2.2
+openai>=1.60
+python-dotenv>=1.0
+requests>=2.31
+telethon>=1.36
+pytest>=8
