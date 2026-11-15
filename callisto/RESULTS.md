@@ -38,3 +38,23 @@ Not proven. 17 trades over one trending week gives t ≈ 1. The gap between the 
 detection delay: entering 15 minutes late leaves nothing. Keep collecting live with
 `monitor.py` and re-run `backtest.py` weekly. Settle SL/TP/trailing only once there are
 several weeks of trades and a week in which the market goes up.
+
+## TP sweep at SL 60 (`sweep_tp.py`, 17 trades, follower, 30 s delay)
+| TP | trail 50/30/10: net | win % | PF | no trail: net | win % | PF |
+|---|---|---|---|---|---|---|
+| 60 | +192 | 65% | 1.53 | +180 | 59% | 1.43 |
+| 70 | +229 | 65% | 1.64 | +280 | 59% | 1.67 |
+| 80 | +222 | 65% | 1.62 | **+380** | 59% | **1.90** |
+| 90 | +224 | 65% | 1.62 | +180 | 47% | 1.33 |
+| 100 | +264 | 65% | 1.73 | +260 | 47% | 1.48 |
+| 110 | +265 | 65% | 1.74 | +340 | 47% | 1.63 |
+| 120 | +295 | 65% | 1.82 | +240 | 41% | 1.40 |
+| 130 | +292 | 65% | 1.81 | +310 | 41% | 1.52 |
+| 140 | +312 | 65% | 1.87 | +380 | 41% | 1.63 |
+| 150 | **+332** | 65% | **1.92** | **+450** | 41% | 1.75 |
+
+- Every cell is profitable, and none is significant (t 0.6–1.3).
+- **With trailing**, net rises almost steadily with TP. There is no peak inside 60–150; the best is the top of the range. In the earlier grid it keeps rising up to TP 400. Win rate stays at 65% because the trail exits the trades that don't reach TP.
+- **Without trailing**, the curve zig-zags. TP 80 (+380, PF 1.90) is a local peak, but its neighbours are +280 and +180: going from 80 to 90 turns two winners into stop-outs. That makes it a single-trade artefact, not a sweet spot.
+- In every cell, buys lose and sells win. A larger TP pays only because the week trended down.
+- Choice: keep **TP 150 with trailing**. It has the smoothest curve, the best PF, the same 65% win rate, and it doesn't depend on one trade flipping. Re-run once a few more weeks are in, ideally including a week when gold rises.
