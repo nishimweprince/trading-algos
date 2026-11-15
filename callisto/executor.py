@@ -582,7 +582,14 @@ def main():
     if args.cmd == "check":
         asyncio.run(cmd_check(s))
     elif args.cmd == "test-order":
-        asyncio.run(cmd_test_order(s, args.side, args.confirm_live, args.hold))
+        try:
+            asyncio.run(cmd_test_order(s, args.side, args.confirm_live, args.hold))
+        except CTraderError as e:
+            hint = {"MARKET_CLOSED": "the order reached the broker; retry when the market opens",
+                    "NOT_ENOUGH_MONEY": "free margin too low for the minimum size"}
+            print(f"broker rejected the test order: {e}"
+                  + (f" ({hint[e.error_code]})" if e.error_code in hint else ""))
+            return 1
     else:
         asyncio.run(run_service(s))
 
