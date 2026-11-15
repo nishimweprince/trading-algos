@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Callisto Monitor</title>
+<style>
+:root {
+  --bg: #f6f5f1; --panel: #ffffff; --ink: #1d1c1a; --muted: #6b6862; --line: #e4e1da;
+  --buy: #157a4a; --buy-bg: #e3f3ea; --sell: #b3261e; --sell-bg: #fbe7e5;
+  --warn: #9a6400; --warn-bg: #fdf1d8; --ok: #157a4a; --bad: #b3261e; --accent: #3b5bdb;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141413; --panel: #1e1d1b; --ink: #ecebe6; --muted: #9a978f; --line: #2f2d2a;
+    --buy: #5cc98f; --buy-bg: #193326; --sell: #f08a80; --sell-bg: #3a1f1c;
+    --warn: #e8b85c; --warn-bg: #362a14; --ok: #5cc98f; --bad: #f08a80; --accent: #8ea4f5;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; }
+main { max-width: 1240px; margin: 0 auto; padding: 20px 16px 48px; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px 20px; margin-bottom: 16px; }
+h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+  margin: 0 0 10px; font-weight: 600; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 99px;
+  font-size: 12px; font-weight: 600; border: 1px solid var(--line); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.live .dot { background: var(--ok); } .stale .dot { background: var(--bad); }
+.muted { color: var(--muted); }
+.grid { display: grid; gap: 14px; grid-template-columns: repeat(12, 1fr); }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px;
+  min-width: 0; }
+.span12 { grid-column: span 12; } .span8 { grid-column: span 8; } .span4 { grid-column: span 4; }
+.span6 { grid-column: span 6; }
+@media (max-width: 900px) { .span8, .span4, .span6 { grid-column: span 12; } }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
+.kpi .v { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.kpi .l { font-size: 12px; color: var(--muted); }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 12px; color: var(--muted); font-weight: 600; white-space: nowrap; }
+td.num, th.num { text-align: right; }
+.scroll { overflow-x: auto; }
+.side { font-weight: 700; padding: 1px 8px; border-radius: 6px; font-size: 12px; }
+.BUY { color: var(--buy); background: var(--buy-bg); } .SELL { color: var(--sell); background: var(--sell-bg); }
+.tag { font-size: 11px; padding: 1px 7px; border-radius: 6px; border: 1px solid var(--line); color: var(--muted); }
+.tag.too_old, .tag.repost { color: var(--warn); background: var(--warn-bg); border-color: transparent; }
+.tag.error { color: var(--bad); background: var(--sell-bg); border-color: transparent; }
+.tag.signal { color: var(--accent); }
+a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+.empty { color: var(--muted); padding: 18px 0; text-align: center; }
+dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 0; }
+dt { color: var(--muted); } dd { margin: 0; font-variant-numeric: tabular-nums; }
+.note { font-size: 12px; color: var(--muted); max-width: 46ch; }
+.feed { max-height: 460px; overflow-y: auto; }
+.pos { color: var(--buy); } .neg { color: var(--sell); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Callisto monitor</h1>
+    <span id="status" class="pill"><span class="dot"></span><span>loading</span></span>
+    <span class="muted" id="sub"></span>
+  </header>
+
+  <div class="grid">
+    <section class="card span12">
+      <div class="kpis" id="kpis"></div>
+    </section>
+
+    <section class="card span12">
+      <h2>Signals (earliest post of each new idea)</h2>
+      <div class="scroll"><table id="signals"></table></div>
+    </section>
+
+    <section class="card span8">
+      <h2>Activity</h2>
+      <div class="feed scroll"><table id="activity"></table></div>
+    </section>
+
+    <section class="card span4">
+      <h2>Trade rules</h2>
+      <dl id="settings"></dl>
+      <h2 style="margin-top:18px">Open ideas</h2>
+      <div id="ideas"></div>
+    </section>
+
+    <section class="card span12">
+      <h2>Last backtest</h2>
+      <div id="backtest"></div>
+    </section>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const fmt = (v, d = 2) => (v === null || v === undefined || v === "") ? "–" : (typeof v === "number" ? v.toLocaleString(undefined, {maximumFractionDigits: d}) : esc(v));
+const ago = (iso, now) => {
+  if (!iso) return "–";
+  const s = Math.max(0, (new Date(now) - new Date(iso)) / 1000);
+  if (s < 90) return `${Math.round(s)}s ago`;
+  if (s < 5400) return `${Math.round(s / 60)}m ago`;
+  if (s < 172800) return `${(s / 3600).toFixed(1)}h ago`;
+  return `${(s / 86400).toFixed(1)}d ago`;
+};
+const time = (iso) => iso ? new Date(iso).toISOString().slice(5, 16).replace("T", " ") + "Z" : "–";
+const signed = (v) => v === null || v === undefined ? "–" :
+  `<span class="${v > 0 ? "pos" : v < 0 ? "neg" : ""}">${v > 0 ? "+" : ""}${fmt(v, 1)}</span>`;
+
+function render(st) {
+  const hb = st.heartbeat || {}, s = st.settings, now = st.now;
+  const age = hb.last_poll ? (new Date(now) - new Date(hb.last_poll)) / 1000 : Infinity;
+  const live = age < Math.max(60, 4 * (s.poll_seconds || 15));
+  $("status").className = "pill " + (live ? "live" : "stale");
+  $("status").lastElementChild.textContent = live ? "live" : (hb.last_poll ? "stalled" : "no heartbeat");
+  $("sub").textContent = `t.me/${s.channel} · ${hb.source || "web"} · last poll ${ago(hb.last_poll, now)} · last post #${hb.last_id || "–"}`;
+
+  const c = st.counts || {};
+  const kpis = [
+    ["signals sent", (c.signal || 0)],
+    ["too old (filtered)", c.too_old || 0],
+    ["reposts", c.repost || 0],
+    ["progress updates", c.update || 0],
+    ["posts classified", Object.entries(c).filter(([k]) => !["start", "error", "update", "repost", "too_old", "signal"].includes(k)).reduce((a, [, v]) => a + v, 0) + (c.signal || 0) + (c.update || 0) + (c.repost || 0) + (c.too_old || 0)],
+    ["errors", hb.errors || 0],
+  ];
+  $("kpis").innerHTML = kpis.map(([l, v]) => `<div class="kpi"><div class="v">${fmt(v, 0)}</div><div class="l">${l}</div></div>`).join("");
+
+  const sig = st.signals || [];
+  $("signals").innerHTML = sig.length ? `<thead><tr><th>Posted</th><th>Side</th><th>Ticker</th>
+    <th class="num">Entry</th><th class="num">Ref price</th><th class="num">SL</th><th class="num">TP</th>
+    <th class="num">Age (pips)</th><th class="num">Age (call→post)</th><th>Note</th><th></th></tr></thead><tbody>` +
+    sig.map((e) => `<tr>
+      <td>${time(e.posted_at)}<div class="muted">${ago(e.posted_at, now)}</div></td>
+      <td><span class="side ${e.direction}">${e.direction}</span>${e.event === "too_old" ? ' <span class="tag too_old">too old</span>' : ""}</td>
+      <td>${esc(e.ticker)}</td>
+      <td class="num">${fmt(e.entry)}${e.entry_range ? `<div class="muted">${fmt(e.entry_range[0])}–${fmt(e.entry_range[1])}</div>` : ""}</td>
+      <td class="num">${fmt(e.reference_price)}</td>
+      <td class="num">${fmt(e.stop_loss)}<div class="muted">${fmt(e.stop_loss_pips, 0)}p</div></td>
+      <td class="num">${fmt(e.take_profit)}<div class="muted">${fmt(e.take_profit_pips, 0)}p</div></td>
+      <td class="num">${signed(e.age?.pips_in_profit)}</td>
+      <td class="num">${e.age?.seconds_since_call != null ? Math.round(e.age.seconds_since_call / 60) + " min" : "–"}</td>
+      <td class="note">${esc(e.note)}</td>
+      <td><a href="${esc(e.post_url)}" target="_blank" rel="noopener">post</a></td></tr>`).join("") + "</tbody>"
+    : `<tbody><tr><td class="empty">No signals yet. The first poll only records the latest post id; signals appear from the next new post on.</td></tr></tbody>`;
+
+  const act = st.activity || [];
+  $("activity").innerHTML = act.length ? "<tbody>" + act.map((e) => {
+    const what = e.event === "update" ? `progress on idea #${e.idea}${e.pips_in_profit != null ? ` (${signed(e.pips_in_profit)} pips)` : ""}`
+      : e.event === "signal" ? `<span class="side ${e.direction}">${e.direction}</span> ${esc(e.ticker)} @ ${fmt(e.entry)}`
+      : e.event === "error" ? esc(e.error) : e.event === "start" ? `monitor started (${esc(e.source)})` : "";
+    return `<tr><td class="muted" style="white-space:nowrap">${time(e.ts)}</td>
+      <td><span class="tag ${esc(e.event)}">${esc(e.event)}</span></td>
+      <td>${what}${e.note ? `<div class="note">${esc(e.note)}</div>` : ""}</td>
+      <td>${e.post_id ? `<a href="https://t.me/${esc(s.channel)}/${e.post_id}" target="_blank" rel="noopener">#${e.post_id}</a>` : ""}</td></tr>`;
+  }).join("") + "</tbody>" : `<tbody><tr><td class="empty">No activity yet.</td></tr></tbody>`;
+
+  const trail = s.trail_start_pips > 0 ? `start ${s.trail_start_pips}, distance ${s.trail_distance_pips}, step ${s.trail_step_pips}` : "off";
+  $("settings").innerHTML = [
+    ["Stop loss", `${s.sl_pips} pips`], ["Take profit", `${s.tp_pips} pips`], ["Trailing", trail],
+    ["Max age", s.max_age_pips ? `${s.max_age_pips} pips` : "off"], ["Grouping", `${s.group_hours} h`],
+    ["Poll", `${s.poll_seconds} s`], ["Classifier", esc(s.model)],
+    ["Webhook", s.webhook ? "on" : "off"], ["Telegram bot", s.telegram_bot ? "on" : "off"],
+  ].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+
+  const ideas = st.open_ideas || [];
+  $("ideas").innerHTML = ideas.length ? "<table><tbody>" + ideas.map((i) => `<tr>
+    <td><span class="side ${i.direction}">${i.direction}</span></td><td class="num">${fmt(i.stated_entry ?? i.later_entry)}</td>
+    <td class="muted">${i.post_ids.length} posts</td><td class="muted">${ago(i.last_seen, now)}</td></tr>`).join("") + "</tbody></table>"
+    : `<div class="empty">None in the last ${s.group_hours * 2} h.</div>`;
+
+  const bt = st.backtest;
+  if (!bt) { $("backtest").innerHTML = `<div class="empty">No backtest summary on this host.</div>`; return; }
+  const f = bt.follower || {}, ch = bt.channel || {};
+  const wk = bt.weekly || {};
+  $("backtest").innerHTML = `<p class="muted" style="margin:0 0 10px">${fmt(bt.days, 0)} days to ${time(bt.generated)} · ${fmt(bt.posts, 0)} posts · ${fmt(bt.ideas, 0)} ideas ·
+    rules SL ${bt.rules.sl} / TP ${bt.rules.tp} / trail ${bt.rules.trail_start > 0 ? `${bt.rules.trail_start}/${bt.rules.trail_dist}/${bt.rules.trail_step}` : "off"}</p>
+    <div class="kpis">
+      <div class="kpi"><div class="v">${fmt(f.trades, 0)}</div><div class="l">trades</div></div>
+      <div class="kpi"><div class="v">${signed(f.net_pips)}</div><div class="l">net pips (follower)</div></div>
+      <div class="kpi"><div class="v">${f.win_rate != null ? Math.round(f.win_rate * 100) + "%" : "–"}</div><div class="l">win rate</div></div>
+      <div class="kpi"><div class="v">${fmt(f.t_stat)}</div><div class="l">t-stat</div></div>
+      <div class="kpi"><div class="v">${signed(ch.net_pips)}</div><div class="l">net pips (channel's entries)</div></div>
+    </div>` + (Object.keys(wk).length ? `<div class="scroll" style="margin-top:12px"><table><thead><tr><th>Week</th><th class="num">Trades</th>
+      <th class="num">Net pips</th><th class="num">BUY</th><th class="num">SELL</th></tr></thead><tbody>` +
+      Object.entries(wk).map(([w, r]) => `<tr><td>${esc(w)}</td><td class="num">${fmt(r.trades, 0)}</td><td class="num">${signed(r.net_pips)}</td>
+      <td class="num">${signed(r.BUY_pips)}</td><td class="num">${signed(r.SELL_pips)}</td></tr>`).join("") + "</tbody></table></div>" : "");
+}
+
+async function tick() {
+  try {
+    const r = await fetch("api/state", {cache: "no-store"});
+    if (r.ok) render(await r.json());
+  } catch (e) { $("status").className = "pill stale"; $("status").lastElementChild.textContent = "UI offline"; }
+}
+tick(); setInterval(tick, 10000);
+</script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+[Unit]
+Description=Callisto signal monitor (t.me/callistofx -> OpenAI -> signal payloads; alert-only, never trades)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+UMask=0077
+User=ec2-user
+WorkingDirectory=/home/ec2-user/callisto
+ExecStart=/home/ec2-user/callisto/.venv/bin/python monitor.py
+Restart=always
+RestartSec=30
+Nice=10
+MemoryMax=600M
+
+[Install]
+WantedBy=multi-user.target

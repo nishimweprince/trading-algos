@@ -34,6 +34,24 @@ from config import CFG
 
 STATE = CFG.data_dir / "monitor_state.json"
 EVENTS = CFG.data_dir / "events.jsonl"
+HEARTBEAT = CFG.data_dir / "heartbeat.json"
+_hb = {"started": None, "source": None, "polls": 0, "errors": 0, "last_poll": None,
+       "last_error": None, "last_id": 0}
+
+
+def heartbeat(mon: Monitor | None = None, error: str | None = None):
+    """Liveness for the UI: last poll time, counters, last post id seen."""
+    now = datetime.now(UTC).isoformat(timespec="seconds")
+    if error:
+        _hb["errors"] += 1
+        _hb["last_error"] = {"ts": now, "error": error[:300]}
+    else:
+        _hb["polls"] += 1
+        _hb["last_poll"] = now
+    if mon is not None:
+        _hb["last_id"] = mon.last_id
+    HEARTBEAT.write_text(json.dumps({**_hb, "poll_seconds": CFG.poll_seconds,
+                                     "channel": CFG.channel}))
 
 
 def payload(idea: signals.Idea, llm: dict, post: dict) -> dict:
@@ -176,6 +194,9 @@ async def run_telethon(mon: Monitor):
                             CFG.telegram_api_hash)
     await client.start()  # interactive phone/code prompt on first run only
     emit({"event": "start", "source": "telethon"})
+    _hb.update(started=datetime.now(UTC).isoformat(timespec="seconds"),
+               source="telethon")
+    heartbeat(mon)
 
     @client.on(events.NewMessage(chats=CFG.channel))
     async def on_msg(ev):
@@ -188,6 +209,7 @@ async def run_telethon(mon: Monitor):
                             text=m.message or "", photos=["telethon"] if images else [],
                             reply_to=m.reply_to_msg_id)
         await asyncio.to_thread(mon.handle, post, images or None)
+        heartbeat(mon)
 
     await client.run_until_disconnected()
 
@@ -201,11 +223,14 @@ def main():
     if args.source == "telethon":
         asyncio.run(run_telethon(mon))
         return
+    _hb.update(started=datetime.now(UTC).isoformat(timespec="seconds"), source="web")
     while True:
         try:
             mon.poll_web()
+            heartbeat(mon)
         except Exception as e:  # noqa: BLE001 - keep the watcher alive
             emit({"event": "error", "error": repr(e)})
+            heartbeat(mon, error=repr(e))
         if args.once:
             break
         time.sleep(CFG.poll_seconds)

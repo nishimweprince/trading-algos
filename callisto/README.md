@@ -78,3 +78,19 @@ Results of the first run are in [RESULTS.md](RESULTS.md).
 - Progress posts with no entry price join whichever open idea on the same side is most recent.
 - The stale check needs prices, so it runs only in the backtest. Live, the `repost` rule and
   `MAX_AGE_PIPS` are the protection against old screenshots.
+
+## Deploy (VM)
+```bash
+deploy/deploy.sh ~/Documents/Markets/VPS/jito.pem ec2-user@ec2-3-65-33-160.eu-central-1.compute.amazonaws.com
+```
+The script rsyncs the code, `.env` (chmod 600) and the classification cache to `~/callisto`,
+builds a Python 3.12 venv, and installs and restarts two systemd units:
+- `callisto-monitor`: web polling every 15 s. It writes `data/events.jsonl` and
+  `data/heartbeat.json`.
+- `callisto-ui`: read-only status page on **127.0.0.1:8079** (`ui_server.py`, stdlib).
+  Set `UI_USER`/`UI_PASSWORD` for basic auth.
+
+The UI binds to localhost only. Reach it with
+`ssh -i jito.pem -N -L 8079:127.0.0.1:8079 ec2-user@<host>` and open http://localhost:8079,
+or publish it through the host's cloudflared tunnel by adding a public hostname in the
+Cloudflare dashboard that points at `http://127.0.0.1:8079`.
