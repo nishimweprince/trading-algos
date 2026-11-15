@@ -39,7 +39,7 @@ detection delay: entering 15 minutes late leaves nothing. Keep collecting live w
 `monitor.py` and re-run `backtest.py` weekly. Settle SL/TP/trailing only once there are
 several weeks of trades and a week in which the market goes up.
 
-## TP sweep at SL 60 (`sweep_tp.py`, 17 trades, follower, 30 s delay)
+## TP sweep at SL 60 (`sweep.py --param tp --sl 60`, 17 trades, follower, 30 s delay)
 | TP | trail 50/30/10: net | win % | PF | no trail: net | win % | PF |
 |---|---|---|---|---|---|---|
 | 60 | +192 | 65% | 1.53 | +180 | 59% | 1.43 |
@@ -58,3 +58,21 @@ several weeks of trades and a week in which the market goes up.
 - **Without trailing**, the curve zig-zags. TP 80 (+380, PF 1.90) is a local peak, but its neighbours are +280 and +180: going from 80 to 90 turns two winners into stop-outs. That makes it a single-trade artefact, not a sweet spot.
 - In every cell, buys lose and sells win. A larger TP pays only because the week trended down.
 - Choice: keep **TP 150 with trailing**. It has the smoothest curve, the best PF, the same 65% win rate, and it doesn't depend on one trade flipping. Re-run once a few more weeks are in, ideally including a week when gold rises.
+
+## SL sweep at TP 150 (`sweep.py --param sl --tp 150 --from 30 --to 100`)
+| SL | trail 50/30/10: net | win % | PF | t | no trail: net | win % | PF | t |
+|---|---|---|---|---|---|---|---|---|
+| 30 | +81 | 29% | 1.23 | 0.31 | +210 | 24% | 1.54 | 0.65 |
+| 40 | +239 | 47% | 1.66 | 0.85 | +460 | 35% | 2.05 | 1.19 |
+| 50 | +244 | 53% | 1.61 | 0.82 | +350 | 35% | 1.64 | 0.86 |
+| 60 | +332 | 65% | 1.92 | 1.12 | +450 | 41% | 1.75 | 1.02 |
+| 70 | +272 | 65% | 1.65 | 0.87 | +570 | 47% | 1.90 | 1.22 |
+| 80 | +337 | 71% | 1.84 | 1.06 | **+940** | 59% | **2.68** | **1.95** |
+| 90 | +287 | 71% | 1.64 | 0.86 | +870 | 59% | 2.38 | 1.73 |
+| 100 | +362 | 76% | 1.90 | 1.10 | +800 | 59% | 2.14 | 1.53 |
+
+- **With trailing**, results are flat (+240 to +360) from SL 40 to SL 100. SL 30 is too tight: 12 of 17 trades stop out. From SL 60 up, sells are a constant +567, so only the buys change the total.
+- **Without trailing**, there is a real plateau at **SL 80–100** (+800 to +940), with SL 80 on top: +940 pips, 59% win rate, PF 2.68, t 1.95. Unlike the TP 80 bump, its neighbours hold up, so this is the sweet spot of this grid.
+- The reason it works: at SL 80 all 8 sells survive their early pullbacks and reach TP 150 (8 × 150 = +1,200). Buys still lose (−260). Trailing caps those sells at +567, which is why no-trail wins at wider stops. This is the same falling-week effect as before.
+- In this sweep, adding a trail lowers net pips in every cell. On one trending week, keeping the trail is a bet that next week won't trend as cleanly.
+- Caveat: SL 80 / TP 150 was chosen from about 60 tested cells on 17 trades from one week, so t 1.95 overstates the evidence.
