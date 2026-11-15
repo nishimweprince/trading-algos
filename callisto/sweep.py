@@ -34,6 +34,8 @@ def main():
     ap.add_argument("--to", dest="stop", type=float, default=150)
     ap.add_argument("--step", type=float, default=10)
     ap.add_argument("--days", type=float, default=7)
+    ap.add_argument("--start", dest="date_from", help="ideas posted on/after YYYY-MM-DD")
+    ap.add_argument("--end", dest="date_to", help="ideas posted before YYYY-MM-DD")
     args = ap.parse_args()
 
     now = datetime.now(UTC)
@@ -45,6 +47,11 @@ def main():
     ideas = [i for i in signals.build(rows) if i.ticker == "XAUUSD"]
     bars = prices.load("XAUUSD", since - timedelta(days=1), now)
     ann = annotate(ideas, bars, STALE_PIPS_DEFAULT)
+    if args.date_from:
+        ann = ann[ann["posted"] >= pd.Timestamp(args.date_from)]
+    if args.date_to:
+        ann = ann[ann["posted"] < pd.Timestamp(args.date_to)]
+    window = f"{args.date_from or 'start'}..{args.date_to or 'now'}"
 
     base = replace(Rules.from_cfg(), sl=args.sl, tp=args.tp)
     if base.trail_start <= 0:  # trailing off in env: compare against the old 50/30/10 trail
@@ -83,10 +90,12 @@ def main():
     df = pd.DataFrame(out)
     out_dir = CFG.data_dir / "results"
     out_dir.mkdir(exist_ok=True)
-    df.to_csv(out_dir / f"sweep_{args.param}_{fixed[0]}{fixed[1]:g}.csv", index=False)
+    windowed = args.date_from or args.date_to
+    tag = f"_{args.date_from or ''}_{args.date_to or ''}" if windowed else ""
+    df.to_csv(out_dir / f"sweep_{args.param}_{fixed[0]}{fixed[1]:g}{tag}.csv", index=False)
     pd.set_option("display.width", 200)
     for name, g in df.groupby("variant", sort=False):
-        print(f"\n== {fixed[0].upper()} {fixed[1]:g}, {name}, "
+        print(f"\n== {window}, {fixed[0].upper()} {fixed[1]:g}, {name}, "
               f"entry delay {CFG.entry_delay_seconds:g}s ==")
         print(g.drop(columns=["variant", fixed[0]]).to_string(index=False))
         best = g.loc[g["net_pips"].idxmax()]

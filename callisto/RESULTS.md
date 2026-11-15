@@ -82,3 +82,73 @@ several weeks of trades and a week in which the market goes up.
 `config.py` and `.env.example`, chosen from the SL sweep above. The tables earlier in this
 file were produced with the old defaults (SL 60, trail 50/30/10). Trailing is still available
 by setting `TRAIL_START_PIPS`.
+
+---
+
+# One-month backtest: 2026-10-15 → 2026-11-15 (run 2026-11-15)
+
+## Pipeline counts
+- 3,210 posts classified: 1,231 signal, 757 promo, 400 member_result, 394 closed_result,
+  225 other, 203 analysis.
+- **125 ideas**, of which 40 are reposts, 18 stale and 3 posted while the market was closed,
+  leaving **64 traded**.
+- Age at first sight: median 48 pips in profit, about 7 minutes after price was last at the
+  stated entry.
+
+## Current defaults (SL 80 / TP 150 / no trailing)
+| model | trades | win % | net pips | t | $/lot |
+|---|---|---|---|---|---|
+| follower | 64 | 42% | +1,090 | 1.19 | +$10,900 |
+| channel (stated entry, optimistic) | 64 | 61% | +3,928 | 4.43 | — |
+
+By week (follower, week starting Monday):
+| week | trades | net pips | BUY | SELL |
+|---|---|---|---|---|
+| Oct 12 | 4 | −90 | +70 | −160 |
+| Oct 19 | 13 | −120 | −100 | −20 |
+| Oct 26 | 13 | +110 | −250 | +360 |
+| Nov 2 | 17 | +250 | +350 | −100 |
+| Nov 9 | 17 | **+940** | −260 | +1,200 |
+
+**Out-of-sample check.** SL 80 was chosen on the Nov 9 week. On the 47 trades before it
+(Oct 15 – Nov 8) the defaults made **+150 pips, t 0.2**: no edge. In that window SL 80 is
+also an isolated spike, with SL 70 at −210 and SL 90 at −150, so the earlier "plateau" did
+not hold. Without trailing, 11 of the 13 out-of-sample SL cells are negative.
+
+## Sweeps (`data/results/sweeps_31d.txt`)
+Net pips, TP 150:
+| SL | month, trail 50/30/10 | month, no trail | Oct 15–Nov 8, trail | Oct 15–Nov 8, no trail |
+|---|---|---|---|---|
+| 30 | +156 | −120 | +74 | −330 |
+| 50 | +240 | −200 | −5 | −550 |
+| 60 | +196 | −60 | −136 | −510 |
+| 70 | +404 | +360 | +132 | −210 |
+| 80 | +471 | **+1,090** | +135 | +150 |
+| 90 | +483 | +720 | +197 | −150 |
+| 100 | +388 | +600 | +27 | −200 |
+| 110 | +475 | +500 | +153 | −230 |
+| 120 | **+822** | +420 | **+541** | −240 |
+| 130 | +819 | +360 | +577 | −230 |
+| 140 | +669 | +30 | +467 | −490 |
+| 150 | +740 | −300 | +578 | −750 |
+
+- **No trailing** only works on the full month because the Nov 9 week is in it. Before that
+  week it loses almost everywhere.
+- **Wide stop with trailing (SL 120–150, TP 150, trail 50/30/10)** is the only region that is
+  positive and flat in both windows: +669 to +822 on the month and +467 to +578 out of
+  sample. Win rate is 75–79%, PF about 1.4, but t is still about 1.0–1.2. The trail closes
+  most trades (4 of 64 reach TP), so TP barely matters there.
+- With SL 80 at the TP end, TP 180–220 without trailing looks best on the month
+  (+1,380 / +1,780). Out of sample it is +400 / +440 at t < 0.5, and TP 240+ turns negative,
+  so I wouldn't use it.
+- No side is consistently right: sells carry the full month at the current defaults
+  (+1,280 vs buys −190), while out of sample the wide-stop trail is carried by buys
+  (+586 to +833).
+
+## Verdict (one month)
+Following the channel is roughly break-even to slightly positive, and not significant: the
+best robust setting gives about +12 pips per trade at t ≈ 1.2 on 64 trades. The channel's
+own entries look strong (+3,928, t 4.4), but a follower arrives about 48 pips late and keeps
+roughly a quarter of that. The SL 80 / no-trail defaults were fitted to one week and failed
+on the three weeks before it. Detection speed (seconds, not minutes) and entering near the
+stated entry would matter more than any SL/TP choice.

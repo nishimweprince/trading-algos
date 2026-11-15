@@ -188,6 +188,20 @@ def run(ann: pd.DataFrame, bars, rules: Rules, model: str = "follower") -> pd.Da
     return pd.DataFrame(out)
 
 
+def by_week(t: pd.DataFrame) -> pd.DataFrame:
+    t = t[t["status"] == "traded"] if len(t) else t
+    if not len(t):
+        return pd.DataFrame()
+    wk = pd.to_datetime(t["posted"]).dt.to_period("W-SUN").dt.start_time.dt.date
+    g = t.groupby(wk)
+    out = g["pips"].agg(trades="count", net_pips="sum", avg="mean")
+    out["win_rate"] = g["pips"].apply(lambda p: (p > 0).mean()).round(2)
+    side = t.pivot_table(index=wk, columns="side", values="pips", aggfunc="sum")
+    out = out.join(side.add_suffix("_pips")).round(1)
+    out.index.name = "week"
+    return out
+
+
 def stats(t: pd.DataFrame) -> dict:
     t = t[t.get("status", pd.Series(dtype=str)) == "traded"] if len(t) else t
     if not len(t):
@@ -264,6 +278,10 @@ def main():
     s_f, s_c = stats(fol), stats(chn)
     print("follower (enter at first post):", s_f)
     print("channel  (stated entry, est. call time):", s_c)
+    weekly = by_week(fol)
+    if len(weekly) > 1:
+        print("\nfollower by week (Mon start):")
+        print(weekly.to_string())
 
     grid = []
     if args.grid:
@@ -284,7 +302,8 @@ def main():
     summary = {"generated": now.isoformat(), "days": args.days, "posts": len(posts),
                "post_kinds": kinds, "ideas": len(ann),
                "skipped": ann["skip"].replace("", np.nan).value_counts().to_dict(),
-               "rules": rules.__dict__, "follower": s_f, "channel": s_c}
+               "rules": rules.__dict__, "follower": s_f, "channel": s_c,
+               "weekly": {str(k): v for k, v in weekly.to_dict("index").items()}}
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=1, default=str))
 
 
