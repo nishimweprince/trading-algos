@@ -47,6 +47,8 @@ def main():
     ann = annotate(ideas, bars, STALE_PIPS_DEFAULT)
 
     base = replace(Rules.from_cfg(), sl=args.sl, tp=args.tp)
+    if base.trail_start <= 0:  # trailing off in env: compare against the old 50/30/10 trail
+        base = replace(base, trail_start=50, trail_dist=30, trail_step=10)
     fixed = ("sl", args.sl) if args.param == "tp" else ("tp", args.tp)
     variants = {
         f"trail {base.trail_start:g}/{base.trail_dist:g}/{base.trail_step:g}": base,

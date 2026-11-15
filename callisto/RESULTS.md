@@ -76,3 +76,9 @@ several weeks of trades and a week in which the market goes up.
 - The reason it works: at SL 80 all 8 sells survive their early pullbacks and reach TP 150 (8 × 150 = +1,200). Buys still lose (−260). Trailing caps those sells at +567, which is why no-trail wins at wider stops. This is the same falling-week effect as before.
 - In this sweep, adding a trail lowers net pips in every cell. On one trending week, keeping the trail is a bet that next week won't trend as cleanly.
 - Caveat: SL 80 / TP 150 was chosen from about 60 tested cells on 17 trades from one week, so t 1.95 overstates the evidence.
+
+## Defaults changed (2026-11-15)
+`SL_PIPS=80`, `TP_PIPS=150` and `TRAIL_START_PIPS=0` (no trailing) are now the defaults in
+`config.py` and `.env.example`, chosen from the SL sweep above. The tables earlier in this
+file were produced with the old defaults (SL 60, trail 50/30/10). Trailing is still available
+by setting `TRAIL_START_PIPS`.

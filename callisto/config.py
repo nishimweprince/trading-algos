@@ -37,9 +37,9 @@ class Config:
     entry_match_pips: float = _f("ENTRY_MATCH_PIPS", 100)  # same idea if entries this close
 
     # Trade management (in pips, measured from OUR fill).
-    sl_pips: float = _f("SL_PIPS", 60)
+    sl_pips: float = _f("SL_PIPS", 80)
     tp_pips: float = _f("TP_PIPS", 150)
-    trail_start_pips: float = _f("TRAIL_START_PIPS", 50)   # 0 = no trailing
+    trail_start_pips: float = _f("TRAIL_START_PIPS", 0)   # 0 = no trailing (sweep, RESULTS.md)
     trail_distance_pips: float = _f("TRAIL_DISTANCE_PIPS", 30)
     trail_step_pips: float = _f("TRAIL_STEP_PIPS", 10)
     max_hold_hours: float = _f("MAX_HOLD_HOURS", 24)

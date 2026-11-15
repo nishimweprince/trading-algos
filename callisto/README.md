@@ -29,9 +29,9 @@ M1 bid/ask data.
 ### Payload (`signal` event)
 ```json
 {"event":"signal","ticker":"XAUUSD","direction":"SELL","entry":3901.99,"entry_range":null,
- "reference_price":3898.52,"stop_loss_pips":60,"take_profit_pips":150,
- "stop_loss":3904.52,"take_profit":3883.52,
- "trailing":{"start_pips":50,"distance_pips":30,"step_pips":10},
+ "reference_price":3898.52,"stop_loss_pips":80,"take_profit_pips":150,
+ "stop_loss":3906.52,"take_profit":3883.52,
+ "trailing":null,
  "channel_sl":null,"channel_tp":null,
  "age":{"pips_in_profit":34.7,"call_time":null,"seconds_since_call":null,"seconds_since_post":4},
  "posted_at":"2026-11-13T07:11:54+00:00","post_id":77882,
