@@ -265,9 +265,10 @@ export class Mt5ExecutionService {
     const request = await this.resolveSubmitRequest(submitting);
     const requestStartedAt = Date.now();
     const submitPath = this.ordersApi ? '/v1/orders' : '/v1/signals';
-    const payload = this.ordersApi ? this.toOrderRequest(request) : request;
+    const payload = this.ordersApi ? this.toOrderRequest(request, submitting.account) : request;
     this.logEvent('signal_submission_started', {
       signalId: submitting.signalId,
+      account: submitting.account,
       attempt: submitting.attempts,
       endpoint: this.endpoint(submitPath),
       request: payload,
@@ -608,7 +609,10 @@ export class Mt5ExecutionService {
   /** The broker-neutral OrderRequest (packages/ta-contracts execution.py). The signal_id is
    * the operation_id and occurred_at is the capture time, so every retry is byte-identical
    * and the service's idempotency replays the first outcome instead of trading twice. */
-  private toOrderRequest(request: Mt5SignalRequest): Record<string, unknown> {
+  private toOrderRequest(
+    request: Mt5SignalRequest,
+    account: string = this.config.executionAccount,
+  ): Record<string, unknown> {
     return {
       operation_id: request.signal_id,
       occurred_at: request.occurred_at,
@@ -617,7 +621,7 @@ export class Mt5ExecutionService {
       execution_type: 'market',
       direction: request.direction,
       targets: [
-        { account: this.config.executionAccount, volume_lots: request.volume },
+        { account, volume_lots: request.volume },
       ],
       stop_loss: request.stop_loss,
       take_profit: request.take_profit,

@@ -194,6 +194,80 @@ describe('execution outbox, EXECUTION_API=orders', () => {
   });
 });
 
+describe('execution outbox, several accounts', () => {
+  let dir: string;
+  let config: AppConfigService;
+  let dedup: DedupService;
+  let service: Mt5ExecutionService;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'exec-multi-'));
+    config = new AppConfigService();
+    config.load({
+      SOURCES: JSON.stringify([{ type: 'TRADING_CENTRAL', url: 'https://example.com/tc' }]),
+      SEEN_STATE_PATH: join(dir, 'seen.json'),
+      MT5_SIGNAL_TRADING_ENABLED: 'true',
+      MT5_SIGNAL_API_URL: 'http://127.0.0.1:8010',
+      MT5_SIGNAL_API_KEY: 'test-api-key-value',
+      MT5_SIGNAL_TIMEOUT_MS: '25',
+      MT5_SIGNAL_RULES: JSON.stringify({ 'XAU/USD': { symbol: 'XAUUSD', volume: '0.10' } }),
+      EXECUTION_API: 'orders',
+      EXECUTION_ACCOUNT: 'icm_demo, ftmo',
+    });
+    dedup = new DedupService(config);
+    dedup.onModuleInit();
+    service = new Mt5ExecutionService(config, dedup);
+  });
+
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('sends one order per account; one account failing does not block the other', async () => {
+    const records = service.createExecutionRecords([idea()]);
+    expect(records.map((r) => r.account)).toEqual(['icm_demo', 'ftmo']);
+    expect(new Set(records.map((r) => r.signalId)).size).toBe(2);
+    dedup.markSeen([idea()], records);
+    const [demoId, ftmoId] = records.map((r) => r.signalId);
+
+    const fetchMock = jest.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/health/trading-ready')) return jsonResponse({ status: 'ready' });
+      const body = JSON.parse(String(init?.body));
+      if (body.targets[0].account === 'ftmo') {
+        return jsonResponse(
+          {
+            error: {
+              code: 'instrument_not_available',
+              message: 'Canonical instrument is not configured for a target account',
+            },
+          },
+          422,
+        );
+      }
+      return jsonResponse(operation(body.operation_id, 'succeeded'), 201);
+    });
+    // a rejected submission is reconciled: the service never recorded it
+    const withStatus = jest.fn(async (url: string, init?: RequestInit) =>
+      url.includes('/v1/operations/')
+        ? jsonResponse({ error: { code: 'operation_not_found', message: 'x' } }, 404)
+        : fetchMock(url, init),
+    );
+    service.setFetchImplementation(withStatus as never);
+
+    await service.processOutbox();
+
+    const bodies = withStatus.mock.calls
+      .filter(([url]) => String(url).endsWith('/v1/orders'))
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)));
+    expect(bodies.map((b) => [b.operation_id, b.targets])).toEqual([
+      [demoId, [{ account: 'icm_demo', volume_lots: '0.10' }]],
+      [ftmoId, [{ account: 'ftmo', volume_lots: '0.10' }]],
+    ]);
+    const byId = Object.fromEntries(dedup.listExecutions().map((r) => [r.signalId, r]));
+    expect(byId[demoId].status).toBe('succeeded');
+    expect(byId[ftmoId].status).toBe('rejected');
+    expect(byId[ftmoId].error).toMatchObject({ code: 'instrument_not_available' });
+  });
+});
+
 describe('config for orders mode and auto-login', () => {
   const base = {
     SOURCES: JSON.stringify([{ type: 'TRADING_CENTRAL', url: 'https://example.com/tc' }]),

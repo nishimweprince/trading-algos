@@ -241,9 +241,13 @@ export function assertRuntimeConfig(config: AppConfig): void {
         'MT5_SIGNAL_RULES must contain at least one symbol and volume rule when MT5 signal trading is enabled.',
       );
     }
-    if (config.EXECUTION_API === 'orders' && !/^[a-z][a-z0-9_-]*$/.test(config.EXECUTION_ACCOUNT)) {
+    const aliases = config.EXECUTION_ACCOUNT.split(',').map((a) => a.trim()).filter(Boolean);
+    if (
+      config.EXECUTION_API === 'orders' &&
+      (aliases.length === 0 || aliases.some((a) => !/^[a-z][a-z0-9_-]*$/.test(a)))
+    ) {
       throw new Error(
-        'EXECUTION_ACCOUNT must be an execution-service account alias when EXECUTION_API=orders.',
+        'EXECUTION_ACCOUNT must list execution-service account aliases (comma-separated) when EXECUTION_API=orders.',
       );
     }
   }

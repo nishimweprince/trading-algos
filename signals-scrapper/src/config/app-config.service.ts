@@ -161,7 +161,14 @@ export class AppConfigService implements OnModuleInit {
   }
 
   get executionAccount(): string {
-    return this.snapshot.EXECUTION_ACCOUNT;
+    return this.executionAccounts[0] ?? '';
+  }
+
+  /** EXECUTION_ACCOUNT may list several aliases ("icm_demo,ftmo"); each gets its own order. */
+  get executionAccounts(): string[] {
+    return this.snapshot.EXECUTION_ACCOUNT.split(',')
+      .map((alias) => alias.trim())
+      .filter(Boolean);
   }
 
   get autoLoginEnabled(): boolean {

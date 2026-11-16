@@ -58,15 +58,33 @@ export class Mt5SignalMapper {
           idea.provider === 'AUTOCHARTIST',
       )
       .filter((idea) => idea.direction === 'UP' || idea.direction === 'DOWN')
-      .map((idea) => this.createRecord(idea));
+      .flatMap((idea) => {
+        if (this.config.executionApi !== 'orders') return [this.createRecord(idea)];
+        // One order per account: the service rejects a whole multi-target order when any
+        // account lacks the instrument, so accounts must not share an operation. The first
+        // account keeps the original id; others get an id scoped to the alias.
+        return this.config.executionAccounts.map((account, index) =>
+          this.createRecord(
+            idea,
+            account,
+            index === 0
+              ? deterministicSignalId(idea.hash)
+              : deterministicSignalId(`${idea.hash}:${account}`),
+          ),
+        );
+      });
   }
 
-  private createRecord(idea: TradingIdea): Mt5ExecutionRecord {
+  private createRecord(
+    idea: TradingIdea,
+    account?: string,
+    signalIdOverride?: string,
+  ): Mt5ExecutionRecord {
     const now = new Date().toISOString();
-    const signalId = deterministicSignalId(idea.hash);
+    const signalId = signalIdOverride ?? deterministicSignalId(idea.hash);
     const rule = this.config.mt5SignalRules[idea.instrument];
     if (!rule) {
-      return this.skipped(signalId, idea, now, 'unmapped_instrument');
+      return { ...this.skipped(signalId, idea, now, 'unmapped_instrument'), account };
     }
 
     const takeProfit = idea.takeProfit ?? idea.target;
@@ -85,7 +103,7 @@ export class Mt5SignalMapper {
       !Number.isFinite(stopLoss) ||
       !Number.isFinite(takeProfit)
     ) {
-      return this.skipped(signalId, idea, now, 'missing_risk_levels');
+      return { ...this.skipped(signalId, idea, now, 'missing_risk_levels'), account };
     }
 
     const hasValidRiskRelationship =
@@ -93,11 +111,11 @@ export class Mt5SignalMapper {
         ? stopLoss < takeProfit
         : stopLoss > takeProfit;
     if (!hasValidRiskRelationship) {
-      return this.skipped(signalId, idea, now, 'invalid_risk_relationship');
+      return { ...this.skipped(signalId, idea, now, 'invalid_risk_relationship'), account };
     }
 
     if (this.hasImplausibleExitLevelMagnitude(idea.entry, stopLoss, takeProfit)) {
-      return this.skipped(signalId, idea, now, 'implausible_exit_level_magnitude');
+      return { ...this.skipped(signalId, idea, now, 'implausible_exit_level_magnitude'), account };
     }
 
     const request: Mt5SignalRequest = {
@@ -116,6 +134,7 @@ export class Mt5SignalMapper {
     return {
       signalId,
       ideaHash: idea.hash,
+      account,
       status: 'pending',
       request,
       attempts: 0,
