@@ -13,7 +13,15 @@ from typing import Any
 
 from google.protobuf.json_format import MessageToDict
 from google.protobuf.message import Message
-from ta_contracts import BrokerOrder, BrokerPosition, Candle, Direction, SymbolInfo, Timeframe
+from ta_contracts import (
+    BrokerDeal,
+    BrokerOrder,
+    BrokerPosition,
+    Candle,
+    Direction,
+    SymbolInfo,
+    Timeframe,
+)
 from ta_core.logging_config import log_event
 from ta_plugin_api.errors import SymbolResolutionError
 from ta_plugin_api.hub import MarketDataHub
@@ -27,6 +35,8 @@ from .proto import (
     ProtoOAAccountsTokenInvalidatedEvent,
     ProtoOAApplicationAuthReq,
     ProtoOAClientDisconnectEvent,
+    ProtoOADealListReq,
+    ProtoOADealStatus,
     ProtoOAExecutionEvent,
     ProtoOAExecutionType,
     ProtoOAGetAccountListByAccessTokenReq,
@@ -754,6 +764,90 @@ class CTraderGateway:
                 await asyncio.sleep(delay)
             self._last_historical[environment] = loop.time()
 
+    async def fetch_deals(
+        self,
+        *,
+        account_alias: str,
+        since: datetime,
+        until: datetime | None = None,
+        max_rows: int = 1000,
+    ) -> tuple[BrokerDeal, ...]:
+        """Deals (fills) executed in [since, until], oldest first.
+
+        Read-only; paged on the historical throttle.
+        """
+        account = self.account(account_alias)
+        if account.catalog is None:
+            raise CTraderError("NOT_CONNECTED", f"account {account_alias} is not ready")
+        environment = account.definition.environment
+        start_ms = int(since.timestamp() * 1000)
+        end_ms = int((until or datetime.now(UTC)).timestamp() * 1000)
+        collected: dict[int, Message] = {}
+        while True:
+            response = await self._enqueue_request(
+                environment,
+                ProtoOADealListReq(
+                    ctidTraderAccountId=account.definition.ctid_trader_account_id,
+                    fromTimestamp=start_ms,
+                    toTimestamp=end_ms,
+                    maxRows=max_rows,
+                ),
+                priority=10,
+                historical=True,
+            )
+            deals = list(response.deal)
+            for deal in deals:
+                collected[int(deal.dealId)] = deal
+            if not response.hasMore or not deals:
+                break
+            oldest = min(int(d.executionTimestamp or d.createTimestamp) for d in deals)
+            if oldest <= start_ms or oldest - 1 >= end_ms:
+                break
+            end_ms = oldest - 1
+        ordered = sorted(
+            collected.values(),
+            key=lambda d: (int(d.executionTimestamp or d.createTimestamp), int(d.dealId)),
+        )
+        return tuple(self._normalize_deal(account, deal) for deal in ordered)
+
+    def _normalize_deal(self, account: GatewayAccount, deal: Message) -> BrokerDeal:
+        catalog = account.catalog
+        instrument = None
+        volume = None
+        with contextlib.suppress(Exception):
+            info = catalog.info(catalog.name_for_id(deal.symbolId))  # type: ignore[union-attr]
+            instrument = info.symbol
+            volume = _protocol_to_lots(int(deal.filledVolume or deal.volume), info.lot_size)
+        money = 10 ** int(deal.moneyDigits) if deal.HasField("moneyDigits") else 100
+        closing = deal.HasField("closePositionDetail")
+        detail = deal.closePositionDetail
+        if closing and detail.HasField("moneyDigits"):
+            money = 10 ** int(detail.moneyDigits)
+        stamp = int(deal.executionTimestamp or deal.createTimestamp)
+        return BrokerDeal(
+            account=account.definition.alias,
+            deal_id=int(deal.dealId),
+            order_id=int(deal.orderId) if deal.HasField("orderId") else None,
+            position_id=int(deal.positionId) if deal.HasField("positionId") else None,
+            instrument=instrument,
+            direction=Direction.BUY if int(deal.tradeSide) == 1 else Direction.SELL,
+            volume_lots=volume,
+            price=Decimal(str(deal.executionPrice)) if deal.HasField("executionPrice") else None,
+            executed_at=datetime.fromtimestamp(stamp / 1000, UTC) if stamp else None,
+            status=ProtoOADealStatus.Name(int(deal.dealStatus))
+            if deal.HasField("dealStatus")
+            else None,
+            closing=closing,
+            entry_price=Decimal(str(detail.entryPrice))
+            if closing and detail.HasField("entryPrice")
+            else None,
+            gross_profit=Decimal(int(detail.grossProfit)) / money if closing else None,
+            commission=Decimal(int(deal.commission)) / money
+            if deal.HasField("commission")
+            else None,
+            swap=Decimal(int(detail.swap)) / money if closing and detail.HasField("swap") else None,
+        )
+
     def list_orders(self, alias: str) -> list[BrokerOrder]:
         account = self.account(alias)
         return [self._normalize_order(account, order) for order in account.orders.values()]
@@ -831,6 +925,13 @@ class CTraderGateway:
             stop_loss=(Decimal(str(position.stopLoss)) if position.HasField("stopLoss") else None),
             take_profit=(
                 Decimal(str(position.takeProfit)) if position.HasField("takeProfit") else None
+            ),
+            label=position.tradeData.label if position.tradeData.HasField("label") else None,
+            comment=position.tradeData.comment if position.tradeData.HasField("comment") else None,
+            opened_at=(
+                datetime.fromtimestamp(position.tradeData.openTimestamp / 1000, UTC)
+                if position.tradeData.HasField("openTimestamp")
+                else None
             ),
         )
 

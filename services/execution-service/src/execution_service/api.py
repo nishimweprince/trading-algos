@@ -4,14 +4,16 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from ta_contracts import (
     AmendOrderRequest,
+    BrokerDeal,
     BrokerOrder,
     BrokerPosition,
     CancelOrderRequest,
@@ -22,6 +24,7 @@ from ta_contracts import (
     OrderRequest,
     PositionProtectionRequest,
 )
+from ta_contracts.market import Candle, Timeframe
 from ta_core import COMMON_ERRORS, ErrorResponse, HealthResponse, ServiceError, create_base_app
 from ta_plugin_api import (
     EXECUTION_GROUP,
@@ -30,6 +33,8 @@ from ta_plugin_api import (
     ExecutionProvider,
     load_providers,
 )
+from ta_plugin_api.errors import SymbolResolutionError
+from ta_plugin_ctrader.errors import CTraderError
 from ta_plugin_ctrader.gateway import CTraderGateway
 from ta_plugin_mt5.terminal import MT5Adapter
 from ta_store import ExecutionRepository, OcoGroupStore
@@ -535,5 +540,72 @@ def create_app(
                     404, "quote_unavailable", f"No quote yet for {instrument} on {alias}"
                 )
             return quote
+
+        def _read_account(alias: str):
+            if gateway is None:
+                raise ServiceError(
+                    404, "history_unavailable", "This profile serves no broker history"
+                )
+            try:
+                return gateway.account(alias)
+            except KeyError as exc:
+                raise ServiceError(404, "account_not_found", str(exc)) from exc
+
+        @app.get(
+            "/v1/accounts/{alias}/candles",
+            response_model=list[Candle],
+            responses={401: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+            dependencies=[Depends(authenticate)],
+        )
+        async def account_candles(
+            alias: str,
+            instrument: str,
+            timeframe: Timeframe = Timeframe.M1,
+            count: int = Query(default=500, ge=1, le=5000),
+            to: datetime | None = None,
+        ) -> list[Candle]:
+            """Closed broker trendbars (bid), stamped at their UTC interval end, oldest first.
+
+            Read-only, over the execution connection's own session (historical throttle, low
+            priority behind orders), so strategies that trade through this service need no
+            second cTrader grant. At most 5000 bars per call; page backwards with `to`.
+            """
+            _read_account(alias)
+            try:
+                candles = await gateway.fetch_candles(
+                    account_alias=alias,
+                    symbol=instrument.strip().upper(),
+                    timeframe=timeframe,
+                    count=count,
+                    to=to,
+                )
+            except CTraderError as exc:
+                raise ServiceError(503, "broker_unavailable", str(exc)) from exc
+            except (KeyError, SymbolResolutionError) as exc:
+                raise ServiceError(404, "instrument_not_found", str(exc)) from exc
+            return list(candles)
+
+        @app.get(
+            "/v1/accounts/{alias}/deals",
+            response_model=list[BrokerDeal],
+            responses={401: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+            dependencies=[Depends(authenticate)],
+        )
+        async def account_deals(
+            alias: str, since: datetime, until: datetime | None = None
+        ) -> list[BrokerDeal]:
+            """Broker deals (fills) executed in [since, until], oldest first. Read-only.
+
+            Closing deals carry the closed position's entry price and P&L, which is how a
+            strategy learns the real exit of a position the broker closed at its SL or TP.
+            """
+            _read_account(alias)
+            if since.tzinfo is None or (until is not None and until.tzinfo is None):
+                raise ServiceError(422, "naive_timestamp", "since/until must include a timezone")
+            try:
+                deals = await gateway.fetch_deals(account_alias=alias, since=since, until=until)
+            except CTraderError as exc:
+                raise ServiceError(503, "broker_unavailable", str(exc)) from exc
+            return list(deals)
 
     return app

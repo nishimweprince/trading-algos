@@ -276,3 +276,31 @@ class BrokerPosition(BaseModel):
     price: Decimal | None = None
     stop_loss: Decimal | None = None
     take_profit: Decimal | None = None
+    # cTrader trade label / comment (the order's `source` and `note`), so callers can tell
+    # their positions apart.
+    label: str | None = None
+    comment: str | None = None
+    opened_at: datetime | None = None
+
+
+class BrokerDeal(BaseModel):
+    """One broker fill (cTrader deal).
+
+    Closing deals carry the closed position's entry price and P&L.
+    """
+
+    account: str
+    deal_id: int
+    order_id: int | None = None
+    position_id: int | None = None
+    instrument: str | None = None
+    direction: Direction | None = None
+    volume_lots: Decimal | None = None
+    price: Decimal | None = None
+    executed_at: datetime | None = None
+    status: str | None = None
+    closing: bool = False
+    entry_price: Decimal | None = None
+    gross_profit: Decimal | None = None
+    commission: Decimal | None = None
+    swap: Decimal | None = None
