@@ -44,6 +44,15 @@ export function chromeExecutableCandidates(
       join(home, 'Applications/Google Chrome.app/Contents/MacOS/Google Chrome'),
     ];
   }
+  if (os === 'LINUX') {
+    return [
+      '/usr/bin/google-chrome-stable',
+      '/usr/bin/google-chrome',
+      '/opt/google/chrome/chrome',
+      '/usr/bin/chromium-browser',
+      '/usr/bin/chromium',
+    ];
+  }
 
   const programFiles = env.PROGRAMFILES ?? env.ProgramFiles;
   const programFilesX86 =
@@ -93,6 +102,7 @@ export function buildChromeArgs(
   endpoint: string,
   userDataDir: string,
   initialUrls: string[],
+  os?: ResolvedHostOs,
 ): string[] {
   const url = new URL(endpoint);
   const port = url.port || (url.protocol === 'https:' ? '443' : '80');
@@ -104,6 +114,8 @@ export function buildChromeArgs(
     `--user-data-dir=${userDataDir}`,
     '--no-first-run',
     '--no-default-browser-check',
+    // A headless Linux service has no keyring daemon; without this Chrome blocks on it.
+    ...(os === 'LINUX' ? ['--password-store=basic'] : []),
     ...initialUrls,
   ];
 }
@@ -206,6 +218,7 @@ export class ChromeLauncherService {
       this.config.cdpEndpoint,
       userDataDir,
       initialUrls,
+      os,
     );
 
     this.logger.log(

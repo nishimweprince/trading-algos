@@ -1,0 +1,18 @@
+# Trading Central / Autochartist scraper. Orders go to execution-service (EXECUTION_API=orders);
+# this process holds no broker credentials.
+[Unit]
+Description=signals-scrapper (IC Markets research -> execution-service)
+After=scraper-chrome.service execution-service.service
+Requires=scraper-chrome.service
+
+[Service]
+User=ec2-user
+WorkingDirectory=/home/ec2-user/signals-scrapper
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node dist/main.js
+Restart=always
+RestartSec=30
+MemoryMax=800M
+
+[Install]
+WantedBy=multi-user.target

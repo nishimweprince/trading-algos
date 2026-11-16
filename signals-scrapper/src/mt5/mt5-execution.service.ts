@@ -45,6 +45,26 @@ const StatusResponseSchema = z
   })
   .passthrough();
 
+// services/execution-service broker-neutral API (EXECUTION_API=orders): OperationResponse.
+const OperationResponseSchema = z
+  .object({
+    operation_id: z.string().uuid(),
+    state: z.enum(['pending', 'succeeded', 'partial_failure', 'rejected', 'unknown']),
+    targets: z
+      .array(
+        z
+          .object({
+            state: z.string(),
+            error_code: z.string().nullable().optional(),
+            error_message: z.string().nullable().optional(),
+          })
+          .passthrough(),
+      )
+      .default([]),
+  })
+  .passthrough();
+type OperationResponse = z.infer<typeof OperationResponseSchema>;
+
 const ErrorResponseSchema = z.object({
   error: z.object({
     code: z.string(),
@@ -183,12 +203,15 @@ export class Mt5ExecutionService {
 
   private async isReady(pendingCount: number): Promise<boolean> {
     const startedAt = Date.now();
+    const readinessPath = this.ordersApi ? '/health/trading-ready' : '/health/ready';
     this.logEvent('readiness_check_started', {
-      endpoint: this.endpoint('/health/ready'),
+      endpoint: this.endpoint(readinessPath),
       pending: pendingCount,
     });
     try {
-      const response = await this.request('/health/ready');
+      const response = await this.request(readinessPath, {
+        headers: this.ordersApi ? { 'X-API-Key': this.config.mt5SignalApiKey } : {},
+      });
       const body = await this.readJson(response);
       const ready =
         response.ok &&
@@ -241,22 +264,24 @@ export class Mt5ExecutionService {
     });
     const request = await this.resolveSubmitRequest(submitting);
     const requestStartedAt = Date.now();
+    const submitPath = this.ordersApi ? '/v1/orders' : '/v1/signals';
+    const payload = this.ordersApi ? this.toOrderRequest(request) : request;
     this.logEvent('signal_submission_started', {
       signalId: submitting.signalId,
       attempt: submitting.attempts,
-      endpoint: this.endpoint('/v1/signals'),
-      request,
+      endpoint: this.endpoint(submitPath),
+      request: payload,
     });
 
     let response: Response;
     try {
-      response = await this.request('/v1/signals', {
+      response = await this.request(submitPath, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'X-API-Key': this.config.mt5SignalApiKey,
         },
-        body: JSON.stringify(request),
+        body: JSON.stringify(payload),
       });
     } catch (err) {
       this.dedup.updateExecution(record.signalId, {
@@ -292,6 +317,15 @@ export class Mt5ExecutionService {
       },
       response.ok ? 'log' : 'warn',
     );
+    if (response.ok && this.ordersApi) {
+      const operation = OperationResponseSchema.safeParse(body);
+      if (operation.success) {
+        this.applyOperation(record.signalId, operation.data);
+        return;
+      }
+      await this.reconcile(submitting, 'submitting');
+      return;
+    }
     if (response.ok) {
       const parsed = SuccessResponseSchema.safeParse(body);
       if (parsed.success) {
@@ -338,7 +372,10 @@ export class Mt5ExecutionService {
     });
     let response: Response;
     try {
-      response = await this.request(`/v1/signals/${record.signalId}`, {
+      const statusPath = this.ordersApi
+        ? `/v1/operations/${record.signalId}`
+        : `/v1/signals/${record.signalId}`;
+      response = await this.request(statusPath, {
         headers: { 'X-API-Key': this.config.mt5SignalApiKey },
       });
     } catch (err) {
@@ -398,6 +435,22 @@ export class Mt5ExecutionService {
         status: 'submitting',
         error: this.parseApiError(body, response.status),
       });
+      return;
+    }
+
+    if (this.ordersApi) {
+      const operation = OperationResponseSchema.safeParse(body);
+      if (operation.success) {
+        this.applyOperation(record.signalId, operation.data, fallbackError);
+      } else {
+        this.dedup.updateExecution(record.signalId, {
+          status: 'submitting',
+          error: {
+            code: 'invalid_status_response',
+            message: 'execution-service returned an invalid operation response',
+          },
+        });
+      }
       return;
     }
 
@@ -477,6 +530,9 @@ export class Mt5ExecutionService {
     request: Mt5SignalRequest,
   ): Promise<Mt5SignalRequest> {
     const baseUrl = this.config.marketDataUrl.replace(/\/$/, '');
+    if (!baseUrl && this.ordersApi) {
+      return this.refreshFromExecutionQuote(request);
+    }
     if (!baseUrl) {
       this.logEvent(
         'autochartist_tick_unconfigured',
@@ -528,6 +584,101 @@ export class Mt5ExecutionService {
           symbol: request.symbol,
           direction: request.direction,
           forecast: request.take_profit,
+          previousStopLoss: request.stop_loss,
+          stopLoss: refreshed.stop_loss,
+          bid: parsed.data.bid,
+          ask: parsed.data.ask,
+        });
+      }
+      return refreshed;
+    } catch (err) {
+      this.logEvent(
+        'autochartist_tick_fetch_failed',
+        { symbol: request.symbol, error: this.safeMessage(err) },
+        'warn',
+      );
+      return request;
+    }
+  }
+
+  private get ordersApi(): boolean {
+    return this.config.executionApi === 'orders';
+  }
+
+  /** The broker-neutral OrderRequest (packages/ta-contracts execution.py). The signal_id is
+   * the operation_id and occurred_at is the capture time, so every retry is byte-identical
+   * and the service's idempotency replays the first outcome instead of trading twice. */
+  private toOrderRequest(request: Mt5SignalRequest): Record<string, unknown> {
+    return {
+      operation_id: request.signal_id,
+      occurred_at: request.occurred_at,
+      source: request.source,
+      instrument: request.symbol,
+      execution_type: 'market',
+      direction: request.direction,
+      targets: [
+        { account: this.config.executionAccount, volume_lots: request.volume },
+      ],
+      stop_loss: request.stop_loss,
+      take_profit: request.take_profit,
+      note: `signals-scrapper ${request.note}`.slice(0, 500),
+    };
+  }
+
+  private applyOperation(
+    signalId: string,
+    operation: OperationResponse,
+    fallbackError?: Mt5ExecutionError,
+  ): void {
+    const target = operation.targets[0];
+    const error: Mt5ExecutionError | undefined = target?.error_code
+      ? { code: target.error_code, message: target.error_message ?? target.error_code }
+      : undefined;
+    if (operation.state === 'succeeded') {
+      this.transition(signalId, 'succeeded', undefined, operation);
+    } else if (operation.state === 'rejected') {
+      this.transition(signalId, 'rejected', error ?? {
+        code: 'operation_rejected',
+        message: 'execution-service rejected the order',
+      });
+    } else if (operation.state === 'pending') {
+      this.transition(signalId, 'submitting', fallbackError);
+    } else {
+      this.transition(signalId, 'unknown', error ?? {
+        code: `operation_${operation.state}`,
+        message: 'execution-service could not confirm the outcome',
+      });
+    }
+  }
+
+  private async refreshFromExecutionQuote(
+    request: Mt5SignalRequest,
+  ): Promise<Mt5SignalRequest> {
+    const account = encodeURIComponent(this.config.executionAccount);
+    const instrument = encodeURIComponent(request.symbol);
+    try {
+      const response = await this.request(
+        `/v1/accounts/${account}/quote?instrument=${instrument}`,
+        { headers: { 'X-API-Key': this.config.mt5SignalApiKey } },
+      );
+      const body = await this.readJson(response);
+      const parsed = MarketQuoteSchema.safeParse(body);
+      if (!response.ok || !parsed.success) {
+        this.logEvent(
+          'autochartist_tick_unavailable',
+          { symbol: request.symbol, httpStatus: response.status, response: body },
+          'warn',
+        );
+        return request;
+      }
+      const refreshed = refreshAutochartistRequestStopLoss(
+        request,
+        parsed.data.bid,
+        parsed.data.ask,
+      );
+      if (refreshed.stop_loss !== request.stop_loss) {
+        this.logEvent('autochartist_stop_loss_refreshed', {
+          symbol: request.symbol,
           previousStopLoss: request.stop_loss,
           stopLoss: refreshed.stop_loss,
           bid: parsed.data.bid,

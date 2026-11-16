@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ScheduleModule } from '@nestjs/schedule';
+import { IcLoginService } from './auth/ic-login.service';
 import { BrowserService } from './browser/browser.service';
 import { ChromeLauncherService } from './browser/chrome-launcher.service';
 import { AppConfigModule } from './config/config.module';
@@ -22,6 +23,7 @@ import { ShutdownService } from './shutdown.service';
     JsonlLoggerService,
     OpenAiVisionService,
     Mt5ExecutionService,
+    IcLoginService,
     TradingCentralExtractor,
     AutochartistExtractor,
     ScraperService,

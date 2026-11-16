@@ -1,0 +1,17 @@
+# Dedicated Chrome profile the scraper attaches to over CDP (127.0.0.1:9222).
+# Log in to IC Markets once through it (README "Manual login") or let AUTO_LOGIN do it.
+[Unit]
+Description=Chrome for signals-scrapper (CDP 127.0.0.1:9222, display :99)
+After=scraper-xvfb.service
+Requires=scraper-xvfb.service
+
+[Service]
+User=ec2-user
+Environment=DISPLAY=:99
+ExecStart=/usr/bin/google-chrome-stable --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=/home/ec2-user/signals-scrapper/.chrome-profile --no-first-run --no-default-browser-check --password-store=basic --window-size=1600,1000 https://secure.ic.com/TradingCentral/TradingCentral
+Restart=always
+RestartSec=10
+MemoryMax=2500M
+
+[Install]
+WantedBy=multi-user.target

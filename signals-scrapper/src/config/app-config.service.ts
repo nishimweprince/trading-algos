@@ -156,6 +156,34 @@ export class AppConfigService implements OnModuleInit {
     return this.snapshot.MT5_SIGNAL_RULES;
   }
 
+  get executionApi(): AppConfig['EXECUTION_API'] {
+    return this.snapshot.EXECUTION_API;
+  }
+
+  get executionAccount(): string {
+    return this.snapshot.EXECUTION_ACCOUNT;
+  }
+
+  get autoLoginEnabled(): boolean {
+    return this.snapshot.AUTO_LOGIN_ENABLED;
+  }
+
+  get icLoginEmail(): string {
+    return this.snapshot.IC_LOGIN_EMAIL;
+  }
+
+  get icLoginPassword(): string {
+    return this.snapshot.IC_LOGIN_PASSWORD;
+  }
+
+  get icTotpSecret(): string {
+    return this.snapshot.IC_TOTP_SECRET;
+  }
+
+  get autoLoginCooldownMinutes(): number {
+    return this.snapshot.AUTO_LOGIN_COOLDOWN_MINUTES;
+  }
+
   get marketDataUrl(): string {
     return this.snapshot.MARKET_DATA_URL;
   }
