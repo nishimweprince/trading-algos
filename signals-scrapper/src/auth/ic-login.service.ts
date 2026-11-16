@@ -52,27 +52,32 @@ export class IcLoginService {
   }
 
   private async attempt(page: Page): Promise<LoginOutcome> {
-    const timeout = this.config.navTimeoutMs;
+    const waitMs = Math.max(this.config.navTimeoutMs, 45_000);
     await this.dismissCookieBanner(page);
-    const email = page.locator('input#email, input[type="email"]').first();
-    const password = page.locator('input#password, input[type="password"]').first();
-    if (!(await email.isVisible().catch(() => false))) return 'no_login_form';
 
-    await email.fill(this.config.icLoginEmail);
-    await password.fill(this.config.icLoginPassword);
-    await page
-      .locator('button[type="submit"]', { hasText: /log\s*in|sign\s*in/i })
-      .first()
-      .click();
-    await page.waitForLoadState('networkidle', { timeout }).catch(() => undefined);
+    // A previous attempt may have left the tab on the 2FA screen: go straight to the code.
+    if ((await this.twoFactorInputs(page)).length === 0) {
+      const email = page.locator('input#email, input[type="email"]').first();
+      const password = page.locator('input#password, input[type="password"]').first();
+      if (!(await email.isVisible().catch(() => false))) return 'no_login_form';
 
-    if (await this.captchaChallengeVisible(page)) return 'captcha';
+      await email.fill(this.config.icLoginEmail);
+      await password.fill(this.config.icLoginPassword);
+      await page
+        .locator('button[type="submit"]', { hasText: /log\s*in|sign\s*in/i })
+        .first()
+        .click();
+      // The login posts in the background (reCAPTCHA token + XHR) and the button spins;
+      // "network idle" fires before it settles, so wait for an actual outcome.
+      const step = await this.waitForOutcome(page, waitMs, 'login');
+      if (step === 'captcha') return 'captcha';
+      if (step === 'error') return 'rejected';
+      if (step === 'left_login') return 'logged_in'; // no second factor (remembered device)
+      if (step === 'timeout') return (await this.stillOnLoginForm(page)) ? 'rejected' : 'error';
+    }
 
     const codeInputs = await this.twoFactorInputs(page);
-    if (codeInputs.length === 0) {
-      if (await this.stillOnLoginForm(page)) return 'rejected';
-      return 'logged_in'; // no second factor asked for (e.g. remembered device)
-    }
+    if (codeInputs.length === 0) return 'error';
 
     // A code about to expire may be stale by the time it is checked; wait for a fresh one.
     if (totpSecondsRemaining(this.now()) < 5) {
@@ -84,19 +89,67 @@ export class IcLoginService {
     } else {
       await codeInputs[0].fill(code);
     }
-    const confirm = page
-      .locator('button[type="submit"], button', {
-        hasText: /verify|confirm|continue|submit|log\s*in|sign\s*in/i,
-      })
-      .first();
+    const verify = page.locator('#VerifyBtn').first();
+    const confirm = (await verify.isVisible().catch(() => false))
+      ? verify
+      : page
+          .locator('button[type="submit"], input[type="submit"], button', {
+            hasText: /verify|confirm|continue|submit|log\s*in|sign\s*in/i,
+          })
+          .first();
     if (await confirm.isVisible().catch(() => false)) await confirm.click();
     else await codeInputs[codeInputs.length >= 6 ? 5 : 0].press('Enter');
-    await page.waitForLoadState('networkidle', { timeout }).catch(() => undefined);
 
-    if (await this.captchaChallengeVisible(page)) return 'captcha';
-    if ((await this.twoFactorInputs(page)).length > 0) return 'two_factor_failed';
-    if (await this.stillOnLoginForm(page)) return 'rejected';
-    return 'logged_in';
+    const step = await this.waitForOutcome(page, waitMs, 'two_factor');
+    if (step === 'captcha') return 'captcha';
+    if (step === 'left_two_factor' || step === 'left_login') return 'logged_in';
+    return 'two_factor_failed';
+  }
+
+  /**
+   * Poll until the submit has a visible result. For the login step: the 2FA field shows,
+   * the page leaves /Account/LogOn, an error appears, or a challenge appears. For the 2FA
+   * step: the page leaves /TwoFactor (or an error/challenge appears).
+   */
+  private async waitForOutcome(
+    page: Page,
+    timeoutMs: number,
+    stage: 'login' | 'two_factor',
+  ): Promise<
+    'two_factor' | 'left_login' | 'left_two_factor' | 'captcha' | 'error' | 'timeout'
+  > {
+    const end = Date.now() + timeoutMs;
+    while (Date.now() < end) {
+      await page.waitForTimeout(500);
+      if (await this.captchaChallengeVisible(page)) return 'captcha';
+      const path = (() => {
+        try {
+          return new URL(page.url()).pathname.toLowerCase();
+        } catch {
+          return '';
+        }
+      })();
+      if (stage === 'login') {
+        if ((await this.twoFactorInputs(page)).length > 0) return 'two_factor';
+        if (path && !path.includes('/account/logon')) {
+          if (path.includes('/twofactor')) continue; // 2FA page still rendering
+          return 'left_login';
+        }
+      } else if (path && !path.includes('/twofactor') && !path.includes('/account/logon')) {
+        return 'left_two_factor';
+      }
+      if (await this.errorShown(page)) return 'error';
+    }
+    return 'timeout';
+  }
+
+  private async errorShown(page: Page): Promise<boolean> {
+    return page
+      .locator('.validation-summary-errors, .field-validation-error, [role="alert"], .alert-danger, .text-danger')
+      .filter({ hasText: /\S/ })
+      .first()
+      .isVisible()
+      .catch(() => false);
   }
 
   private async dismissCookieBanner(page: Page): Promise<void> {
@@ -109,6 +162,8 @@ export class IcLoginService {
 
   private async twoFactorInputs(page: Page) {
     const selectors = [
+      'input#inpTwoFactorKey',
+      'input[name="TwoFactorKey"]',
       'input[autocomplete="one-time-code"]',
       'input[name*="code" i]:not([type="hidden"])',
       'input[id*="code" i]:not([type="hidden"])',

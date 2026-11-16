@@ -61,6 +61,7 @@ describe('IcLoginService guards', () => {
     const page = {
       locator: () => ({
         first: () => ({ isVisible: async () => false }),
+        all: async () => [],
       }),
     };
     await expect(login.login(page as never)).resolves.toBe('no_login_form');
