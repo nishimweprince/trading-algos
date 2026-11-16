@@ -224,6 +224,21 @@ export interface WaitForTradingCentralCardsOptions {
   sleep?: (ms: number) => Promise<void>;
 }
 
+/** Below this the widget shows one clipped column (Target/Pivot cut off). */
+const TC_MIN_FRAME_WIDTH = 900;
+
+async function frameWidth(frame: { frameElement: () => Promise<unknown> }): Promise<number | undefined> {
+  try {
+    const element = (await frame.frameElement()) as {
+      boundingBox: () => Promise<{ width: number } | null>;
+    };
+    const box = await element.boundingBox();
+    return box?.width;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Poll the Trading Central Recognia iframe until idea-card markers appear.
  * Returns true when ready, false when the timeout elapses.
@@ -244,8 +259,16 @@ export async function waitForTradingCentralCards(
           () => document.body?.innerText ?? '',
         );
         if (isTradingCentralContentReady(text)) {
-          logger.log('Trading Central idea cards are visible in the Recognia iframe');
-          return true;
+          // Cards can render while the widget is still at a narrow width, which cuts off
+          // the Target/Pivot rows. Wait until the iframe has its full layout width.
+          const width = await frameWidth(frame);
+          if (width === undefined || width >= TC_MIN_FRAME_WIDTH) {
+            logger.log('Trading Central idea cards are visible in the Recognia iframe');
+            return true;
+          }
+          await frame
+            .evaluate(() => window.dispatchEvent(new Event('resize')))
+            .catch(() => undefined);
         }
       } catch {
         // Frame may still be loading.

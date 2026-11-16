@@ -81,6 +81,16 @@ export class AutochartistExtractor implements IdeaExtractor {
       }
 
       await page.waitForTimeout(settleMs).catch(() => undefined);
+      // The cookie modal (it only offers "Allow") covers the current price, which the
+      // vision step needs. Hide it in this view only; nothing is clicked or consented to.
+      await page
+        .evaluate(() => {
+          const modal = document.querySelector<HTMLElement>('#cookie-consent-modal');
+          if (modal) modal.style.display = 'none';
+          document.querySelectorAll('.modal-backdrop').forEach((el) => el.remove());
+          document.body.classList.remove('modal-open');
+        })
+        .catch(() => undefined);
     } catch (err) {
       this.logger.warn(
         `prepareForScreenshot failed (${err instanceof Error ? err.message : String(err)}); screenshotting current view`,
