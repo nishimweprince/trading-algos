@@ -216,6 +216,31 @@ export class BrowserService implements OnModuleDestroy {
         this.sharedPage = opened;
         return opened;
       }
+      if (!matching && this.config.chromeProfile === 'DEDICATED') {
+        // The scraper's own Chrome: after a login IC Markets lands on another client-area
+        // page (e.g. /Home/Dashboard). Adopt that same-host tab and send it to the source,
+        // but never the tracked Autochartist tab and never an unrelated site.
+        const sourceHost = new URL(sourceUrl).host;
+        const sameHost = ctx
+          .pages()
+          .filter((page) => !page.isClosed() && page !== this.autochartistPage)
+          .find((page) => {
+            try {
+              return new URL(page.url()).host === sourceHost;
+            } catch {
+              return false;
+            }
+          });
+        if (sameHost) {
+          this.logger.log(
+            `Adopting ${new URL(sameHost.url()).pathname} tab for ${normalizeTabUrl(sourceUrl)}`,
+          );
+          this.applyTimeouts(sameHost);
+          await this.navigate(sameHost, sourceUrl);
+          this.sharedPage = sameHost;
+          return sameHost;
+        }
+      }
       if (!matching) {
         throw new BrowserAccessError(
           'matching_tab_not_found',
