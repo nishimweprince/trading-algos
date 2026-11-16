@@ -8,7 +8,7 @@ Requires=scraper-xvfb.service
 [Service]
 User=ec2-user
 Environment=DISPLAY=:99
-ExecStart=/usr/bin/google-chrome-stable --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=/home/ec2-user/signals-scrapper/.chrome-profile --no-first-run --no-default-browser-check --password-store=basic --window-size=1600,1000 https://secure.ic.com/TradingCentral/TradingCentral
+ExecStart=/usr/bin/google-chrome-stable --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=/home/ec2-user/signals-scrapper/.chrome-profile --no-first-run --no-default-browser-check --password-store=basic --window-size=1600,1000 --window-position=0,0 --disable-gpu --disable-dev-shm-usage --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling https://secure.ic.com/TradingCentral/TradingCentral
 Restart=always
 RestartSec=10
 MemoryMax=2500M

@@ -70,3 +70,23 @@ describe('IcLoginService guards', () => {
     await expect(login.login(page as never)).resolves.toBe('no_login_form');
   });
 });
+
+describe('logged-out IC Markets tabs', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { tabMatchesSource, isLoginTabFor } = require('../src/browser/browser.service');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { isLoginWallFromSnapshot } = require('../src/scraper/login-wall');
+  const tc = 'https://secure.ic.com/TradingCentral/TradingCentral';
+  const login = 'https://secure.ic.com/Account/LogOn?ReturnUrl=%2fTradingCentral%2fTradingCentral';
+
+  it('treats the login page returning to a source as that source tab', () => {
+    expect(isLoginTabFor(login, tc)).toBe(true);
+    expect(tabMatchesSource(login, tc)).toBe(true);
+    expect(isLoginTabFor(login, 'https://secure.ic.com/AutoChartist/SignIn')).toBe(false);
+    expect(isLoginTabFor('https://secure.ic.com/Account/LogOn', tc)).toBe(false);
+  });
+
+  it('recognises /Account/LogOn as a login wall', () => {
+    expect(isLoginWallFromSnapshot({ url: login, html: '<html></html>' })).toBe(true);
+  });
+});

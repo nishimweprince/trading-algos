@@ -9,6 +9,7 @@ export async function isLoginWall(page: Page): Promise<boolean> {
     const url = page.url().toLowerCase();
     if (
       url.includes('/login') ||
+      url.includes('/logon') ||
       url.includes('/signin') ||
       url.includes('/auth') ||
       url.includes('sso.')
@@ -60,6 +61,7 @@ export function isLoginWallFromSnapshot(opts: {
   const url = opts.url.toLowerCase();
   if (
     url.includes('/login') ||
+      url.includes('/logon') ||
     url.includes('/signin') ||
     url.includes('/auth') ||
     url.includes('sso.')
