@@ -1,0 +1,356 @@
+# Walk-forward top-20 strategies (copied from Docs/Walk Forward/config, 2026-11-17). Lots set by the owner.
+# Defaults common to all strategies:
+defaults:
+  venue: ftmo_wf_demo            # execution-service :8010 alias, FTMO $100k cTrader demo (hedging)
+  take_profit_R: 2.0
+  max_hold_market_minutes: 2880  # 48h of trading time
+  friday_flat_research_time: "16:45"   # = 21:45 UTC
+  no_entry_research_time: ["16:00", "18:59"]  # = 21:00-23:59 UTC
+  max_entry_delay_minutes: 30
+  one_position_per_strategy: true
+  strategies_independent: true   # no netting / dedupe across strategies
+  kill_rule: {min_trades: 60, disable_if_cum_R_below: 0.0}
+  research_clock_utc_offset_hours: -5   # EST fixed, no DST
+pip_size: {XAUUSD: 0.10, USDJPY: 0.01, AUDUSD: 0.0001}
+research_cost: {XAUUSD: 0.30, USDJPY: 0.008, AUDUSD: 0.00008}   # price units, round trip; used in signal qualification only
+strategies:
+  - id: S01
+    name: "Gold double bottom 10M, 1H trend, k5"
+    symbol: XAUUSD
+    enabled: true
+    engine: patterns
+    timeframes: [10min]
+    patterns: [double_bottom]
+    pivot_k: 5
+    trend_filter: 1H
+    qualification: risk_atr_and_3x_cost
+    confluence_window_minutes: null
+    stop_pips: 80
+    take_profit_pips: 160
+    lots: 0.10   # owner, 2026-11-17 (FTMO $100k demo)
+    source: wf_s01   # execution-service source == cTrader label
+    backtest: {trades: 165, per_month: 2.0, win: 0.485, mean_R: 0.337, t: 3.03, years_positive: "6/7"}
+    reference_trades: reference/trades/S01_trades.csv
+  - id: S02
+    name: "Gold resistance breakout 15M, 1H trend, k5"
+    symbol: XAUUSD
+    enabled: true
+    engine: patterns
+    timeframes: [15min]
+    patterns: [resistance]
+    pivot_k: 5
+    trend_filter: 1H
+    qualification: risk_atr_and_3x_cost
+    confluence_window_minutes: null
+    stop_pips: 100
+    take_profit_pips: 200
+    lots: 0.10   # owner, 2026-11-17 (FTMO $100k demo)
+    source: wf_s02   # execution-service source == cTrader label
+    backtest: {trades: 94, per_month: 1.1, win: 0.479, mean_R: 0.316, t: 2.17, years_positive: "5/7"}
+    reference_trades: reference/trades/S02_trades.csv
+  - id: S03
+    name: "Gold inverse H&S 10M, 4H trend, k5"
+    symbol: XAUUSD
+    enabled: true
+    engine: patterns
+    timeframes: [10min]
+    patterns: [inverse_hs]
+    pivot_k: 5
+    trend_filter: 4H
+    qualification: risk_atr_and_3x_cost
+    confluence_window_minutes: null
+    stop_pips: 50
+    take_profit_pips: 100
+    lots: 0.10   # owner, 2026-11-17 (FTMO $100k demo)
+    source: wf_s03   # execution-service source == cTrader label
+    backtest: {trades: 88, per_month: 1.1, win: 0.466, mean_R: 0.318, t: 2.0, years_positive: "5/7"}
+    reference_trades: reference/trades/S03_trades.csv
+  - id: S04
+    name: "Gold double top 15M, 4H trend, k5"
+    symbol: XAUUSD
+    enabled: true
+    engine: patterns
+    timeframes: [15min]
+    patterns: [double_top]
+    pivot_k: 5
+    trend_filter: 4H
+    qualification: risk_atr_and_3x_cost
+    confluence_window_minutes: null
+    stop_pips: 50
+    take_profit_pips: 100
+    lots: 0.10   # owner, 2026-11-17 (FTMO $100k demo)
+    source: wf_s04   # execution-service source == cTrader label
+    backtest: {trades: 98, per_month: 1.2, win: 0.439, mean_R: 0.264, t: 1.75, years_positive: "6/7"}
+    reference_trades: reference/trades/S04_trades.csv
+  - id: S05
+    name: "Gold ascending triangle 15M, 1H trend, k5"
+    symbol: XAUUSD
+    enabled: true
+    engine: patterns
+    timeframes: [15min]
+    patterns: [ascending_triangle]
+    pivot_k: 5
+    trend_filter: 1H
+    qualification: risk_atr_and_3x_cost
+    confluence_window_minutes: null
+    stop_pips: 100
+    take_profit_pips: 200
+    lots: 0.10   # owner, 2026-11-17 (FTMO $100k demo)
+    source: wf_s05   # execution-service source == cTrader label
+    backtest: {trades: 145, per_month: 1.7, win: 0.483, mean_R: 0.29, t: 2.5, years_positive: "4/7"}
+    reference_trades: reference/trades/S05_trades.csv
+  - id: S06
+    name: "USDJPY double bottom 15M, 4H trend, k3"
+    symbol: USDJPY
+    enabled: true
+    engine: patterns
+    timeframes: [15min]
+    patterns: [double_bottom]
+    pivot_k: 3
+    trend_filter: 4H
+    qualification: risk_atr_and_3x_cost
+    confluence_window_minutes: null
+    stop_pips: 30
+    take_profit_pips: 60
+    lots: 0.10   # owner, 2026-11-17 (FTMO $100k demo)
+    source: wf_s06   # execution-service source == cTrader label
+    backtest: {trades: 147, per_month: 1.8, win: 0.442, mean_R: 0.212, t: 1.86, years_positive: "6/7"}
+    reference_trades: reference/trades/S06_trades.csv
+  - id: S07
+    name: "C4 Gold inverse H&S 15M, 4H up, k3"
+    symbol: XAUUSD
+    enabled: true
+    engine: hs
+    timeframes: [15min]
+    patterns: [inverse_hs]
+    pivot_k: 3
+    trend_filter: 4H
+    qualification: risk_atr_only
+    confluence_window_minutes: null
+    stop_pips: 80
+    take_profit_pips: 160
+    lots: 0.10   # owner, 2026-11-17 (FTMO $100k demo)
+    source: wf_s07   # execution-service source == cTrader label
+    backtest: {trades: 114, per_month: 1.4, win: 0.447, mean_R: 0.231, t: 1.74, years_positive: "6/7"}
+    reference_trades: reference/trades/S07_trades.csv
+  - id: S08
+    name: "C6 USDJPY H&S confluence 5/10/15M, 1H, k3"
+    symbol: USDJPY
+    enabled: true
+    engine: hs_confluence
+    timeframes: [5min, 10min, 15min]
+    patterns: [head_shoulders, inverse_hs]
+    pivot_k: 3
+    trend_filter: 1H
+    qualification: risk_atr_and_3x_cost
+    confluence_window_minutes: 60
+    stop_pips: 30
+    take_profit_pips: 60
+    lots: 0.10   # owner, 2026-11-17 (FTMO $100k demo)
+    source: wf_s08   # execution-service source == cTrader label
+    backtest: {trades: 114, per_month: 1.4, win: 0.412, mean_R: 0.118, t: 0.95, years_positive: "5/7"}
+    reference_trades: reference/trades/S08_trades.csv
+  - id: S09
+    name: "USDJPY head & shoulders top 15M, no filter, k3"
+    symbol: USDJPY
+    enabled: true
+    engine: patterns
+    timeframes: [15min]
+    patterns: [head_shoulders]
+    pivot_k: 3
+    trend_filter: none
+    qualification: risk_atr_and_3x_cost
+    confluence_window_minutes: null
+    stop_pips: 40
+    take_profit_pips: 80
+    lots: 0.10   # owner, 2026-11-17 (FTMO $100k demo)
+    source: wf_s09   # execution-service source == cTrader label
+    backtest: {trades: 189, per_month: 2.3, win: 0.434, mean_R: 0.155, t: 1.6, years_positive: "6/7"}
+    reference_trades: reference/trades/S09_trades.csv
+  - id: S10
+    name: "C1 Gold high-vol flush short 15M"
+    symbol: XAUUSD
+    enabled: true
+    engine: rule_C1
+    timeframes: [15min]
+    patterns: []
+    pivot_k: null
+    trend_filter: none
+    qualification: none
+    confluence_window_minutes: null
+    stop_pips: 70
+    take_profit_pips: 140
+    lots: 0.10   # owner, 2026-11-17 (FTMO $100k demo)
+    source: wf_s10   # execution-service source == cTrader label
+    backtest: {trades: 305, per_month: 3.7, win: 0.42, mean_R: 0.188, t: 2.26, years_positive: "6/7"}
+    reference_trades: reference/trades/S10_trades.csv
+  - id: S11
+    name: "AUDUSD double top 15M, 4H trend, k3"
+    symbol: AUDUSD
+    enabled: true
+    engine: patterns
+    timeframes: [15min]
+    patterns: [double_top]
+    pivot_k: 3
+    trend_filter: 4H
+    qualification: risk_atr_and_3x_cost
+    confluence_window_minutes: null
+    stop_pips: 30
+    take_profit_pips: 60
+    lots: 0.10   # owner, 2026-11-17 (FTMO $100k demo)
+    source: wf_s11   # execution-service source == cTrader label
+    backtest: {trades: 109, per_month: 1.3, win: 0.422, mean_R: 0.118, t: 0.97, years_positive: "5/7"}
+    reference_trades: reference/trades/S11_trades.csv
+  - id: S12
+    name: "C5 USDJPY inverse H&S 5M, 1H up, k5"
+    symbol: USDJPY
+    enabled: true
+    engine: hs
+    timeframes: [5min]
+    patterns: [inverse_hs]
+    pivot_k: 5
+    trend_filter: 1H
+    qualification: risk_atr_and_3x_cost
+    confluence_window_minutes: null
+    stop_pips: 40
+    take_profit_pips: 80
+    lots: 0.10   # owner, 2026-11-17 (FTMO $100k demo)
+    source: wf_s12   # execution-service source == cTrader label
+    backtest: {trades: 177, per_month: 2.2, win: 0.458, mean_R: 0.126, t: 1.33, years_positive: "3/7"}
+    reference_trades: reference/trades/S12_trades.csv
+  - id: S13
+    name: "USDJPY ascending triangle 5M, no filter, k3"
+    symbol: USDJPY
+    enabled: true
+    engine: patterns
+    timeframes: [5min]
+    patterns: [ascending_triangle]
+    pivot_k: 3
+    trend_filter: none
+    qualification: risk_atr_and_3x_cost
+    confluence_window_minutes: null
+    stop_pips: 50
+    take_profit_pips: 100
+    lots: 0.10   # owner, 2026-11-17 (FTMO $100k demo)
+    source: wf_s13   # execution-service source == cTrader label
+    backtest: {trades: 904, per_month: 11.2, win: 0.467, mean_R: 0.14, t: 3.44, years_positive: "6/7"}
+    reference_trades: reference/trades/S13_trades.csv
+  - id: S14
+    name: "AUDUSD descending triangle 10M, 4H trend, k3"
+    symbol: AUDUSD
+    enabled: true
+    engine: patterns
+    timeframes: [10min]
+    patterns: [descending_triangle]
+    pivot_k: 3
+    trend_filter: 4H
+    qualification: risk_atr_and_3x_cost
+    confluence_window_minutes: null
+    stop_pips: 40
+    take_profit_pips: 80
+    lots: 0.10   # owner, 2026-11-17 (FTMO $100k demo)
+    source: wf_s14   # execution-service source == cTrader label
+    backtest: {trades: 221, per_month: 2.7, win: 0.507, mean_R: 0.143, t: 1.85, years_positive: "6/7"}
+    reference_trades: reference/trades/S14_trades.csv
+  - id: S15
+    name: "Gold rectangle 15M, 4H trend, k5"
+    symbol: XAUUSD
+    enabled: true
+    engine: patterns
+    timeframes: [15min]
+    patterns: [rectangle]
+    pivot_k: 5
+    trend_filter: 4H
+    qualification: risk_atr_and_3x_cost
+    confluence_window_minutes: null
+    stop_pips: 50
+    take_profit_pips: 100
+    lots: 0.10   # owner, 2026-11-17 (FTMO $100k demo)
+    source: wf_s15   # execution-service source == cTrader label
+    backtest: {trades: 143, per_month: 1.7, win: 0.399, mean_R: 0.125, t: 1.03, years_positive: "2/7"}
+    reference_trades: reference/trades/S15_trades.csv
+  - id: S16
+    name: "AUDUSD head & shoulders top 15M, 1H trend, k3"
+    symbol: AUDUSD
+    enabled: true
+    engine: patterns
+    timeframes: [15min]
+    patterns: [head_shoulders]
+    pivot_k: 3
+    trend_filter: 1H
+    qualification: risk_atr_and_3x_cost
+    confluence_window_minutes: null
+    stop_pips: 30
+    take_profit_pips: 60
+    lots: 0.10   # owner, 2026-11-17 (FTMO $100k demo)
+    source: wf_s16   # execution-service source == cTrader label
+    backtest: {trades: 83, per_month: 1.0, win: 0.506, mean_R: 0.201, t: 1.45, years_positive: "5/7"}
+    reference_trades: reference/trades/S16_trades.csv
+  - id: S17
+    name: "USDJPY flag 10M, 4H trend, k5"
+    symbol: USDJPY
+    enabled: true
+    engine: patterns
+    timeframes: [10min]
+    patterns: [bull_flag, bear_flag]
+    pivot_k: 5
+    trend_filter: 4H
+    qualification: risk_atr_and_3x_cost
+    confluence_window_minutes: null
+    stop_pips: 50
+    take_profit_pips: 100
+    lots: 0.10   # owner, 2026-11-17 (FTMO $100k demo)
+    source: wf_s17   # execution-service source == cTrader label
+    backtest: {trades: 484, per_month: 6.0, win: 0.44, mean_R: 0.067, t: 1.24, years_positive: "5/7"}
+    reference_trades: reference/trades/S17_trades.csv
+  - id: S18
+    name: "C3 Gold inside-day fade short 15M"
+    symbol: XAUUSD
+    enabled: true
+    engine: rule_C3
+    timeframes: [15min]
+    patterns: []
+    pivot_k: null
+    trend_filter: none
+    qualification: none
+    confluence_window_minutes: null
+    stop_pips: 100
+    take_profit_pips: 200
+    lots: 0.10   # owner, 2026-11-17 (FTMO $100k demo)
+    source: wf_s18   # execution-service source == cTrader label
+    backtest: {trades: 300, per_month: 3.6, win: 0.4, mean_R: 0.075, t: 0.97, years_positive: "5/7"}
+    reference_trades: reference/trades/S18_trades.csv
+  - id: S19
+    name: "C2 Gold low-ADX momentum long 15M"
+    symbol: XAUUSD
+    enabled: true
+    engine: rule_C2
+    timeframes: [15min]
+    patterns: []
+    pivot_k: null
+    trend_filter: none
+    qualification: none
+    confluence_window_minutes: null
+    stop_pips: 100
+    take_profit_pips: 200
+    lots: 0.10   # owner, 2026-11-17 (FTMO $100k demo)
+    source: wf_s19   # execution-service source == cTrader label
+    backtest: {trades: 363, per_month: 4.4, win: 0.397, mean_R: 0.098, t: 1.37, years_positive: "4/7"}
+    reference_trades: reference/trades/S19_trades.csv
+  - id: S20
+    name: "USDJPY all-pattern confluence portfolio 5/10/15M, 1H, k5"
+    symbol: USDJPY
+    enabled: true
+    engine: patterns_confluence
+    timeframes: [5min, 10min, 15min]
+    patterns: [double_top, double_bottom, head_shoulders, inverse_hs, ascending_triangle, descending_triangle, rectangle, channel_up, channel_down, bull_flag, bear_flag, resistance, support]
+    pivot_k: 5
+    trend_filter: 1H
+    qualification: risk_atr_and_3x_cost
+    confluence_window_minutes: 60
+    stop_pips: 40
+    take_profit_pips: 80
+    lots: 0.10   # owner, 2026-11-17 (FTMO $100k demo)
+    source: wf_s20   # execution-service source == cTrader label
+    backtest: {trades: 1297, per_month: 16.0, win: 0.412, mean_R: 0.067, t: 1.87, years_positive: "5/7"}
+    reference_trades: reference/trades/S20_trades.csv
