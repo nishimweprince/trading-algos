@@ -59,6 +59,7 @@ describe('IcLoginService guards', () => {
     login.now = () => clock;
     // A page whose login form is not there: the attempt runs and reports it.
     const page = {
+      url: () => 'https://secure.ic.com/Account/LogOn',
       locator: () => ({
         first: () => ({ isVisible: async () => false }),
         all: async () => [],
