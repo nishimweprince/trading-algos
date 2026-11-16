@@ -326,6 +326,86 @@ describe('per-account open-position cap', () => {
   });
 });
 
+describe('Autochartist entry and stop from the live quote', () => {
+  function setupAc(dir: string) {
+    const config = new AppConfigService();
+    config.load({
+      SOURCES: JSON.stringify([{ type: 'AUTOCHARTIST', url: 'https://example.com/ac' }]),
+      SEEN_STATE_PATH: join(dir, 'seen.json'),
+      MT5_SIGNAL_TRADING_ENABLED: 'true',
+      MT5_SIGNAL_API_URL: 'http://127.0.0.1:8010',
+      MT5_SIGNAL_API_KEY: 'test-api-key-value',
+      MT5_SIGNAL_TIMEOUT_MS: '25',
+      MT5_SIGNAL_RULES: JSON.stringify({ 'EUR/CAD': { symbol: 'EURCAD', volume: '0.10' } }),
+      EXECUTION_API: 'orders',
+      EXECUTION_ACCOUNT: 'icm_demo',
+    });
+    const dedup = new DedupService(config);
+    dedup.onModuleInit();
+    return { dedup, service: new Mt5ExecutionService(config, dedup) };
+  }
+  const acIdea = (direction: 'UP' | 'DOWN', target: number): TradingIdea => ({
+    provider: 'AUTOCHARTIST',
+    instrument: 'EUR/CAD',
+    timeframe: '60',
+    direction,
+    entry: null,
+    takeProfit: target,
+    target,
+    ideaTimestamp: '2026-11-16T09:00:00.000Z',
+    capturedAt: new Date().toISOString(),
+    sourceUrl: 'https://example.com/ac',
+    hash: 'a'.repeat(64),
+  });
+
+  async function run(direction: 'UP' | 'DOWN', target: number, quote: unknown) {
+    const dir = mkdtempSync(join(tmpdir(), 'exec-ac-'));
+    try {
+      const { dedup, service } = setupAc(dir);
+      const records = service.createExecutionRecords([acIdea(direction, target)]);
+      expect(records[0].status).toBe('pending');
+      expect(records[0].request?.stop_loss).toBe('');
+      dedup.markSeen([acIdea(direction, target)], records);
+      const fetchMock = jest.fn(async (url: string, init?: RequestInit) => {
+        if (url.endsWith('/health/trading-ready')) return jsonResponse({ status: 'ready' });
+        if (url.includes('/quote')) {
+          return quote ? jsonResponse(quote) : jsonResponse({ error: { code: 'x', message: 'x' } }, 404);
+        }
+        const body = JSON.parse(String(init?.body));
+        return jsonResponse(operation(body.operation_id, 'succeeded'), 201);
+      });
+      service.setFetchImplementation(fetchMock as never);
+      await service.processOutbox();
+      const orders = fetchMock.mock.calls
+        .filter(([u]) => String(u).endsWith('/v1/orders'))
+        .map(([, i]) => JSON.parse(String((i as RequestInit).body)));
+      return { orders, record: dedup.listExecutions()[0] };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it('buys at the ask with the stop mirrored below it', async () => {
+    const { orders, record } = await run('UP', 1.5762, { symbol: 'EURCAD', bid: 1.5740, ask: 1.5742 });
+    expect(record.status).toBe('succeeded');
+    expect(orders[0].take_profit).toBe('1.5762');
+    expect(Number(orders[0].stop_loss)).toBeCloseTo(2 * 1.5742 - 1.5762, 6);
+  });
+
+  it('does not send when the live price is already past the forecast', async () => {
+    const { orders, record } = await run('UP', 1.5749, { symbol: 'EURCAD', bid: 1.5750, ask: 1.5752 });
+    expect(orders).toHaveLength(0);
+    expect(record.status).toBe('rejected');
+    expect(record.error).toMatchObject({ code: 'target_already_reached' });
+  });
+
+  it('does not send without a live quote', async () => {
+    const { orders, record } = await run('DOWN', 1.5700, null);
+    expect(orders).toHaveLength(0);
+    expect(record.error).toMatchObject({ code: 'no_live_quote' });
+  });
+});
+
 describe('config for orders mode and auto-login', () => {
   const base = {
     SOURCES: JSON.stringify([{ type: 'TRADING_CENTRAL', url: 'https://example.com/tc' }]),

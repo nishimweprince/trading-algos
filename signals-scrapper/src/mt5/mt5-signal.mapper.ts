@@ -97,24 +97,36 @@ export class Mt5SignalMapper {
     ) {
       stopLoss = autochartistStopLoss(idea.entry, takeProfit);
     }
+    // Autochartist without a readable chart price: the stop is set from the live quote at
+    // submit time (refreshAutochartistRequestStopLoss); "" marks it as not yet known.
+    const stopFromLiveQuote =
+      idea.provider === 'AUTOCHARTIST' &&
+      (idea.entry == null || !Number.isFinite(idea.entry)) &&
+      takeProfit != null &&
+      Number.isFinite(takeProfit);
     if (
-      stopLoss === undefined ||
-      takeProfit === undefined ||
-      !Number.isFinite(stopLoss) ||
-      !Number.isFinite(takeProfit)
+      !stopFromLiveQuote &&
+      (stopLoss === undefined ||
+        takeProfit === undefined ||
+        !Number.isFinite(stopLoss) ||
+        !Number.isFinite(takeProfit))
     ) {
       return { ...this.skipped(signalId, idea, now, 'missing_risk_levels'), account };
     }
 
     const hasValidRiskRelationship =
-      idea.direction === 'UP'
-        ? stopLoss < takeProfit
-        : stopLoss > takeProfit;
+      stopFromLiveQuote ||
+      (idea.direction === 'UP'
+        ? (stopLoss as number) < (takeProfit as number)
+        : (stopLoss as number) > (takeProfit as number));
     if (!hasValidRiskRelationship) {
       return { ...this.skipped(signalId, idea, now, 'invalid_risk_relationship'), account };
     }
 
-    if (this.hasImplausibleExitLevelMagnitude(idea.entry, stopLoss, takeProfit)) {
+    if (
+      !stopFromLiveQuote &&
+      this.hasImplausibleExitLevelMagnitude(idea.entry, stopLoss as number, takeProfit as number)
+    ) {
       return { ...this.skipped(signalId, idea, now, 'implausible_exit_level_magnitude'), account };
     }
 
@@ -125,7 +137,7 @@ export class Mt5SignalMapper {
       symbol: rule.symbol,
       direction: idea.direction === 'UP' ? 'buy' : 'sell',
       volume: rule.volume,
-      stop_loss: String(stopLoss),
+      stop_loss: stopFromLiveQuote ? '' : String(stopLoss),
       take_profit: String(takeProfit),
       note: idea.hash,
       source:

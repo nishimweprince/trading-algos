@@ -279,6 +279,11 @@ export class Mt5ExecutionService {
       error: undefined,
     });
     const request = await this.resolveSubmitRequest(submitting);
+    const invalid = this.liveRiskProblem(request);
+    if (invalid) {
+      this.transition(record.signalId, 'rejected', invalid);
+      return;
+    }
     const requestStartedAt = Date.now();
     const submitPath = this.ordersApi ? '/v1/orders' : '/v1/signals';
     const payload = this.ordersApi ? this.toOrderRequest(request, submitting.account) : request;
@@ -665,6 +670,30 @@ export class Mt5ExecutionService {
       | undefined;
     const id = Number(response?.targets?.[0]?.position_id);
     return Number.isFinite(id) && id > 0 ? id : undefined;
+  }
+
+  /**
+   * An Autochartist order whose stop could not be set from a live quote, or whose forecast
+   * the live price has already passed (stop on the wrong side), must not be sent.
+   */
+  private liveRiskProblem(request: Mt5SignalRequest): Mt5ExecutionError | undefined {
+    if (request.source !== 'autochartist') return undefined;
+    if (!request.stop_loss) {
+      return {
+        code: 'no_live_quote',
+        message: 'No live bid/ask to set the Autochartist entry and stop; not sent',
+      };
+    }
+    const stop = Number(request.stop_loss);
+    const target = Number(request.take_profit);
+    const ok = request.direction === 'buy' ? stop < target : stop > target;
+    if (!Number.isFinite(stop) || !Number.isFinite(target) || !ok) {
+      return {
+        code: 'target_already_reached',
+        message: `Live price is already past the forecast ${request.take_profit}; not sent`,
+      };
+    }
+    return undefined;
   }
 
   private get ordersApi(): boolean {
