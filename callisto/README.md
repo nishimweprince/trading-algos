@@ -78,3 +78,64 @@ Results of the first run are in [RESULTS.md](RESULTS.md).
 - Progress posts with no entry price join whichever open idea on the same side is most recent.
 - The stale check needs prices, so it runs only in the backtest. Live, the `repost` rule and
   `MAX_AGE_PIPS` are the protection against old screenshots.
+
+## Deploy (VM)
+```bash
+deploy/deploy.sh ~/Documents/Markets/VPS/jito.pem ec2-user@ec2-3-65-33-160.eu-central-1.compute.amazonaws.com
+```
+The script rsyncs the code, `.env` (chmod 600) and the classification cache to `~/callisto`,
+builds a Python 3.12 venv, and installs and restarts two systemd units:
+- `callisto-monitor`: web polling every 15 s. It writes `data/events.jsonl` and
+  `data/heartbeat.json`.
+- `callisto-ui`: read-only status page on **127.0.0.1:8079** (`ui_server.py`, stdlib).
+  Set `UI_USER`/`UI_PASSWORD` for basic auth.
+
+The UI binds to localhost only. Reach it with
+`ssh -i jito.pem -N -L 8079:127.0.0.1:8079 ec2-user@<host>` and open http://localhost:8079,
+or publish it through the host's cloudflared tunnel by adding a public hostname in the
+Cloudflare dashboard that points at `http://127.0.0.1:8079`.
+
+## cTrader execution (`executor.py`)
+`callisto-executor` reads `signal` events from `data/events.jsonl` and sends cTrader market
+orders: volume from `LOTS`, `relativeStopLoss`/`relativeTakeProfit` from `SL_PIPS`/`TP_PIPS`,
+label `callisto`. It then trails the stop client-side from spot prices with the backtest
+rule (`TRAIL_*`), using `ProtoOAAmendPositionSLTPReq`. After a restart it reconciles and
+picks up open `callisto` positions again.
+
+Safety switches:
+- `EXECUTION_ENABLED=false` (the default) only logs `would_place`.
+- A live account also needs `LIVE_TRADING_ENABLED=true`.
+- Signals older than `MAX_SIGNAL_AGE_SECONDS` are skipped.
+- A signal is skipped when price has already run more than `MAX_ENTRY_SLIP_PIPS` (80) past
+  the channel's stated entry in its direction. Price on the other side of the entry is taken.
+- `MAX_OPEN_POSITIONS` caps open positions.
+- The first start begins at the end of the event log and never replays old signals.
+
+```bash
+.venv/bin/python executor.py check                 # auth, account, XAUUSD spec, quote; no order
+.venv/bin/python executor.py test-order --side BUY # min-size order with SL/TP, then close it
+                                                   # (live account: also LIVE_TRADING_ENABLED=true
+                                                   #  and --confirm-live)
+```
+
+Needs `CTRADER_CLIENT_ID` / `CTRADER_CLIENT_SECRET` (openapi.ctrader.com → Applications) plus
+the OAuth token pair. The refresh token rotates and the newest pair lives in
+`data/ctrader_tokens.json`, so run the executor on one host only. `deploy.sh` ships the
+workspace packages it imports (`ta-core`, `ta-contracts`, `ta-plugin-api`, `plugins/ctrader`)
+into `vendor/`. It enables `callisto-executor` only once the app credentials are in `.env`.
+Tests: `test_executor.py` runs the order, fill, trail, close, reconcile and token-refresh
+paths over the plugin's wire-level `FakeCTraderServer`.
+
+### Tickmind source
+The same executor also trades Tickmind signals (`tickmind/watch_signals.py` writes
+`state/events.jsonl`; point `TICKMIND_EVENTS_PATH` at it). Both sources share one process,
+because cTrader rotates the refresh token and a second process on the account would lock the
+first one out.
+- A Tickmind signal is decided once, when it is `active` with entry/stop/target known.
+- It is skipped if it is older than `TICKMIND_MAX_SIGNAL_AGE_SECONDS` (300), if price is
+  more than `TICKMIND_MAX_ENTRY_SLIP_PIPS` (50) from its entry, or if price is already past
+  its stop or target.
+- The order uses Tickmind's stop and target as distances from the fill, with no trailing.
+- `TICKMIND_FOLLOW_CLOSE` closes the position when Tickmind marks the signal closed.
+- Positions are labelled `tickmind` and have their own switch (`TICKMIND_EXECUTION_ENABLED`),
+  size (`TICKMIND_LOTS`) and cap. A live account still needs `LIVE_TRADING_ENABLED`.

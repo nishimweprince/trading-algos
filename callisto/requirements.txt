@@ -5,3 +5,4 @@ python-dotenv>=1.0
 requests>=2.31
 telethon>=1.36
 pytest>=8
+pytest-asyncio>=0.24

@@ -1,0 +1,17 @@
+[Unit]
+Description=Callisto cTrader executor (follows signal events; dry run unless EXECUTION_ENABLED=true)
+After=network-online.target callisto-monitor.service
+Wants=network-online.target
+
+[Service]
+UMask=0077
+User=ec2-user
+WorkingDirectory=/home/ec2-user/callisto
+ExecStart=/home/ec2-user/callisto/.venv/bin/python executor.py run
+Restart=always
+RestartSec=30
+Nice=5
+MemoryMax=400M
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,17 @@
+[Unit]
+Description=Callisto monitor UI (127.0.0.1:8079; publish through cloudflared with access control)
+After=network-online.target
+
+[Service]
+User=ec2-user
+WorkingDirectory=/home/ec2-user/callisto
+Environment=UI_HOST=127.0.0.1
+Environment=UI_PORT=8079
+ExecStart=/home/ec2-user/callisto/.venv/bin/python ui_server.py
+Restart=always
+RestartSec=10
+Nice=10
+MemoryMax=300M
+
+[Install]
+WantedBy=multi-user.target
