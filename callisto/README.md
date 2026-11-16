@@ -106,6 +106,8 @@ Safety switches:
 - `EXECUTION_ENABLED=false` (the default) only logs `would_place`.
 - A live account also needs `LIVE_TRADING_ENABLED=true`.
 - Signals older than `MAX_SIGNAL_AGE_SECONDS` are skipped.
+- A signal is skipped when price has already run more than `MAX_ENTRY_SLIP_PIPS` (80) past
+  the channel's stated entry in its direction. Price on the other side of the entry is taken.
 - `MAX_OPEN_POSITIONS` caps open positions.
 - The first start begins at the end of the event log and never replays old signals.
 

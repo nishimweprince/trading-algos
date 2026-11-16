@@ -119,7 +119,8 @@ def settings(**kw) -> X.ExecSettings:
     s = X.ExecSettings(client_id="cid", client_secret="sec", access_token="tok",
                        refresh_token="ref", account_id=ACC, is_live=False,
                        execution_enabled=True, live_trading_enabled=False, lots=0.01,
-                       max_open=1, max_signal_age_s=180, tm_events="", tm_enabled=True,
+                       max_open=1, max_signal_age_s=180, max_entry_slip_pips=80,
+                       tm_events="", tm_enabled=True,
                        tm_lots=0.2, tm_max_open=1, tm_max_age_s=300, tm_max_slip_pips=50,
                        tm_follow_close=True)
     for k, v in kw.items():
@@ -141,8 +142,9 @@ async def make(tmp_path, **kw):
     return b, ex
 
 
-def signal(side="BUY", age_s=5, post_id=1):
+def signal(side="BUY", age_s=5, post_id=1, entry=None):
     return {"event": "signal", "ticker": "XAUUSD", "direction": side, "post_id": post_id,
+            "entry": entry,
             "posted_at": (datetime.now(UTC) - timedelta(seconds=age_s)).isoformat()}
 
 
@@ -351,3 +353,24 @@ def test_follower_reads_complete_lines_from_offset(tmp_path):
     assert f.read() == [{"c": 3}]
     g = X.Follower(p, f.offset)            # restart from the persisted offset
     assert g.read() == []
+
+
+async def test_callisto_skips_chased_entries(tmp_path):
+    b, ex = await make(tmp_path)                       # bid 4000.00 / ask 4000.30
+    # BUY whose stated entry is 95 pips below the ask: already ran, skip (last night's case)
+    chased = await ex.on_signal(signal("BUY", entry=3990.80, post_id=1))
+    assert chased["event"] == "skipped" and "past the entry" in chased["reason"]
+    assert chased["slip_pips"] == 95.0
+    # SELL with price inside the stated range: trade
+    ok = await ex.on_signal(signal("SELL", entry=4000.50, post_id=2))
+    assert ok["event"] == "placed" and ok["slip_pips"] == 5.0
+    assert len(b.orders) == 1
+    await ex.close()
+
+
+async def test_callisto_price_against_signal_is_not_chasing(tmp_path):
+    b, ex = await make(tmp_path)
+    # BUY at an ask 100 pips BELOW the stated entry: not chasing, take it
+    out = await ex.on_signal(signal("BUY", entry=4010.30))
+    assert out["event"] == "placed" and out["slip_pips"] == -100.0
+    await ex.close()

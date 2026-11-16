@@ -171,3 +171,20 @@ By week (net / BUY / SELL):
 4 of 5 weeks are positive and the profit is spread across weeks rather than coming from a
 single one, unlike SL 80 / no trail, which had +940 in one week and +150 in the rest.
 It is still not significant.
+
+## Entry-distance guard (2026-11-16)
+The first live night had two Callisto stop-outs. The second bought 95 pips above the channel's
+stated entry because price had already run. Month backtest at SL 80 / TP 150 / trail
+50/30/10, skipping signals whose price at the post is more than N pips past the stated entry
+in the signal's direction:
+
+| N | trades | net pips | avg |
+|---|---|---|---|
+| off | 64 | +471 | +7.4 |
+| 30 | 13 | −13 | −1.0 |
+| 50 | 34 | +476 | +14.0 |
+| **80** | **51** | **+763** | **+15.0** |
+| 120 | 61 | +380 | +6.2 |
+
+`MAX_ENTRY_SLIP_PIPS=80` is now the executor default. The curve is noisy and t is about 1.5
+at best, so this is a guard against chasing, not evidence of an edge.

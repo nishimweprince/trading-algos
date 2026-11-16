@@ -36,7 +36,7 @@ Env (callisto/.env)
   CTRADER_ACCOUNT_ID                         ctid account id (skips the lookup)
   CTRADER_SYMBOLS={"XAUUSD": "XAUUSD"}       signal ticker -> broker symbol name
   EXECUTION_ENABLED=false  LIVE_TRADING_ENABLED=false
-  LOTS=0.2  MAX_OPEN_POSITIONS=1  MAX_SIGNAL_AGE_SECONDS=180
+  LOTS=0.2  MAX_OPEN_POSITIONS=1  MAX_SIGNAL_AGE_SECONDS=180  MAX_ENTRY_SLIP_PIPS=80
   TICKMIND_EVENTS_PATH=/home/ec2-user/tickmind/state/events.jsonl
   TICKMIND_EXECUTION_ENABLED=false  TICKMIND_LOTS=0.2  TICKMIND_MAX_OPEN_POSITIONS=1
   TICKMIND_MAX_SIGNAL_AGE_SECONDS=300  TICKMIND_MAX_ENTRY_SLIP_PIPS=50  TICKMIND_FOLLOW_CLOSE=true
@@ -111,6 +111,10 @@ class ExecSettings:
     lots: float = float(os.getenv("LOTS") or 0.2)
     max_open: int = int(os.getenv("MAX_OPEN_POSITIONS") or 1)
     max_signal_age_s: float = float(os.getenv("MAX_SIGNAL_AGE_SECONDS") or 180)
+    # Skip a Callisto signal when price has already run this many pips past the channel's
+    # stated entry in the signal's direction (0 = off). 80 kept 51/64 month trades and the
+    # best per-trade result in the backtest (RESULTS.md); 50 halves the trades.
+    max_entry_slip_pips: float = float(os.getenv("MAX_ENTRY_SLIP_PIPS") or 80)
     # Tickmind source (tickmind/watch_signals.py writes state/events.jsonl)
     tm_events: str = os.getenv("TICKMIND_EVENTS_PATH", "")
     tm_enabled: bool = _env_bool("TICKMIND_EXECUTION_ENABLED")
@@ -471,6 +475,20 @@ class Executor:
             spec = await self.symbol(sig["ticker"])
         except CTraderError as e:
             return log({"event": "skipped", "reason": str(e), **base})
+        entry = sig.get("entry")
+        if entry and self.s.max_entry_slip_pips > 0:
+            try:
+                bid, ask = await self.quote(spec, timeout=5)
+            except CTraderError as e:
+                return log({"event": "skipped", "reason": str(e), **base})
+            sgn = 1 if sig["direction"] == "BUY" else -1
+            px = ask if sgn > 0 else bid
+            # >0: price already ran in the signal's favour; we would be chasing
+            slip = sgn * (px - float(entry)) / CFG.pip(spec.name)
+            base.update(entry=entry, price=px, slip_pips=round(slip, 1))
+            if slip > self.s.max_entry_slip_pips:
+                return log({"event": "skipped", "reason": f"price {slip:+.0f} pips past the "
+                            f"entry (max {self.s.max_entry_slip_pips:g})", **base})
         order = self.build_order(spec, sig["direction"], f"callisto-{sig.get('post_id')}",
                                  comment=f"callisto post {sig.get('post_id')}")
         detail = {"symbol": spec.name, "volume": order.volume, "lots": self.s.lots,
