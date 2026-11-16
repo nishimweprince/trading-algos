@@ -90,6 +90,8 @@ export const AppConfigSchema = z.object({
   IC_LOGIN_PASSWORD: z.string().default(''),
   IC_TOTP_SECRET: z.string().default(''),
   AUTO_LOGIN_COOLDOWN_MINUTES: z.coerce.number().positive().default(30),
+  // Answer to IC Markets' trusted-device question after 2FA (default: do not trust).
+  IC_TRUST_DEVICE: EnvBooleanSchema.default(false),
   // market-data-service, for the live bid/ask behind Autochartist stop refresh.
   // Empty disables the refresh; the signal keeps its original stop.
   MARKET_DATA_URL: z.union([z.literal(''), z.string().url()]).default(''),
@@ -178,6 +180,7 @@ export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     IC_LOGIN_PASSWORD: env.IC_LOGIN_PASSWORD ?? '',
     IC_TOTP_SECRET: env.IC_TOTP_SECRET ?? '',
     AUTO_LOGIN_COOLDOWN_MINUTES: env.AUTO_LOGIN_COOLDOWN_MINUTES ?? '30',
+    IC_TRUST_DEVICE: env.IC_TRUST_DEVICE ?? 'false',
     HEADLESS: env.HEADLESS ?? 'false',
     NAV_TIMEOUT_MS: env.NAV_TIMEOUT_MS ?? '30000',
     CONTENT_WAIT_MS: env.CONTENT_WAIT_MS ?? '10000',

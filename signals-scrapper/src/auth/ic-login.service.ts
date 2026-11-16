@@ -55,6 +55,11 @@ export class IcLoginService {
     const waitMs = Math.max(this.config.navTimeoutMs, 45_000);
     await this.dismissCookieBanner(page);
 
+    // A previous attempt may have stopped on the trusted-device question (2FA already passed).
+    if (this.onSecureDevice(page)) {
+      return (await this.answerSecureDevice(page, waitMs)) ? 'logged_in' : 'error';
+    }
+
     // A previous attempt may have left the tab on the 2FA screen: go straight to the code.
     if ((await this.twoFactorInputs(page)).length === 0) {
       const email = page.locator('input#email, input[type="email"]').first();
@@ -103,7 +108,43 @@ export class IcLoginService {
     const step = await this.waitForOutcome(page, waitMs, 'two_factor');
     if (step === 'captcha') return 'captcha';
     if (step === 'left_two_factor' || step === 'left_login') return 'logged_in';
+    if (step === 'secure_device') {
+      return (await this.answerSecureDevice(page, waitMs)) ? 'logged_in' : 'error';
+    }
     return 'two_factor_failed';
+  }
+
+  private onSecureDevice(page: Page): boolean {
+    return /\/twofactor\/securedevice/i.test(page.url());
+  }
+
+  /**
+   * After a correct code IC Markets asks whether to trust this browser ("Trust and proceed" /
+   * "Do not trust and proceed"). Default: do not trust (the scraper can always generate a
+   * fresh code); IC_TRUST_DEVICE=true trusts the scraper's dedicated Chrome profile instead.
+   */
+  private async answerSecureDevice(page: Page, waitMs: number): Promise<boolean> {
+    const label = this.config.icTrustDevice ? /^trust and proceed$/i : /do not trust and proceed/i;
+    const button = page
+      .locator('input[type="button"], input[type="submit"], button')
+      .filter({ hasText: label })
+      .first();
+    const byValue = page
+      .locator(
+        this.config.icTrustDevice
+          ? 'input[value="Trust and proceed" i]'
+          : 'input[value="Do not trust and proceed" i]',
+      )
+      .first();
+    const target = (await byValue.isVisible().catch(() => false)) ? byValue : button;
+    if (!(await target.isVisible().catch(() => false))) return false;
+    await target.click();
+    const end = Date.now() + waitMs;
+    while (Date.now() < end) {
+      await page.waitForTimeout(500);
+      if (!/\/twofactor|\/account\/logon/i.test(page.url())) return true;
+    }
+    return false;
   }
 
   /**
@@ -116,7 +157,13 @@ export class IcLoginService {
     timeoutMs: number,
     stage: 'login' | 'two_factor',
   ): Promise<
-    'two_factor' | 'left_login' | 'left_two_factor' | 'captcha' | 'error' | 'timeout'
+    | 'two_factor'
+    | 'left_login'
+    | 'left_two_factor'
+    | 'secure_device'
+    | 'captcha'
+    | 'error'
+    | 'timeout'
   > {
     const end = Date.now() + timeoutMs;
     while (Date.now() < end) {
@@ -129,6 +176,7 @@ export class IcLoginService {
           return '';
         }
       })();
+      if (path.includes('/twofactor/securedevice')) return 'secure_device';
       if (stage === 'login') {
         if ((await this.twoFactorInputs(page)).length > 0) return 'two_factor';
         if (path && !path.includes('/account/logon')) {

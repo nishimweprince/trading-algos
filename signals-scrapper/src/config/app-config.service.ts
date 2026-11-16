@@ -180,6 +180,10 @@ export class AppConfigService implements OnModuleInit {
     return this.snapshot.IC_TOTP_SECRET;
   }
 
+  get icTrustDevice(): boolean {
+    return this.snapshot.IC_TRUST_DEVICE;
+  }
+
   get autoLoginCooldownMinutes(): number {
     return this.snapshot.AUTO_LOGIN_COOLDOWN_MINUTES;
   }
