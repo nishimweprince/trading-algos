@@ -314,7 +314,12 @@ export class ScraperService {
             screenshotPath,
           });
         } catch (err) {
-          if (err instanceof TradingCentralContentNotReadyError) {
+          const onLoginPage =
+            err instanceof TradingCentralContentNotReadyError &&
+            !this.hooks.isLoginWall &&
+            page !== null &&
+            (await isLoginWall(page));
+          if (err instanceof TradingCentralContentNotReadyError && !onLoginPage) {
             this.logger.warn(
               `Trading Central widget not ready for ${source.url}; skipping extraction`,
             );
@@ -339,7 +344,8 @@ export class ScraperService {
               ideas: [],
             };
           }
-          throw err;
+          // A logged-out tab never shows the widget: fall through to the login step.
+          if (!onLoginPage) throw err;
         }
       }
 
