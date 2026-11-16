@@ -171,6 +171,10 @@ export class AppConfigService implements OnModuleInit {
       .filter(Boolean);
   }
 
+  get executionMaxOpenPositions(): Record<string, number> {
+    return this.snapshot.EXECUTION_MAX_OPEN_POSITIONS;
+  }
+
   get autoLoginEnabled(): boolean {
     return this.snapshot.AUTO_LOGIN_ENABLED;
   }

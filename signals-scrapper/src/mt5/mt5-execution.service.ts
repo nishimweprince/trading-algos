@@ -165,9 +165,25 @@ export class Mt5ExecutionService {
     if (pending.length > 0) {
       const ready = await this.isReady(pending.length);
       if (ready) {
+        const openByAccount = new Map<string, number>();
         for (const record of pending) {
+          const capped = await this.capReached(record, openByAccount);
+          if (capped === 'unknown') continue; // keep pending; try again next tick
+          if (capped) {
+            this.transition(record.signalId, 'skipped', {
+              code: 'max_open_positions',
+              message: `${record.account} already has ${openByAccount.get(record.account ?? '')} open position(s) from this scraper (cap ${this.config.executionMaxOpenPositions[record.account ?? '']})`,
+            });
+            continue;
+          }
           summary.submitted += 1;
           await this.submit(record);
+          if (record.account && openByAccount.has(record.account)) {
+            const after = this.dedup.listExecutions().find((r) => r.signalId === record.signalId);
+            if (after?.status === 'succeeded') {
+              openByAccount.set(record.account, (openByAccount.get(record.account) ?? 0) + 1);
+            }
+          }
         }
       } else {
         this.logger.warn(
@@ -600,6 +616,55 @@ export class Mt5ExecutionService {
       );
       return request;
     }
+  }
+
+  /**
+   * true when the record's account is at its EXECUTION_MAX_OPEN_POSITIONS cap, counting this
+   * scraper's own positions (position ids from its succeeded orders) still open at the broker.
+   * 'unknown' when the positions could not be read: the record then waits for the next tick.
+   */
+  private async capReached(
+    record: Mt5ExecutionRecord,
+    openByAccount: Map<string, number>,
+  ): Promise<boolean | 'unknown'> {
+    const account = record.account;
+    const cap = account ? this.config.executionMaxOpenPositions[account] : undefined;
+    if (!this.ordersApi || !account || cap === undefined) return false;
+    if (!openByAccount.has(account)) {
+      try {
+        const response = await this.request(
+          `/v1/accounts/${encodeURIComponent(account)}/positions`,
+          { headers: { 'X-API-Key': this.config.mt5SignalApiKey } },
+        );
+        const body = await this.readJson(response);
+        if (!response.ok || !Array.isArray(body)) throw new Error(`HTTP ${response.status}`);
+        const open = new Set(
+          body.map((p) => Number((p as { position_id?: unknown }).position_id)),
+        );
+        const mine = this.dedup
+          .listExecutions('succeeded')
+          .filter((r) => r.account === account)
+          .map((r) => this.positionIdOf(r))
+          .filter((id): id is number => id !== undefined && open.has(id));
+        openByAccount.set(account, new Set(mine).size);
+      } catch (err) {
+        this.logEvent(
+          'position_cap_check_failed',
+          { account, error: this.safeMessage(err), nextAction: 'retry_next_tick' },
+          'warn',
+        );
+        return 'unknown';
+      }
+    }
+    return (openByAccount.get(account) ?? 0) >= cap;
+  }
+
+  private positionIdOf(record: Mt5ExecutionRecord): number | undefined {
+    const response = record.response as
+      | { targets?: Array<{ position_id?: unknown }> }
+      | undefined;
+    const id = Number(response?.targets?.[0]?.position_id);
+    return Number.isFinite(id) && id > 0 ? id : undefined;
   }
 
   private get ordersApi(): boolean {

@@ -84,6 +84,9 @@ export const AppConfigSchema = z.object({
   // to the account alias EXECUTION_ACCOUNT.
   EXECUTION_API: z.enum(['signals', 'orders']).default('signals'),
   EXECUTION_ACCOUNT: z.string().default(''),
+  // Per-account cap on this scraper's own open positions, e.g. {"ftmo":3}. Ideas beyond it
+  // are recorded as skipped (max_open_positions), not queued.
+  EXECUTION_MAX_OPEN_POSITIONS: z.record(z.string(), z.coerce.number().int().positive()).default({}),
   // IC Markets client-area auto-login (email/password + TOTP from the authenticator secret).
   AUTO_LOGIN_ENABLED: EnvBooleanSchema.default(false),
   IC_LOGIN_EMAIL: z.string().default(''),
@@ -175,6 +178,7 @@ export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     MARKET_DATA_TIMEOUT_MS: env.MARKET_DATA_TIMEOUT_MS ?? '5000',
     EXECUTION_API: env.EXECUTION_API ?? 'signals',
     EXECUTION_ACCOUNT: env.EXECUTION_ACCOUNT ?? '',
+    EXECUTION_MAX_OPEN_POSITIONS: parseJsonObject(env.EXECUTION_MAX_OPEN_POSITIONS, 'EXECUTION_MAX_OPEN_POSITIONS'),
     AUTO_LOGIN_ENABLED: env.AUTO_LOGIN_ENABLED ?? 'false',
     IC_LOGIN_EMAIL: env.IC_LOGIN_EMAIL ?? '',
     IC_LOGIN_PASSWORD: env.IC_LOGIN_PASSWORD ?? '',
@@ -291,6 +295,15 @@ export function resolveHostOs(
     );
   }
   return configured === 'AUTO' ? detected : configured;
+}
+
+function parseJsonObject(raw: string | undefined, name: string): Record<string, unknown> {
+  if (raw === undefined || raw.trim() === '') return {};
+  try {
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch (err) {
+    throw new Error(`${name} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 /** Parse the JSON rules map without ever including secret configuration in errors. */

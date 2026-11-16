@@ -268,6 +268,64 @@ describe('execution outbox, several accounts', () => {
   });
 });
 
+describe('per-account open-position cap', () => {
+  it('skips ideas once the scraper has 3 positions open on ftmo', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'exec-cap-'));
+    try {
+      const config = new AppConfigService();
+      config.load({
+        SOURCES: JSON.stringify([{ type: 'TRADING_CENTRAL', url: 'https://example.com/tc' }]),
+        SEEN_STATE_PATH: join(dir, 'seen.json'),
+        MT5_SIGNAL_TRADING_ENABLED: 'true',
+        MT5_SIGNAL_API_URL: 'http://127.0.0.1:8010',
+        MT5_SIGNAL_API_KEY: 'test-api-key-value',
+        MT5_SIGNAL_TIMEOUT_MS: '25',
+        MT5_SIGNAL_RULES: JSON.stringify({ 'XAU/USD': { symbol: 'XAUUSD', volume: '0.10' } }),
+        EXECUTION_API: 'orders',
+        EXECUTION_ACCOUNT: 'ftmo',
+        EXECUTION_MAX_OPEN_POSITIONS: '{"ftmo":3}',
+      });
+      const dedup = new DedupService(config);
+      dedup.onModuleInit();
+      const service = new Mt5ExecutionService(config, dedup);
+      const ideaN = (n: number): TradingIdea => ({ ...idea(), hash: String(n).repeat(64).slice(0, 64) });
+      // two earlier scraper positions on ftmo, still open (ids 11, 12) and one closed (13)
+      const earlier = [1, 2, 3].map((n) => service.createExecutionRecords([ideaN(n)])[0]);
+      dedup.markSeen([1, 2, 3].map(ideaN), earlier);
+      earlier.forEach((r, i) =>
+        dedup.updateExecution(r.signalId, {
+          status: 'succeeded',
+          response: { targets: [{ position_id: 11 + i }] },
+        }),
+      );
+      const fresh = [4, 5].map((n) => service.createExecutionRecords([ideaN(n)])[0]);
+      dedup.markSeen([4, 5].map(ideaN), fresh);
+
+      let pid = 100;
+      const fetchMock = jest.fn(async (url: string, init?: RequestInit) => {
+        if (url.endsWith('/health/trading-ready')) return jsonResponse({ status: 'ready' });
+        if (url.endsWith('/v1/accounts/ftmo/positions')) {
+          return jsonResponse([{ position_id: 11 }, { position_id: 12 }, { position_id: 999 }]);
+        }
+        const body = JSON.parse(String(init?.body));
+        return jsonResponse(operation(body.operation_id, 'succeeded', { position_id: pid++ }), 201);
+      });
+      service.setFetchImplementation(fetchMock as never);
+
+      await service.processOutbox();
+
+      const orders = fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/v1/orders'));
+      expect(orders).toHaveLength(1); // 2 open + 1 new = cap 3; position 999 is not ours
+      const byId = Object.fromEntries(dedup.listExecutions().map((r) => [r.signalId, r]));
+      expect(byId[fresh[0].signalId].status).toBe('succeeded');
+      expect(byId[fresh[1].signalId].status).toBe('skipped');
+      expect(byId[fresh[1].signalId].error).toMatchObject({ code: 'max_open_positions' });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('config for orders mode and auto-login', () => {
   const base = {
     SOURCES: JSON.stringify([{ type: 'TRADING_CENTRAL', url: 'https://example.com/tc' }]),
