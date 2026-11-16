@@ -61,8 +61,18 @@ export class AutochartistExtractor implements IdeaExtractor {
 
       const control = await this.findFavouritesControl(page, timeout);
       if (control) {
-        await control.click({ timeout });
-        this.logger.log('Clicked Autochartist "Our Favourites" tab');
+        try {
+          await control.click({ timeout: Math.min(timeout, 5000) });
+          this.logger.log('Clicked Autochartist "Our Favourites" tab');
+        } catch {
+          // Autochartist's cookie modal offers only "Allow" and intercepts pointer events.
+          // Consent is not given on the user's behalf: activate the tab element directly
+          // underneath the modal instead.
+          await control.evaluate((el: HTMLElement) => el.click());
+          this.logger.log(
+            'Activated Autochartist "Our Favourites" tab under the cookie modal (consent not given)',
+          );
+        }
       } else {
         this.logger.warn(
           'Autochartist "Our Favourites" tab not found; navigating #tab-2 fragment',
