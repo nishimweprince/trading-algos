@@ -149,7 +149,7 @@ describe('OpenAiVisionService.extractAutochartist', () => {
     expect(idea.hash).toBe(second.ideas[0].hash);
   });
 
-  it('rejects a card missing a readable current price or target', async () => {
+  it('keeps a card without a readable chart price (entry comes from the live quote) but rejects a missing target', async () => {
     respond({
       signals: [
         { ...validPayload.signals[0], currentPrice: null },
@@ -160,12 +160,14 @@ describe('OpenAiVisionService.extractAutochartist', () => {
 
     const result = await service.extractAutochartist(screenshotPath, context);
 
-    expect(result.ideas).toHaveLength(0);
-    expect(result.rejected[0].reasons).toContain('missing current price (entry)');
-    expect(result.rejected[1].reasons).toContain('missing target');
+    expect(result.ideas).toHaveLength(1);
+    expect(result.ideas[0].entry).toBeNull();
+    expect(result.ideas[0].stopLoss).toBeUndefined();
+    expect(result.ideas[0].raw).toMatchObject({ entryFromLiveQuote: true });
+    expect(result.rejected[0].reasons).toContain('missing target');
   });
 
-  it('rejects a bullish card whose target sits below the current price', async () => {
+  it('treats a chart price that contradicts the direction (forecast tag misread) as unknown', async () => {
     respond({
       signals: [
         {
@@ -180,10 +182,11 @@ describe('OpenAiVisionService.extractAutochartist', () => {
 
     const result = await service.extractAutochartist(screenshotPath, context);
 
-    expect(result.ideas).toHaveLength(0);
-    expect(result.rejected[0].reasons).toContain(
-      'UP direction requires target above current price',
-    );
+    expect(result.ideas).toHaveLength(1);
+    expect(result.ideas[0].entry).toBeNull();
+    expect(result.ideas[0].raw).toMatchObject({
+      currentPriceIssue: 'chart price 16.6 contradicts UP forecast 16.5',
+    });
   });
 
   it('fails before an API request when the screenshot is missing', async () => {

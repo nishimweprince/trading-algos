@@ -23,7 +23,7 @@ export const BrowserModeSchema = z.enum(['CDP', 'PERSISTENT']);
  */
 export const ChromeProfileSchema = z.enum(['MAIN', 'DEDICATED']);
 export type ChromeProfile = z.infer<typeof ChromeProfileSchema>;
-export const HostOsSchema = z.enum(['AUTO', 'MACOS', 'WINDOWS']);
+export const HostOsSchema = z.enum(['AUTO', 'MACOS', 'WINDOWS', 'LINUX']);
 export type HostOs = z.infer<typeof HostOsSchema>;
 export type ResolvedHostOs = Exclude<HostOs, 'AUTO'>;
 
@@ -77,6 +77,24 @@ export const AppConfigSchema = z.object({
   MT5_SIGNAL_TIMEOUT_MS: z.coerce.number().int().positive().default(70000),
   MT5_EXECUTION_MAX_ENTRIES: z.coerce.number().int().positive().default(5000),
   MT5_SIGNAL_RULES: Mt5SignalRulesSchema.default({}),
+  // Which execution-service API the outbox talks to. `signals`: the MT5 compat API
+  // (POST /v1/signals, Windows MT5 host). `orders`: the broker-neutral API
+  // (POST /v1/orders) served by the cTrader `production` profile on any OS. In `orders`
+  // mode each MT5_SIGNAL_RULES symbol is the service's canonical instrument and orders go
+  // to the account alias EXECUTION_ACCOUNT.
+  EXECUTION_API: z.enum(['signals', 'orders']).default('signals'),
+  EXECUTION_ACCOUNT: z.string().default(''),
+  // Per-account cap on this scraper's own open positions, e.g. {"ftmo":3}. Ideas beyond it
+  // are recorded as skipped (max_open_positions), not queued.
+  EXECUTION_MAX_OPEN_POSITIONS: z.record(z.string(), z.coerce.number().int().positive()).default({}),
+  // IC Markets client-area auto-login (email/password + TOTP from the authenticator secret).
+  AUTO_LOGIN_ENABLED: EnvBooleanSchema.default(false),
+  IC_LOGIN_EMAIL: z.string().default(''),
+  IC_LOGIN_PASSWORD: z.string().default(''),
+  IC_TOTP_SECRET: z.string().default(''),
+  AUTO_LOGIN_COOLDOWN_MINUTES: z.coerce.number().positive().default(30),
+  // Answer to IC Markets' trusted-device question after 2FA (default: do not trust).
+  IC_TRUST_DEVICE: EnvBooleanSchema.default(false),
   // market-data-service, for the live bid/ask behind Autochartist stop refresh.
   // Empty disables the refresh; the signal keeps its original stop.
   MARKET_DATA_URL: z.union([z.literal(''), z.string().url()]).default(''),
@@ -158,6 +176,15 @@ export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     MARKET_DATA_API_KEY: env.MARKET_DATA_API_KEY ?? '',
     MARKET_DATA_MARKET: env.MARKET_DATA_MARKET ?? 'forex',
     MARKET_DATA_TIMEOUT_MS: env.MARKET_DATA_TIMEOUT_MS ?? '5000',
+    EXECUTION_API: env.EXECUTION_API ?? 'signals',
+    EXECUTION_ACCOUNT: env.EXECUTION_ACCOUNT ?? '',
+    EXECUTION_MAX_OPEN_POSITIONS: parseJsonObject(env.EXECUTION_MAX_OPEN_POSITIONS, 'EXECUTION_MAX_OPEN_POSITIONS'),
+    AUTO_LOGIN_ENABLED: env.AUTO_LOGIN_ENABLED ?? 'false',
+    IC_LOGIN_EMAIL: env.IC_LOGIN_EMAIL ?? '',
+    IC_LOGIN_PASSWORD: env.IC_LOGIN_PASSWORD ?? '',
+    IC_TOTP_SECRET: env.IC_TOTP_SECRET ?? '',
+    AUTO_LOGIN_COOLDOWN_MINUTES: env.AUTO_LOGIN_COOLDOWN_MINUTES ?? '30',
+    IC_TRUST_DEVICE: env.IC_TRUST_DEVICE ?? 'false',
     HEADLESS: env.HEADLESS ?? 'false',
     NAV_TIMEOUT_MS: env.NAV_TIMEOUT_MS ?? '30000',
     CONTENT_WAIT_MS: env.CONTENT_WAIT_MS ?? '10000',
@@ -218,6 +245,23 @@ export function assertRuntimeConfig(config: AppConfig): void {
         'MT5_SIGNAL_RULES must contain at least one symbol and volume rule when MT5 signal trading is enabled.',
       );
     }
+    const aliases = config.EXECUTION_ACCOUNT.split(',').map((a) => a.trim()).filter(Boolean);
+    if (
+      config.EXECUTION_API === 'orders' &&
+      (aliases.length === 0 || aliases.some((a) => !/^[a-z][a-z0-9_-]*$/.test(a)))
+    ) {
+      throw new Error(
+        'EXECUTION_ACCOUNT must list execution-service account aliases (comma-separated) when EXECUTION_API=orders.',
+      );
+    }
+  }
+  if (config.AUTO_LOGIN_ENABLED) {
+    const missing = ['IC_LOGIN_EMAIL', 'IC_LOGIN_PASSWORD', 'IC_TOTP_SECRET'].filter(
+      (name) => !String(config[name as keyof AppConfig] ?? '').trim(),
+    );
+    if (missing.length > 0) {
+      throw new Error(`AUTO_LOGIN_ENABLED requires ${missing.join(', ')}.`);
+    }
   }
 }
 
@@ -231,6 +275,7 @@ export function detectHostOs(
 ): ResolvedHostOs | undefined {
   if (platform === 'darwin') return 'MACOS';
   if (platform === 'win32') return 'WINDOWS';
+  if (platform === 'linux') return 'LINUX';
   return undefined;
 }
 
@@ -250,6 +295,15 @@ export function resolveHostOs(
     );
   }
   return configured === 'AUTO' ? detected : configured;
+}
+
+function parseJsonObject(raw: string | undefined, name: string): Record<string, unknown> {
+  if (raw === undefined || raw.trim() === '') return {};
+  try {
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch (err) {
+    throw new Error(`${name} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 /** Parse the JSON rules map without ever including secret configuration in errors. */

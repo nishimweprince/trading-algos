@@ -18,6 +18,9 @@ export function defaultChromeUserDataDir(
   if (os === 'MACOS') {
     return join(home, 'Library', 'Application Support', 'Google', 'Chrome');
   }
+  if (os === 'LINUX') {
+    return join(env.XDG_CONFIG_HOME ?? join(home, '.config'), 'google-chrome');
+  }
   const localAppData =
     env.LOCALAPPDATA ??
     env.LocalAppData ??

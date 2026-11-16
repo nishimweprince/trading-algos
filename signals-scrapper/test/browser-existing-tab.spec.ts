@@ -82,6 +82,26 @@ describe('BrowserService existing CDP tab selection', () => {
     });
   });
 
+  it('adopts a same-host IC Markets tab (e.g. the dashboard after login) in the dedicated Chrome', async () => {
+    const browser = service();
+    const goto = jest.fn().mockResolvedValue(undefined);
+    const dashboard = { ...page('https://secure.ic.com/Home/Dashboard'), goto } as unknown as Page;
+    const newPage = jest.fn();
+    jest.spyOn(browser, 'ensureContext').mockResolvedValue({
+      pages: () => [page('https://example.com'), dashboard],
+      newPage,
+    } as never);
+
+    await expect(
+      browser.getPage('https://secure.ic.com/TradingCentral/TradingCentral'),
+    ).resolves.toBe(dashboard);
+    expect(goto).toHaveBeenCalledWith(
+      'https://secure.ic.com/TradingCentral/TradingCentral',
+      expect.anything(),
+    );
+    expect(newPage).not.toHaveBeenCalled();
+  });
+
   it('opens exactly one tab in main Chrome when no matching tab exists, then reuses it', async () => {
     const browser = service('MAIN');
     const goto = jest.fn().mockResolvedValue(undefined);

@@ -1,0 +1,21 @@
+# Linux host: the cTrader `production` profile. This is the ONLY process on the host that
+# holds cTrader credentials (.env.production + data/token-cache.production.json).
+# Strategies (callisto, tickmind, signals-scrapper, ...) call its HTTP API on 127.0.0.1:8010
+# with API_KEY; none of them may hold a cTrader grant (the refresh token rotates, so a
+# second holder would lock this one out).
+[Unit]
+Description=Execution service (cTrader production; sole holder of cTrader credentials; 127.0.0.1:8010)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+UMask=0077
+User=ec2-user
+WorkingDirectory=/home/ec2-user/execution-hub/services/execution-service
+ExecStart=/home/ec2-user/execution-hub/.venv/bin/execution-service --profile production
+Restart=always
+RestartSec=10
+MemoryMax=600M
+
+[Install]
+WantedBy=multi-user.target

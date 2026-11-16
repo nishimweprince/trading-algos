@@ -16,6 +16,7 @@ from ta_contracts import (
     BrokerPosition,
     CancelOrderRequest,
     ClosePositionRequest,
+    MarketQuote,
     OperationResponse,
     OperationState,
     OrderRequest,
@@ -508,5 +509,31 @@ def create_app(
         )
         async def account_positions(alias: str) -> list[BrokerPosition]:
             return await asyncio.to_thread(execution_service.positions, alias)
+
+        @app.get(
+            "/v1/accounts/{alias}/quote",
+            response_model=MarketQuote,
+            responses={401: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+            dependencies=[Depends(authenticate)],
+        )
+        async def account_quote(alias: str, instrument: str) -> MarketQuote:
+            """Latest bid/ask the execution connection holds for one account's instrument.
+
+            Read-only. It lets strategies that trade through this service (trailing
+            stops, entry-distance guards) price their decisions without opening a
+            second broker session, which would need their own cTrader grant.
+            """
+            if gateway is None:
+                raise ServiceError(404, "quotes_unavailable", "This profile serves no quotes")
+            try:
+                account = gateway.account(alias)
+            except KeyError as exc:
+                raise ServiceError(404, "account_not_found", str(exc)) from exc
+            quote = account.hub.last_quote(instrument.strip().upper())
+            if quote is None:
+                raise ServiceError(
+                    404, "quote_unavailable", f"No quote yet for {instrument} on {alias}"
+                )
+            return quote
 
     return app

@@ -61,8 +61,18 @@ export class AutochartistExtractor implements IdeaExtractor {
 
       const control = await this.findFavouritesControl(page, timeout);
       if (control) {
-        await control.click({ timeout });
-        this.logger.log('Clicked Autochartist "Our Favourites" tab');
+        try {
+          await control.click({ timeout: Math.min(timeout, 5000) });
+          this.logger.log('Clicked Autochartist "Our Favourites" tab');
+        } catch {
+          // Autochartist's cookie modal offers only "Allow" and intercepts pointer events.
+          // Consent is not given on the user's behalf: activate the tab element directly
+          // underneath the modal instead.
+          await control.evaluate((el: HTMLElement) => el.click());
+          this.logger.log(
+            'Activated Autochartist "Our Favourites" tab under the cookie modal (consent not given)',
+          );
+        }
       } else {
         this.logger.warn(
           'Autochartist "Our Favourites" tab not found; navigating #tab-2 fragment',
@@ -71,6 +81,16 @@ export class AutochartistExtractor implements IdeaExtractor {
       }
 
       await page.waitForTimeout(settleMs).catch(() => undefined);
+      // The cookie modal (it only offers "Allow") covers the current price, which the
+      // vision step needs. Hide it in this view only; nothing is clicked or consented to.
+      await page
+        .evaluate(() => {
+          const modal = document.querySelector<HTMLElement>('#cookie-consent-modal');
+          if (modal) modal.style.display = 'none';
+          document.querySelectorAll('.modal-backdrop').forEach((el) => el.remove());
+          document.body.classList.remove('modal-open');
+        })
+        .catch(() => undefined);
     } catch (err) {
       this.logger.warn(
         `prepareForScreenshot failed (${err instanceof Error ? err.message : String(err)}); screenshotting current view`,

@@ -37,6 +37,8 @@ export interface Mt5ExecutionError {
 export interface Mt5ExecutionRecord {
   signalId: string;
   ideaHash: string;
+  /** EXECUTION_API=orders: the execution-service account alias this record trades. */
+  account?: string;
   status: Mt5ExecutionStatus;
   request?: Mt5SignalRequest;
   attempts: number;

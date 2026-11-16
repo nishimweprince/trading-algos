@@ -199,13 +199,13 @@ function render(st) {
 
 function renderExec(st) {
   const hb = st.executor, ev = st.executions || [], now = st.now;
-  if (!hb && !ev.length) { $("exec").innerHTML = `<div class="empty">Executor not running (needs cTrader app credentials).</div>`; return; }
+  if (!hb && !ev.length) { $("exec").innerHTML = `<div class="empty">Executor not running.</div>`; return; }
   const live = hb && (new Date(now) - new Date(hb.last_beat)) / 1000 < 30 && hb.connected;
-  const mode = !hb ? "–" : hb.environment === "live" && !hb.live_trading_enabled ? "blocked: live account" : `${hb.environment} account`;
+  const mode = !hb ? "–" : `${hb.environment || "?"} account, service fuses apply`;
   const pos = (hb && hb.open_positions) || [];
   $("exec").innerHTML = `<dl style="margin-bottom:12px">
       <dt>Status</dt><dd><span class="pill ${live ? "live" : "stale"}"><span class="dot"></span>${live ? "connected" : "offline"}</span>${hb && hb.last_error ? ` <span class="note">${esc(hb.last_error)}</span>` : ""}</dd>
-      <dt>Account</dt><dd>${hb ? `${esc(hb.account_number || "")} (ctid ${esc(hb.account_id)}, ${esc(hb.environment)})` : "–"}</dd>
+      <dt>Account</dt><dd>${hb ? `${esc(hb.account || "")} (${esc(hb.environment || "?")}) via ${esc(hb.service || "")}` : "–"}</dd>
       <dt>Mode</dt><dd>${mode}</dd>
       ${hb && hb.sources ? Object.entries(hb.sources).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v.enabled ? "on" : "off (logs only)"} · ${fmt(v.lots)} lots · max ${v.max_open} open${k === "tickmind" && !v.watching ? " · not watching" : ""}${v.sl_pips ? ` · SL ${v.sl_pips} / TP ${v.tp_pips}` : ""}</dd>`).join("") : `<dt>Size</dt><dd>${hb ? fmt(hb.lots) + " lots" : "–"}</dd>`}
       <dt>Open positions</dt><dd>${pos.length ? pos.map((p) => `<span class="side ${p.side}">${p.side}</span> #${p.position_id} @ ${fmt(p.entry)} SL ${fmt(p.stop_loss)} TP ${fmt(p.take_profit)}`).join("<br>") : "none"}</dd></dl>` +

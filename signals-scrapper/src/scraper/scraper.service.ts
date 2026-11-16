@@ -25,6 +25,7 @@ import {
 import { waitForResearchContent } from './content-wait';
 import { IdeaExtractor } from './idea-extractor.interface';
 import { isLoginWall } from './login-wall';
+import { IcLoginService } from '../auth/ic-login.service';
 import { NetworkCaptureSession } from './network-capture';
 
 export interface SourceRunResult {
@@ -126,6 +127,7 @@ export class ScraperService {
     private readonly tradingCentral: TradingCentralExtractor,
     private readonly autochartist: AutochartistExtractor,
     @Optional() private readonly mt5?: Mt5ExecutionService,
+    @Optional() private readonly icLogin?: IcLoginService,
   ) {
     this.extractors = new Map<ProviderType, IdeaExtractor>([
       ['TRADING_CENTRAL', this.tradingCentral],
@@ -218,7 +220,7 @@ export class ScraperService {
     return { startedAt, finishedAt, results, totalNew, mt5 };
   }
 
-  async runSource(source: SourceConfig): Promise<SourceRunResult> {
+  async runSource(source: SourceConfig, afterLogin = false): Promise<SourceRunResult> {
     const extractor = this.extractors.get(source.type);
     if (!extractor) {
       this.logger.warn(`No extractor for type ${source.type}; skipping`);
@@ -312,7 +314,12 @@ export class ScraperService {
             screenshotPath,
           });
         } catch (err) {
-          if (err instanceof TradingCentralContentNotReadyError) {
+          const onLoginPage =
+            err instanceof TradingCentralContentNotReadyError &&
+            !this.hooks.isLoginWall &&
+            page !== null &&
+            (await isLoginWall(page));
+          if (err instanceof TradingCentralContentNotReadyError && !onLoginPage) {
             this.logger.warn(
               `Trading Central widget not ready for ${source.url}; skipping extraction`,
             );
@@ -337,7 +344,8 @@ export class ScraperService {
               ideas: [],
             };
           }
-          throw err;
+          // A logged-out tab never shows the widget: fall through to the login step.
+          if (!onLoginPage) throw err;
         }
       }
 
@@ -362,6 +370,21 @@ export class ScraperService {
           if (visionSource) throw err;
           this.logger.warn(
             `Screenshot failed for ${source.type}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+
+      if (loginWall && page && this.icLogin && !afterLogin) {
+        const outcome = await this.icLogin.login(page);
+        if (outcome === 'logged_in') {
+          capture?.dispose();
+          capture = null;
+          this.logger.log(`Signed back in to IC Markets; re-running ${source.type}`);
+          return this.runSource(source, true);
+        }
+        if (outcome !== 'disabled' && outcome !== 'cooldown') {
+          this.logger.warn(
+            `IC Markets needs a manual login (auto-login: ${outcome}); see README "Manual login"`,
           );
         }
       }

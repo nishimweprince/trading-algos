@@ -1,0 +1,13 @@
+# Virtual display for the scraper's Chrome (a visible, non-headless browser).
+[Unit]
+Description=Xvfb :99 for signals-scrapper Chrome
+After=network.target
+
+[Service]
+User=ec2-user
+ExecStart=/usr/bin/Xvfb :99 -screen 0 1600x1000x24 -nolisten tcp
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

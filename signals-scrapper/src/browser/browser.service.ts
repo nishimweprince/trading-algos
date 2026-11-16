@@ -50,7 +50,25 @@ export function normalizeTabUrl(value: string): string {
 }
 
 export function tabMatchesSource(tabUrl: string, sourceUrl: string): boolean {
-  return normalizeTabUrl(tabUrl) === normalizeTabUrl(sourceUrl);
+  return normalizeTabUrl(tabUrl) === normalizeTabUrl(sourceUrl) || isLoginTabFor(tabUrl, sourceUrl);
+}
+
+/**
+ * A logged-out source tab sits on the IC Markets login page with the source as its
+ * ReturnUrl (e.g. /Account/LogOn?ReturnUrl=%2fTradingCentral%2fTradingCentral). It is
+ * still that source's tab: the login-wall check and auto-login then run on it, and a
+ * successful login returns it to the source page.
+ */
+export function isLoginTabFor(tabUrl: string, sourceUrl: string): boolean {
+  try {
+    const tab = new URL(tabUrl);
+    const source = new URL(sourceUrl);
+    if (tab.host !== source.host || !/\/account\/logon/i.test(tab.pathname)) return false;
+    const returnUrl = tab.searchParams.get('ReturnUrl') ?? tab.searchParams.get('returnUrl');
+    return !!returnUrl && returnUrl.toLowerCase() === source.pathname.toLowerCase();
+  } catch {
+    return false;
+  }
 }
 
 @Injectable()
@@ -197,6 +215,31 @@ export class BrowserService implements OnModuleDestroy {
         await this.navigate(opened, sourceUrl);
         this.sharedPage = opened;
         return opened;
+      }
+      if (!matching && this.config.chromeProfile === 'DEDICATED') {
+        // The scraper's own Chrome: after a login IC Markets lands on another client-area
+        // page (e.g. /Home/Dashboard). Adopt that same-host tab and send it to the source,
+        // but never the tracked Autochartist tab and never an unrelated site.
+        const sourceHost = new URL(sourceUrl).host;
+        const sameHost = ctx
+          .pages()
+          .filter((page) => !page.isClosed() && page !== this.autochartistPage)
+          .find((page) => {
+            try {
+              return new URL(page.url()).host === sourceHost;
+            } catch {
+              return false;
+            }
+          });
+        if (sameHost) {
+          this.logger.log(
+            `Adopting ${new URL(sameHost.url()).pathname} tab for ${normalizeTabUrl(sourceUrl)}`,
+          );
+          this.applyTimeouts(sameHost);
+          await this.navigate(sameHost, sourceUrl);
+          this.sharedPage = sameHost;
+          return sameHost;
+        }
       }
       if (!matching) {
         throw new BrowserAccessError(

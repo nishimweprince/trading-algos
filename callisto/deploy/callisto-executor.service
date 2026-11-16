@@ -1,6 +1,6 @@
 [Unit]
-Description=Callisto cTrader executor (follows signal events; dry run unless EXECUTION_ENABLED=true)
-After=network-online.target callisto-monitor.service
+Description=Callisto/Tickmind executor (trades through execution-service; holds no broker credentials)
+After=network-online.target execution-service.service callisto-monitor.service
 Wants=network-online.target
 
 [Service]

@@ -7,6 +7,10 @@ from types import MethodType
 from uuid import uuid4
 
 import pytest
+from execution_service.api import create_app
+from execution_service.config import AccountDefinition
+from execution_service.errors import CTraderError, ServiceError
+from execution_service.service import ExecutionService
 from fastapi.testclient import TestClient
 from ta_contracts import (
     OperationAction,
@@ -28,6 +32,7 @@ from ta_plugin_ctrader.proto import (
     ProtoOAExecutionType,
     ProtoOAGetAccountListByAccessTokenReq,
     ProtoOAOrderType,
+    ProtoOASpotEvent,
     ProtoOASubscribeSpotsReq,
     ProtoOATrader,
     ProtoOATraderReq,
@@ -36,10 +41,6 @@ from ta_plugin_ctrader.proto import (
 from ta_plugin_ctrader.symbols import SymbolCatalog
 from ta_store import ExecutionRepository
 
-from execution_service.api import create_app
-from execution_service.config import AccountDefinition
-from execution_service.errors import CTraderError, ServiceError
-from execution_service.service import ExecutionService
 from tests.conftest import build_settings
 
 
@@ -536,3 +537,29 @@ def test_ctrader_accounts_report_oco_unsupported(tmp_path: Path) -> None:
     assert submitted.json()["error"]["code"] == "oco_not_supported"
     assert capabilities.status_code == 501
     assert alias.status_code == 404
+
+
+def test_account_quote_serves_the_gateway_last_quote(tmp_path: Path) -> None:
+    gateway = _ready_gateway(tmp_path)
+    repository = ExecutionRepository(tmp_path / "executions.sqlite3")
+    app = create_app(gateway.settings, gateway=gateway, repository=repository)
+    client = TestClient(app)  # no lifespan: the quote comes from the hub
+    headers = {"X-API-Key": "test-api-key-at-least-16"}
+
+    missing = client.get("/v1/accounts/forex_demo/quote?instrument=EURUSD", headers=headers)
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "quote_unavailable"
+
+    gateway._handle_spot(
+        ProtoOASpotEvent(ctidTraderAccountId=12345678, symbolId=1, bid=108_000, ask=108_020)
+    )
+    quote = client.get("/v1/accounts/forex_demo/quote?instrument=eurusd", headers=headers)
+    assert quote.status_code == 200
+    body = quote.json()
+    assert body["symbol"] == "EURUSD" and body["bid"] == 1.08 and body["ask"] == 1.0802
+
+    unknown = client.get("/v1/accounts/nope/quote?instrument=EURUSD", headers=headers)
+    assert unknown.status_code == 404
+    assert unknown.json()["error"]["code"] == "account_not_found"
+    unauthorised = client.get("/v1/accounts/forex_demo/quote?instrument=EURUSD")
+    assert unauthorised.status_code == 401

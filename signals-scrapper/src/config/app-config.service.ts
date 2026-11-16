@@ -156,6 +156,49 @@ export class AppConfigService implements OnModuleInit {
     return this.snapshot.MT5_SIGNAL_RULES;
   }
 
+  get executionApi(): AppConfig['EXECUTION_API'] {
+    return this.snapshot.EXECUTION_API;
+  }
+
+  get executionAccount(): string {
+    return this.executionAccounts[0] ?? '';
+  }
+
+  /** EXECUTION_ACCOUNT may list several aliases ("icm_demo,ftmo"); each gets its own order. */
+  get executionAccounts(): string[] {
+    return this.snapshot.EXECUTION_ACCOUNT.split(',')
+      .map((alias) => alias.trim())
+      .filter(Boolean);
+  }
+
+  get executionMaxOpenPositions(): Record<string, number> {
+    return this.snapshot.EXECUTION_MAX_OPEN_POSITIONS;
+  }
+
+  get autoLoginEnabled(): boolean {
+    return this.snapshot.AUTO_LOGIN_ENABLED;
+  }
+
+  get icLoginEmail(): string {
+    return this.snapshot.IC_LOGIN_EMAIL;
+  }
+
+  get icLoginPassword(): string {
+    return this.snapshot.IC_LOGIN_PASSWORD;
+  }
+
+  get icTotpSecret(): string {
+    return this.snapshot.IC_TOTP_SECRET;
+  }
+
+  get icTrustDevice(): boolean {
+    return this.snapshot.IC_TRUST_DEVICE;
+  }
+
+  get autoLoginCooldownMinutes(): number {
+    return this.snapshot.AUTO_LOGIN_COOLDOWN_MINUTES;
+  }
+
   get marketDataUrl(): string {
     return this.snapshot.MARKET_DATA_URL;
   }

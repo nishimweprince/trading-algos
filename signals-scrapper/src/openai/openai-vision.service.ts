@@ -153,10 +153,10 @@ Fields to read from each card:
 
 Accuracy and rejection rules:
 13. Read currentPrice and target independently, digit by digit. Never move a decimal point, round, append a zero, drop a digit, or infer an unreadable digit. Autochartist cards do not show a stop level — do not return stopLoss.
-14. A UP card should have target above currentPrice; a DOWN card should have target below currentPrice. If the readable values contradict the direction, still return what you read and explain the conflict in rejected.
-15. If target or currentPrice is cut off or unreadable, return null for that field and record the problem in rejected.
+14. A UP card should have target above currentPrice; a DOWN card should have target below currentPrice. If the values you read contradict the direction, return currentPrice null and keep the card in signals (direction from the shaded forecast box / pattern).
+15. If target is cut off or unreadable, put the card in rejected. If only currentPrice is unreadable, return null for it and keep the card in signals.
 16. Ignore navigation tabs, filter bars, "Trade Now" buttons, the RSI subchart, account controls, and any card cut off beyond reliable extraction.
-17. Return a card in signals when instrument, timeframe, direction, target, and currentPrice are all readable — even without description or expiry text.
+17. Return a card in signals when instrument, timeframe, direction and target are readable — even without description, expiry text or a readable currentPrice. currentPrice is optional: when the only highlighted axis label is the Forecast (equal to target), return currentPrice null rather than copying the forecast; the live price is used for the entry.
 `.trim();
 
 @Injectable()
@@ -291,37 +291,36 @@ export class OpenAiVisionService {
       const reasons: string[] = [];
       const instrument = splitPairSymbol(candidate.instrument);
       const timeframe = candidate.timeframe?.trim().toUpperCase() ?? '';
-      const entry = candidate.currentPrice;
       const target = candidate.target;
+      // The chart rarely prints the current price: the only highlighted axis tag is the
+      // forecast, which the model then reads as the price (entry == target). A missing or
+      // contradictory chart price is not grounds to reject; the entry and stop are then
+      // taken from the live quote at order time (Mt5ExecutionService).
+      let entry: number | null = candidate.currentPrice ?? null;
+      let currentPriceIssue: string | undefined;
+      if (entry == null) {
+        currentPriceIssue = 'current price not readable';
+      } else if (
+        target != null &&
+        ((candidate.direction === 'UP' && target <= entry) ||
+          (candidate.direction === 'DOWN' && target >= entry))
+      ) {
+        currentPriceIssue = `chart price ${entry} contradicts ${candidate.direction} forecast ${target}`;
+        entry = null;
+      }
 
       if (!instrument) reasons.push('missing instrument');
       if (!timeframe) reasons.push('missing timeframe');
       if (!candidate.direction) reasons.push('missing direction');
-      if (entry == null) reasons.push('missing current price (entry)');
       if (target == null) reasons.push('missing target');
-      if (
-        candidate.direction === 'UP' &&
-        entry != null &&
-        target != null &&
-        target <= entry
-      ) {
-        reasons.push('UP direction requires target above current price');
-      }
-      if (
-        candidate.direction === 'DOWN' &&
-        entry != null &&
-        target != null &&
-        target >= entry
-      ) {
-        reasons.push('DOWN direction requires target below current price');
-      }
 
       if (reasons.length > 0) {
         rejected.push({ source, reasons });
         continue;
       }
 
-      const stopLoss = autochartistStopLoss(entry as number, target as number);
+      const stopLoss =
+        entry != null ? autochartistStopLoss(entry, target as number) : undefined;
       const ideaTimestamp = autochartistIdeaTimestamp(
         candidate.identifiedAtText,
         ctx.capturedAt,
@@ -346,6 +345,7 @@ export class OpenAiVisionService {
           identifiedAtText: candidate.identifiedAtText,
           expiryText: candidate.expiryText,
           sourceText: candidate.rawSourceText,
+          ...(currentPriceIssue ? { currentPriceIssue, entryFromLiveQuote: true } : {}),
         },
       };
       ideas.push({ ...base, hash: computeIdeaHash(base) });

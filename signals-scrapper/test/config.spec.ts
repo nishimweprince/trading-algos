@@ -177,11 +177,13 @@ describe('config / SOURCES validation', () => {
   it('detects macOS/Windows and enforces explicit HOST_OS assertions', () => {
     expect(detectHostOs('darwin')).toBe('MACOS');
     expect(detectHostOs('win32')).toBe('WINDOWS');
-    expect(detectHostOs('linux')).toBeUndefined();
+    expect(detectHostOs('linux')).toBe('LINUX');
+    expect(detectHostOs('freebsd')).toBeUndefined();
     expect(resolveHostOs('AUTO', 'darwin')).toBe('MACOS');
     expect(resolveHostOs('WINDOWS', 'win32')).toBe('WINDOWS');
     expect(() => resolveHostOs('WINDOWS', 'darwin')).toThrow(/does not match/);
-    expect(() => resolveHostOs('AUTO', 'linux')).toThrow(/unsupported/);
+    expect(resolveHostOs('AUTO', 'linux')).toBe('LINUX');
+    expect(() => resolveHostOs('AUTO', 'freebsd')).toThrow(/unsupported/);
 
     const detected = detectHostOs();
     const mismatched = detected === 'MACOS' ? 'WINDOWS' : 'MACOS';
