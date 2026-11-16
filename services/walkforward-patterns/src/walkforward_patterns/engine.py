@@ -327,3 +327,12 @@ class Market:
         until the next `on_m1`, whose minute is the entry minute)."""
         for tf, b in self._close_buckets(t):
             self._on_ltf(tf, b)
+
+    def signal_now(self, t: int, price: float, is_flat: Callable[[str], bool]) -> tuple[list[Entry], list[Skip]]:
+        """Live: at the start of research minute t (all M1 bars before t fed), close the buckets that ended and
+        resolve their signals with entry minute t. `price` stands in for the open of minute t (the current bid),
+        which the research uses only for the risk qualification of pattern signals."""
+        self.flush(t)
+        if not self.pending:
+            return [], []
+        return self._resolve(t, price, is_flat)

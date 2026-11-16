@@ -26,6 +26,7 @@ ta-notify = { workspace = true }
 research = ["pandas>=2.2", "numba>=0.60"]
 
 [project.scripts]
+wfp = "walkforward_patterns.cli:main"
 wfp-replay = "walkforward_patterns.replay:main"
 
 [dependency-groups]
@@ -53,6 +54,8 @@ line-length = 120
 [tool.ruff.lint]
 # `l` is the low price (OHLC) everywhere, and patterns.py is a line-for-line port of the research loop.
 extend-ignore = ["E741", "E702"]
+# status.py is one embedded HTML/JS page; its line length is the page's.
+extend-per-file-ignores = { "src/walkforward_patterns/status.py" = ["E501"] }
 
 [tool.ruff.lint.isort]
 known-first-party = ["walkforward_patterns"]
