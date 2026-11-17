@@ -10,6 +10,7 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <set>
 #include <sstream>
 #include <thread>
@@ -224,10 +225,24 @@ int main(int argc, char** argv) {
       ++sent;
     }
     // Tables: re-plan before every new table, so each create uses a fresh recent slot (a create must name a slot
-    // still in SlotHashes, the last 512 slots, about 100 s).
+    // still in SlotHashes, the last 512 slots, about 100 s). Table contents are read from chain once and then
+    // tracked here, applying each confirmed write: re-reading right after a write can hit a node that has not seen
+    // it yet, and a plan built on that stale view tried to push a full table past 256 addresses (17 Nov 2026).
+    std::map<Pubkey, tx::AltAccount> local;
+    {
+      tx::AltManager start;
+      std::vector<Pubkey> listed;
+      app::load_tables(rpc, cfg.mode.alts_path, start, &listed);
+      for (const Pubkey& t : listed) {
+        auto acc = rpc.account(t, "confirmed");
+        if (!acc) continue;
+        if (auto a = tx::decode_lookup_table(acc->data.data(), acc->data.size(), acc->owner)) local[t] = *a;
+      }
+      tables = listed;
+    }
     for (;;) {
       tx::AltManager now;
-      load(now, tables);
+      for (const auto& [t, a] : local) now.upsert(t, a);
       std::vector<Pubkey> todo = now.missing(keys);
       if (todo.empty()) break;
       std::vector<Pubkey> created;
@@ -240,6 +255,22 @@ int main(int argc, char** argv) {
         if (creates && i > 0) break;  // a second new table: re-plan with a fresh slot
         std::string sig = send_confirmed(rpc, wallet, plan[i]);
         ++sent;
+        // Apply the confirmed transaction to the local view: a create adds an empty table, an extend its addresses.
+        for (uint8_t j = 0; j < plan[i].n; ++j) {
+          const tx::Ix& ix = plan[i].ixs[j];
+          if (ix.program != prog::ALT) continue;
+          uint32_t op;
+          std::memcpy(&op, ix.data, 4);
+          const Pubkey& t = ix.accounts[0].key;
+          if (op == 0) {
+            tx::AltAccount a;
+            a.has_authority = true;
+            a.authority = w;
+            local[t] = a;
+          } else if (op == 2) {
+            for (size_t o = 12; o + 32 <= ix.data_len; o += 32) local[t].addresses.push_back(key_from(ix.data + o));
+          }
+        }
         if (creates) {
           // Record the table the moment it exists, so a stopped run never loses track of it.
           tables.push_back(created.front());
