@@ -28,13 +28,11 @@ deployer=$(solana-keygen pubkey "$DEPLOYER")
 [ -f "$PROGRAM" ] || { solana-keygen new --no-bip39-passphrase --silent -o "$PROGRAM" >/dev/null; chmod 600 "$PROGRAM"; }
 program=$(solana-keygen pubkey "$PROGRAM")
 
-# Build as the toolchain's owner (never as root) in a clean copy; only the deploy itself needs the root-only keys.
-BUILDER=${BUILD_USER:-ec2-user}
-WORK=$(mktemp -d /tmp/jito-executor-build.XXXXXX)
-cp -r "$SRC" "$WORK/executor"
-chown -R "$BUILDER" "$WORK"
-sudo -u "$BUILDER" env PATH="$PATH" bash -c "cd '$WORK/executor' && cargo test --quiet 2>&1 | tail -3 && cargo build-sbf 2>&1 | tail -1"
-SO="$WORK/executor/target/deploy/jito_arb_executor.so"
+# Build and test as the checkout's owner (never as root), in place: the tests read fixtures by repo-relative path.
+# Any test or build failure stops here, before anything touches mainnet.
+BUILDER=${BUILD_USER:-$(stat -c %U "$SRC")}
+sudo -u "$BUILDER" env PATH="$PATH" bash -c "set -euo pipefail; cd '$SRC'; cargo test --quiet; cargo build-sbf >/dev/null 2>&1 || cargo build-sbf"
+SO="$SRC/target/deploy/jito_arb_executor.so"
 bytes=$(stat -c %s "$SO")
 rent=$(( (bytes + 45 + 128) * 6960 ))
 bal=$(solana balance "$deployer" --url "$URL" --lamports | awk '{print $1}')
