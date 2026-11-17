@@ -17,9 +17,10 @@ use crate::args::{Dex, ExecuteRouteArgs, LegSpec};
 use crate::error::ExecutorError;
 use crate::guard;
 
-/// Only this key may route through the program. Placeholder until deployment: set to the hot wallet's
-/// pubkey before `cargo build-sbf` (RUNBOOK-VM.md). The upgrade authority is a separate key.
-pub const OWNER: Pubkey = pubkey!("11111111111111111111111111111111");
+/// Only this key may route through the program: the hot wallet (/etc/jito-arb/hot_wallet.json on the Frankfurt VM,
+/// created 17 Nov 2026). The upgrade authority is a separate key (the deployer). A new hot wallet needs a rebuild
+/// and an upgrade.
+pub const OWNER: Pubkey = pubkey!("5eX6wD6ye9ixkfi83znxxmEWbJsMBdrUh3panbBGEhi");
 
 pub const RAYDIUM_V4: Pubkey = pubkey!("675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8");
 pub const WHIRLPOOL: Pubkey = pubkey!("whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc");
