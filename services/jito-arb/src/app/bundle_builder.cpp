@@ -1,7 +1,5 @@
 #include "app/bundle_builder.hpp"
 
-#include "app/bundle_sim.hpp"
-
 #include <unistd.h>
 
 #include <cstdint>
@@ -16,27 +14,17 @@
 
 namespace arb::app {
 
-Pubkey dry_run_executor() {
+Pubkey placeholder_executor() {
   Pubkey k{};
   std::memcpy(k.data(), "jito-arb dry-run executor (none)", 32);
   return k;
 }
 
-Keypair dry_run_keypair() {
+Keypair test_keypair() {
   uint8_t seed[32];
   std::memcpy(seed, "jito-arb dry run only: no funds!", 32);
   return Keypair::from_seed(seed);
 }
-
-namespace {
-/** Virtual table n: 0 is the shared table, pool id i is table i + 1. */
-Pubkey table_key(uint32_t n) {
-  Pubkey k{};
-  std::memcpy(k.data(), "virtual-alt", 11);
-  std::memcpy(k.data() + 28, &n, 4);
-  return k;
-}
-}  // namespace
 
 std::vector<Pubkey> shared_table_keys(const Pubkey& wallet, std::span<const flash::FlashReserve> reserves, const Pubkey& executor) {
   std::vector<Pubkey> v;
@@ -91,21 +79,6 @@ std::vector<Pubkey> pool_table_keys(const PoolState& p, const Pubkey& wallet) {
   return v;
 }
 
-void seed_virtual_tables(tx::AltManager& alts, const StateStore& store, const Pubkey& wallet,
-                         std::span<const flash::FlashReserve> reserves, const Pubkey& executor) {
-  auto table = [&wallet](const std::vector<Pubkey>& keys) {
-    tx::AltAccount a;
-    a.has_authority = true;
-    a.authority = wallet;
-    for (const Pubkey& k : keys)
-      if (k != wallet && a.addresses.size() < tx::ALT_MAX_ADDRESSES) a.addresses.push_back(k);
-    return a;
-  };
-  alts.upsert(table_key(0), table(shared_table_keys(wallet, reserves, executor)));
-  for (uint32_t i = 0; i < store.pool_count(); ++i)
-    if (auto p = store.pool(i)) alts.upsert(table_key(i + 1), table(pool_table_keys(*p, wallet)));
-}
-
 BundleBuilder::BundleBuilder(const Config& cfg, Runtime& rt, Keypair wallet, Pubkey executor, tx::AltManager& alts,
                              tx::BlockhashCache& blockhash, risk::Limits& limits, submit::Submitter& submitter)
     : cfg_(cfg), rt_(rt), wallet_(wallet), executor_(executor), alts_(alts), blockhash_(blockhash), limits_(limits),
@@ -116,17 +89,6 @@ BundleBuilder::BundleBuilder(const Config& cfg, Runtime& rt, Keypair wallet, Pub
   guard_.tip_max_lamports = cfg.jito.tip_max_lamports;
 }
 
-void BundleBuilder::warm(bool force) {
-  if (!virtual_tables_ || seeded_) return;
-  std::vector<flash::FlashReserve> rs;
-  for (const std::string& m : cfg_.engine.base_mints)
-    if (auto r = rt_.engine().flash_reserve(parse_pubkey(m))) rs.push_back(*r);
-  // Off the hot path, wait until every base's flash reserve is known so the shared table is complete.
-  if (!force && rt_.engine().flash_mode() && rs.size() < cfg_.engine.base_mints.size()) return;
-  seed_virtual_tables(alts_, rt_.store(), wallet_.pubkey(), rs, executor_);
-  seeded_ = true;
-}
-
 void BundleBuilder::operator()(const engine::Opportunity& o, const engine::Cycle& c, obs::DecisionRecord& rec) {
   auto skip = [&](engine::Reason r) {
     rec.action = uint8_t(obs::Action::Skipped);
@@ -134,7 +96,6 @@ void BundleBuilder::operator()(const engine::Opportunity& o, const engine::Cycle
   };
   ++n_.built;
   const uint64_t t_enter = now_ns();
-  if (virtual_tables_ && !seeded_) warm(true);
   uint8_t dex_mask = 0;
   std::shared_ptr<const PoolState> legs[engine::MAX_LEGS];
   for (int i = 0; i < c.n; ++i) {
@@ -146,17 +107,17 @@ void BundleBuilder::operator()(const engine::Opportunity& o, const engine::Cycle
     for (int i = 0; i < c.n; ++i) all &= armed_->contains(legs[i]->address);
     if (!all) {
       ++n_.not_armed;
-      if (enforce_armed_) return skip(engine::Reason::not_armed);
+      return skip(engine::Reason::not_armed);
     }
   }
   uint64_t slot = std::max(o.slot, rt_.clock().slot.load(std::memory_order_relaxed));
   // §10 limits: kill switch, fee cap, float, reject pause, feed lag, disabled quoters.
   limits_.set_kill(::access(cfg_.mode.kill_file.c_str(), F_OK) == 0 || limits_.killed());
-  // Feed age: the newest account update (replay has none and passes 0); a failed health gate counts as
+  // Feed age: the newest account update (tests have none and pass 0); a failed health gate counts as
   // infinitely stale, so the feed_lag block covers flapping streams too.
   int64_t feed_age_ms = 0;
   if (!feed_ok_) feed_age_ms = INT64_MAX;
-  else if (uint64_t lu = rt_.last_update_ns(); lu && !placeholder_blockhash_) feed_age_ms = int64_t((now_ns() - std::min(now_ns(), lu)) / 1'000'000);
+  else if (uint64_t lu = rt_.last_update_ns(); lu) feed_age_ms = int64_t((now_ns() - std::min(now_ns(), lu)) / 1'000'000);
   risk::Block blk = limits_.check(rec.wall_ms, wallet_lamports_, feed_age_ms, dex_mask);
   if (blk != risk::Block::none) {
     ++n_.risk_blocked;
@@ -187,25 +148,12 @@ void BundleBuilder::operator()(const engine::Opportunity& o, const engine::Cycle
     return skip(engine::Reason::sign_guard);
   }
   const uint64_t t_guarded = now_ns();
-  if (placeholder_blockhash_) blockhash_.set(Hash{}, slot, rec.wall_ms);
   auto bh = blockhash_.get(slot);
   if (!bh) {
     ++n_.build_failed;
     return skip(engine::Reason::tx_build_failed);
   }
-  // Virtual tables are one per pool (8,000+): handing the compiler all of them meant copying every table and
-  // scanning each for every account, ~10 ms a bundle. A route only ever uses the shared table and its own
-  // pools' tables. Real tables (live) are few and shared across pools, so they all go to the compiler.
-  std::vector<tx::LookupTable> tables;
-  if (virtual_tables_) {
-    Pubkey keys[1 + engine::MAX_LEGS];
-    size_t n = 0;
-    keys[n++] = table_key(0);
-    for (int i = 0; i < c.n; ++i) keys[n++] = table_key(c.legs[i].pool + 1);
-    tables = alts_.active(std::span<const Pubkey>(keys, n), slot);
-  } else {
-    tables = alts_.active(slot);
-  }
+  std::vector<tx::LookupTable> tables = alts_.active(slot);
   Pubkey statics[1] = {p.tip_account};
   const uint64_t t_compile = now_ns();
   auto t = tx::build_tx(wallet_.pubkey(), &wallet_, ixs_, *bh, tables, last_, statics);
@@ -231,18 +179,6 @@ void BundleBuilder::operator()(const engine::Opportunity& o, const engine::Cycle
   std::memcpy(rec.signature, last_.sig.data(), 64);
   std::vector<submit::RegionResult> regions;
   switch (submitter_.submit(last_, slot, rt_.clock().slot.load(std::memory_order_relaxed), rec.wall_ms, &regions)) {
-    case submit::SubmitOutcome::DryRun:
-      ++n_.dry_run;
-      rec.action = uint8_t(obs::Action::DryRun);
-      if (sim_) {
-        SimJob j;
-        j.o = o;
-        j.c = c;
-        for (int i = 0; i < c.n; ++i) j.legs[size_t(i)] = legs[i];
-        j.cand = rec;
-        sim_->submit(std::move(j));
-      }
-      break;
     case submit::SubmitOutcome::Sent:
       ++n_.sent;
       rec.action = uint8_t(obs::Action::Sent);

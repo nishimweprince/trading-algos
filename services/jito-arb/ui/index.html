@@ -199,7 +199,7 @@
     <div class="panel">
       <h2>Services</h2>
       <div class="tablewrap"><table id="units"></table></div>
-      <p class="note">Dry run: bundles are built and signed but never sent. This build refuses dry_run = false.</p>
+      <p class="note">Live: bundles are sent to Jito from the hot wallet. Stop sending with the KILL file.</p>
     </div>
   </section>
 </main>
@@ -246,8 +246,8 @@ async function refreshState() {
     const s = await getJSON("/api/state");
     const m = s.metrics, r = s.rates, u = s.units;
     const live = u["jito-arb.service"] === "active";
-    $("mode").textContent = m.arb_dry_run === 1 ? "dry run" : m.arb_dry_run === 0 ? "LIVE" : "no metrics";
-    $("mode").className = "pill " + (m.arb_dry_run === 1 ? "good" : m.arb_dry_run === 0 ? "bad" : "warn");
+    $("mode").textContent = m.arb_uptime_seconds != null ? "LIVE" : "no metrics";
+    $("mode").className = "pill " + (m.arb_uptime_seconds != null ? "bad" : "warn");
     const st = u["jito-arb.service"] || "?";
     $("svc").textContent = live ? (m.arb_kill_switch ? "KILL switch on" : "running") : st === "no systemd" ? "no systemd (dev)" : "service " + st;
     $("svc").className = "pill " + (live && !m.arb_kill_switch ? "good" : st === "no systemd" ? "warn" : "bad");
@@ -274,22 +274,14 @@ async function refreshState() {
       tile("Streams up", `${fmt(m.arb_feed_shards_up)}`, `${fmt(m.arb_feed_reconnects)} reconnects`),
       tile("Decode failures", fmt(m.arb_decode_failures), "since start"),
       tile("Candidates", fmt(m.arb_engine_candidates), "priced above min EV"),
-      tile("Bundles (dry run)", fmt(m.arb_bundles_dry_run), `${fmt(m.arb_bundles_signed)} signed`),
+      tile("Bundles sent", fmt(m.arb_bundles_sent || 0), `${fmt(m.arb_bundles_signed)} signed · ${fmt(m.arb_bundles_risk_blocked || 0)} held by a limit`),
       tile("Armed pools", m.arb_armed_pools ? fmt(m.arb_armed_pools) : "all", m.arb_armed_pools
-           ? `${fmt(m.arb_bundles_not_armed)} dry-run routes used a pool outside the set (skipped when live)`
+           ? `${fmt(m.arb_bundles_not_armed)} routes skipped: a pool outside the set`
            : "no armed set loaded"),
       tile("Hot wallet", m.arb_wallet_lamports >= 0 ? fmt(m.arb_wallet_lamports / 1e9, 4) + " SOL" : "–",
            `${fmt(m.arb_bundles_landed || 0)} landed · ${fmt(m.arb_bundles_not_landed || 0)} not landed · ${fmt(m.arb_bundles_rejected || 0)} rejected`),
-      tile("Simulated OK", fmt(m.arb_sim_ok), `${fmt(m.arb_sim_profitable)} would land · the rest revert at no cost · ${fmt(m.arb_sim_failed)} failed`,
-           m.arb_sim_failed > m.arb_sim_ok ? "warnv" : ""),
       tile("Skip logs sampled", fmt(m.arb_decision_skip_logs_dropped), "all signed candidates and outcomes retained"),
-      tile("Simulation jobs", fmt(m.arb_sim_submitted), `${fmt(m.arb_sim_terminal)} finished · ${fmt(m.arb_sim_queued)} queued · ${fmt(m.arb_sim_in_flight)} in progress`),
-      tile("State at simulation", `${fmt(m.arb_sim_state_matched)} / ${fmt(m.arb_sim_state_drifted)}`,
-           `matched / drifted vaults · ${fmt(m.arb_sim_quoter_suspect)} quoter suspects · ${fmt(m.arb_sim_per_leg)} leg by leg`,
-           (m.arb_sim_quoter_suspect || 0) > 0 ? "warnv" : ""),
       tile("Held back", fmt(m.arb_quarantined_pools), `pools quarantined · ${fmt(m.arb_engine_implausible_profit)} implausible profits · ${fmt(m.arb_engine_no_room_memo)} no-room skips`),
-      tile("Not simulated", fmt((m.arb_sim_dropped || 0) + (m.arb_sim_no_holder || 0) + Math.max(0, (m.arb_sim_too_large || 0) - (m.arb_sim_per_leg || 0)) + (m.arb_sim_rpc_error || 0) + (m.arb_sim_setup_error || 0) + (m.arb_sim_funding_changed || 0) + (m.arb_sim_intermediate_balance || 0)),
-           `${fmt(m.arb_sim_rpc_error)} RPC · ${fmt(m.arb_sim_setup_error)} setup · ${fmt(m.arb_sim_no_holder)} no holder · ${fmt(m.arb_sim_funding_changed)} holder moved · ${fmt(m.arb_sim_dropped)} capped`),
     ].join("");
     const ms = (us) => us == null || us < 0 ? null : us / 1000;
     const judge = (v, ok, warn) => v == null ? "" : v <= ok ? "goodv" : v <= warn ? "warnv" : "badv";
@@ -326,7 +318,7 @@ async function refreshState() {
       ["Pool updates", m.arb_engine_pool_updates], ["Cycle evaluations", m.arb_engine_cycles_seen],
       ["Skipped: stale leg", m.arb_engine_stale], ["Skipped: DEX not quoted", m.arb_engine_unsupported], ["Skipped: pool can't swap", m.arb_engine_untradable],
       ["Passed prefilter", m.arb_engine_prefilter_pass], ["Sized", m.arb_engine_sized],
-      ["Candidates", m.arb_engine_candidates], ["Dry-run bundles", m.arb_bundles_dry_run],
+      ["Candidates", m.arb_engine_candidates], ["Signed", m.arb_bundles_signed], ["Sent", m.arb_bundles_sent], ["Landed", m.arb_bundles_landed],
     ];
     const top = Math.max(1, ...steps.map((x) => x[1] || 0));
     $("funnel").innerHTML = steps.map(([k, v]) => `<div class="bar"><span>${esc(k)}</span><div class="track"><div class="fill" style="width:${(100 * Math.log10(1 + (v || 0)) / Math.log10(1 + top)).toFixed(1)}%"></div></div><span class="n">${big(v)}</span></div>`).join("") + `<p class="note">Bar length is logarithmic.</p>`;
@@ -372,8 +364,9 @@ async function refreshDecisions() {
   try {
     const d = await getJSON("/api/decisions?hours=" + hours);
     const days = Object.entries(d.by_day);
-    // Sums of gross, tip, net and EV cover dispatched (dry-run) candidates only.
-    $("days").innerHTML = days.length ? `<tr><th>Day (UTC)</th><th class="num">Logged candidates</th><th class="num">Dry-run</th><th class="num">Skipped</th><th class="num">Gross SOL</th><th class="num">Tip SOL</th><th class="num">Net SOL</th><th class="num">EV SOL</th><th class="num">Net / bundle</th><th class="num">Sim OK</th><th class="num">Sim failed</th><th class="num" title="simulated net at or above min_net: passes the on-chain guard">Would land</th><th class="num" title="below the guard or failed: the bundle reverts and costs nothing">Would revert</th><th class="num" title="sum over bundles that would land; reverts count 0">Sim net SOL (guarded)</th><th class="num" title="landing bundles simulated over 20 slots after detection: later flow, not the route">of which late</th><th class="num" title="every simulated-OK bundle with min_out = 0, losses included; not reachable on chain">Unguarded</th></tr>` +
+    // Sums of gross, tip, net and EV cover dispatched candidates only (quoted, before landing). Sim columns are
+    // the archived dry-run simulations and stay empty for live records.
+    $("days").innerHTML = days.length ? `<tr><th>Day (UTC)</th><th class="num">Logged candidates</th><th class="num">Dispatched</th><th class="num">Skipped</th><th class="num">Gross SOL</th><th class="num">Tip SOL</th><th class="num">Net SOL</th><th class="num">EV SOL</th><th class="num">Net / bundle</th><th class="num">Sim OK</th><th class="num">Sim failed</th><th class="num" title="simulated net at or above min_net: passes the on-chain guard">Would land</th><th class="num" title="below the guard or failed: the bundle reverts and costs nothing">Would revert</th><th class="num" title="sum over bundles that would land; reverts count 0">Sim net SOL (guarded)</th><th class="num" title="landing bundles simulated over 20 slots after detection: later flow, not the route">of which late</th><th class="num" title="every simulated-OK bundle with min_out = 0, losses included; not reachable on chain">Unguarded</th></tr>` +
       days.map(([k, v]) => `<tr><td>${esc(k)}</td><td class="num">${fmt(v.candidates)}</td><td class="num">${fmt(v.dispatched)}</td><td class="num">${fmt(v.candidates - v.dispatched)}</td><td class="num">${fmt(v.gross_lamports / 1e9, 4)}</td><td class="num">${fmt(v.tip_lamports / 1e9, 4)}</td><td class="num">${fmt(v.net_lamports / 1e9, 4)}</td><td class="num">${fmt(v.ev_lamports / 1e9, 5)}</td><td class="num">${v.dispatched ? fmt(v.net_lamports / 1e9 / v.dispatched, 5) : "–"}</td><td class="num">${fmt(v.sim_ok || 0)}</td><td class="num">${fmt(v.sim_failed || 0)}</td><td class="num">${fmt(v.sim_land || 0)}</td><td class="num">${fmt(v.sim_revert || 0)}</td><td class="num">${fmt((v.sim_landed_net_lamports || 0) / 1e9, 5)}</td><td class="num sub">${fmt((v.sim_landed_net_late_lamports || 0) / 1e9, 5)} (${fmt(v.sim_land_late || 0)})</td><td class="num sub">${fmt((v.sim_net_lamports || 0) / 1e9, 5)}</td></tr>`).join("")
       : `<tr><td class="empty">No candidates in this window. A candidate is a sized cycle; most mainnet gaps close before they clear fees and the tip.</td></tr>`;
     const rs = Object.entries(d.skipped_by_reason);

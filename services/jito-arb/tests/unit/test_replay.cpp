@@ -19,8 +19,7 @@ TEST(replay_frames_into_decision_log_and_report) {
   app::PoolsFile pf;
   std::string err;
   CHECK(app::from_json(read_file(fixture_path("replay_pools.json")), pf, &err));
-  Config cfg;  // defaults: dry_run, flash funding, both DEXes enabled
-  CHECK(cfg.mode.dry_run);
+  Config cfg;  // defaults: flash funding, both DEXes enabled; no send hook, so nothing is built or sent
   app::Runtime rt(cfg, pf);
   char path[] = "/tmp/arb_decisions_XXXXXX";
   int fd = mkstemp(path);

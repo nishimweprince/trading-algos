@@ -305,7 +305,7 @@ int main(int argc, char** argv) {
       // (c) the full §7.3 transaction through the executor, with a placeholder or deployed id.
       Check f;
       f.name = "full_route_tx";
-      Pubkey exec = executor_s.empty() ? app::dry_run_executor() : parse_pubkey(executor_s);
+      Pubkey exec = executor_s.empty() ? app::placeholder_executor() : parse_pubkey(executor_s);
       engine::Cycle cyc;
       cyc.n = 2;
       cyc.base = mint::WSOL;

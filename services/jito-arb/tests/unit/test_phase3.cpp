@@ -5,8 +5,10 @@
 #include <unistd.h>
 
 #include <chrono>
+#include <climits>
 #include <cstring>
 
+#include "app/arming.hpp"
 #include "app/bundle_builder.hpp"
 #include "app/live_plan.hpp"
 #include "dex/quoter.hpp"
@@ -74,6 +76,39 @@ class MockHttp final : public submit::HttpPost {
   std::string body_;
 };
 
+/**
+ * Lookup tables laid out as arm-accounts creates them on chain (needed_table_keys packed 256 to a table), filled on
+ * the first candidate: the flash reserves are known only once their accounts have been replayed.
+ */
+struct TestTables {
+  tx::AltManager alts;
+  bool seeded = false;
+  void seed(app::Runtime& rt, const Config& cfg, const Pubkey& wallet, const Pubkey& executor) {
+    if (seeded) return;
+    seeded = true;
+    std::vector<flash::FlashReserve> rs;
+    for (const std::string& m : cfg.engine.base_mints)
+      if (auto r = rt.engine().flash_reserve(parse_pubkey(m))) rs.push_back(*r);
+    auto keys = app::needed_table_keys(rt.store(), wallet, rs, executor);
+    for (size_t i = 0, n = 0; i < keys.size(); i += tx::ALT_MAX_ADDRESSES, ++n) {
+      tx::AltAccount a;
+      a.has_authority = true;
+      a.authority = wallet;
+      a.addresses.assign(keys.begin() + long(i), keys.begin() + long(std::min(keys.size(), i + tx::ALT_MAX_ADDRESSES)));
+      Pubkey t{};
+      t[0] = 0xA1;
+      t[1] = uint8_t(n);
+      alts.upsert(t, a);
+    }
+  }
+};
+
+Pubkey test_executor() {
+  Pubkey k{};
+  std::memset(k.data(), 0xE1, 32);
+  return k;
+}
+
 }  // namespace
 
 TEST(execute_route_layout_matches_shared_fixture) {
@@ -109,8 +144,8 @@ TEST(route_tx_layout_accounts_and_borrow_index) {
   CHECK(c != nullptr);
   if (!c) return;
   std::shared_ptr<const PoolState> legs[2] = {L.rt->store().pool(c->legs[0].pool), L.rt->store().pool(c->legs[1].pool)};
-  Keypair kp = app::dry_run_keypair();
-  Pubkey exec = app::dry_run_executor();
+  Keypair kp = app::test_keypair();
+  Pubkey exec = app::placeholder_executor();
   const flash::FlashReserve* r = L.rt->engine().flash_reserve(mint::WSOL);
   CHECK(r != nullptr && r->enabled);
   tx::RouteTxParams p;
@@ -175,10 +210,10 @@ TEST(route_tx_layout_accounts_and_borrow_index) {
 }
 
 TEST(sign_guard_allowlist_and_tip_rules) {
-  Keypair kp = app::dry_run_keypair();
+  Keypair kp = app::test_keypair();
   risk::SignGuard g;
   g.wallet = kp.pubkey();
-  g.executor = app::dry_run_executor();
+  g.executor = app::placeholder_executor();
   g.tip_accounts = risk::default_tip_accounts();
   g.tip_max_lamports = 1'000'000;
   auto base = [&] {
@@ -253,7 +288,7 @@ TEST(limits_kill_switch_and_denylist) {
 }
 
 TEST(alt_activation_and_extend_plan) {
-  Keypair kp = app::dry_run_keypair();
+  Keypair kp = app::test_keypair();
   tx::AltManager m(2);
   tx::AltAccount a;
   a.has_authority = true;
@@ -329,7 +364,7 @@ TEST(jito_bodies_parsers_and_429_backoff) {
   CHECK(!rr[1].backed_off && calls_ams == 2);
 }
 
-TEST(dry_run_gate_never_reaches_send_bundle) {
+TEST(submitter_sends_once_and_never_retries_a_passed_slot) {
   int calls = 0;
   auto make = [&] {
     return std::make_unique<submit::JitoClient>(std::vector<std::string>{"frankfurt"}, "https://%s.x",
@@ -337,12 +372,9 @@ TEST(dry_run_gate_never_reaches_send_bundle) {
   };
   tx::SignedTx t;
   t.len = 100;
-  submit::Submitter dry(true, make());
-  CHECK(dry.dry_run());
-  for (int i = 0; i < 10; ++i) CHECK(dry.submit(t, 5, 5, 0) == submit::SubmitOutcome::DryRun);
-  CHECK_EQ(calls, 0);
-  submit::Submitter live(false, make());
-  CHECK(!live.dry_run());
+  submit::Submitter none(nullptr);  // the recorder: no client, nothing can be sent
+  CHECK(none.submit(t, 5, 5, 0) == submit::SubmitOutcome::NoRegion);
+  submit::Submitter live(make());
   CHECK(live.submit(t, 5, 6, 0) == submit::SubmitOutcome::Stale);  // the slot passed: never a retry
   CHECK_EQ(calls, 0);
   CHECK(live.submit(t, 5, 5, 0) == submit::SubmitOutcome::Sent);
@@ -370,35 +402,36 @@ TEST(bundle_tracker_outcomes) {
   CHECK(done.back().second == submit::BundleTracker::Result::NotLanded);
 }
 
-TEST(dry_run_replay_signs_bundles_with_zero_sends) {
+TEST(replay_signs_and_sends_each_bundle_once) {
   Loaded L;
-  CHECK(L.cfg.mode.dry_run);
-  Keypair kp = app::dry_run_keypair();
-  tx::AltManager alts;
+  L.cfg.risk.max_feed_lag_ms = INT32_MAX;  // replayed frames carry their recording-time receive stamps
+  Keypair kp = app::test_keypair();
+  TestTables tt;
   tx::BlockhashCache bh;
+  bh.set(Hash{}, UINT64_MAX >> 1, 0);  // never stale within the replay
   risk::Limits limits(risk::limits_config(L.cfg));
   int calls = 0;
-  submit::Submitter sub(true, std::make_unique<submit::JitoClient>(
-                                  std::vector<std::string>{"frankfurt"}, "https://%s.x",
-                                  [&](const std::string&) { return std::unique_ptr<submit::HttpPost>(new MockHttp(&calls)); }));
-  app::BundleBuilder bb(L.cfg, *L.rt, kp, app::dry_run_executor(), alts, bh, limits, sub);
-  bb.set_offline(true);
+  submit::Submitter sub(std::make_unique<submit::JitoClient>(
+      std::vector<std::string>{"frankfurt"}, "https://%s.x",
+      [&](const std::string&) { return std::unique_ptr<submit::HttpPost>(new MockHttp(&calls)); }));
+  app::BundleBuilder bb(L.cfg, *L.rt, kp, test_executor(), tt.alts, bh, limits, sub);
   std::vector<obs::DecisionRecord> recs;
   std::vector<std::vector<uint8_t>> txs;
   L.rt->set_send_hook([&](const engine::Opportunity& o, const engine::Cycle& c, obs::DecisionRecord& r) {
+    tt.seed(*L.rt, L.cfg, kp.pubkey(), test_executor());
     bb(o, c, r);
     recs.push_back(r);
     txs.emplace_back(bb.last_tx().bytes, bb.last_tx().bytes + bb.last_tx().len);
   });
   CHECK(L.rt->replay_file(fixture_path("frames.bin")));
   const auto& s = bb.stats();
-  std::printf("    dry run: built=%llu signed=%llu dry_run=%llu too_large=%llu guard=%llu failed=%llu\n", (unsigned long long)s.built,
-              (unsigned long long)s.signed_ok, (unsigned long long)s.dry_run, (unsigned long long)s.too_large,
-              (unsigned long long)s.guard_blocked, (unsigned long long)s.build_failed);
-  CHECK(s.built >= 40 && s.dry_run == s.built && s.sent == 0);
-  CHECK_EQ(calls, 0);
+  std::printf("    replay: built=%llu signed=%llu sent=%llu too_large=%llu guard=%llu failed=%llu stale=%llu\n", (unsigned long long)s.built,
+              (unsigned long long)s.signed_ok, (unsigned long long)s.sent, (unsigned long long)s.too_large,
+              (unsigned long long)s.guard_blocked, (unsigned long long)s.build_failed, (unsigned long long)s.stale);
+  CHECK(s.built >= 40 && s.signed_ok == s.built && s.sent + s.stale == s.signed_ok && s.sent > 0);
+  CHECK_EQ(uint64_t(calls), s.sent);  // one sendBundle per sent bundle, none for stale ones
   for (size_t i = 0; i < recs.size(); ++i) {
-    CHECK(recs[i].action == uint8_t(obs::Action::DryRun));
+    if (recs[i].action != uint8_t(obs::Action::Sent)) continue;
     const std::vector<uint8_t>& t = txs[i];
     CHECK(t.size() <= tx::PACKET_DATA_SIZE && t[0] == 1);
     // The signature in the record is a valid ed25519 signature by the wallet over the message.
@@ -407,17 +440,22 @@ TEST(dry_run_replay_signs_bundles_with_zero_sends) {
   }
   // KILL file: every later send is blocked (feeds keep running).
   Loaded K;
+  K.cfg.risk.max_feed_lag_ms = INT32_MAX;
   char dir[] = "/tmp/arb_kill_XXXXXX";
   CHECK(mkdtemp(dir) != nullptr);
   K.cfg.mode.kill_file = std::string(dir) + "/KILL";
   std::fclose(std::fopen(K.cfg.mode.kill_file.c_str(), "w"));
   K.rt = std::make_unique<app::Runtime>(K.cfg, K.pf);
-  tx::AltManager alts2;
-  app::BundleBuilder bk(K.cfg, *K.rt, kp, app::dry_run_executor(), alts2, bh, limits, sub);
-  bk.set_offline(true);
-  K.rt->set_send_hook([&](const engine::Opportunity& o, const engine::Cycle& c, obs::DecisionRecord& r) { bk(o, c, r); });
+  TestTables tk;
+  const int sent_before = calls;
+  app::BundleBuilder bk(K.cfg, *K.rt, kp, test_executor(), tk.alts, bh, limits, sub);
+  K.rt->set_send_hook([&](const engine::Opportunity& o, const engine::Cycle& c, obs::DecisionRecord& r) {
+    tk.seed(*K.rt, K.cfg, kp.pubkey(), test_executor());
+    bk(o, c, r);
+  });
   CHECK(K.rt->replay_file(fixture_path("frames.bin")));
   CHECK(bk.stats().built > 0 && bk.stats().risk_blocked == bk.stats().built && bk.stats().signed_ok == 0);
+  CHECK_EQ(calls, sent_before);
   std::remove(K.cfg.mode.kill_file.c_str());
   rmdir(dir);
 }
@@ -467,9 +505,9 @@ TEST(cp_executor_route_ranges_directions_and_token_programs) {
     c.legs[0].mint_out = forward ? mint::USDC : mint::WSOL;
     c.legs[1].mint_out = c.base;
     std::shared_ptr<const PoolState> legs[2] = {pump_first ? pump : cp, pump_first ? cp : pump};
-    auto wallet = app::dry_run_keypair().pubkey();
+    auto wallet = app::test_keypair().pubkey();
     tx::IxList list;
-    auto args = tx::execute_route_ix(list, app::dry_run_executor(), wallet, c, legs, 123456789, 123456790);
+    auto args = tx::execute_route_ix(list, app::placeholder_executor(), wallet, c, legs, 123456789, 123456790);
     CHECK(args.has_value()); if (!args) continue;
     CHECK_EQ(list.n, uint8_t(1)); const auto& ix = list.ixs[0];
     CHECK_EQ(ix.n_accounts, uint8_t(35)); CHECK_EQ(args->num_legs, uint8_t(2));
@@ -524,17 +562,21 @@ TEST(armed_set_counts_in_dry_run_and_skips_when_enforced) {
   app::ArmedSet one;
   CHECK(one.load_json(app::armed_to_json({a})) && one.contains(a) && one.size() == 1);
 
-  // The replay's routes go through fixture pools, none of which is `a`: every candidate is outside the set.
-  for (bool enforce : {false, true}) {
+  // The replay's routes go through fixture pools, none of which is `a`: every candidate is outside the set and is
+  // skipped before anything is built, signed or sent.
+  {
     Loaded L;
-    Keypair kp = app::dry_run_keypair();
+    L.cfg.risk.max_feed_lag_ms = INT32_MAX;
+    Keypair kp = app::test_keypair();
     tx::AltManager alts;
     tx::BlockhashCache bh;
     risk::Limits limits(risk::limits_config(L.cfg));
-    submit::Submitter sub(true, nullptr);
-    app::BundleBuilder bb(L.cfg, *L.rt, kp, app::dry_run_executor(), alts, bh, limits, sub);
-    bb.set_offline(true);
-    bb.set_armed(&one, enforce);
+    int calls = 0;
+    submit::Submitter sub(std::make_unique<submit::JitoClient>(
+        std::vector<std::string>{"frankfurt"}, "https://%s.x",
+        [&](const std::string&) { return std::unique_ptr<submit::HttpPost>(new MockHttp(&calls)); }));
+    app::BundleBuilder bb(L.cfg, *L.rt, kp, test_executor(), alts, bh, limits, sub);
+    bb.set_armed(&one);
     std::vector<obs::DecisionRecord> recs;
     L.rt->set_send_hook([&](const engine::Opportunity& o, const engine::Cycle& c, obs::DecisionRecord& r) {
       bb(o, c, r);
@@ -542,13 +584,8 @@ TEST(armed_set_counts_in_dry_run_and_skips_when_enforced) {
     });
     CHECK(L.rt->replay_file(fixture_path("frames.bin")));
     const auto& s = bb.stats();
-    CHECK(s.built > 0 && s.not_armed == s.built);
-    if (enforce) {
-      CHECK(s.signed_ok == 0 && s.dry_run == 0);
-      for (auto& r : recs) CHECK(r.action == uint8_t(obs::Action::Skipped) && r.reason == uint8_t(engine::Reason::not_armed));
-    } else {
-      CHECK(s.dry_run == s.built);  // dry run keeps measuring every pool
-    }
+    CHECK(s.built > 0 && s.not_armed == s.built && s.signed_ok == 0 && s.sent == 0 && calls == 0);
+    for (auto& r : recs) CHECK(r.action == uint8_t(obs::Action::Skipped) && r.reason == uint8_t(engine::Reason::not_armed));
   }
   CHECK(std::string(engine::reason_name(engine::Reason::not_armed)) == "not_armed");
 }

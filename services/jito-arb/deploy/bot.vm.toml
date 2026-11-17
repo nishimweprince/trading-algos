@@ -1,11 +1,11 @@
 # jito-arb on the Frankfurt VM (installed as /etc/jito-arb/bot.toml by deploy/install.sh).
 # Secrets are not here: HELIUS_API_KEY and LASERSTREAM_ENDPOINT come from /etc/jito-arb/jito-arb.env.
-# Dry run: this build refuses dry_run = false (phase 4 needs the owner's review, RUNBOOK-VM.md).
+# Live only (dry run removed 17 Nov 2026): start-up checks refuse to run without the hot wallet, executor, armed set
+# and lookup tables. Stop sending with the KILL file (docs/GO-LIVE.md).
 pools_path = "/var/lib/jito-arb/pools.json"
 
 [mode]
 alts_path = "/var/lib/jito-arb/alts.json"       # real lookup tables, written by arm-accounts; live loads them from chain
-dry_run = true
 funding_mode = "flash"
 kill_file = "/var/lib/jito-arb/KILL"
 armed_path = "/var/lib/jito-arb/armed.json"   # written by live-plan; dry run only counts routes outside it

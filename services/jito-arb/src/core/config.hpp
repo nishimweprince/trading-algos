@@ -1,6 +1,6 @@
 #pragma once
-// Runtime configuration (spec §6.9, §10, §12). dry_run defaults to true: going
-// live is an explicit `dry_run = false` in the file.
+// Runtime configuration (spec §6.9, §10, §12). The bot is live only: dry_run = true refuses the start
+// (kept so an old config fails loudly instead of trading unexpectedly).
 #include <cstdint>
 #include <map>
 #include <string>
@@ -16,17 +16,15 @@ struct Config {
   } chain;
 
   struct Mode {
-    bool dry_run = true;
+    bool dry_run = false;                // removed: the bot is live only; true refuses the start (kept to catch old configs)
     std::string funding_mode = "flash";  // flash | own
     std::string kill_file = "KILL";      // relative to the run directory
-    bool simulate_before_send = true;    // pre-send simulateTransaction (spec §9)
     // {"pools":[..]} written by the live-plan tool: the pools whose lookup tables and token accounts exist.
-    // Empty: no armed set (every pool). Dry run only counts routes outside it; live skips them (not_armed).
+    // Routes through any other pool are skipped (not_armed). Live refuses to start without it.
     std::string armed_path;
-    // {"tables":[..]} written by arm-accounts: the bot's real lookup tables. Live loads them from chain (and refuses
-    // to start without any); dry run keeps its virtual tables unless real_tables_in_dry_run.
+    // {"tables":[..]} written by arm-accounts: the bot's lookup tables, loaded from chain; live refuses to start
+    // without any.
     std::string alts_path;
-    bool real_tables_in_dry_run = false;
   } mode;
 
   struct Helius {

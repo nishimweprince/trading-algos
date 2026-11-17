@@ -38,7 +38,7 @@ std::vector<Pubkey> needed_table_keys(const StateStore& store, const Pubkey& wal
     if (!is_zero(k) && seen.insert(k).second) out.push_back(k);
   };
   // The executor id is unknown until it is deployed: leave it out rather than table a placeholder.
-  Pubkey placeholder = dry_run_executor();
+  Pubkey placeholder = placeholder_executor();
   for (const Pubkey& k : shared_table_keys(wallet, reserves, executor.value_or(placeholder)))
     if (k != placeholder) add(k);
   for (uint32_t i = 0; i < store.pool_count(); ++i)
