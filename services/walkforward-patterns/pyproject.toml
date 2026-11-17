@@ -1,0 +1,62 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "walkforward-patterns"
+version = "0.1.0"
+description = "Walk-forward top-20 pattern strategies (XAUUSD/USDJPY/AUDUSD) on a cTrader demo via execution-service"
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+dependencies = [
+  "httpx>=0.27,<1",
+  "numpy>=1.26",
+  "pyyaml>=6",
+  "pydantic-settings>=2.6,<3",
+  "ta-core",
+  "ta-notify",
+]
+
+[tool.uv.sources]
+ta-core = { workspace = true }
+ta-notify = { workspace = true }
+
+[project.optional-dependencies]
+# The research oracle (vendored reference code in tests/reference) needs pandas + numba.
+research = ["pandas>=2.2", "numba>=0.60"]
+
+[project.scripts]
+wfp = "walkforward_patterns.cli:main"
+wfp-replay = "walkforward_patterns.replay:main"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3,<9",
+  "ruff>=0.8,<1",
+  "pandas>=2.2",
+  "numba>=0.60",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/walkforward_patterns"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+pythonpath = ["src", "tests/reference"]
+markers = ["parity: full-history replay parity (needs WF_DATA and WF_REFERENCE)"]
+
+[tool.ruff]
+extend = "../../pyproject.toml"
+extend-exclude = ["tests/reference"]
+line-length = 120
+
+[tool.ruff.lint]
+# `l` is the low price (OHLC) everywhere, and patterns.py is a line-for-line port of the research loop.
+extend-ignore = ["E741", "E702"]
+# status.py is one embedded HTML/JS page; its line length is the page's.
+extend-per-file-ignores = { "src/walkforward_patterns/status.py" = ["E501"] }
+
+[tool.ruff.lint.isort]
+known-first-party = ["walkforward_patterns"]
+known-third-party = ["lib", "hs", "patterns", "conftest"]

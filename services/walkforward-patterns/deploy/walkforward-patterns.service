@@ -1,0 +1,17 @@
+[Unit]
+Description=Walk-forward top-20 pattern strategies (trades the FTMO demo through execution-service; holds no broker credentials)
+After=network-online.target execution-service.service
+Wants=network-online.target
+
+[Service]
+UMask=0077
+User=ec2-user
+WorkingDirectory=/home/ec2-user/walkforward-patterns/services/walkforward-patterns
+ExecStart=/home/ec2-user/walkforward-patterns/.venv/bin/wfp run
+Restart=always
+RestartSec=30
+Nice=5
+MemoryMax=600M
+
+[Install]
+WantedBy=multi-user.target

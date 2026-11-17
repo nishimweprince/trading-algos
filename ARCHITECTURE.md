@@ -35,6 +35,7 @@ project was deleted.)
 | `pk-status` (in `services/poly-kalshi-service`) | Rust / axum | 8051 | Read-only poly-kalshi status page and gate progress |
 | `services/pk-maker-cpp` (`pkm`) | C++20 | — | The live Kalshi-priced post-only maker on Polymarket's 15-min Up/Down markets (pk-polymaker's rule, which it replaces): busy-polled hot thread, pre-signed orders, fills from the user channel; no API, journal or metrics. Live needs `PKM_LIVE_CONFIRM=yes` |
 | `services/zone-trend` | Python (`zt` CLI) | — | Binance USDⓈ-M zone-trend swing strategy: Binance Vision data, pure core, backtester; live runner only after the M4 gate (see its PLAN.md) |
+| `services/walkforward-patterns` | Python (`wfp` CLI) | 8083 (status, loopback) | The top-20 walk-forward pattern strategies (XAUUSD/USDJPY/AUDUSD) on a cTrader demo through execution-service: incremental port of the research detectors (replay parity 20/20), journal, kill rule; reads bars and deals from the hub, holds no broker credentials |
 | `services/bar-portion-mm-service` | C++20 | 8060 | Binance USDⓈ-M Bar Portion market maker: verified public books, deterministic replay and queue-aware mainnet shadow fills; live modes are refused |
 
 `execution-service` runs three instances from one codebase:
