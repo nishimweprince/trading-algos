@@ -39,7 +39,8 @@ def cmd_check(_a) -> int:
     print(f"account {s.account}: env={a.get('environment')} connected={a.get('connected')} "
           f"order_entry_enabled={a.get('order_entry_enabled')} rights={a.get('broker_access_rights')}")
     if a.get("is_live"):
-        print("WARN this alias is a LIVE account; the plan is an FTMO demo")
+        print("note: cTrader reports this account as live (FTMO evaluations run on FTMO's live servers);"
+              " the hub's LIVE_TRADING_ENABLED fuse applies")
     for sym in cfg.symbols:
         q = hub.quote(sym)
         c = hub.candles(sym, 3)
@@ -64,6 +65,7 @@ def cmd_run(_a) -> int:
     from .status import serve
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)  # one line per hub request otherwise
     s, cfg, hub = _ctx()
     j = Journal(s.db_path)
     if j.get("started_at") is None:

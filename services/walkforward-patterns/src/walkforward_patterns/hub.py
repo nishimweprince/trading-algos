@@ -50,7 +50,8 @@ class Hub:
         return r.json()
 
     def accounts(self) -> list[dict]:
-        return self._get("/v1/accounts")
+        data = self._get("/v1/accounts")
+        return data.get("accounts", []) if isinstance(data, dict) else data
 
     def quote(self, instrument: str) -> dict | None:
         try:
