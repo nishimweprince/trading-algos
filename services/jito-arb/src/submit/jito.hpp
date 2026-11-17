@@ -41,6 +41,8 @@ std::vector<InflightStatus> parse_inflight(std::string_view body);
 std::vector<Pubkey> parse_tip_accounts(std::string_view body);
 /** landed_tips_25th_percentile of the newest entry, SOL -> lamports (rounded up). 0 when absent. */
 uint64_t parse_tip_floor_p25(std::string_view body);
+/** landed_tips_<pct>th_percentile (pct in 25, 50, 75, 95, 99) of the newest entry, lamports; 0 when absent. */
+uint64_t parse_tip_floor(std::string_view body, int pct);
 
 /** One HTTP POST on a kept-alive connection; returns the status code, body in `out`. Throws on transport failure. */
 class HttpPost {

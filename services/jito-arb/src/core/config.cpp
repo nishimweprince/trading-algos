@@ -117,19 +117,19 @@ Config load_config(const std::string& path) {
   }
   Reader r{kv, {}};
 #define G(sec, field) r.get(#sec "." #field, c.sec.field)
-  G(mode, dry_run); G(mode, funding_mode); G(mode, kill_file); G(mode, simulate_before_send); G(mode, armed_path);
+  G(mode, dry_run); G(mode, funding_mode); G(mode, kill_file); G(mode, simulate_before_send); G(mode, armed_path); G(mode, alts_path); G(mode, real_tables_in_dry_run);
   G(helius, laserstream_endpoint); G(helius, rpc_url); G(helius, api_key_env); G(helius, max_grpc_connections);
   G(helius, shard_size); G(helius, max_frames_per_pass); G(helius, resync_lag_ms); G(helius, reconnect_min_ms); G(helius, reconnect_max_ms);
   G(helius, ping_interval_ms); G(helius, replay_from_slot); G(helius, rpc_timeout_ms);
   G(jito, regions); G(jito, block_engine_fmt); G(jito, tip_floor_url); G(jito, tip_min_lamports);
-  G(jito, tip_max_lamports); G(jito, tip_floor_refresh_ms); G(jito, tip_accounts_refresh_s); G(jito, backoff_429_ms);
+  G(jito, tip_max_lamports); G(jito, tip_floor_refresh_ms); G(jito, tip_floor_percentile); G(jito, tip_accounts_refresh_s); G(jito, backoff_429_ms);
   G(jito, status_poll_ms); G(jito, status_timeout_ms); G(jito, sender_enabled); G(jito, sender_url);
   G(engine, base_mints); G(engine, max_hops); G(engine, min_spot_edge); G(engine, min_ev_lamports);
   G(engine, min_net_lamports); G(engine, max_trade_lamports); G(engine, min_trade_lamports);
   G(engine, max_input_fraction); G(engine, target_land_rate); G(engine, max_bundles_per_slot);
   G(engine, max_cycles_per_pool); G(engine, max_send_lag_ms); G(engine, max_state_age_slots); G(engine, settle_slots); G(engine, max_sized_per_update);
   G(engine, cooldown_ms); G(chain, slot_ms); G(engine, sizer_max_evals); G(engine, alpha_init); G(engine, alpha_min);
-  G(engine, alpha_max); G(engine, alpha_step); G(engine, alpha_window); G(engine, p_land_init);
+  G(engine, alpha_max); G(engine, alpha_step); G(engine, alpha_window); G(engine, tip_state_path); G(engine, p_land_init);
   G(engine, cu_overhead); G(engine, max_route_cu); G(engine, cu_headroom); G(engine, base_fee_lamports);
   G(engine, cu_price_micro_lamports);
   G(dex, raydium_v4_enabled); G(dex, whirlpool_enabled); G(dex, raydium_v4_cu); G(dex, whirlpool_cu);
@@ -142,12 +142,12 @@ Config load_config(const std::string& path) {
   G(discovery, track_cpmm); G(discovery, cpmm_fetch_cap); G(discovery, dlmm_fetch_cap); G(discovery, track_pumpswap); G(discovery, track_clmm);
   G(flash, provider); G(flash, lending_market); G(flash, reserves);
   G(risk, max_daily_fee_spend_sol); G(risk, min_sol_float); G(risk, max_sol_float);
-  G(risk, max_consecutive_rejects); G(risk, reject_pause_s); G(risk, max_feed_lag_ms);
+  G(risk, max_consecutive_rejects); G(risk, reject_pause_s); G(risk, max_feed_lag_ms); G(risk, feed_flap_reconnects_per_min);
   G(risk, quote_mismatch_rate); G(risk, quote_mismatch_min_samples); G(risk, transfer_fee_max_bps);
   G(risk, freeze_allowlist); G(risk, denylist_path); G(risk, denylist_ttl_s);
   G(keys, hot_wallet_path); G(keys, cold_wallet_pubkey); G(keys, executor_program_id);
   G(obs, metrics_addr); G(obs, metrics_port); G(obs, log_level); G(obs, log_path); G(obs, decision_log_dir);
-  G(obs, decision_log_rotate_s); G(obs, skip_log_max_per_s);
+  G(obs, decision_log_rotate_s); G(obs, skip_log_max_per_s); G(obs, alert_name); G(obs, alert_after_s); G(obs, alert_repeat_s);
   G(recorder, dir); G(recorder, rotate_s);
   G(sim, enabled); G(sim, max_per_s); G(sim, holder_refresh_s); G(sim, min_payer_lamports); G(sim, holder_seed_path);
   G(sim, quarantine_strikes); G(sim, quarantine_window_s); G(sim, quarantine_s); G(sim, short_bps); G(sim, max_wait_ms);

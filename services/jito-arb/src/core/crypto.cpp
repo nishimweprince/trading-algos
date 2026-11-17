@@ -8,6 +8,8 @@
 
 #include <cstring>
 #include <stdexcept>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "core/base58.hpp"
@@ -173,8 +175,22 @@ bool create_program_address(std::initializer_list<Seed> seeds, const Pubkey& pro
 }
 
 Pubkey pda(std::initializer_list<Seed> seeds, const Pubkey& program) {
+  // The bump search costs ~120 us (TweetNaCl point decompression per try), and a bundle derives ~25
+  // addresses (ATAs, tick/bin arrays, oracles): ~3 ms of the build. The same addresses recur, so each
+  // thread memoizes them. Key: the program plus every seed, length-prefixed, so distinct seed lists
+  // never collide. Cleared when it grows past a bound (a pool universe needs ~100k entries).
+  thread_local std::unordered_map<std::string, Pubkey> memo;
+  thread_local std::string key;
+  key.assign(reinterpret_cast<const char*>(program.data()), 32);
+  for (const Seed& s : seeds) {
+    key.push_back(char(s.len));
+    key.append(reinterpret_cast<const char*>(s.ptr), s.len);
+  }
+  if (auto it = memo.find(key); it != memo.end()) return it->second;
   Pubkey out;
   if (!find_program_address(seeds, program, out)) throw std::runtime_error("no viable PDA bump");
+  if (memo.size() >= 400'000) memo.clear();
+  memo.emplace(key, out);
   return out;
 }
 

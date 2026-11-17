@@ -80,4 +80,11 @@ class HttpResponseParser {
 void format_request(std::string& out, const char* method, const Url& url, std::string_view path, std::string_view body,
                     std::string_view headers = {});
 
+/**
+ * One request on a fresh connection (background jobs: alerts, the tip floor). Returns the HTTP status, or 0 on
+ * a transport failure (reason in `err`); the body goes to `out`.
+ */
+int http_once(const char* method, const std::string& url, std::string_view body, int timeout_ms, std::string& out,
+              std::string* err = nullptr);
+
 }  // namespace arb

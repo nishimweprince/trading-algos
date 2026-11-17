@@ -29,6 +29,10 @@ Keypair dry_run_keypair();
  * (programs, Kamino reserve accounts), all active: the tables discovery would create. Used by replay
  * and dry runs so the full route compiles under 1,232 bytes; the table keys are synthetic.
  */
+/** Keys every route references (programs, authorities, the flash reserves, the executor): the shared table. */
+std::vector<Pubkey> shared_table_keys(const Pubkey& wallet, std::span<const flash::FlashReserve> reserves, const Pubkey& executor);
+/** The accounts a route through this pool needs from a lookup table (pool, vaults, the wallet's ATAs, arrays). */
+std::vector<Pubkey> pool_table_keys(const PoolState& p, const Pubkey& wallet);
 void seed_virtual_tables(tx::AltManager& alts, const StateStore& store, const Pubkey& wallet,
                          std::span<const flash::FlashReserve> reserves, const Pubkey& executor);
 
@@ -44,6 +48,8 @@ class BundleBuilder {
   /** The Runtime send hook. */
   void operator()(const engine::Opportunity& o, const engine::Cycle& c, obs::DecisionRecord& rec);
   void set_wallet_lamports(uint64_t l) { wallet_lamports_ = l; }
+  /** The feed health gate (feed::FeedHealth): while false every candidate is blocked as feed_lag. */
+  void set_feed_ok(bool ok) { feed_ok_ = ok; }
   /** Seed the virtual lookup tables on first use (until discovery has created the real ones). */
   void set_virtual_tables(bool on) { virtual_tables_ = on; }
   /**
@@ -94,6 +100,7 @@ class BundleBuilder {
   submit::Submitter& submitter_;
   risk::SignGuard guard_;
   std::mt19937_64 rng_{0x5EED};
+  bool feed_ok_ = true;  // replay and tests have no streams; live sets it every second
   uint64_t wallet_lamports_ = UINT64_MAX;  // unknown until the wallet subscription reports it
   bool virtual_tables_ = false, placeholder_blockhash_ = false, seeded_ = false;
   tx::IxList ixs_;

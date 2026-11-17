@@ -248,6 +248,15 @@ uint64_t Rpc::priority_fee_estimate(const std::vector<Pubkey>& accounts, const c
   }
 }
 
+std::string Rpc::send_transaction(const std::string& tx_b64) {
+  std::string body = call("sendTransaction", "[\"" + tx_b64 +
+                                                 "\",{\"encoding\":\"base64\",\"skipPreflight\":false,\"preflightCommitment\":\"confirmed\",\"maxRetries\":5}]");
+  simdjson::dom::parser p;
+  std::string_view sig;
+  if (p.parse(body)["result"].get(sig) != simdjson::SUCCESS) throw std::runtime_error("sendTransaction: no signature: " + body.substr(0, 300));
+  return std::string(sig);
+}
+
 std::string Rpc::simulate(const std::string& tx_b64) {
   std::string body = call("simulateTransaction", "[\"" + tx_b64 +
                                                      "\",{\"encoding\":\"base64\",\"sigVerify\":false,\"replaceRecentBlockhash\":true,\"commitment\":\"processed\"}]");

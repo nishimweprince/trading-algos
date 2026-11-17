@@ -76,6 +76,8 @@ class Rpc {
   uint64_t priority_fee_estimate(const std::vector<Pubkey>& accounts, const char* level = "VeryHigh");
   /** Empty string = success; otherwise the error plus logs. */
   std::string simulate(const std::string& tx_b64);
+  /** sendTransaction with preflight on (the node simulates first and rejects a failing tx). Returns the signature. */
+  std::string send_transaction(const std::string& tx_b64);
   /**
    * simulateTransaction with sigVerify:false and replaceRecentBlockhash:true, returning the
    * post-simulation state of `accounts` (base64). Read-only: nothing is sent to the cluster.

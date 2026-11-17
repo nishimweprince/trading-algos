@@ -3,6 +3,8 @@
 // integers: lamports, base-token raw units, and parts-per-million for alpha and p_land.
 #include <cstdint>
 #include <map>
+#include <string>
+#include <string_view>
 
 #include "core/bytes.hpp"
 #include "core/types.hpp"
@@ -53,6 +55,15 @@ class TipPolicy {
   uint64_t tip_floor_p25() const { return floor_p25_; }
   /** Record one attempt's outcome (landed or not) and run the window adjustment. */
   void record(uint16_t route_class, bool landed);
+  /** Total attempts recorded (changes whenever the learned state does). */
+  uint64_t attempts() const;
+  /**
+   * Learned state, one line per route class: "class alpha_ppm attempts landed window_attempts window_landed".
+   * Saved by the live loop so a restart does not reset alpha and p_land to their priors.
+   */
+  std::string save() const;
+  /** Replace the learned state; false (state unchanged) on a malformed line. Alpha is re-clamped to the bounds. */
+  bool load(std::string_view text);
 
  private:
   struct Class {

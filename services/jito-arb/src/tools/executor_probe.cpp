@@ -1,6 +1,7 @@
 // Local-validator acceptance helper. Mainnet use is read-only manifest capture; simulation is LOCAL ONLY.
 #include <cstdio>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <set>
 #include <simdjson.h>
@@ -10,22 +11,24 @@
 #include "core/rpc.hpp"
 #include "core/programs.hpp"
 #include "feed/resync.hpp"
+#include "flash/kamino.hpp"
+#include "state/accounts.hpp"
 #include "state/discovery.hpp"
 #include "tx/builders.hpp"
 #include "tx/dex_ix.hpp"
 using namespace arb;
 int main(int argc, char** argv) {
  try {
-  std::string pool_s, holder_s, executor_s, url, manifest;
+  std::string pool_s, holder_s, executor_s, url, manifest, flash_s;
   uint64_t amount=1000000, minimum=0;
   for(int i=1;i+1<argc;i+=2) {
    std::string a=argv[i],v=argv[i+1];
    if(a=="--pool")pool_s=v;else if(a=="--holder")holder_s=v;else if(a=="--executor")executor_s=v;
-   else if(a=="--rpc")url=v;else if(a=="--manifest")manifest=v;
+   else if(a=="--rpc")url=v;else if(a=="--manifest")manifest=v;else if(a=="--flash")flash_s=v;
    else if(a=="--amount")amount=std::stoull(v);else if(a=="--min-out")minimum=std::stoull(v);
    else throw std::runtime_error("unknown argument");
   }
-  if(pool_s.empty()||holder_s.empty()||executor_s.empty()) throw std::runtime_error("requires --pool --holder --executor; optional --manifest FILE, --rpc URL, --amount RAW, --min-out RAW");
+  if(pool_s.empty()||holder_s.empty()||executor_s.empty()) throw std::runtime_error("requires --pool --holder --executor; optional --manifest FILE, --rpc URL, --amount RAW, --min-out RAW, --flash KAMINO_RESERVE");
   crypto_init(); Config cfg;
   if(url.empty())url=resolve_rpc_url(cfg);
   Rpc rpc(url,30000);Pubkey pool=parse_pubkey(pool_s),owner=parse_pubkey(holder_s),exec=parse_pubkey(executor_s);
@@ -49,8 +52,20 @@ int main(int argc, char** argv) {
       if (minimum>volume->lamports)tx::dexix::pump_fund_user_volume(ixs,owner,minimum-volume->lamports);
     }
   }
+  // --flash: wrap the executor in a Kamino flash borrow/repay of the wSOL reserve (spec §7.3 layout, no tip).
+  std::optional<flash::FlashReserve> fr;
+  uint8_t borrow_index=0;
+  if(!flash_s.empty()) {
+    Pubkey rk=parse_pubkey(flash_s);auto ra=rpc.account(rk,"processed");if(!ra)throw std::runtime_error("missing reserve");
+    auto r=state::decode_kamino_reserve(ra->data.data(),ra->data.size(),ra->owner);if(!r)throw std::runtime_error(std::string("bad reserve: ")+r.error().what);
+    fr=flash::make_reserve(rk,*r,0);
+    if(fr->liquidity_mint!=mint::WSOL)throw std::runtime_error("--flash reserve must lend wSOL");
+    if(!fr->enabled)throw std::runtime_error("flash loans disabled on reserve");
+    borrow_index=ixs.n;flash::borrow_ix(ixs,*fr,owner,base,amount);
+  }
   auto encoded=tx::execute_route_ix(ixs,exec,owner,cycle,legs,amount,minimum);
   if(!encoded)throw std::runtime_error(encoded.error().what);
+  if(fr)flash::repay_ix(ixs,*fr,owner,base,amount,borrow_index);
   auto wire=app::unsigned_tx_b64(owner,ixs);
   if(wire.empty())throw std::runtime_error("static executor route exceeds packet size");
   if(!manifest.empty()) {
@@ -64,6 +79,9 @@ int main(int argc, char** argv) {
   auto before=rpc.account(base,"processed");uint64_t pre=0;if(before&&before->data.size()>=72)std::memcpy(&pre,before->data.data()+64,8);
   auto sim=rpc.simulate_full(wire,{base},0,"processed");uint64_t post=0;if(!sim.accounts.empty()&&sim.accounts[0]&&sim.accounts[0]->data.size()>=72)std::memcpy(&post,sim.accounts[0]->data.data()+64,8);
   uint64_t out=post+amount>=pre?post+amount-pre:0;
+  // With --flash the repay (amount + fee) runs after the executor's min_out check, so the whole-transaction delta
+  // is the executor's measured output minus the flash fee: add it back to report what the guard compared.
+  if(fr&&sim.ok){auto fee=flash::flash_loan_fee(amount,fr->flash_loan_fee_sf);if(!fee)throw std::runtime_error("flash fee");out+=*fee;}
   std::printf("{\"ok\":%s,\"final_out\":%llu,\"units\":%llu,\"min_out\":%llu,\"min_out_error\":%s}\n",sim.ok?"true":"false",(unsigned long long)out,(unsigned long long)sim.units,(unsigned long long)minimum,sim.err.find("6002")!=std::string::npos?"true":"false");
   if(!sim.ok){std::fprintf(stderr,"%s\n",sim.err.c_str());for(auto& l:sim.logs)std::fprintf(stderr,"%s\n",l.c_str());}
   return sim.ok?0:1;

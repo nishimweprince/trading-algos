@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <fstream>
 #include <map>
 #include <set>
@@ -14,6 +15,7 @@
 #include <vector>
 
 #include "app/bundle_builder.hpp"
+#include "app/arming.hpp"
 #include "app/bundle_sim.hpp"
 #include "app/live_send.hpp"
 #include "core/crypto.hpp"
@@ -26,10 +28,13 @@
 #include "core/ring.hpp"
 #include "feed/frames.hpp"
 #include "feed/laserstream_client.hpp"
+#include "feed/health.hpp"
 #include "feed/resync.hpp"
+#include "obs/alert.hpp"
 #include "obs/log.hpp"
 #include "obs/metrics.hpp"
 #include "submit/jito.hpp"
+#include "submit/tip_floor.hpp"
 
 namespace arb::app {
 
@@ -153,6 +158,47 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   Pubkey executor = cfg.keys.executor_program_id == "VERIFY" ? dry_run_executor() : parse_pubkey(cfg.keys.executor_program_id);
   BundleBuilder builder(cfg, rt, wallet, executor, alts, blockhash, limits, submitter);
   builder.set_virtual_tables(true);
+  // Feed health gates every send and drives the alerts (the Nov 11-16 outage went unnoticed for 4.3 days).
+  feed::FeedHealthConfig fhc;
+  fhc.max_update_age_ms = cfg.risk.max_feed_lag_ms;
+  fhc.flap_reconnects_per_min = cfg.risk.feed_flap_reconnects_per_min;
+  fhc.alert_after_ms = int64_t(cfg.obs.alert_after_s) * 1000;
+  fhc.recover_after_ms = int64_t(cfg.obs.alert_after_s) * 1000;
+  fhc.repeat_ms = int64_t(cfg.obs.alert_repeat_s) * 1000;
+  feed::FeedHealth health(fhc);
+  obs::Alerter alerts(cfg.obs.alert_name);
+  if (!recorder)
+    alerts.send(std::string("started: ") + (live_send ? "LIVE (sending bundles)" : "dry run") + ", " + std::to_string(pf.pools.size()) +
+                " pools, " + std::to_string(shards.size()) + " streams");
+  bool was_quota = false, was_kill = false;
+  // Tip floor (spec §6.6): tip_min = max(jito.tip_min_lamports, Jito's landed-tip percentile), polled off-thread.
+  std::unique_ptr<submit::TipFloorPoller> tip_floor;
+  if (!recorder && cfg.jito.tip_floor_percentile > 0 && !cfg.jito.tip_floor_url.empty())
+    tip_floor = std::make_unique<submit::TipFloorPoller>(cfg.jito.tip_floor_url, cfg.jito.tip_floor_percentile, cfg.jito.tip_floor_refresh_ms);
+  // Learned tip state survives restarts (alpha and p_land per route class).
+  auto save_tips = [&] {
+    if (cfg.engine.tip_state_path.empty()) return;
+    const std::string tmp = cfg.engine.tip_state_path + ".tmp";
+    {
+      std::ofstream f(tmp, std::ios::trunc);
+      f << "# jito-arb tip state: class alpha_ppm attempts landed window_attempts window_landed\n" << rt.tips().save();
+      if (!f) {
+        LOG_WARN("tip state: cannot write %s", tmp.c_str());
+        return;
+      }
+    }
+    if (std::rename(tmp.c_str(), cfg.engine.tip_state_path.c_str()) != 0) LOG_WARN("tip state: cannot replace %s", cfg.engine.tip_state_path.c_str());
+  };
+  if (!cfg.engine.tip_state_path.empty()) {
+    std::ifstream f(cfg.engine.tip_state_path);
+    if (f) {
+      std::stringstream ss;
+      ss << f.rdbuf();
+      if (rt.tips().load(ss.str())) LOG_INFO("tip state: %llu attempts restored from %s", (unsigned long long)rt.tips().attempts(), cfg.engine.tip_state_path.c_str());
+      else LOG_WARN("tip state: %s is malformed, starting from the priors", cfg.engine.tip_state_path.c_str());
+    }
+  }
+  uint64_t saved_tip_attempts = rt.tips().attempts();
   // Armed set: the pools whose lookup tables and token accounts exist. Dry run only counts routes outside it.
   ArmedSet armed;
   if (!cfg.mode.armed_path.empty()) {
@@ -170,6 +216,36 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       LOG_WARN("armed set %s unreadable (%s): not counting", cfg.mode.armed_path.c_str(), aerr.c_str());
     }
   }
+  // Real lookup tables (arm-accounts writes mode.alts_path). Live compiles against them only: the virtual tables
+  // are synthetic addresses that no validator could resolve, so live refuses to start without real ones.
+  const bool real_tables = !recorder && !cfg.mode.alts_path.empty() && (live_send || cfg.mode.real_tables_in_dry_run);
+  auto reload_tables = [&]() -> size_t {
+    tx::AltManager fresh;
+    size_t n = load_tables(rpc, cfg.mode.alts_path, fresh);
+    if (n) alts = std::move(fresh);
+    return n;
+  };
+  if (real_tables) {
+    size_t n = 0;
+    try {
+      n = reload_tables();
+    } catch (const std::exception& e) {
+      LOG_ERROR("lookup tables: %s", e.what());
+    }
+    if (n) {
+      builder.set_virtual_tables(false);
+      LOG_INFO("lookup tables: %zu loaded from chain (%s)", n, cfg.mode.alts_path.c_str());
+    } else if (live_send) {
+      LOG_ERROR("no lookup tables in %s: run arm-accounts --send first; refusing to send", cfg.mode.alts_path.c_str());
+      return 1;
+    } else {
+      LOG_WARN("no lookup tables in %s: dry run keeps the virtual tables", cfg.mode.alts_path.c_str());
+    }
+  } else if (live_send) {
+    LOG_ERROR("mode.alts_path is not set: live needs the real lookup tables; refusing to send");
+    return 1;
+  }
+  auto last_tables = std::chrono::steady_clock::now();
   // Landing feedback: Jito's verdict on each sent bundle, polled off the engine thread.
   std::unique_ptr<LandingWatcher> watcher;
   if (live_send) {
@@ -237,7 +313,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
     if (it == usage_gauges.end()) it = usage_gauges.emplace(name, &reg.gauge(name, help)).first;
     return *it->second;
   };
-  int64_t last_blockhash_try = 0, last_resync_try = 0, last_bank_resync_try = 0;
+  int64_t last_blockhash_try = 0, last_resync_try = 0, last_bank_resync_try = 0, last_tables_try = 0;
   // Next to the decision logs (the data dir the dashboard reads).
   std::string quarantine_path = cfg.obs.decision_log_dir + "/../quarantine.json";
   auto& g_decode = reg.gauge("arb_decode_failures", "account decode failures");
@@ -316,6 +392,13 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   auto& g_no_room_memo = reg.gauge("arb_engine_no_room_memo", "evaluations skipped: x_max was below min_trade and nothing changed since");
   auto& g_signed = reg.gauge("arb_bundles_signed", "bundles built and signed");
   auto& g_shards = reg.gauge("arb_feed_shards_up", "LaserStream streams currently up");
+  auto& g_healthy = reg.gauge("arb_feed_healthy", "1 while the feed passes the health gate (streams up, not flapping, fresh)");
+  auto& g_flaps = reg.gauge("arb_feed_reconnects_last_min", "stream reconnects across all shards in the last 60 s");
+  auto& g_down_s = reg.gauge("arb_feed_unhealthy_seconds", "seconds the feed has failed the health gate (0 when healthy)");
+  auto& g_status = reg.gauge("arb_feed_last_status_code", "gRPC status code of the latest stream end (-1: none)");
+  auto& g_tip_floor = reg.gauge("arb_tip_floor_lamports", "Jito landed-tip percentile used as tip_min (0: not fetched or stale)");
+  auto& g_alerts = reg.gauge("arb_alerts_sent", "alerts delivered to Telegram");
+  auto& g_alerts_failed = reg.gauge("arb_alerts_failed", "alerts Telegram did not accept");
   // Latency windows (last 60 s), microseconds: p50 / p99 / max and the sample count.
   struct LatGauges {
     obs::Gauge *p50, *p99, *max, *n;
@@ -415,7 +498,39 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       g_cand.set(int64_t(rt.engine().counters().candidates));
       g_dry.set(int64_t(builder.stats().dry_run));
       g_rec.set(int64_t(frames.bytes_written()));
-      g_kill.set(::access(cfg.mode.kill_file.c_str(), F_OK) == 0 ? 1 : 0);
+      const bool kill_now = ::access(cfg.mode.kill_file.c_str(), F_OK) == 0;
+      g_kill.set(kill_now ? 1 : 0);
+      if (kill_now != was_kill) alerts.send(kill_now ? "KILL file present: sending stopped" : "KILL file removed");
+      was_kill = kill_now;
+      if (!recorder) {
+        feed::FeedHealthSample hs;
+        hs.now_ms = wall_ms();
+        hs.shards_total = int(shards.size());
+        int code = -1;
+        for (auto& s : shards) {
+          hs.shards_up += s.client->counters().up.load() ? 1 : 0;
+          code = std::max(code, s.client->counters().last_status.load());
+        }
+        hs.reconnects_total = rc;
+        uint64_t lu = rt.last_update_ns();
+        hs.update_age_ms = lu ? int64_t((mono_ns() - std::min(mono_ns(), lu)) / 1'000'000) : -1;
+        auto ev = health.update(hs);
+        builder.set_feed_ok(health.ok());
+        g_healthy.set(health.ok() ? 1 : 0);
+        g_flaps.set(health.reconnects_last_min());
+        g_down_s.set(health.ok() || health.down_since_ms() < 0 ? 0 : (hs.now_ms - health.down_since_ms()) / 1000);
+        g_status.set(code);
+        std::string why = health.reason() + (code > 0 ? " (last gRPC status " + std::to_string(code) + ")" : "");
+        if (ev == feed::FeedEvent::down) alerts.send("FEED DOWN, sending paused: " + why);
+        else if (ev == feed::FeedEvent::still_down)
+          alerts.send("feed still down after " + std::to_string((hs.now_ms - health.down_since_ms()) / 60000) + " min: " + why);
+        else if (ev == feed::FeedEvent::recovered) alerts.send("feed recovered");
+        const bool quota = usage::quota_exhausted();
+        if (quota != was_quota) alerts.send(quota ? "Helius RPC quota exhausted (429 max usage)" : "Helius RPC quota available again");
+        was_quota = quota;
+        g_alerts.set(int64_t(alerts.sent()));
+        g_alerts_failed.set(int64_t(alerts.failed()));
+      }
       g_risk_blocked.set(int64_t(builder.stats().risk_blocked));
       if (!recorder) builder.warm();
       g_armed.set(int64_t(armed.size()));
@@ -431,6 +546,25 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
           if (landed) LOG_INFO("bundle %s landed in slot %llu", d.bundle_id.c_str(), (unsigned long long)d.landed_slot);
         }
       g_landed.set(int64_t(n_landed));
+      // Tables change when arm-accounts extends them: re-read once a minute (a handful of accounts, one RPC call).
+      if (real_tables && now - last_tables >= std::chrono::seconds(60) && usage::may_call(last_tables_try, wall_ms())) {
+        last_tables = now;
+        try {
+          if (reload_tables()) builder.set_virtual_tables(false);
+        } catch (const std::exception& e) {
+          LOG_WARN("lookup tables: %s", e.what());
+        }
+      }
+      if (rt.tips().attempts() != saved_tip_attempts) {
+        saved_tip_attempts = rt.tips().attempts();
+        save_tips();
+      }
+      if (tip_floor) {
+        // A floor older than a minute is dropped (back to the config floor) rather than trusted.
+        uint64_t fl = tip_floor->value(wall_ms(), 60'000);
+        rt.tips().set_tip_floor_p25(fl);
+        g_tip_floor.set(int64_t(fl));
+      }
       g_not_landed.set(int64_t(n_not_landed));
       g_rejected.set(int64_t(n_rejected));
       // Tip accounts: read-only, so it runs in dry run too. Jito says the list is stable; a short or failed
