@@ -79,6 +79,9 @@ int main(int argc, char** argv) {
   auto before=rpc.account(base,"processed");uint64_t pre=0;if(before&&before->data.size()>=72)std::memcpy(&pre,before->data.data()+64,8);
   auto sim=rpc.simulate_full(wire,{base},0,"processed");uint64_t post=0;if(!sim.accounts.empty()&&sim.accounts[0]&&sim.accounts[0]->data.size()>=72)std::memcpy(&post,sim.accounts[0]->data.data()+64,8);
   uint64_t out=post+amount>=pre?post+amount-pre:0;
+  // With --flash the repay (amount + fee) runs after the executor's min_out check, so the whole-transaction delta
+  // is the executor's measured output minus the flash fee: add it back to report what the guard compared.
+  if(fr&&sim.ok){auto fee=flash::flash_loan_fee(amount,fr->flash_loan_fee_sf);if(!fee)throw std::runtime_error("flash fee");out+=*fee;}
   std::printf("{\"ok\":%s,\"final_out\":%llu,\"units\":%llu,\"min_out\":%llu,\"min_out_error\":%s}\n",sim.ok?"true":"false",(unsigned long long)out,(unsigned long long)sim.units,(unsigned long long)minimum,sim.err.find("6002")!=std::string::npos?"true":"false");
   if(!sim.ok){std::fprintf(stderr,"%s\n",sim.err.c_str());for(auto& l:sim.logs)std::fprintf(stderr,"%s\n",l.c_str());}
   return sim.ok?0:1;
