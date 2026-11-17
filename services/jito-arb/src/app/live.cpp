@@ -59,10 +59,27 @@ constexpr size_t RING_SLOTS = 1024, RING_SLOT_BYTES = 16 << 10;  // whirlpool ti
 }  // namespace
 
 int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_seconds) {
-  if (!cfg.mode.dry_run) {
-    LOG_ERROR("dry_run = false is refused in this build: mainnet sends start at phase 4, after the owner reviews the "
-              "phase-2 replay gate and the phase-3 validator tests (RUNBOOK-VM.md)");
-    return 2;
+  // Live (dry_run = false, and no --dry-run on the command line) sends real bundles from the hot wallet. Every
+  // precondition is checked here, before any stream opens; the armed set and the lookup tables are checked once
+  // loaded below. Anything missing refuses the start rather than falling back to a dry-run default.
+  if (!cfg.mode.dry_run && !recorder) {
+    std::vector<std::string> missing;
+    if (::access(cfg.keys.hot_wallet_path.c_str(), R_OK) != 0) missing.push_back("hot wallet file " + cfg.keys.hot_wallet_path);
+    if (cfg.keys.executor_program_id == "VERIFY") missing.push_back("keys.executor_program_id");
+    if (cfg.mode.armed_path.empty()) missing.push_back("mode.armed_path");
+    if (cfg.mode.alts_path.empty()) missing.push_back("mode.alts_path");
+    if (cfg.jito.regions.empty()) missing.push_back("jito.regions");
+    if (cfg.mode.funding_mode == "flash" && cfg.flash.reserves.empty()) missing.push_back("flash.reserves");
+    if (!missing.empty()) {
+      std::string all;
+      for (const auto& m : missing) all += (all.empty() ? "" : ", ") + m;
+      LOG_ERROR("live refused: missing %s", all.c_str());
+      return 2;
+    }
+    LOG_WARN("LIVE: dry_run = false, bundles are sent to Jito from the hot wallet (max %.3f SOL a trade, %d a slot, "
+             "fee cap %.3f SOL a day, float floor %.2f SOL)",
+             double(cfg.engine.max_trade_lamports) / 1e9, cfg.engine.max_bundles_per_slot, cfg.risk.max_daily_fee_spend_sol,
+             cfg.risk.min_sol_float);
   }
   std::ifstream f(cfg.pools_path);
   if (!f) {
@@ -84,6 +101,10 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   Keypair wallet = dry_run_keypair();
   if (::access(cfg.keys.hot_wallet_path.c_str(), R_OK) == 0) wallet = Keypair::load_file(cfg.keys.hot_wallet_path);
   else LOG_WARN("no hot wallet at %s: dry run signs with the fixed test key", cfg.keys.hot_wallet_path.c_str());
+  if (!cfg.mode.dry_run && !recorder && wallet.pubkey() == dry_run_keypair().pubkey()) {
+    LOG_ERROR("live refused: the signer is the dry-run test key");
+    return 2;
+  }
 
   // Subscriptions: pool accounts over the pool shards; wallet and flash reserves on their own stream.
   std::vector<Pubkey> pool_keys = rt.store().subscribed_keys(), wallet_keys = pf.reserves;
