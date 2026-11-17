@@ -14,6 +14,7 @@ def rpc(url,method,params):
 def main():
     p=argparse.ArgumentParser();p.add_argument('--manifest',required=True);p.add_argument('--program',required=True)
     p.add_argument('--probe',required=True);p.add_argument('--validator',default='solana-test-validator');p.add_argument('--work',required=True)
+    p.add_argument('--flash',default='',help='Kamino wSOL reserve: wrap the executor in a flash borrow/repay (same as the manifest capture)')
     a=p.parse_args();m=json.load(open(a.manifest));root=pathlib.Path(a.work);root.mkdir(parents=True,exist_ok=True)
     url=os.environ['RPC_URL'];local='http://127.0.0.1:18899';loader='BPFLoaderUpgradeab1e11111111111111111111111'
     builtins={'11111111111111111111111111111111','ComputeBudget111111111111111111111111111111',m['executor']}
@@ -56,7 +57,7 @@ def main():
         holder=rpc(local,'getAccountInfo',[m['holder'],{'encoding':'base64','commitment':'processed'}])['value']
         if not holder or holder['lamports']<20000000:
             raise RuntimeError('cloned payer missing or underfunded')
-        base=[a.probe,'--pool',m['pool'],'--holder',m['holder'],'--executor',m['executor'],'--rpc',local,'--amount','1000000']
+        base=[a.probe,'--pool',m['pool'],'--holder',m['holder'],'--executor',m['executor'],'--rpc',local,'--amount','1000000']+(['--flash',a.flash] if a.flash else [])
         def run(minimum):
             r=subprocess.run(base+['--min-out',str(minimum)],capture_output=True,text=True)
             (root/('probe-'+str(minimum)+'.log')).write_text(r.stderr+'\n'+r.stdout)
@@ -66,7 +67,7 @@ def main():
         if not first['ok'] or first['final_out']<=0:raise RuntimeError('baseline execution failed')
         # The pool can change observations/timestamps; simulation never commits its token balances.
         good=run(first['final_out']);bad=run(first['final_out']+1)
-        result={'dex':m['kind'],'baseline':first,'at_minimum':good,'above_minimum':bad,
+        result={'dex':m['kind'],'flash':bool(a.flash),'baseline':first,'at_minimum':good,'above_minimum':bad,
                 'pass':good['ok'] and not bad['ok'] and bad['min_out_error']}
         (root/'result.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result))
         if not result['pass']:raise RuntimeError('min_out gate failed')
