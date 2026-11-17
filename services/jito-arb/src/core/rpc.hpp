@@ -75,7 +75,7 @@ class Rpc {
   /** Helius getPriorityFeeEstimate (micro-lamports/CU); 0 when unavailable. */
   uint64_t priority_fee_estimate(const std::vector<Pubkey>& accounts, const char* level = "VeryHigh");
   /** Empty string = success; otherwise the error plus logs. */
-  std::string simulate(const std::string& tx_b64);
+  std::string simulate(const std::string& tx_b64, const char* commitment = "processed");
   /** sendTransaction with preflight on (the node simulates first and rejects a failing tx). Returns the signature. */
   std::string send_transaction(const std::string& tx_b64);
   /**

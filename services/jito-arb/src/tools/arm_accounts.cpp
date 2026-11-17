@@ -5,6 +5,9 @@
 // an interrupted run continues where it stopped.
 //
 //   arm-accounts CONFIG [--send] [--yes] [--cu-price MICRO_LAMPORTS]
+#include <simdjson.h>
+
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -55,6 +58,27 @@ void write_atomic(const std::string& path, const std::string& body) {
 }
 
 double sol(uint64_t lamports) { return double(lamports) / 1e9; }
+
+/**
+ * The slot a new lookup table is derived from. The ALT program requires it to be in SlotHashes of the bank that
+ * executes the create, which holds only that bank's ancestors. Since Alpenglow (Votor, Oct 2026) "finalized" is
+ * often the same slot as "confirmed", so naming it failed in the preflight with InvalidInstructionData (17 Nov
+ * 2026). Name a slot that produced a block 8 to 40 slots back instead (skipped slots are not in SlotHashes).
+ */
+uint64_t recent_table_slot(Rpc& rpc) {
+  uint64_t top = rpc.slot("finalized");
+  std::string body = rpc.call("getBlocks", "[" + std::to_string(top - 40) + "," + std::to_string(top - 8) + ",{\"commitment\":\"finalized\"}]");
+  simdjson::dom::parser p;
+  simdjson::dom::array arr;
+  if (p.parse(body)["result"].get(arr) != simdjson::SUCCESS) throw std::runtime_error("getBlocks: " + body.substr(0, 200));
+  uint64_t best = 0;
+  for (auto e : arr) {
+    uint64_t v;
+    if (e.get(v) == simdjson::SUCCESS) best = std::max(best, v);
+  }
+  if (!best) throw std::runtime_error("getBlocks returned no recent block");
+  return best;
+}
 
 /** Sign, send (preflight on) and wait for confirmation. Throws on any failure: the run stops, a re-run resumes. */
 std::string send_confirmed(Rpc& rpc, const Keypair& kp, const tx::IxList& ixs) {
@@ -195,11 +219,13 @@ int main(int argc, char** argv) {
       std::vector<tx::IxList> first;
       if (!setup.empty()) first.push_back(setup.front());
       std::vector<Pubkey> created;
-      auto tplan = alts.plan_extend(missing_keys, w, w, rpc.slot("finalized"), &created);
+      auto tplan = alts.plan_extend(missing_keys, w, w, recent_table_slot(rpc), &created);
       app::add_compute_budget(tplan, 200'000, cu_price);
       if (!tplan.empty()) first.push_back(tplan.front());
       for (const auto& l : first) {
-        std::string res = rpc.simulate(app::unsigned_tx_b64(w, l));
+        // At "confirmed", the bank sendTransaction's preflight uses: a processed-bank simulation passed a table create
+        // that the preflight then rejected.
+        std::string res = rpc.simulate(app::unsigned_tx_b64(w, l), "confirmed");
         std::printf("simulation           %s\n", res.empty() ? "ok" : res.c_str());
       }
       std::printf("read-only: nothing sent. Run again with --send to create them.\n");
@@ -225,9 +251,9 @@ int main(int argc, char** argv) {
       ++sent;
     }
     // Tables: re-plan before every new table, so each create uses a fresh recent slot (a create must name a slot
-    // still in SlotHashes, the last 512 slots, about 100 s). Table contents are read from chain once and then
-    // tracked here, applying each confirmed write: re-reading right after a write can hit a node that has not seen
-    // it yet, and a plan built on that stale view tried to push a full table past 256 addresses (17 Nov 2026).
+    // still in SlotHashes, the last 512 slots, about 100 s; see recent_table_slot). Table contents are read from
+    // chain once and then tracked here, applying each confirmed write, so a node that has not yet seen the latest
+    // extend cannot make the plan re-add addresses.
     std::map<Pubkey, tx::AltAccount> local;
     {
       tx::AltManager start;
@@ -246,7 +272,7 @@ int main(int argc, char** argv) {
       std::vector<Pubkey> todo = now.missing(keys);
       if (todo.empty()) break;
       std::vector<Pubkey> created;
-      auto plan = now.plan_extend(todo, w, w, rpc.slot("finalized"), &created);
+      auto plan = now.plan_extend(todo, w, w, recent_table_slot(rpc), &created);
       app::add_compute_budget(plan, 200'000, cu_price);
       for (size_t i = 0; i < plan.size(); ++i) {
         bool creates = false;

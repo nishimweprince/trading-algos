@@ -257,9 +257,10 @@ std::string Rpc::send_transaction(const std::string& tx_b64) {
   return std::string(sig);
 }
 
-std::string Rpc::simulate(const std::string& tx_b64) {
+std::string Rpc::simulate(const std::string& tx_b64, const char* commitment) {
   std::string body = call("simulateTransaction", "[\"" + tx_b64 +
-                                                     "\",{\"encoding\":\"base64\",\"sigVerify\":false,\"replaceRecentBlockhash\":true,\"commitment\":\"processed\"}]");
+                                                     "\",{\"encoding\":\"base64\",\"sigVerify\":false,\"replaceRecentBlockhash\":true,\"commitment\":\"" +
+                                                     commitment + "\"}]");
   simdjson::dom::parser p;
   element v = p.parse(body)["result"]["value"];
   element err;
