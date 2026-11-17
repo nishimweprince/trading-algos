@@ -2,7 +2,9 @@
 
 A FastAPI gateway for durable, idempotent trade execution through the cTrader or MT5 broker plugin
 (`plugins/ctrader`, `plugins/mt5`). Market data — quotes, candles, tick streams — is served by
-[market-data-service](../market-data-service/README.md), not here. cTrader production owns one OAuth token store, one demo connection and
+[market-data-service](../market-data-service/README.md); the only exceptions are the read-only
+`/v1/accounts/{alias}/quote`, `/candles` and `/deals` routes, which let strategies that trade
+through this service read their own account without a second cTrader grant. cTrader production owns one OAuth token store, one demo connection and
 one live connection; each connection authenticates every token-authorized registry account in its
 broker-reported environment.
 
@@ -134,7 +136,10 @@ All `/v1/*` routes require an `X-API-Key` header matching `API_KEY`. Health rout
 | GET | `/v1/operations/{operation_id}` | Durable parent and per-account execution state. |
 | GET | `/v1/accounts` | Usable accounts, demo/live classification, access rights, execution gates and skipped-account counts. |
 | GET | `/v1/accounts/{alias}/orders` | Reconciled pending orders. |
-| GET | `/v1/accounts/{alias}/positions` | Reconciled open positions. |
+| GET | `/v1/accounts/{alias}/positions` | Reconciled open positions, with the cTrader `label` (the order's `source`), `comment` and `opened_at`. |
+| GET | `/v1/accounts/{alias}/quote?instrument=` | Latest bid/ask on the execution connection (cTrader). |
+| GET | `/v1/accounts/{alias}/candles?instrument=&timeframe=M1&count=&to=` | Closed trendbars (bid) from the execution connection, UTC interval-end stamps, ≤ 5000 per call (cTrader, read-only, historical throttle). |
+| GET | `/v1/accounts/{alias}/deals?since=&until=` | Broker deals (fills) in a window; closing deals carry entry price, gross P&L, commission, swap (cTrader, read-only). |
 | GET | `/health/live` | Process is up. |
 | GET | `/health/ready` | 200 when every broker connection is up, else 503 with details. |
 | GET | `/health/trading-ready` | 200 when accounts, ledger and execution gates are ready. |

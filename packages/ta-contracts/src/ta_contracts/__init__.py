@@ -3,6 +3,7 @@
 from .execution import (
     AmendOrderRequest,
     AmendOrderTarget,
+    BrokerDeal,
     BrokerOrder,
     BrokerPosition,
     CancelOrderRequest,
@@ -53,6 +54,7 @@ __all__ = [
     "SOURCE_SLUG_PATTERN",
     "AmendOrderRequest",
     "AmendOrderTarget",
+    "BrokerDeal",
     "BrokerOrder",
     "BrokerPosition",
     "Candle",
