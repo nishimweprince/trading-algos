@@ -1,6 +1,7 @@
 #include "engine/costs.hpp"
 
 #include <algorithm>
+#include <sstream>
 
 #include "core/u256.hpp"
 
@@ -63,6 +64,39 @@ void TipPolicy::record(uint16_t rc, bool landed) {
   if (rate < p_.target_land_ppm) c.alpha_ppm = std::min(p_.alpha_max_ppm, c.alpha_ppm + p_.step_ppm);
   else if (rate > p_.target_land_ppm) c.alpha_ppm = c.alpha_ppm > p_.step_ppm ? std::max(p_.alpha_min_ppm, c.alpha_ppm - p_.step_ppm) : p_.alpha_min_ppm;
   c.window_attempts = c.window_landed = 0;
+}
+
+uint64_t TipPolicy::attempts() const {
+  uint64_t n = 0;
+  for (const auto& [rc, c] : classes_) n += c.attempts;
+  return n;
+}
+
+std::string TipPolicy::save() const {
+  std::string out;
+  for (const auto& [rc, c] : classes_)
+    out += std::to_string(rc) + " " + std::to_string(c.alpha_ppm) + " " + std::to_string(c.attempts) + " " + std::to_string(c.landed) +
+           " " + std::to_string(c.window_attempts) + " " + std::to_string(c.window_landed) + "\n";
+  return out;
+}
+
+bool TipPolicy::load(std::string_view text) {
+  std::map<uint16_t, Class> next;
+  std::istringstream in{std::string(text)};
+  std::string line;
+  while (std::getline(in, line)) {
+    if (line.empty() || line[0] == '#') continue;
+    std::istringstream ls(line);
+    uint64_t rc, alpha;
+    Class c;
+    if (!(ls >> rc >> alpha >> c.attempts >> c.landed >> c.window_attempts >> c.window_landed) || rc > UINT16_MAX ||
+        c.landed > c.attempts || c.window_landed > c.window_attempts)
+      return false;
+    c.alpha_ppm = uint32_t(std::clamp<uint64_t>(alpha, p_.alpha_min_ppm, p_.alpha_max_ppm));
+    next[uint16_t(rc)] = c;
+  }
+  classes_ = std::move(next);
+  return true;
 }
 
 Pricing price(uint64_t x, int64_t profit_base, uint64_t flash_fee, uint32_t route_cu, uint16_t route_class,

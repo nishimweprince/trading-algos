@@ -4,6 +4,7 @@
 
 #include <unistd.h>
 
+#include <cstdint>
 #include <cstring>
 #include <set>
 #include <stdexcept>
@@ -152,7 +153,12 @@ void BundleBuilder::operator()(const engine::Opportunity& o, const engine::Cycle
   uint64_t slot = std::max(o.slot, rt_.clock().slot.load(std::memory_order_relaxed));
   // §10 limits: kill switch, fee cap, float, reject pause, feed lag, disabled quoters.
   limits_.set_kill(::access(cfg_.mode.kill_file.c_str(), F_OK) == 0 || limits_.killed());
-  risk::Block blk = limits_.check(rec.wall_ms, wallet_lamports_, 0, dex_mask);
+  // Feed age: the newest account update (replay has none and passes 0); a failed health gate counts as
+  // infinitely stale, so the feed_lag block covers flapping streams too.
+  int64_t feed_age_ms = 0;
+  if (!feed_ok_) feed_age_ms = INT64_MAX;
+  else if (uint64_t lu = rt_.last_update_ns(); lu && !placeholder_blockhash_) feed_age_ms = int64_t((now_ns() - std::min(now_ns(), lu)) / 1'000'000);
+  risk::Block blk = limits_.check(rec.wall_ms, wallet_lamports_, feed_age_ms, dex_mask);
   if (blk != risk::Block::none) {
     ++n_.risk_blocked;
     return skip(engine::Reason::risk_block);

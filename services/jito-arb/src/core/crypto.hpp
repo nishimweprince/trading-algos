@@ -34,7 +34,7 @@ bool find_program_address(std::initializer_list<Seed> seeds, const Pubkey& progr
 /** createProgramAddressSync with explicit seeds (bump included). False when the hash is on the curve. */
 bool create_program_address(std::initializer_list<Seed> seeds, const Pubkey& program, Pubkey& out);
 
-/** Throwing convenience for boot-time constants. */
+/** Throwing convenience; memoized per thread, so repeated derivations on the hot path cost a lookup. */
 Pubkey pda(std::initializer_list<Seed> seeds, const Pubkey& program);
 
 /** Associated token account (allowOwnerOffCurve semantics: no owner check). */

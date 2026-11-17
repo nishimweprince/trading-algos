@@ -71,19 +71,22 @@ std::vector<Pubkey> parse_tip_accounts(std::string_view body) {
   return out;
 }
 
-uint64_t parse_tip_floor_p25(std::string_view body) {
+uint64_t parse_tip_floor(std::string_view body, int pct) {
   simdjson::dom::parser p;
   simdjson::padded_string ps(body);
   simdjson::dom::array arr;
   if (p.parse(ps).get(arr) != simdjson::SUCCESS) return 0;
+  const std::string key = "landed_tips_" + std::to_string(pct) + "th_percentile";
   double sol = 0;
   for (auto e : arr) {  // newest entry is the last one
     double v;
-    if (e["landed_tips_25th_percentile"].get(v) == simdjson::SUCCESS) sol = v;
+    if (e[key].get(v) == simdjson::SUCCESS) sol = v;
   }
   // SOL as a float at the API edge; converted once, rounded up, to integer lamports.
   return sol > 0 ? uint64_t(std::ceil(sol * double(LAMPORTS_PER_SOL) - 1e-6)) : 0;
 }
+
+uint64_t parse_tip_floor_p25(std::string_view body) { return parse_tip_floor(body, 25); }
 
 namespace {
 

@@ -1,5 +1,8 @@
 #include "submit/conn.hpp"
 
+#include <algorithm>
+#include <chrono>
+
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netdb.h>
@@ -296,6 +299,34 @@ void format_request(std::string& out, const char* method, const Url& url, std::s
     out.append("Content-Length: ").append(std::to_string(body.size())).append("\r\n");
   }
   out.append("\r\n").append(body);
+}
+
+int http_once(const char* method, const std::string& url, std::string_view body, int timeout_ms, std::string& out,
+              std::string* err) {
+  Url u = parse_url(url);
+  Conn conn;
+  if (!conn.connect(u, timeout_ms, err)) return 0;
+  std::string req;
+  format_request(req, method, u, u.path, body);
+  if (!conn.write_all(req.data(), req.size(), timeout_ms)) {
+    if (err) *err = "write failed";
+    return 0;
+  }
+  HttpResponseParser parser;
+  auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+  char buf[16384];
+  while (std::chrono::steady_clock::now() < deadline) {
+    int left = int(std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count());
+    if (!conn.wait_readable(std::max(1, left))) continue;
+    ssize_t n = conn.read_some(buf, sizeof buf);
+    if (n < 0) break;
+    if (n > 0 && parser.feed(buf, size_t(n))) {
+      out.assign(parser.body());
+      return parser.status();
+    }
+  }
+  if (err) *err = "no complete response";
+  return 0;
 }
 
 }  // namespace arb

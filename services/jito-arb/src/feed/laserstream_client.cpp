@@ -122,11 +122,14 @@ struct LaserstreamClient::Impl {
       call->Read(&rbuf, tag(READ));
       reading = true;
     };
-    auto begin_finish = [&](const char* why) {
+    // A failed start/read/write means the server ended the stream: Finish then reports its status (quota,
+    // auth, overload). Cancelling first replaced that with our own CANCELLED, which is all the Nov 11-16
+    // outage logs showed. Only shutdown and silence, where the stream may still be open, cancel.
+    auto begin_finish = [&](const char* why, bool cancel) {
       if (!finishing) {
         finishing = true;
         LOG_WARN("laserstream %s ending: %s", name.c_str(), why);
-        ctx.TryCancel();
+        if (cancel) ctx.TryCancel();
       }
     };
     while (!finished) {
@@ -138,7 +141,7 @@ struct LaserstreamClient::Impl {
         switch (reinterpret_cast<intptr_t>(t)) {
           case START:
             start_done = true;
-            if (!ok) { begin_finish("start failed"); break; }
+            if (!ok) { begin_finish("start failed", false); break; }
             started = true;
             counters.up.store(true);
             LOG_INFO("laserstream %s subscribed", name.c_str());
@@ -147,25 +150,27 @@ struct LaserstreamClient::Impl {
             break;
           case READ:
             reading = false;
-            if (!ok) { begin_finish("read failed"); break; }
+            if (!ok) { begin_finish("read failed", false); break; }
             last_frame = now_ns();
             publish(rbuf);
             start_read();
             break;
           case WRITE:
             writing = false;
-            if (!ok) { begin_finish("write failed"); break; }
+            if (!ok) { begin_finish("write failed", false); break; }
             outq.pop_front();
             start_write();
             break;
           case FINISH:
             finished = true;
-            LOG_WARN("laserstream %s finished: %d %s", name.c_str(), int(status.error_code()), status.error_message().c_str());
+            counters.last_status.store(int(status.error_code()));
+            LOG_WARN("laserstream %s finished: %d %s%s%s", name.c_str(), int(status.error_code()), status.error_message().c_str(),
+                     status.error_details().empty() ? "" : " | ", status.error_details().substr(0, 200).c_str());
             break;
         }
       }
       uint64_t now = now_ns();
-      if (stop.load(std::memory_order_relaxed)) begin_finish("shutdown");
+      if (stop.load(std::memory_order_relaxed)) begin_finish("shutdown", true);
       if (!finishing && started) {
         bool dirty;
         {
@@ -181,7 +186,7 @@ struct LaserstreamClient::Impl {
           outq.push_back(encode_ping_request(++ping_id));
           start_write();
         }
-        if (now - last_frame > 30'000'000'000ULL) begin_finish("silence");
+        if (now - last_frame > 30'000'000'000ULL) begin_finish("silence", true);
       }
       if (finishing && start_done && !reading && !writing && !finish_called) {
         call->Finish(&status, tag(FINISH));

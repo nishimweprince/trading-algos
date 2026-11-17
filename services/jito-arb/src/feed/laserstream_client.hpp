@@ -19,6 +19,7 @@ struct StreamCounters {
   std::atomic<uint64_t> frames{0}, bytes{0}, oversize{0}, reconnects{0};
   std::atomic<bool> up{false};
   std::atomic<uint64_t> last_slot{0};  // newest slot seen, for from_slot on reconnect
+  std::atomic<int> last_status{-1};    // gRPC status code of the latest stream end (-1: none yet)
 };
 
 class LaserstreamClient {

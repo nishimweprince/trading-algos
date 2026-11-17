@@ -47,6 +47,7 @@ struct Config {
     uint64_t tip_min_lamports = 1000;
     uint64_t tip_max_lamports = 50'000'000;
     int tip_floor_refresh_ms = 10000;
+    int tip_floor_percentile = 25;     // tip_min = max(tip_min_lamports, this landed-tip percentile); 0 = off
     int tip_accounts_refresh_s = 3600;
     int backoff_429_ms = 1000;
     int status_poll_ms = 500;
@@ -80,6 +81,7 @@ struct Config {
     double alpha_init = 0.5;
     double alpha_min = 0.2, alpha_max = 0.95, alpha_step = 0.05;
     int alpha_window = 50;
+    std::string tip_state_path;       // learned alpha / p_land per route class, kept across restarts ("" = off)
     double p_land_init = 0.1;
     uint32_t cu_overhead = 60000;     // Kamino borrow+repay, tip, executor bookkeeping
     uint32_t max_route_cu = 1'200'000;
@@ -139,6 +141,7 @@ struct Config {
     int max_consecutive_rejects = 200;
     int reject_pause_s = 300;
     int max_feed_lag_ms = 800;
+    int feed_flap_reconnects_per_min = 3;  // reconnects (all shards) in 60 s that close the feed gate
     double quote_mismatch_rate = 0.02;
     int quote_mismatch_min_samples = 50;
     int transfer_fee_max_bps = 100;
@@ -162,6 +165,9 @@ struct Config {
     std::string decision_log_dir = "data/decisions";
     int decision_log_rotate_s = 3600;
     uint32_t skip_log_max_per_s = 0;  // 0 keeps every skip; never limits signed candidates/outcomes
+    std::string alert_name = "jito-arb";  // prefix of every alert (Telegram token and chat id come from the environment)
+    int alert_after_s = 60;               // unhealthy feed this long before "FEED DOWN"
+    int alert_repeat_s = 1800;            // reminder while it stays down
   } obs;
 
   // Read-only simulation of every dry-run bundle's swap legs (spec §9), paid by a public holder of the base token.

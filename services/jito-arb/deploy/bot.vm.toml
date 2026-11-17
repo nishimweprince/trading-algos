@@ -18,6 +18,8 @@ resync_lag_ms = 1800000           # RPC refresh of quiet pools is a safety net o
 shard_size = 6000                 # 8 x 6000 keys: 8,000 pools need ~46,000 (spec suggests 300; not a Helius limit)
 
 [engine]
+tip_state_path = "/var/lib/jito-arb/tip_state.txt"   # learned alpha / p_land survive restarts
+alpha_window = 20                 # first landing data is sparse (~14 candidates an hour): adjust every 20, not 50
 max_cycles_per_pool = 256         # cycles one pool's update re-prices; 64 was a stopgap before the DLMM clock fix
 # A bundle that does not land costs nothing, and dry run never learns p_land (it stays at p_land_init 0.1), so the
 # 20k EV default meant net >= 200k. 1k x 0.1 makes min_net (10k) the binding floor: 80 -> 197 slots on Nov 4-5 logs.
@@ -48,6 +50,7 @@ hot_wallet_path = "/etc/jito-arb/hot_wallet.json"   # absent: dry run signs with
 executor_program_id = "VERIFY"
 
 [obs]
+alert_name = "jito-arb fra"      # Telegram prefix; TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID in jito-arb.env
 skip_log_max_per_s = 0           # optional skip-only log cap; signed candidates/outcomes are always kept
 metrics_addr = "127.0.0.1"
 metrics_port = 9100
