@@ -132,7 +132,7 @@ TEST(base64_round_trip) {
 
 TEST(config_defaults_and_overrides) {
   Config c = load_config("");
-  CHECK(c.mode.dry_run);
+  CHECK(!c.mode.dry_run);  // live only: true is refused at start (main.cpp)
   CHECK_EQ(c.engine.max_hops, 3);
   CHECK_EQ(c.engine.min_ev_lamports, uint64_t(20000));
   CHECK_EQ(c.obs.metrics_port, 9100);
@@ -146,9 +146,11 @@ TEST(config_defaults_and_overrides) {
     threw = true;
   }
   CHECK(threw);
-  // The example config parses and keeps dry_run on.
+  // The example and VM configs parse (the loader rejects unknown keys, such as the removed simulate_before_send).
   Config ex = load_config(std::string(ARB_SOURCE_DIR) + "/config/bot.example.toml");
-  CHECK(ex.mode.dry_run);
+  CHECK(!ex.mode.dry_run);
+  Config vm = load_config(std::string(ARB_SOURCE_DIR) + "/deploy/bot.vm.toml");
+  CHECK(!vm.mode.dry_run && !vm.mode.alts_path.empty());
 }
 
 TEST(pda_and_ata_known_values) {

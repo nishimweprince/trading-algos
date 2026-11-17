@@ -178,7 +178,7 @@ TEST(arming_needs_dedupe_and_leave_out_wallet_and_placeholder) {
   std::set<Pubkey> uniq(keys.begin(), keys.end());
   CHECK_EQ(uniq.size(), keys.size());
   CHECK(!uniq.count(w));
-  CHECK(!uniq.count(app::dry_run_executor()));
+  CHECK(!uniq.count(app::placeholder_executor()));
   CHECK(uniq.count(key_n(10)) && uniq.count(key_n(42)));
   for (const auto& a : atas) CHECK(uniq.count(a.ata));
   auto with_exec = app::needed_table_keys(store, w, {}, key_n(77));

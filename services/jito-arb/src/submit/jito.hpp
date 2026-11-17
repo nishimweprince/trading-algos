@@ -7,8 +7,6 @@
 //   GET  https://bundles.jito.wtf/api/v1/bundles/tip_floor -> landed_tips_{25,50,75,95,99}th_percentile (SOL)
 // Default limit: 1 request per second per IP per region; HTTP 429 when exceeded -> back off that region.
 //
-// Submitter is the dry-run gate: constructed with dry_run = true it holds no client at all, so
-// sendBundle is unreachable (spec §1 rule 6).
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -84,13 +82,12 @@ class JitoClient {
   uint64_t sends_ = 0;
 };
 
-enum class SubmitOutcome : uint8_t { DryRun = 0, Sent, Stale, NoRegion };
+enum class SubmitOutcome : uint8_t { Sent = 1, Stale, NoRegion };
 
 class Submitter {
  public:
-  /** dry_run = true discards `client`: nothing this object does can reach sendBundle. */
-  Submitter(bool dry_run, std::unique_ptr<JitoClient> client);
-  bool dry_run() const { return !client_; }
+  /** Without a client (the recorder, which never builds bundles) every submit is NoRegion. */
+  explicit Submitter(std::unique_ptr<JitoClient> client);
   /**
    * Send one signed transaction as a one-transaction bundle, unless the slot it was built for has passed
    * (a stale arb is a new decision, never a retry).

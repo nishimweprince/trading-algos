@@ -1,11 +1,10 @@
 # jito-arb example config. Defaults live in src/core/config.hpp; every key here is optional.
-# dry_run stays true until the owner flips it after the phase-2 replay gate and phase-3 validator tests.
+# The bot is live only: it starts only with a hot wallet, a deployed executor, an armed set and lookup tables
+# (docs/GO-LIVE.md). To stop sending, create the KILL file.
 
 [mode]
-dry_run = true
 funding_mode = "flash"          # flash | own
 kill_file = "KILL"
-simulate_before_send = true
 
 [helius]
 laserstream_endpoint = "VERIFY" # from the Helius dashboard, Frankfurt region

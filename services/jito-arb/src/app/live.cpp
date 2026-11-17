@@ -16,7 +16,6 @@
 
 #include "app/bundle_builder.hpp"
 #include "app/arming.hpp"
-#include "app/bundle_sim.hpp"
 #include "app/live_send.hpp"
 #include "core/crypto.hpp"
 #include "core/programs.hpp"
@@ -59,10 +58,10 @@ constexpr size_t RING_SLOTS = 1024, RING_SLOT_BYTES = 16 << 10;  // whirlpool ti
 }  // namespace
 
 int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_seconds) {
-  // Live (dry_run = false, and no --dry-run on the command line) sends real bundles from the hot wallet. Every
+  // Live only (dry run was removed on 17 Nov 2026): the bot sends real bundles from the hot wallet. Every
   // precondition is checked here, before any stream opens; the armed set and the lookup tables are checked once
-  // loaded below. Anything missing refuses the start rather than falling back to a dry-run default.
-  if (!cfg.mode.dry_run && !recorder) {
+  // loaded below. Anything missing refuses the start. The recorder mode never builds or sends anything.
+  if (!recorder) {
     std::vector<std::string> missing;
     if (::access(cfg.keys.hot_wallet_path.c_str(), R_OK) != 0) missing.push_back("hot wallet file " + cfg.keys.hot_wallet_path);
     if (cfg.keys.executor_program_id == "VERIFY") missing.push_back("keys.executor_program_id");
@@ -76,7 +75,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       LOG_ERROR("live refused: missing %s", all.c_str());
       return 2;
     }
-    LOG_WARN("LIVE: dry_run = false, bundles are sent to Jito from the hot wallet (max %.3f SOL a trade, %d a slot, "
+    LOG_WARN("LIVE: bundles are sent to Jito from the hot wallet (max %.3f SOL a trade, %d a slot, "
              "fee cap %.3f SOL a day, float floor %.2f SOL)",
              double(cfg.engine.max_trade_lamports) / 1e9, cfg.engine.max_bundles_per_slot, cfg.risk.max_daily_fee_spend_sol,
              cfg.risk.min_sol_float);
@@ -97,12 +96,12 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   Runtime rt(cfg, pf);
   auto& reg = obs::Registry::get();
 
-  // Signer: the hot wallet when its file exists (mode 0600 enforced), else the fixed dry-run key.
-  Keypair wallet = dry_run_keypair();
+  // Signer: the hot wallet (mode 0600 enforced; required above). The recorder signs nothing and only needs an
+  // address to watch, so without a wallet file it watches the fixed test key.
+  Keypair wallet = test_keypair();
   if (::access(cfg.keys.hot_wallet_path.c_str(), R_OK) == 0) wallet = Keypair::load_file(cfg.keys.hot_wallet_path);
-  else LOG_WARN("no hot wallet at %s: dry run signs with the fixed test key", cfg.keys.hot_wallet_path.c_str());
-  if (!cfg.mode.dry_run && !recorder && wallet.pubkey() == dry_run_keypair().pubkey()) {
-    LOG_ERROR("live refused: the signer is the dry-run test key");
+  if (!recorder && wallet.pubkey() == test_keypair().pubkey()) {
+    LOG_ERROR("live refused: the signer is the fixed test key");
     return 2;
   }
 
@@ -129,7 +128,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
     shards[i].client = std::make_unique<feed::LaserstreamClient>(cfg, "shard" + std::to_string(i), *shards[i].ring, stop);
     shards[i].client->set_spec(specs[i]);
   }
-  LOG_INFO("%s: %zu pools, %zu cycles, %zu shards (%zu pool keys, %zu wallet/reserve keys)", recorder ? "recorder" : "live dry run",
+  LOG_INFO("%s: %zu pools, %zu cycles, %zu shards (%zu pool keys, %zu wallet/reserve keys)", recorder ? "recorder" : "live",
            pf.pools.size(), rt.cycles().size(), shards.size(), only_pools.size(), wallet_keys.size());
 
   // Streams first, then the initial state by RPC: once every stream is subscribed, no change after the read
@@ -164,21 +163,18 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
     }
   }
 
-  // Send side (dry run): virtual lookup tables until discovery's real ones exist; real recent blockhash.
+  // Send side: the real lookup tables (loaded below) and a recent blockhash.
   tx::AltManager alts;
   tx::BlockhashCache blockhash;
   risk::Limits limits(risk::limits_config(cfg));
-  // The send path. A JitoClient exists only when dry_run = false, which run_live refuses above: until the owner
-  // removes that refusal nothing below can reach sendBundle.
   auto jito_http = [&cfg](const std::string& url) { return submit::make_rpc_http(url, cfg.helius.rpc_timeout_ms); };
   auto jito_client = [&](std::vector<std::string> regions) {
     return std::make_unique<submit::JitoClient>(std::move(regions), cfg.jito.block_engine_fmt, jito_http, cfg.jito.backoff_429_ms);
   };
-  const bool live_send = !cfg.mode.dry_run && !recorder;
-  submit::Submitter submitter(!live_send, live_send ? jito_client(cfg.jito.regions) : nullptr);
-  Pubkey executor = cfg.keys.executor_program_id == "VERIFY" ? dry_run_executor() : parse_pubkey(cfg.keys.executor_program_id);
+  const bool live_send = !recorder;
+  submit::Submitter submitter(live_send ? jito_client(cfg.jito.regions) : nullptr);
+  Pubkey executor = cfg.keys.executor_program_id == "VERIFY" ? placeholder_executor() : parse_pubkey(cfg.keys.executor_program_id);
   BundleBuilder builder(cfg, rt, wallet, executor, alts, blockhash, limits, submitter);
-  builder.set_virtual_tables(true);
   // Feed health gates every send and drives the alerts (the Nov 11-16 outage went unnoticed for 4.3 days).
   feed::FeedHealthConfig fhc;
   fhc.max_update_age_ms = cfg.risk.max_feed_lag_ms;
@@ -189,7 +185,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   feed::FeedHealth health(fhc);
   obs::Alerter alerts(cfg.obs.alert_name);
   if (!recorder)
-    alerts.send(std::string("started: ") + (live_send ? "LIVE (sending bundles)" : "dry run") + ", " + std::to_string(pf.pools.size()) +
+    alerts.send(std::string("started: LIVE (sending bundles), ") + std::to_string(pf.pools.size()) +
                 " pools, " + std::to_string(shards.size()) + " streams");
   bool was_quota = false, was_kill = false;
   // Tip floor (spec §6.6): tip_min = max(jito.tip_min_lamports, Jito's landed-tip percentile), polled off-thread.
@@ -220,7 +216,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
     }
   }
   uint64_t saved_tip_attempts = rt.tips().attempts();
-  // Armed set: the pools whose lookup tables and token accounts exist. Dry run only counts routes outside it.
+  // Armed set: the pools whose lookup tables and token accounts exist; routes through any other pool are skipped.
   ArmedSet armed;
   if (!cfg.mode.armed_path.empty()) {
     std::ifstream af(cfg.mode.armed_path);
@@ -228,18 +224,15 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
     as << af.rdbuf();
     std::string aerr;
     if (af && armed.load_json(as.str(), &aerr)) {
-      builder.set_armed(&armed, live_send);
-      LOG_INFO("armed set: %zu pools from %s (%s)", armed.size(), cfg.mode.armed_path.c_str(), live_send ? "enforced" : "counted only in dry run");
+      builder.set_armed(&armed);
+      LOG_INFO("armed set: %zu pools from %s", armed.size(), cfg.mode.armed_path.c_str());
     } else if (live_send) {
       LOG_ERROR("armed set %s unreadable (%s): refusing to trade every pool", cfg.mode.armed_path.c_str(), aerr.c_str());
       return 1;
-    } else {
-      LOG_WARN("armed set %s unreadable (%s): not counting", cfg.mode.armed_path.c_str(), aerr.c_str());
     }
   }
-  // Real lookup tables (arm-accounts writes mode.alts_path). Live compiles against them only: the virtual tables
-  // are synthetic addresses that no validator could resolve, so live refuses to start without real ones.
-  const bool real_tables = !recorder && !cfg.mode.alts_path.empty() && (live_send || cfg.mode.real_tables_in_dry_run);
+  // Lookup tables (arm-accounts writes mode.alts_path), read from chain; live refuses to start without any.
+  const bool real_tables = live_send && !cfg.mode.alts_path.empty();
   auto reload_tables = [&]() -> size_t {
     tx::AltManager fresh;
     size_t n = load_tables(rpc, cfg.mode.alts_path, fresh);
@@ -254,13 +247,10 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       LOG_ERROR("lookup tables: %s", e.what());
     }
     if (n) {
-      builder.set_virtual_tables(false);
       LOG_INFO("lookup tables: %zu loaded from chain (%s)", n, cfg.mode.alts_path.c_str());
-    } else if (live_send) {
+    } else {
       LOG_ERROR("no lookup tables in %s: run arm-accounts --send first; refusing to send", cfg.mode.alts_path.c_str());
       return 1;
-    } else {
-      LOG_WARN("no lookup tables in %s: dry run keeps the virtual tables", cfg.mode.alts_path.c_str());
     }
   } else if (live_send) {
     LOG_ERROR("mode.alts_path is not set: live needs the real lookup tables; refusing to send");
@@ -309,11 +299,6 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       LOG_WARN("wallet read: %s", e.what());
     }
   }
-  BundleSim sim(cfg, stop);
-  if (!recorder && cfg.sim.enabled) {
-    builder.set_simulator(&sim);
-    sim.start();
-  }
   obs::DecisionLog dlog(cfg.obs.decision_log_dir, cfg.obs.decision_log_rotate_s);
   feed::FrameWriter frames(cfg.recorder.dir, cfg.recorder.rotate_s);
   if (!recorder) {
@@ -339,12 +324,11 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   std::string quarantine_path = cfg.obs.decision_log_dir + "/../quarantine.json";
   auto& g_decode = reg.gauge("arb_decode_failures", "account decode failures");
   auto& g_cand = reg.gauge("arb_engine_candidates", "candidates priced above min_ev");
-  auto& g_dry = reg.gauge("arb_bundles_dry_run", "bundles built and signed in dry run");
   auto& g_rec = reg.gauge("arb_recorder_bytes", "bytes written by the recorder");
   auto& g_kill = reg.gauge("arb_kill_switch", "1 while the KILL file is present");
   auto& g_risk_blocked = reg.gauge("arb_bundles_risk_blocked", "candidates stopped by a limit: kill switch, fee cap, float, reject pause, feed lag");
   auto& g_armed = reg.gauge("arb_armed_pools", "pools in the armed set (0: no armed set, every pool)");
-  auto& g_not_armed = reg.gauge("arb_bundles_not_armed", "routes through an unarmed pool (counted in dry run, skipped live)");
+  auto& g_not_armed = reg.gauge("arb_bundles_not_armed", "routes skipped: through a pool outside the armed set");
   auto& g_tip_accounts = reg.gauge("arb_jito_tip_accounts", "tip accounts from the last getTipAccounts (0: the built-in list)");
   auto& g_landed = reg.gauge("arb_bundles_landed", "sent bundles Jito reported landed");
   auto& g_not_landed = reg.gauge("arb_bundles_not_landed", "sent bundles that did not land within the status timeout");
@@ -386,32 +370,13 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   auto& g_sp_edge = reg.gauge("arb_engine_spread_edge", "spread-stale cycles past the spot-edge prefilter (shadow, never sent)");
   auto& g_sp_priced = reg.gauge("arb_engine_spread_priced", "spread-stale cycles that sized and priced as a candidate (shadow)");
   auto& g_sp_gross = reg.gauge("arb_engine_spread_gross_lamports", "gross of spread-stale priced cycles (shadow), lamports");
-  auto& g_sim_submitted = reg.gauge("arb_sim_submitted", "dry-run simulation jobs submitted since start");
-  auto& g_sim_queued = reg.gauge("arb_sim_queued", "simulation jobs waiting for RPC");
-  auto& g_sim_inflight = reg.gauge("arb_sim_in_flight", "simulation jobs doing RPC");
-  auto& g_sim_terminal = reg.gauge("arb_sim_terminal", "simulation terminal outcomes (all categories)");
-  auto& g_sim_per_leg = reg.gauge("arb_sim_per_leg", "routes too large for one message, simulated leg by leg");
-  auto& g_sim_matched = reg.gauge("arb_sim_state_matched", "simulations whose legs' vaults equalled the engine's snapshot");
-  auto& g_sim_drifted = reg.gauge("arb_sim_state_drifted", "simulations whose legs' vaults had moved since the snapshot (state drift)");
-  auto& g_sim_suspect = reg.gauge("arb_sim_quoter_suspect", "failed or short simulations on matched state (quoter suspect)");
-  auto& g_sim_funding = reg.gauge("arb_sim_funding_changed", "holder account movement invalidated diagnostic");
-  auto& g_sim_inventory = reg.gauge("arb_sim_intermediate_balance", "fixed-input route consumed holder inventory");
-  auto& g_sim_ok = reg.gauge("arb_sim_ok", "dry-run bundles whose legs simulated without error");
-  auto& g_sim_failed = reg.gauge("arb_sim_failed", "dry-run bundles whose legs failed in simulation");
-  auto& g_sim_profitable = reg.gauge("arb_sim_profitable", "simulated bundles still profitable after tip and fee");
-  auto& g_sim_dropped = reg.gauge("arb_sim_dropped", "dry-run bundles not simulated (rate cap, queue full or stale)");
-  auto& g_sim_stale = reg.gauge("arb_sim_stale", "dry-run bundles dropped at dequeue: queued longer than sim.max_wait_ms");
-  auto& g_sim_no_holder = reg.gauge("arb_sim_no_holder", "dry-run bundles with no public holder of the trade size");
-  auto& g_sim_too_large = reg.gauge("arb_sim_too_large", "dry-run bundles whose direct-swap message exceeds 1,232 bytes");
-  auto& g_sim_context_retries = reg.gauge("arb_sim_context_retries", "bounded retries while the simulation bank catches up to the unchanged minimum context slot");
-  auto& g_sim_setup = reg.gauge("arb_sim_setup_error", "simulation setup or unclassified message errors; excludes failed swap legs");
-  auto& g_sim_rpc = reg.gauge("arb_sim_rpc_error", "simulation RPC errors");
   auto& g_untradable = reg.gauge("arb_engine_untradable", "evaluations skipped: a leg the program rejects in that direction");
   auto& g_quarantined = reg.gauge("arb_engine_quarantined", "evaluations skipped: a leg quarantined by failed or short simulations");
   auto& g_implausible = reg.gauge("arb_engine_implausible_profit", "sized candidates skipped: profit above engine.max_profit_ratio");
   auto& g_quarantine_pools = reg.gauge("arb_quarantined_pools", "pool directions quarantined now");
   auto& g_no_room_memo = reg.gauge("arb_engine_no_room_memo", "evaluations skipped: x_max was below min_trade and nothing changed since");
   auto& g_signed = reg.gauge("arb_bundles_signed", "bundles built and signed");
+  auto& g_sent = reg.gauge("arb_bundles_sent", "bundles accepted by at least one Jito region");
   auto& g_shards = reg.gauge("arb_feed_shards_up", "LaserStream streams currently up");
   auto& g_healthy = reg.gauge("arb_feed_healthy", "1 while the feed passes the health gate (streams up, not flapping, fresh)");
   auto& g_flaps = reg.gauge("arb_feed_reconnects_last_min", "stream reconnects across all shards in the last 60 s");
@@ -440,11 +405,6 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
                          lat("arb_build_step_tables_us", "build step over 1 h: blockhash and lookup tables, us"),
                          lat("arb_build_step_sign_us", "build step over 1 h: compile message and sign, us")};
   auto& g_deferred = reg.gauge("arb_engine_deferred", "cycles past the prefilter not sized: below their update's top max_sized_per_update");
-  LatGauges g_sim_mis = lat("arb_sim_mismatch_ppm", "simulated vs quoted final out, ppm (signed; 1 h window)");
-  LatGauges g_sim_lag = lat("arb_sim_lag_slots", "slots from the candidate to its simulation (1 h window)");
-  obs::LatencyWindow sim_mismatch(3600), sim_lag(3600);
-  risk::Limits sim_limits(risk::limits_config(cfg));
-  uint8_t sim_tripped = 0;
   LatGauges g_edge = lat("arb_sized_edge_ppm", "spot edge the prefilter saw on sized cycles, ppm");
   LatGauges g_fprof = lat("arb_failed_profit_ppm", "best realized profit / size on cycles that sized to no profit, ppm");
   struct DiagGauge {
@@ -517,7 +477,6 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       g_reconnects.set(int64_t(rc));
       g_decode.set(int64_t(rt.store().decode_failures()));
       g_cand.set(int64_t(rt.engine().counters().candidates));
-      g_dry.set(int64_t(builder.stats().dry_run));
       g_rec.set(int64_t(frames.bytes_written()));
       const bool kill_now = ::access(cfg.mode.kill_file.c_str(), F_OK) == 0;
       g_kill.set(kill_now ? 1 : 0);
@@ -553,7 +512,6 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
         g_alerts_failed.set(int64_t(alerts.failed()));
       }
       g_risk_blocked.set(int64_t(builder.stats().risk_blocked));
-      if (!recorder) builder.warm();
       g_armed.set(int64_t(armed.size()));
       g_not_armed.set(int64_t(builder.stats().not_armed));
       // Jito's verdicts feed the tip controller (alpha and p_land per route class) and the reject pause.
@@ -571,7 +529,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       if (real_tables && now - last_tables >= std::chrono::seconds(60) && usage::may_call(last_tables_try, wall_ms())) {
         last_tables = now;
         try {
-          if (reload_tables()) builder.set_virtual_tables(false);
+          reload_tables();
         } catch (const std::exception& e) {
           LOG_WARN("lookup tables: %s", e.what());
         }
@@ -588,7 +546,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       }
       g_not_landed.set(int64_t(n_not_landed));
       g_rejected.set(int64_t(n_rejected));
-      // Tip accounts: read-only, so it runs in dry run too. Jito says the list is stable; a short or failed
+      // Tip accounts (read-only RPC). Jito says the list is stable; a short or failed
       // answer keeps the previous list.
       if (!recorder && cfg.jito.tip_accounts_refresh_s > 0 && !cfg.jito.regions.empty() && wall_ms() >= next_tip_refresh_ms) {
         next_tip_refresh_ms = wall_ms() + int64_t(cfg.jito.tip_accounts_refresh_s) * 1000;
@@ -625,72 +583,6 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       g_no_room_memo.set(int64_t(n.no_room_memo));
       g_quarantined.set(int64_t(n.quarantined));
       g_implausible.set(int64_t(n.implausible));
-      // Simulation outcomes: into the decision log, the quote-mismatch feed (record-only in dry run) and gauges.
-      for (const obs::DecisionRecord& r : sim.drain()) {
-        if (!dlog.write(r)) LOG_ERROR("cannot persist simulation outcome");
-        if (r.outcome == uint8_t(obs::Outcome::SimulatedOk) && r.min_out) {
-          int64_t mis = int64_t((__int128(r.final_out) - __int128(r.min_out)) * 1'000'000 / __int128(r.min_out));
-          sim_mismatch.add(mono_ns(), mis);
-          // Exact parity uses coherent snapshots. These delayed diagnostics include state drift, so record
-          // per-DEX mismatch policy only on same-slot single-DEX routes; never attribute a route delta to all legs.
-          bool same_dex = true;
-          for (int i = 1; i < r.hops; ++i) same_dex &= r.dex[i] == r.dex[0];
-          if (r.slot == r.state_slot[0] && same_dex) sim_limits.record_sim(r.dex[0], std::abs(mis) > 1000);
-        }
-        if (r.slot && r.state_slot[0]) sim_lag.add(mono_ns(), int64_t(r.slot) - int64_t(r.state_slot[0]));
-        // Feed the verdict back to dispatch: a route that failed at leg k marks legs 1..k (a short output from an
-        // earlier leg makes a later one fail), a short success marks every leg, a clean success clears them.
-        // Not-simulated outcomes (too large, no holder, RPC, setup) say nothing about the pools, and neither does
-        // a simulation that ran more than strike_max_lag_slots after the candidate.
-        if (app::sim_verdict_usable(r, cfg.sim.strike_max_lag_slots)) {
-          int bad_upto = -1;  // legs [0, bad_upto) are bad; 0 = all good; -1 = no verdict
-          if (r.outcome == uint8_t(obs::Outcome::SimulatedOk) && r.min_out) {
-            int64_t short_bps = int64_t((__int128(r.min_out) - __int128(r.final_out)) * 10'000 / __int128(r.min_out));
-            bad_upto = short_bps > cfg.sim.short_bps ? r.hops : 0;
-          } else if (r.outcome == uint8_t(obs::Outcome::SimulationFailed) && r.reason >= 1 && r.reason <= 3) {
-            bad_upto = r.reason;
-          }
-          bool per_leg = r.pad0[0] == 1;  // legs simulated alone: each verdict is that leg's own
-          if (bad_upto >= 0)
-            for (int i = 0; i < r.hops; ++i) {
-              bool bad = i < bad_upto;
-              if (per_leg)
-                bad = r.outcome == uint8_t(obs::Outcome::SimulationFailed) ? i == r.reason - 1
-                                                                          : int64_t(r.state_seq[i]) > cfg.sim.short_bps;
-              if (auto id = rt.store().pool_id(key_from(r.pools[i])))
-                rt.engine().note_sim(*id, (r.a_to_b_mask >> i) & 1, bad, wall_ms());
-            }
-        }
-        // Runtime errors are classified in the outcome/sidecar; they are not proof of an amount-out mismatch.
-      }
-      // Record-only: a separate Limits instance, so a mismatch rate (which here includes state drift between
-      // the candidate and its simulation) never blocks dry-run bundles; logged once when a DEX would trip.
-      for (uint8_t d = 0; d < 8; ++d)
-        if (sim_limits.dex_disabled(d) && !(sim_tripped & (1u << d))) {
-          sim_tripped |= uint8_t(1u << d);
-          LOG_WARN("bundle sim: %s would be disabled by the quote-mismatch rate (record-only in dry run)", dex_name(DexKind(d)));
-        }
-      const auto& sc = sim.counters();
-      g_sim_submitted.set(int64_t(sc.submitted.load()));
-      g_sim_queued.set(int64_t(sc.queued.load()));
-      g_sim_inflight.set(int64_t(sc.in_flight.load()));
-      g_sim_terminal.set(int64_t(sc.terminal.load()));
-      g_sim_per_leg.set(int64_t(sc.per_leg.load()));
-      g_sim_matched.set(int64_t(sc.state_matched.load()));
-      g_sim_drifted.set(int64_t(sc.state_drifted.load()));
-      g_sim_suspect.set(int64_t(sc.quoter_suspect.load()));
-      g_sim_funding.set(int64_t(sc.funding_changed.load()));
-      g_sim_inventory.set(int64_t(sc.intermediate_balance.load()));
-      g_sim_ok.set(int64_t(sc.ok.load()));
-      g_sim_failed.set(int64_t(sc.failed.load()));
-      g_sim_profitable.set(int64_t(sc.profitable.load()));
-      g_sim_dropped.set(int64_t(sc.dropped.load()));
-      g_sim_stale.set(int64_t(sc.stale.load()));
-      g_sim_no_holder.set(int64_t(sc.no_holder.load()));
-      g_sim_too_large.set(int64_t(sc.too_large.load()));
-      g_sim_context_retries.set(int64_t(sc.context_retries.load()));
-      g_sim_setup.set(int64_t(sc.setup_error.load()));
-      g_sim_rpc.set(int64_t(sc.rpc_error.load()));
       g_st_incomplete.set(int64_t(n.stale_incomplete));
       g_st_resync.set(int64_t(n.stale_resync));
       g_st_spread.set(int64_t(n.stale_spread));
@@ -699,6 +591,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       g_sp_priced.set(int64_t(n.spread_priced));
       g_sp_gross.set(int64_t(n.spread_gross_lamports));
       g_signed.set(int64_t(builder.stats().signed_ok));
+      g_sent.set(int64_t(builder.stats().sent));
       g_slot.set(int64_t(rt.clock().slot.load()));
       g_uptime.set(int64_t(std::chrono::duration_cast<std::chrono::seconds>(now - t0).count()));
       int up = 0;
@@ -730,8 +623,6 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       put(g_build, builder.build_sign_us(), tnow);
       for (int i = 0; i < 4; ++i) put(g_step[i], builder.build_step_us(i), tnow);
       g_deferred.set(int64_t(rt.engine().counters().deferred));
-      put(g_sim_mis, sim_mismatch, tnow);
-      put(g_sim_lag, sim_lag, tnow);
       // Measured slot time, once a minute: chain.slot_ms should match it (slots went 400 -> 200 ms in Oct 2026).
       if (uint64_t sl = rt.clock().slot.load(); slot_mark == 0) {
         slot_mark = sl;
@@ -881,12 +772,9 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   }
   for (auto& s : shards) s.thread.join();
   if (watcher) watcher->shutdown();
-  sim.shutdown();
-  for (const auto& r : sim.drain())
-    if (!dlog.write(r)) LOG_ERROR("cannot persist final simulation outcome");
-  LOG_INFO("%s stopped: frames=%llu candidates=%llu dry_run_bundles=%llu recorder_bytes=%llu", recorder ? "recorder" : "live",
+  LOG_INFO("%s stopped: frames=%llu candidates=%llu sent=%llu recorder_bytes=%llu", recorder ? "recorder" : "live",
            (unsigned long long)rt.stats().frames, (unsigned long long)rt.engine().counters().candidates,
-           (unsigned long long)builder.stats().dry_run, (unsigned long long)frames.bytes_written());
+           (unsigned long long)builder.stats().sent, (unsigned long long)frames.bytes_written());
   return 0;
 }
 

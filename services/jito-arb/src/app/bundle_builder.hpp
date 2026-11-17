@@ -1,8 +1,7 @@
 #pragma once
 // The send hook (spec §9): a dispatched opportunity becomes the §7.3 transaction (CU limit, Kamino
 // borrow, executor execute_route, repay, tip), checked by the sign guard and the §10 limits,
-// compiled against the active lookup tables, signed, and handed to the Submitter. In dry run the
-// Submitter holds no client: the signed bundle is recorded in the decision log and nothing is sent.
+// compiled against the bot's lookup tables (loaded from chain), signed, and handed to the Submitter.
 #include <random>
 
 #include <functional>
@@ -17,28 +16,20 @@
 
 namespace arb::app {
 
-class BundleSim;
-
-/** Stand-in executor id for dry runs before the program is deployed (never on chain). */
-Pubkey dry_run_executor();
-/** Dry-run signer when no hot-wallet file is configured: a fixed, publicly known test seed (holds nothing). */
-Keypair dry_run_keypair();
-
-/**
- * One lookup table per pool (its accounts and the wallet's ATAs for its mints) plus a shared table
- * (programs, Kamino reserve accounts), all active: the tables discovery would create. Used by replay
- * and dry runs so the full route compiles under 1,232 bytes; the table keys are synthetic.
- */
 /** Keys every route references (programs, authorities, the flash reserves, the executor): the shared table. */
 std::vector<Pubkey> shared_table_keys(const Pubkey& wallet, std::span<const flash::FlashReserve> reserves, const Pubkey& executor);
 /** The accounts a route through this pool needs from a lookup table (pool, vaults, the wallet's ATAs, arrays). */
 std::vector<Pubkey> pool_table_keys(const PoolState& p, const Pubkey& wallet);
-void seed_virtual_tables(tx::AltManager& alts, const StateStore& store, const Pubkey& wallet,
-                         std::span<const flash::FlashReserve> reserves, const Pubkey& executor);
+
+/** Placeholder executor id for tests and tools before a program is deployed (never on chain). */
+Pubkey placeholder_executor();
+/** A fixed, publicly known test keypair (holds nothing): tests, tools, and the recorder's watch address. */
+Keypair test_keypair();
+
 
 struct BuilderStats {
-  uint64_t built = 0, signed_ok = 0, too_large = 0, guard_blocked = 0, risk_blocked = 0, build_failed = 0, dry_run = 0, sent = 0, stale = 0;
-  uint64_t not_armed = 0;  // routes through an unarmed pool (counted in dry run, skipped live)
+  uint64_t built = 0, signed_ok = 0, too_large = 0, guard_blocked = 0, risk_blocked = 0, build_failed = 0, sent = 0, stale = 0;
+  uint64_t not_armed = 0;  // routes skipped: through a pool outside the armed set
 };
 
 class BundleBuilder {
@@ -50,27 +41,9 @@ class BundleBuilder {
   void set_wallet_lamports(uint64_t l) { wallet_lamports_ = l; }
   /** The feed health gate (feed::FeedHealth): while false every candidate is blocked as feed_lag. */
   void set_feed_ok(bool ok) { feed_ok_ = ok; }
-  /** Seed the virtual lookup tables on first use (until discovery has created the real ones). */
-  void set_virtual_tables(bool on) { virtual_tables_ = on; }
-  /**
-   * Seed the virtual tables now rather than on the first candidate: it derives two token-account addresses per
-   * pool, about half a second at 8,000 pools, which the first candidate otherwise waited for. The live loop
-   * calls it once a second until it has run (force: seed even without every flash reserve).
-   */
-  void warm(bool force = false);
-  /** Simulate every dry-run bundle's legs (read-only, background thread). Null: off. */
-  void set_simulator(BundleSim* s) { sim_ = s; }
-  /**
-   * Replay without RPC: virtual tables, and sign over a placeholder blockhash (all zeros) stamped at the
-   * current slot. Never on a send path: the Submitter is dry run whenever this is used.
-   */
-  void set_offline(bool on) { virtual_tables_ = placeholder_blockhash_ = on; }
   void set_tip_accounts(std::vector<Pubkey> v) { guard_.tip_accounts = std::move(v); }
-  /**
-   * The pools the bot may trade (null: every pool). With enforce, a route through an unarmed pool is skipped as
-   * not_armed; without it (dry run) the route is only counted, so dry run keeps measuring every pool.
-   */
-  void set_armed(const ArmedSet* a, bool enforce) { armed_ = a; enforce_armed_ = enforce; }
+  /** The pools the bot may trade (null: every pool); a route through any other pool is skipped as not_armed. */
+  void set_armed(const ArmedSet* a) { armed_ = a; }
   /** Called for each bundle Jito accepted: (bundle id, signature, route class, wall ms). */
   using SentHook = std::function<void(const std::string&, const Signature&, uint16_t, int64_t)>;
   void set_sent_hook(SentHook h) { sent_hook_ = std::move(h); }
@@ -86,9 +59,7 @@ class BundleBuilder {
   obs::LatencyWindow& build_step_us(int i) { return step_us_[i]; }
 
  private:
-  BundleSim* sim_ = nullptr;
   const ArmedSet* armed_ = nullptr;
-  bool enforce_armed_ = false;
   SentHook sent_hook_;
   const Config& cfg_;
   Runtime& rt_;
@@ -100,9 +71,8 @@ class BundleBuilder {
   submit::Submitter& submitter_;
   risk::SignGuard guard_;
   std::mt19937_64 rng_{0x5EED};
-  bool feed_ok_ = true;  // replay and tests have no streams; live sets it every second
+  bool feed_ok_ = true;  // tests have no streams; live sets it every second
   uint64_t wallet_lamports_ = UINT64_MAX;  // unknown until the wallet subscription reports it
-  bool virtual_tables_ = false, placeholder_blockhash_ = false, seeded_ = false;
   tx::IxList ixs_;
   tx::SignedTx last_;
   BuilderStats n_;

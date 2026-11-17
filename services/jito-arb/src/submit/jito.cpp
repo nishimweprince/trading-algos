@@ -175,13 +175,11 @@ std::vector<Pubkey> JitoClient::tip_accounts() {
   return v;
 }
 
-Submitter::Submitter(bool dry_run, std::unique_ptr<JitoClient> client) {
-  if (!dry_run) client_ = std::move(client);
-}
+Submitter::Submitter(std::unique_ptr<JitoClient> client) : client_(std::move(client)) {}
 
 SubmitOutcome Submitter::submit(const tx::SignedTx& t, uint64_t built_slot, uint64_t current_slot, int64_t now_ms,
                                 std::vector<RegionResult>* results) {
-  if (!client_) return SubmitOutcome::DryRun;
+  if (!client_) return SubmitOutcome::NoRegion;
   if (current_slot > built_slot) return SubmitOutcome::Stale;
   std::string b64tx = b64(t.bytes, t.len);
   auto rr = client_->send_bundle(std::span<const std::string>(&b64tx, 1), now_ms);
