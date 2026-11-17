@@ -29,6 +29,10 @@ Keypair dry_run_keypair();
  * (programs, Kamino reserve accounts), all active: the tables discovery would create. Used by replay
  * and dry runs so the full route compiles under 1,232 bytes; the table keys are synthetic.
  */
+/** Keys every route references (programs, authorities, the flash reserves, the executor): the shared table. */
+std::vector<Pubkey> shared_table_keys(const Pubkey& wallet, std::span<const flash::FlashReserve> reserves, const Pubkey& executor);
+/** The accounts a route through this pool needs from a lookup table (pool, vaults, the wallet's ATAs, arrays). */
+std::vector<Pubkey> pool_table_keys(const PoolState& p, const Pubkey& wallet);
 void seed_virtual_tables(tx::AltManager& alts, const StateStore& store, const Pubkey& wallet,
                          std::span<const flash::FlashReserve> reserves, const Pubkey& executor);
 

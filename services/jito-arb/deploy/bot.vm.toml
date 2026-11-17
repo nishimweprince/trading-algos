@@ -4,6 +4,7 @@
 pools_path = "/var/lib/jito-arb/pools.json"
 
 [mode]
+alts_path = "/var/lib/jito-arb/alts.json"       # real lookup tables, written by arm-accounts; live loads them from chain
 dry_run = true
 funding_mode = "flash"
 kill_file = "/var/lib/jito-arb/KILL"

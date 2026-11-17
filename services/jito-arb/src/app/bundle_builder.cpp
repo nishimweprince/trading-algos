@@ -38,73 +38,72 @@ Pubkey table_key(uint32_t n) {
 }
 }  // namespace
 
-void seed_virtual_tables(tx::AltManager& alts, const StateStore& store, const Pubkey& wallet,
-                         std::span<const flash::FlashReserve> reserves, const Pubkey& executor) {
-  tx::AltAccount shared;
-  shared.has_authority = true;
-  shared.authority = wallet;
-  std::set<Pubkey> seen;
-  auto add = [&](tx::AltAccount& a, const Pubkey& k) {
-    if (k == wallet || a.addresses.size() >= tx::ALT_MAX_ADDRESSES) return;
-    a.addresses.push_back(k);
-  };
+std::vector<Pubkey> shared_table_keys(const Pubkey& wallet, std::span<const flash::FlashReserve> reserves, const Pubkey& executor) {
+  std::vector<Pubkey> v;
   for (const Pubkey& k : {prog::TOKEN, prog::TOKEN_2022, prog::KLEND, prog::SYSVAR_INSTRUCTIONS, prog::RAYDIUM_V4, prog::WHIRLPOOL,
                           prog::RAYDIUM_CPMM, prog::PUMPSWAP, prog::RAYDIUM_CLMM, prog::MEMO, prog::SYSTEM, tx::dexix::raydium_authority(), tx::dexix::cpmm_authority(),
                           tx::dexix::pump_global_config(), tx::dexix::pump_fee_config(), tx::dexix::pump_event_authority(),
                           tx::dexix::pump_user_volume_accumulator(wallet), executor})
-    add(shared, k);
+    v.push_back(k);
   for (const flash::FlashReserve& r : reserves)
     for (const Pubkey& k : {r.reserve, r.lending_market, r.lending_market_authority, r.liquidity_mint, r.supply_vault, r.fee_vault})
-      add(shared, k);
-  alts.upsert(table_key(0), shared);
-  for (uint32_t i = 0; i < store.pool_count(); ++i) {
-    auto p = store.pool(i);
-    if (!p) continue;
+      v.push_back(k);
+  return v;
+}
+
+std::vector<Pubkey> pool_table_keys(const PoolState& p, const Pubkey& wallet) {
+  std::vector<Pubkey> v{p.address, p.vault_a, p.vault_b, tx::wallet_ata(wallet, p.mint_a, p), tx::wallet_ata(wallet, p.mint_b, p)};
+  switch (p.kind) {
+    case DexKind::Dlmm:
+      v.push_back(prog::METEORA_DLMM);
+      v.push_back(p.dlmm.oracle);
+      v.push_back(state::dlmm_bitmap_pda(p.address));
+      v.push_back(p.mint_a); v.push_back(p.mint_b);
+      for (auto& slot : p.dlmm_arrays) v.push_back(slot.key);
+      break;
+    case DexKind::Whirlpool:
+      v.push_back(tx::dexix::whirlpool_oracle(p.address));
+      for (uint8_t t = 0; t < p.n_ticks; ++t) v.push_back(p.ticks[t].key);
+      break;
+    case DexKind::Clmm:
+      v.push_back(p.clmm.amm_config);
+      v.push_back(p.clmm.observation_key);
+      v.push_back(state::clmm_bitmap_extension_pda(p.address));
+      v.push_back(p.mint_a);
+      v.push_back(p.mint_b);
+      for (uint8_t t = 0; t < p.n_ticks; ++t) v.push_back(p.ticks[t].key);
+      break;
+    case DexKind::PumpSwap:
+      v.push_back(p.mint_a);
+      v.push_back(p.mint_b);
+      break;
+    case DexKind::Cpmm:
+      v.push_back(p.cpmm.amm_config);
+      v.push_back(p.cpmm.observation_key);
+      v.push_back(p.mint_a);
+      v.push_back(p.mint_b);
+      break;
+    case DexKind::RaydiumV4:
+      break;
+    default:
+      throw std::invalid_argument(std::string("lookup table keys: unsupported dex ") + dex_name(p.kind));
+  }
+  return v;
+}
+
+void seed_virtual_tables(tx::AltManager& alts, const StateStore& store, const Pubkey& wallet,
+                         std::span<const flash::FlashReserve> reserves, const Pubkey& executor) {
+  auto table = [&wallet](const std::vector<Pubkey>& keys) {
     tx::AltAccount a;
     a.has_authority = true;
     a.authority = wallet;
-    add(a, p->address);
-    add(a, p->vault_a);
-    add(a, p->vault_b);
-    add(a, tx::wallet_ata(wallet, p->mint_a, *p));
-    add(a, tx::wallet_ata(wallet, p->mint_b, *p));
-    switch (p->kind) {
-      case DexKind::Dlmm:
-        add(a, prog::METEORA_DLMM);
-        add(a, p->dlmm.oracle);
-        add(a, state::dlmm_bitmap_pda(p->address));
-        add(a, p->mint_a); add(a, p->mint_b);
-        for (auto& slot : p->dlmm_arrays) add(a, slot.key);
-        break;
-      case DexKind::Whirlpool:
-        add(a, tx::dexix::whirlpool_oracle(p->address));
-        for (uint8_t t = 0; t < p->n_ticks; ++t) add(a, p->ticks[t].key);
-        break;
-      case DexKind::Clmm:
-        add(a, p->clmm.amm_config);
-        add(a, p->clmm.observation_key);
-        add(a, state::clmm_bitmap_extension_pda(p->address));
-        add(a, p->mint_a);
-        add(a, p->mint_b);
-        for (uint8_t t = 0; t < p->n_ticks; ++t) add(a, p->ticks[t].key);
-        break;
-      case DexKind::PumpSwap:
-        add(a, p->mint_a);
-        add(a, p->mint_b);
-        break;
-      case DexKind::Cpmm:
-        add(a, p->cpmm.amm_config);
-        add(a, p->cpmm.observation_key);
-        add(a, p->mint_a);
-        add(a, p->mint_b);
-        break;
-      case DexKind::RaydiumV4:
-        break;
-      default:
-        throw std::invalid_argument(std::string("virtual ALT: unsupported dex ") + dex_name(p->kind));
-    }
-    alts.upsert(table_key(i + 1), a);
-  }
+    for (const Pubkey& k : keys)
+      if (k != wallet && a.addresses.size() < tx::ALT_MAX_ADDRESSES) a.addresses.push_back(k);
+    return a;
+  };
+  alts.upsert(table_key(0), table(shared_table_keys(wallet, reserves, executor)));
+  for (uint32_t i = 0; i < store.pool_count(); ++i)
+    if (auto p = store.pool(i)) alts.upsert(table_key(i + 1), table(pool_table_keys(*p, wallet)));
 }
 
 BundleBuilder::BundleBuilder(const Config& cfg, Runtime& rt, Keypair wallet, Pubkey executor, tx::AltManager& alts,

@@ -23,6 +23,10 @@ struct Config {
     // {"pools":[..]} written by the live-plan tool: the pools whose lookup tables and token accounts exist.
     // Empty: no armed set (every pool). Dry run only counts routes outside it; live skips them (not_armed).
     std::string armed_path;
+    // {"tables":[..]} written by arm-accounts: the bot's real lookup tables. Live loads them from chain (and refuses
+    // to start without any); dry run keeps its virtual tables unless real_tables_in_dry_run.
+    std::string alts_path;
+    bool real_tables_in_dry_run = false;
   } mode;
 
   struct Helius {

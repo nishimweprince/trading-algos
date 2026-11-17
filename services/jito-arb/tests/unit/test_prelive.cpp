@@ -1,10 +1,20 @@
-// Pre-live hardening: feed health gate and alerts, PDA memo, tip policy.
+// Pre-live hardening: feed health gate and alerts, PDA memo, tip policy, arming (token accounts, lookup tables).
+#include <cstring>
+#include <set>
 #include <string>
 
+#include "app/arming.hpp"
+#include "app/bundle_builder.hpp"
+
 #include "core/crypto.hpp"
+#include "core/base58.hpp"
 #include "core/programs.hpp"
+#include "engine/costs.hpp"
 #include "feed/health.hpp"
 #include "obs/alert.hpp"
+#include "state/state_store.hpp"
+#include "submit/jito.hpp"
+#include "tx/builders.hpp"
 #include "test.hpp"
 
 using namespace arb;
@@ -108,8 +118,6 @@ TEST(pda_memo_matches_uncached_derivation) {
   CHECK(b == direct);
 }
 
-#include "engine/costs.hpp"
-#include "submit/jito.hpp"
 
 TEST(tip_state_round_trips_and_clamps) {
   engine::TipPolicy t;
@@ -135,4 +143,99 @@ TEST(tip_floor_percentiles_parse) {
   CHECK_EQ(submit::parse_tip_floor(body, 50), uint64_t(10000));
   CHECK_EQ(submit::parse_tip_floor_p25(body), uint64_t(5000));
   CHECK_EQ(submit::parse_tip_floor(body, 60), uint64_t(0));
+}
+
+
+namespace {
+Pubkey key_n(uint8_t n) {
+  Pubkey k{};
+  k[0] = n;
+  k[31] = 0x5a;
+  return k;
+}
+}  // namespace
+
+TEST(arming_needs_dedupe_and_leave_out_wallet_and_placeholder) {
+  crypto_init();
+  StateStore store;
+  const Pubkey wsol = parse_pubkey("So11111111111111111111111111111111111111112");
+  for (uint8_t i = 0; i < 3; ++i) {  // three SOL pools, two sharing a mint
+    PoolDef d;
+    d.kind = DexKind::RaydiumV4;
+    d.address = key_n(uint8_t(10 + i));
+    d.mint_a = wsol;
+    d.mint_b = key_n(i == 2 ? 20 : uint8_t(20 + i));
+    d.vault_a = key_n(uint8_t(30 + i));
+    d.vault_b = key_n(uint8_t(40 + i));
+    store.add_pool(d);
+  }
+  const Pubkey w = key_n(99);
+  auto atas = app::needed_atas(store, w);
+  CHECK_EQ(atas.size(), size_t(3));  // wSOL + two distinct other mints
+  for (const auto& a : atas) CHECK(a.ata == ata(w, a.mint, prog::TOKEN));
+
+  auto keys = app::needed_table_keys(store, w, {}, std::nullopt);
+  std::set<Pubkey> uniq(keys.begin(), keys.end());
+  CHECK_EQ(uniq.size(), keys.size());
+  CHECK(!uniq.count(w));
+  CHECK(!uniq.count(app::dry_run_executor()));
+  CHECK(uniq.count(key_n(10)) && uniq.count(key_n(42)));
+  for (const auto& a : atas) CHECK(uniq.count(a.ata));
+  auto with_exec = app::needed_table_keys(store, w, {}, key_n(77));
+  CHECK_EQ(with_exec.size(), keys.size() + 1);
+
+  auto txs = app::ata_txs(atas, w, 2);
+  CHECK_EQ(txs.size(), size_t(2));
+  app::add_compute_budget(txs, 200'000, 20'000);
+  CHECK_EQ(int(txs[0].n), 4);  // limit, price, 2 creates
+  CHECK(txs[0].ixs[0].program == prog::COMPUTE_BUDGET && txs[0].ixs[2].program == prog::ATA);
+  CHECK_EQ(int(txs[0].ixs[2].data[0]), 1);  // CreateIdempotent
+  for (const auto& t : txs) CHECK(app::setup_programs_allowed(t));
+  tx::IxList bad = txs[0];
+  tx::system_transfer(bad, w, key_n(5), 1);
+  CHECK(!app::setup_programs_allowed(bad));
+}
+
+TEST(arming_tables_json_round_trip) {
+  std::vector<Pubkey> t{key_n(1), key_n(2)}, back;
+  CHECK(app::tables_from_json(app::tables_to_json(t), back));
+  CHECK(back == t);
+  std::string err;
+  CHECK(!app::tables_from_json("{\"tables\":[\"nope\"]}", back, &err));
+  CHECK(back == t);  // unchanged on error
+  CHECK(!app::tables_from_json("{}", back));
+}
+
+// The plan the tool sends: missing keys only, at most 256 per table, 20 per extend, one create per new table.
+TEST(arming_extend_plan_fills_existing_then_creates) {
+  tx::AltManager alts;
+  const Pubkey w = key_n(99);
+  tx::AltAccount have;
+  have.has_authority = true;
+  have.authority = w;
+  for (int i = 0; i < 250; ++i) have.addresses.push_back(key_n(uint8_t(i)));
+  alts.upsert(key_n(250), have);
+  std::vector<Pubkey> keys;
+  for (int i = 0; i < 300; ++i) {
+    Pubkey k{};
+    k[0] = uint8_t(i);
+    k[1] = uint8_t(i >> 8);
+    k[31] = 0x5a;
+    keys.push_back(k);
+  }
+  auto missing = alts.missing(keys);
+  std::vector<Pubkey> created;
+  auto plan = alts.plan_extend(missing, w, w, 1000, &created);
+  CHECK_EQ(created.size(), size_t(1));
+  size_t added = 0, creates = 0;
+  for (const auto& l : plan)
+    for (uint8_t j = 0; j < l.n; ++j)
+      if (l.ixs[j].program == prog::ALT) {
+        uint32_t op;
+        std::memcpy(&op, l.ixs[j].data, 4);
+        if (op == 0) ++creates;
+        else added += size_t(l.ixs[j].data_len - 12) / 32;
+      }
+  CHECK_EQ(creates, size_t(1));
+  CHECK_EQ(added, missing.size());
 }

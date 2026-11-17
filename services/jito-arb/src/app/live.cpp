@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "app/bundle_builder.hpp"
+#include "app/arming.hpp"
 #include "app/bundle_sim.hpp"
 #include "app/live_send.hpp"
 #include "core/crypto.hpp"
@@ -215,6 +216,36 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       LOG_WARN("armed set %s unreadable (%s): not counting", cfg.mode.armed_path.c_str(), aerr.c_str());
     }
   }
+  // Real lookup tables (arm-accounts writes mode.alts_path). Live compiles against them only: the virtual tables
+  // are synthetic addresses that no validator could resolve, so live refuses to start without real ones.
+  const bool real_tables = !recorder && !cfg.mode.alts_path.empty() && (live_send || cfg.mode.real_tables_in_dry_run);
+  auto reload_tables = [&]() -> size_t {
+    tx::AltManager fresh;
+    size_t n = load_tables(rpc, cfg.mode.alts_path, fresh);
+    if (n) alts = std::move(fresh);
+    return n;
+  };
+  if (real_tables) {
+    size_t n = 0;
+    try {
+      n = reload_tables();
+    } catch (const std::exception& e) {
+      LOG_ERROR("lookup tables: %s", e.what());
+    }
+    if (n) {
+      builder.set_virtual_tables(false);
+      LOG_INFO("lookup tables: %zu loaded from chain (%s)", n, cfg.mode.alts_path.c_str());
+    } else if (live_send) {
+      LOG_ERROR("no lookup tables in %s: run arm-accounts --send first; refusing to send", cfg.mode.alts_path.c_str());
+      return 1;
+    } else {
+      LOG_WARN("no lookup tables in %s: dry run keeps the virtual tables", cfg.mode.alts_path.c_str());
+    }
+  } else if (live_send) {
+    LOG_ERROR("mode.alts_path is not set: live needs the real lookup tables; refusing to send");
+    return 1;
+  }
+  auto last_tables = std::chrono::steady_clock::now();
   // Landing feedback: Jito's verdict on each sent bundle, polled off the engine thread.
   std::unique_ptr<LandingWatcher> watcher;
   if (live_send) {
@@ -282,7 +313,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
     if (it == usage_gauges.end()) it = usage_gauges.emplace(name, &reg.gauge(name, help)).first;
     return *it->second;
   };
-  int64_t last_blockhash_try = 0, last_resync_try = 0, last_bank_resync_try = 0;
+  int64_t last_blockhash_try = 0, last_resync_try = 0, last_bank_resync_try = 0, last_tables_try = 0;
   // Next to the decision logs (the data dir the dashboard reads).
   std::string quarantine_path = cfg.obs.decision_log_dir + "/../quarantine.json";
   auto& g_decode = reg.gauge("arb_decode_failures", "account decode failures");
@@ -515,6 +546,15 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
           if (landed) LOG_INFO("bundle %s landed in slot %llu", d.bundle_id.c_str(), (unsigned long long)d.landed_slot);
         }
       g_landed.set(int64_t(n_landed));
+      // Tables change when arm-accounts extends them: re-read once a minute (a handful of accounts, one RPC call).
+      if (real_tables && now - last_tables >= std::chrono::seconds(60) && usage::may_call(last_tables_try, wall_ms())) {
+        last_tables = now;
+        try {
+          if (reload_tables()) builder.set_virtual_tables(false);
+        } catch (const std::exception& e) {
+          LOG_WARN("lookup tables: %s", e.what());
+        }
+      }
       if (rt.tips().attempts() != saved_tip_attempts) {
         saved_tip_attempts = rt.tips().attempts();
         save_tips();
