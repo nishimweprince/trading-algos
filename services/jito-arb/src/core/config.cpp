@@ -125,7 +125,7 @@ Config load_config(const std::string& path) {
   G(jito, tip_max_lamports); G(jito, tip_floor_refresh_ms); G(jito, tip_floor_percentile); G(jito, tip_accounts_refresh_s); G(jito, backoff_429_ms);
   G(jito, status_poll_ms); G(jito, status_timeout_ms); G(jito, sender_enabled); G(jito, sender_url);
   G(jito, route_by_leader); G(jito, route_regions); G(jito, always_regions); G(jito, skip_not_jito_leaders);
-  G(jito, skip_bam_leaders); G(jito, bam_dbi_fmt); G(jito, bam_uuid_env); G(jito, send_timeout_ms);
+  G(jito, skip_bam_leaders); G(jito, bam_dbi_fmt); G(jito, bam_uuid_env); G(jito, send_timeout_ms); G(jito, keepalive_s);
   G(engine, base_mints); G(engine, max_hops); G(engine, min_spot_edge); G(engine, min_ev_lamports);
   G(engine, min_net_lamports); G(engine, max_trade_lamports); G(engine, min_trade_lamports);
   G(engine, max_input_fraction); G(engine, target_land_rate); G(engine, max_bundles_per_slot);

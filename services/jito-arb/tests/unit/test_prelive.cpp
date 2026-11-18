@@ -302,9 +302,9 @@ namespace {
 class RecordingHttp final : public submit::HttpPost {
  public:
   RecordingHttp(std::string url, std::string headers, std::mutex* mu, std::vector<std::string>* log) : url_(std::move(url)), headers_(std::move(headers)), mu_(mu), log_(log) {}
-  int post(std::string_view, std::string_view, std::string& out) override {
+  int post(std::string_view path, std::string_view, std::string& out) override {
     std::lock_guard<std::mutex> g(*mu_);
-    log_->push_back(url_ + "|" + headers_);
+    log_->push_back(url_ + "|" + headers_ + "|" + std::string(path));
     out = "{\"jsonrpc\":\"2.0\",\"result\":\"bid1\",\"id\":1}";
     return 200;
   }
@@ -322,6 +322,7 @@ TEST(router_sends_async_per_region_and_drops_passed_slots) {
   submit::RouterConfig c;
   c.regions = {"frankfurt", "amsterdam"};
   c.always = {"frankfurt"};
+  c.keepalive_s = 0;  // count bundle posts only
   c.http = [&](const std::string& url, const std::string& h) { return std::unique_ptr<submit::HttpPost>(new RecordingHttp(url, h, &mu, &posts)); };
   std::atomic<uint64_t> slot{100};
   submit::Router r(c, nullptr, &slot, [&](const submit::SendResult& s, const Signature&, uint16_t, uint64_t, const submit::LeaderInfo&, int64_t) {
@@ -374,4 +375,25 @@ TEST(adaptive_cu_limit_learns_from_measured_use) {
   auto b = engine::price(1'000'000'000, 5'000'000, 0, 280'000, 776, bp, t, cc);
   CHECK(a.ok && b.ok);
   CHECK(a.cu_limit < b.cu_limit && a.cu_limit == uint32_t(167'500));
+}
+
+TEST(router_warms_every_region_and_pings_idle_connections) {
+  std::mutex mu;
+  std::vector<std::string> posts;
+  submit::RouterConfig c;
+  c.keepalive_s = 1;
+  c.http = [&](const std::string& url, const std::string& h) { return std::unique_ptr<submit::HttpPost>(new RecordingHttp(url, h, &mu, &posts)); };
+  submit::Router r(c, nullptr, nullptr, [](const submit::SendResult&, const Signature&, uint16_t, uint64_t, const submit::LeaderInfo&, int64_t) {});
+  r.warm({"frankfurt", "tokyo"});
+  auto count = [&](const std::string& region) {
+    std::lock_guard<std::mutex> g(mu);
+    return size_t(std::count_if(posts.begin(), posts.end(), [&](const std::string& p) {
+      return p.find(region) != std::string::npos && p.find("getTipAccounts") != std::string::npos;
+    }));
+  };
+  for (int i = 0; i < 200 && (count("frankfurt") < 1 || count("tokyo") < 1); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  CHECK(count("frankfurt") >= 1 && count("tokyo") >= 1);  // opened at once, before any bundle
+  std::this_thread::sleep_for(std::chrono::milliseconds(2300));
+  CHECK(count("frankfurt") >= 2 && count("tokyo") >= 2);  // pinged again while idle
+  CHECK(r.keepalive_rtt().count("tokyo") == 1 && r.keepalive_failures() == 0);
 }

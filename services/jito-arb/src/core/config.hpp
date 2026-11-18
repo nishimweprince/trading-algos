@@ -66,6 +66,7 @@ struct Config {
     std::string bam_dbi_fmt = "http://%s.mainnet.bam.jito.wtf:9090";
     std::string bam_uuid_env = "JITO_BAM_UUID";  // BAM Direct Bundle Ingest (Jito allowlist); unset = off
     int send_timeout_ms = 2000;
+    int keepalive_s = 45;                // idle block-engine connections pinged after this long (0 = off)
   } jito;
 
   struct Engine {

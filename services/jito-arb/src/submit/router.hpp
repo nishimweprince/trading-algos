@@ -35,6 +35,9 @@ struct RouterConfig {
   std::string bam_uuid;                      // empty: no BAM Direct Bundle Ingest
   int timeout_ms = 2000;
   int backoff_429_ms = 1000;
+  // Block-engine connections are opened when a sender starts and kept warm with a getTipAccounts call after this
+  // many idle seconds (0 = off): the first Tokyo send on 18 Nov took 646 ms, mostly the TLS handshake.
+  int keepalive_s = 45;
   /** Transport per (url, extra headers); default: kept-alive TLS (make_rpc_http). Tests inject a mock. */
   std::function<std::unique_ptr<HttpPost>(const std::string& url, const std::string& headers)> http;
 };
@@ -68,6 +71,12 @@ class Router {
   Router& operator=(const Router&) = delete;
   /** Enqueue (never blocks). Skipped when the plan says so; returns the plan. */
   RoutePlan route(const std::string& tx_b64, const Signature& sig, uint16_t route_class, uint64_t built_slot, int64_t wall_ms);
+  /** Open the block-engine connection of every region now (and keep it warm), instead of on its first bundle. */
+  void warm(const std::vector<std::string>& regions);
+  /** Latest keepalive round trip per region, us (-1 until one succeeded). */
+  std::map<std::string, int64_t> keepalive_rtt();
+  uint64_t keepalives() const { return keepalives_.load(); }
+  uint64_t keepalive_failures() const { return keepalive_failures_.load(); }
   /** Round-trip times per region over the last hour (p50, p99, samples), for the metrics. */
   std::map<std::string, obs::LatencyStats> rtt_stats();
   uint64_t accepted() const { return accepted_.load(); }
@@ -93,6 +102,7 @@ class Router {
     std::condition_variable cv;
     std::deque<Job> q;
     int64_t backoff_until_ms = 0;
+    int64_t last_post_ms = 0;
     std::thread th;
   };
   void run(Sender& s);
@@ -103,7 +113,8 @@ class Router {
   Done done_;
   std::vector<std::unique_ptr<Sender>> senders_;
   std::atomic<bool> stop_{false};
-  std::atomic<uint64_t> accepted_{0}, failed_{0}, dropped_{0}, skipped_{0};
+  std::atomic<uint64_t> accepted_{0}, failed_{0}, dropped_{0}, skipped_{0}, keepalives_{0}, keepalive_failures_{0};
+  std::map<std::string, int64_t> keepalive_rtt_;  // guarded by rtt_mu_
   std::mutex rtt_mu_;
   std::map<std::string, obs::LatencyWindow> rtt_;
 };

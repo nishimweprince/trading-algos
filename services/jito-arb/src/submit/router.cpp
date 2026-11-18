@@ -97,13 +97,48 @@ RoutePlan Router::route(const std::string& tx_b64, const Signature& sig, uint16_
   return p;
 }
 
+void Router::warm(const std::vector<std::string>& regions) {
+  for (const auto& r : regions) sender(r, false);
+}
+
+std::map<std::string, int64_t> Router::keepalive_rtt() {
+  std::lock_guard<std::mutex> g(rtt_mu_);
+  return keepalive_rtt_;
+}
+
 void Router::run(Sender& s) {
+  // Block-engine senders open their connection at once and keep it warm while idle. BAM DBI has no documented
+  // cheap call, so its connection opens on the first bundle.
+  const bool keep = !s.bam && c_.keepalive_s > 0;
+  auto keepalive = [&] {
+    std::string resp;
+    const uint64_t t0 = now_ns();
+    int st = 0;
+    try {
+      st = s.http->post("/api/v1/getTipAccounts", "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getTipAccounts\",\"params\":[]}", resp);
+    } catch (const std::exception&) {
+      st = 0;
+    }
+    s.last_post_ms = wall_ms();
+    ++keepalives_;
+    std::lock_guard<std::mutex> g(rtt_mu_);
+    if (st == 200) keepalive_rtt_[s.region] = int64_t(now_ns() - t0) / 1000;
+    else ++keepalive_failures_;
+    if (st == 429) s.backoff_until_ms = wall_ms() + c_.backoff_429_ms;
+  };
+  if (keep) keepalive();
   for (;;) {
     Job j;
     {
       std::unique_lock<std::mutex> l(s.mu);
-      s.cv.wait(l, [&] { return stop_.load() || !s.q.empty(); });
+      bool got = keep ? s.cv.wait_for(l, std::chrono::seconds(c_.keepalive_s), [&] { return stop_.load() || !s.q.empty(); })
+                      : (s.cv.wait(l, [&] { return stop_.load() || !s.q.empty(); }), true);
       if (stop_) return;
+      if (!got) {
+        l.unlock();
+        if (wall_ms() - s.last_post_ms >= int64_t(c_.keepalive_s) * 1000) keepalive();
+        continue;
+      }
       j = std::move(s.q.front());
       s.q.pop_front();
     }
@@ -126,6 +161,7 @@ void Router::run(Sender& s) {
       continue;
     }
     std::string resp;
+    s.last_post_ms = wall_ms();
     try {
       r.http_status = s.http->post("/api/v1/bundles", j.body, resp);
     } catch (const std::exception& e) {

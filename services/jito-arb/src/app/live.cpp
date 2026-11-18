@@ -339,6 +339,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       if (const char* u = std::getenv(cfg.jito.bam_uuid_env.c_str())) rc.bam_uuid = u;
       rc.timeout_ms = cfg.jito.send_timeout_ms;
       rc.backoff_429_ms = cfg.jito.backoff_429_ms;
+      rc.keepalive_s = cfg.jito.keepalive_s;
       leaders = std::make_unique<submit::LeaderMap>(resolve_rpc_url(cfg), cfg.jito.route_regions);
       router = std::make_unique<submit::Router>(
           rc, leaders.get(), &rt.clock().slot,
@@ -359,6 +360,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
                      ",\"err\":" + json_str(r.error.substr(0, 160)) + "}");
           });
       submitter.set_router(router.get());
+      router->warm(cfg.jito.route_regions);  // every region's connection opens now, not on its first bundle
       LOG_INFO("routing: leader-aware to %zu regions (always %zu), BAM Direct Bundle Ingest %s", cfg.jito.route_regions.size(),
                cfg.jito.always_regions.size(), rc.bam_uuid.empty() ? "off (no UUID)" : "on");
       builder.set_queued_hook([&](const tx::SignedTx& t, uint16_t rc2) {
@@ -733,6 +735,10 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
           reg.gauge("arb_jito_rtt_samples_" + n, "sendBundle round trips measured (1 h)").set(int64_t(st.count));
         }
         reg.gauge("arb_leader_map_ready", "1 once the leader schedule and Jito flags are loaded").set(leaders && leaders->ready() ? 1 : 0);
+        for (const auto& [region, us] : router->keepalive_rtt())
+          reg.gauge("arb_jito_keepalive_rtt_us_" + region, "latest keepalive round trip on the warm connection, us").set(us);
+        reg.gauge("arb_jito_keepalives", "keepalive calls on idle block-engine connections").set(int64_t(router->keepalives()));
+        reg.gauge("arb_jito_keepalive_failures", "keepalive calls that did not return 200").set(int64_t(router->keepalive_failures()));
       }
       if (audit) {
         g_audit_ok.set(int64_t(audit->ok()));
