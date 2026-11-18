@@ -638,6 +638,9 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
           limits.record_submit(wall_ms(), rejected);
           ++(landed ? n_landed : rejected ? n_rejected : n_not_landed);
           if (landed) LOG_INFO("bundle %s landed in slot %llu", d.bundle_id.c_str(), (unsigned long long)d.landed_slot);
+          // Persist Jito's verdict next to the send lines (the dashboard counts these; metrics reset on restart).
+          log_line("{\"t\":" + std::to_string(wall_ms()) + ",\"id\":" + json_str(d.bundle_id) + ",\"landing\":\"" +
+                   (landed ? "landed" : rejected ? "rejected" : "not_landed") + "\",\"landed_slot\":" + std::to_string(d.landed_slot) + "}");
         }
       g_landed.set(int64_t(n_landed));
       // Tables change when arm-accounts extends them: re-read once a minute (a handful of accounts, one RPC call).

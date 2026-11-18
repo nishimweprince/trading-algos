@@ -121,85 +121,50 @@
 <header class="wrap">
   <h1>jito-arb</h1>
   <span id="mode" class="pill">…</span>
-  <span id="svc" class="pill">…</span>
+  <span id="feed" class="pill">…</span>
   <span class="sub" id="updated">connecting…</span>
 </header>
 <main class="wrap">
   <section class="alert" id="alert" hidden></section>
-  <section class="grid g8" id="tiles"></section>
 
-  <section class="panel">
-    <h2>Helius usage</h2>
-    <p class="note">Rates over the last minute, scaled to an hour; totals since the bot started. RPC by method, stream by account kind.</p>
-    <div class="cols">
-      <div class="tablewrap"><table id="usage_rpc"></table></div>
-      <div class="tablewrap"><table id="usage_feed"></table></div>
-    </div>
-  </section>
-
-  <section class="panel">
-    <h2>Latency to land a candidate</h2>
-    <div class="grid g6" id="lattiles"></div>
-    <div class="cols" id="latcharts" style="margin-top:12px"></div>
-    <p class="note">Targets come from Jito's 50 ms auction tick: land in the first tick after a gap opens.
-      Feed lag is when we receive an account update minus when Helius produced it (created_at), on synced clocks.
-      Slot offset adds where in the ~200 ms slot the trade happened. Detect to signed covers everything we control
-      before the HTTP write; Jito Frankfurt adds about 1 ms one way (1.9 ms RTT measured).</p>
-  </section>
-
-  <section class="panel">
-    <div class="panelhead">
-      <h2>Feed and engine</h2>
-      <div class="seg" id="range"><button data-m="15">15m</button><button data-m="60" class="on">1h</button><button data-m="360">6h</button></div>
-    </div>
-    <div class="cols" id="charts"></div>
+  <section>
+    <h2>Results</h2>
+    <div class="grid g6" id="results"></div>
+    <p class="note" id="results_note"></p>
   </section>
 
   <section class="cols">
     <div class="panel">
-      <h2>Engine funnel (since start)</h2>
-      <div class="funnel" id="funnel"></div>
-      <p class="note">"DEX not quoted" counts cycles with a leg on a DEX whose quoter has not passed parity.</p>
+      <h2>By leader type</h2>
+      <div class="tablewrap"><table id="kinds"></table></div>
+      <p class="note">Who led the slot each bundle targeted. BAM leaders favour BAM's own bundle path (Direct Bundle Ingest), which needs Jito access.</p>
     </div>
     <div class="panel">
-      <h2>Why sizing fails (since start)</h2>
-      <div class="funnel" id="sizerfail"></div>
-      <div class="grid" id="edgetiles" style="margin-top:12px"></div>
-      <p class="note">"No profit" means every size quoted cleanly but lost money: the prefilter's spot edge was not
-        tradable. A zero-liquidity Whirlpool leg shows a price no trade can get.</p>
+      <h2>By region</h2>
+      <div class="tablewrap"><table id="regions"></table></div>
+      <p class="note">Each bundle goes to Frankfurt plus the regions nearest the slot's leaders. Round trip is on the warm connection.</p>
     </div>
   </section>
 
   <section class="panel">
-    <div class="panelhead">
-      <h2>Decisions by day</h2>
-      <div class="seg" id="drange"><button data-h="24" class="on">24h</button><button data-h="168">7d</button><button data-h="336">14d</button></div>
-    </div>
-    <div class="tablewrap"><table id="days"></table></div>
-    <div id="reasons" style="margin-top:10px"></div>
+    <h2>Recent bundles</h2>
+    <div class="tablewrap"><table id="recent"></table></div>
   </section>
 
-  <section class="panel">
-    <h2>Latest candidates</h2>
-    <div class="tablewrap"><table id="latest"></table></div>
-  </section>
-
-  <section class="panel">
-    <h2>Quarantined by simulation</h2>
-    <p class="note">Pool directions not dispatched for a while because their bundle simulations failed or came out short repeatedly.</p>
-    <div class="tablewrap"><table id="quarantine"></table></div>
+  <section>
+    <h2>Health</h2>
+    <div class="grid g6" id="health"></div>
   </section>
 
   <section class="cols">
     <div class="panel">
-      <h2>Tracked pools</h2>
-      <div id="poolsum" class="sub" style="margin-bottom:8px"></div>
-      <div class="tablewrap"><table id="pools"></table></div>
+      <h2>Why opportunities are skipped (24 h)</h2>
+      <div id="reasons" class="funnel"></div>
     </div>
     <div class="panel">
       <h2>Services</h2>
       <div class="tablewrap"><table id="units"></table></div>
-      <p class="note">Live: bundles are sent to Jito from the hot wallet. Stop sending with the KILL file.</p>
+      <p class="note">Stop sending at once: <span class="mono">sudo -u jito-arb touch /var/lib/jito-arb/KILL</span> (remove it to resume).</p>
     </div>
   </section>
 </main>
@@ -207,203 +172,105 @@
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 const fmt = (v, d = 0) => v == null || isNaN(v) ? "–" : Number(v).toLocaleString(undefined, {maximumFractionDigits: d, minimumFractionDigits: d});
-const big = (v) => v == null ? "–" : v >= 1e9 ? fmt(v / 1e9, 2) + "B" : v >= 1e6 ? fmt(v / 1e6, 2) + "M" : v >= 1e4 ? fmt(v / 1e3, 1) + "k" : fmt(v);
-const bytes = (v) => v == null ? "–" : v >= 1 << 20 ? fmt(v / 1048576, 1) + " MB" : v >= 1024 ? fmt(v / 1024, 1) + " KB" : fmt(v) + " B";
+const big = (v) => v == null ? "–" : v >= 1e6 ? fmt(v / 1e6, 1) + "M" : v >= 1e4 ? fmt(v / 1e3, 1) + "k" : fmt(v);
 const ago = (t) => { if (!t) return "–"; const s = Math.max(0, Date.now() / 1000 - t); return s < 90 ? fmt(s) + "s ago" : s < 5400 ? fmt(s / 60) + "m ago" : fmt(s / 3600, 1) + "h ago"; };
 const dur = (s) => s == null ? "–" : s < 3600 ? fmt(s / 60) + "m" : s < 86400 ? fmt(s / 3600, 1) + "h" : fmt(s / 86400, 1) + "d";
-const short = (k) => k ? k.slice(0, 4) + "…" + k.slice(-4) : "";
-let minutes = 60, hours = 24;
+const pct = (a, b) => b ? fmt(100 * a / b) + "%" : "–";
+const KIND = {jito: "Jito", bam: "BAM", not_jito: "Not on Jito", unknown: "Unknown"};
+const REASON = {
+  sizer_no_room: "No trade size fits (pool too shallow)", sizer_quote_error: "A leg could not be quoted",
+  below_min_net: "Profit below the 10k-lamport floor after tip", not_armed: "Pool not set up (no lookup table)",
+  sizer_no_profit: "Not profitable at any size", pool_conflict: "Pool already used this slot", slot_cap: "One bundle per slot already sent",
+  boundary: "Price outside the tracked ticks/bins", below_min_ev: "Expected value too small", implausible_profit: "Quote too good to be real",
+  risk_block: "Held by a safety limit (KILL, fees, float, feed)", leader_skipped: "Slot leader not on Jito",
+};
 
 function tile(k, v, d = "", cls = "") {
   return `<div class="panel tile"><div class="k">${esc(k)}</div><div class="v ${cls}">${v}</div><div class="d">${d}</div></div>`;
 }
-
-function chart(title, ts, vals, unit, digits = 0) {
-  const pts = ts.map((t, i) => [t, vals[i]]).filter((p) => p[1] != null);
-  const now = pts.length ? pts[pts.length - 1][1] : null;
-  if (pts.length < 2) return `<div class="chartwrap"><div class="row"><span>${esc(title)}</span><span class="now">${fmt(now, digits)} ${unit}</span></div><div class="empty">collecting samples…</div></div>`;
-  const W = 600, H = 120, P = 4;
-  const t0 = pts[0][0], t1 = pts[pts.length - 1][0];
-  const ys = pts.map((p) => p[1]);
-  const max = Math.max(...ys) * 1.1 || 1, min = 0;
-  const x = (t) => P + (W - 2 * P) * (t - t0) / Math.max(1, t1 - t0);
-  const y = (v) => H - 14 - (H - 24) * (v - min) / (max - min);
-  const d = pts.map((p, i) => (i ? "L" : "M") + x(p[0]).toFixed(1) + " " + y(p[1]).toFixed(1)).join(" ");
-  const area = d + ` L ${x(t1).toFixed(1)} ${H - 14} L ${x(t0).toFixed(1)} ${H - 14} Z`;
-  return `<div class="chartwrap"><div class="row"><span>${esc(title)}</span><span class="now">${fmt(now, digits)} ${unit}</span></div>
-    <svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${esc(title)}">
-      <line class="axis" x1="0" x2="${W}" y1="${H - 14}" y2="${H - 14}"/>
-      <path class="area" d="${area}"/><path class="line" d="${d}"/>
-      <text x="${P}" y="10">${fmt(max / 1.1, digits)}</text><text x="${P}" y="${H - 2}">${new Date(t0 * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}</text>
-      <text x="${W - P}" y="${H - 2}" text-anchor="end">now</text>
-    </svg></div>`;
-}
-
 async function getJSON(u) { const r = await fetch(u, {cache: "no-store"}); if (!r.ok) throw new Error(u + " " + r.status); return r.json(); }
 
+let metrics = {}, units = {};
 async function refreshState() {
   try {
     const s = await getJSON("/api/state");
-    const m = s.metrics, r = s.rates, u = s.units;
-    const live = u["jito-arb.service"] === "active";
-    $("mode").textContent = m.arb_uptime_seconds != null ? "LIVE" : "no metrics";
-    $("mode").className = "pill " + (m.arb_uptime_seconds != null ? "bad" : "warn");
-    const st = u["jito-arb.service"] || "?";
-    $("svc").textContent = live ? (m.arb_kill_switch ? "KILL switch on" : "running") : st === "no systemd" ? "no systemd (dev)" : "service " + st;
-    $("svc").className = "pill " + (live && !m.arb_kill_switch ? "good" : st === "no systemd" ? "warn" : "bad");
-    $("updated").textContent = s.scrape_error ? "metrics unavailable: " + s.scrape_error : "updated " + ago(s.sampled_at) + " · slot " + fmt(m.arb_slot) + " · up " + dur(m.arb_uptime_seconds);
-    const age = m.arb_feed_update_age_ms;
-    // Outage banner: quota exhausted, or no stream up / no update for 30 s.
+    const m = metrics = s.metrics; const u = units = s.units;
+    const up = u["jito-arb.service"] === "active" && m.arb_uptime_seconds != null;
+    $("mode").textContent = !up ? "bot down" : m.arb_kill_switch ? "KILL switch on" : "LIVE";
+    $("mode").className = "pill " + (!up ? "bad" : m.arb_kill_switch ? "warn" : "good");
+    const healthy = m.arb_feed_healthy === 1;
+    $("feed").textContent = healthy ? "feed healthy" : "feed down";
+    $("feed").className = "pill " + (healthy ? "good" : "bad");
+    $("updated").textContent = s.scrape_error ? "metrics unavailable: " + s.scrape_error : "updated " + ago(s.sampled_at) + " · up " + dur(m.arb_uptime_seconds);
     const issues = [];
-    if (m.arb_helius_quota_exhausted === 1) issues.push(`Helius quota exhausted for ${dur(m.arb_helius_quota_exhausted_seconds)}: RPC answers 429 "max usage reached"; polling is backed off to once a minute.`);
-    if (m.arb_feed_shards_up === 0) issues.push("No LaserStream stream is up: the bot sees no account updates.");
-    else if (age > 30000) issues.push(`Newest account update is ${dur(age / 1000)} old.`);
+    if (s.scrape_error || !up) issues.push("The bot is not running or not reporting.");
+    if (m.arb_helius_quota_exhausted === 1) issues.push(`Helius quota exhausted for ${dur(m.arb_helius_quota_exhausted_seconds)}.`);
+    if (up && !healthy) issues.push(`Feed unhealthy for ${dur(m.arb_feed_unhealthy_seconds)}: sending is paused.`);
+    if (m.arb_wallet_lamports >= 0 && m.arb_wallet_lamports < 3e8) issues.push("Hot wallet below the 0.3 SOL floor: sending is paused.");
     $("alert").hidden = issues.length === 0;
     $("alert").innerHTML = issues.map((t) => `<div>${esc(t)}</div>`).join("");
-    const usageRows = (prefix, label) => Object.keys(m).filter((k) => k.startsWith(prefix)).map((k) => k.slice(prefix.length)).sort((a, b) => (m[prefix + b] || 0) - (m[prefix + a] || 0));
-    const perHour = (k) => r[k] == null ? "–" : fmt(r[k] * 3600);
-    $("usage_rpc").innerHTML = `<tr><th>RPC method</th><th class="num">Calls / h</th><th class="num">Calls</th><th class="num">MB in</th><th class="num">429s</th></tr>` +
-      usageRows("arb_rpc_calls_").map((x) => `<tr><td class="mono">${esc(x)}</td><td class="num">${perHour("arb_rpc_calls_" + x)}</td><td class="num">${fmt(m["arb_rpc_calls_" + x])}</td><td class="num">${fmt((m["arb_rpc_bytes_in_" + x] || 0) / 1e6, 1)}</td><td class="num">${fmt(m["arb_rpc_rate_limited_" + x] || 0)}</td></tr>`).join("");
-    $("usage_feed").innerHTML = `<tr><th>Stream account kind</th><th class="num">MB / h</th><th class="num">Updates / h</th><th class="num">GB total</th></tr>` +
-      usageRows("arb_feed_bytes_").map((x) => `<tr><td class="mono">${esc(x)}</td><td class="num">${r["arb_feed_bytes_" + x] == null ? "–" : fmt(r["arb_feed_bytes_" + x] * 3600 / 1e6, 1)}</td><td class="num">${perHour("arb_feed_updates_" + x)}</td><td class="num">${fmt((m["arb_feed_bytes_" + x] || 0) / 1e9, 2)}</td></tr>`).join("");
-    $("tiles").innerHTML = [
-      tile("Pools tracked", fmt(m.arb_pools), `${fmt(m.arb_pools_quotable)} quotable now`),
-      tile("Cycles", fmt(m.arb_cycles), "2- and 3-hop"),
-      tile("Feed", fmt(r.arb_feed_frames, 1) + "/s", bytes(r.arb_feed_bytes) + "/s"),
-      tile("Newest update", age == null || age < 0 ? "–" : fmt(age) + " ms", "sends pause above 800 ms", age > 800 ? "warnv" : ""),
-      tile("Streams up", `${fmt(m.arb_feed_shards_up)}`, `${fmt(m.arb_feed_reconnects)} reconnects`),
-      tile("Decode failures", fmt(m.arb_decode_failures), "since start"),
-      tile("Candidates", fmt(m.arb_engine_candidates), "priced above min EV"),
-      tile("Bundles sent", fmt(m.arb_bundles_sent || 0), `${fmt(m.arb_bundles_signed)} signed · ${fmt(m.arb_bundles_risk_blocked || 0)} held by a limit`),
-      tile("Armed pools", m.arb_armed_pools ? fmt(m.arb_armed_pools) : "all", m.arb_armed_pools
-           ? `${fmt(m.arb_bundles_not_armed)} routes skipped: a pool outside the set`
-           : "no armed set loaded"),
-      tile("Hot wallet", m.arb_wallet_lamports >= 0 ? fmt(m.arb_wallet_lamports / 1e9, 4) + " SOL" : "–",
-           `${fmt(m.arb_bundles_landed || 0)} landed · ${fmt(m.arb_bundles_not_landed || 0)} not landed · ${fmt(m.arb_bundles_rejected || 0)} rejected`),
-      tile("Skip logs sampled", fmt(m.arb_decision_skip_logs_dropped), "all signed candidates and outcomes retained"),
-      tile("Held back", fmt(m.arb_quarantined_pools), `pools quarantined · ${fmt(m.arb_engine_implausible_profit)} implausible profits · ${fmt(m.arb_engine_no_room_memo)} no-room skips`),
+    const age = m.arb_feed_update_age_ms, lag = m.arb_feed_lag_us_p50, det = m.arb_detect_to_signed_us_p50;
+    $("health").innerHTML = [
+      tile("Streams up", `${fmt(m.arb_feed_shards_up)} of 9`, `${fmt(m.arb_feed_reconnects_last_min)} reconnects in the last minute`, m.arb_feed_shards_up >= 9 ? "goodv" : "badv"),
+      tile("Newest update", age == null || age < 0 ? "–" : fmt(age) + " ms", "sending pauses above 800 ms", age > 800 ? "badv" : ""),
+      tile("Feed lag", lag == null || lag < 0 ? "–" : fmt(lag / 1000, 1) + " ms", "Helius to us, median"),
+      tile("Detect to signed", det == null || det < 0 ? "–" : fmt(det / 1000, 1) + " ms", "update in to bundle signed, median"),
+      tile("Pools", fmt(m.arb_pools), `${fmt(m.arb_armed_pools)} set up for trading`),
+      tile("Tip floor", m.arb_tip_floor_lamports > 0 ? fmt(m.arb_tip_floor_lamports) + " lamports" : "–", "Jito landed-tip 25th percentile"),
     ].join("");
-    const ms = (us) => us == null || us < 0 ? null : us / 1000;
-    const judge = (v, ok, warn) => v == null ? "" : v <= ok ? "goodv" : v <= warn ? "warnv" : "badv";
-    const lagP50 = ms(m.arb_feed_lag_us_p50), lagP99 = ms(m.arb_feed_lag_us_p99);
-    const offP50 = ms(m.arb_slot_offset_us_p50), offP99 = ms(m.arb_slot_offset_us_p99);
-    const detP50 = m.arb_detect_to_signed_us_p50, detP99 = m.arb_detect_to_signed_us_p99;
-    const none = (n) => !n ? "no samples yet" : `${fmt(n)} samples / 60 s`;
-    $("lattiles").innerHTML = [
-      tile("Feed lag p50", lagP50 == null ? "–" : fmt(lagP50, 1) + " ms", "target < 30 ms · " + none(m.arb_feed_lag_us_samples), judge(lagP50, 30, 50)),
-      tile("Feed lag p99", lagP99 == null ? "–" : fmt(lagP99, 1) + " ms", "within one 50 ms tick", judge(lagP99, 50, 100)),
-      tile("Slot offset p50", offP50 == null ? "–" : fmt(offP50) + " ms", "slot start to update · " + none(m.arb_slot_offset_us_samples)),
-      tile("Slot offset p99", offP99 == null ? "–" : fmt(offP99) + " ms", m.arb_slot_time_ms > 0 ? `slot time ${fmt(m.arb_slot_time_ms)} ms (measured)` : "slot time ~200 ms"),
-      tile("Detect to signed p50", detP50 == null || detP50 < 0 ? "–" : fmt(detP50) + " µs", none(m.arb_detect_to_signed_us_samples), judge(detP50 < 0 ? null : detP50, 250, 500)),
-      tile("Detect to signed p99", detP99 == null || detP99 < 0 ? "–" : fmt(detP99) + " µs", "target < 500 µs", judge(detP99 < 0 ? null : detP99, 500, 2000)),
-    ].join("");
-    const fails = [
-      ["No profit at any size", m.arb_sizer_fail_no_profit], ["Tick array not cached", m.arb_sizer_fail_boundary],
-      ["Leg cannot take input", m.arb_sizer_fail_partial_fill], ["Quote error", m.arb_sizer_fail_quote_error],
-      ["Zero output", m.arb_sizer_fail_zero_out], ["No room (x_max)", m.arb_sizer_fail_no_room], ["Other", m.arb_sizer_fail_other],
-    ];
-    const ftop = Math.max(1, ...fails.map((x) => x[1] || 0));
-    $("sizerfail").innerHTML = fails.map(([k, v]) => `<div class="bar"><span>${esc(k)}</span><div class="track"><div class="fill" style="width:${(100 * (v || 0) / ftop).toFixed(1)}%"></div></div><span class="n">${big(v)}</span></div>`).join("") +
-      `<div class="bar"><span class="sub">Zero-liquidity Whirlpool leg</span><div class="track" style="background:none"></div><span class="n">${big(m.arb_sizer_zero_liquidity_leg)}</span></div>`;
-    // -1 is the "no samples" value of these windows, but realized profit can itself be negative: use the count.
-    const bps = (ppm, n) => !n || ppm == null ? "–" : fmt(ppm / 100, 2) + " bps";
-    const ne = m.arb_sized_edge_ppm_samples, nf = m.arb_failed_profit_ppm_samples;
-    $("edgetiles").innerHTML = [
-      tile("Predicted edge p50", bps(m.arb_sized_edge_ppm_p50, ne), "spot product, sized cycles"),
-      tile("Predicted edge p99", bps(m.arb_sized_edge_ppm_p99, ne), (ne || 0) + " in 60 s"),
-      tile("Realized p50 (failed)", bps(m.arb_failed_profit_ppm_p50, nf), "best profit / size"),
-      tile("Realized p99 (failed)", bps(m.arb_failed_profit_ppm_p99, nf), "closest to profitable"),
-    ].join("");
-    const steps = [
-      ["Pool updates", m.arb_engine_pool_updates], ["Cycle evaluations", m.arb_engine_cycles_seen],
-      ["Skipped: stale leg", m.arb_engine_stale], ["Skipped: DEX not quoted", m.arb_engine_unsupported], ["Skipped: pool can't swap", m.arb_engine_untradable],
-      ["Passed prefilter", m.arb_engine_prefilter_pass], ["Sized", m.arb_engine_sized],
-      ["Candidates", m.arb_engine_candidates], ["Signed", m.arb_bundles_signed], ["Sent", m.arb_bundles_sent], ["Landed", m.arb_bundles_landed],
-    ];
-    const top = Math.max(1, ...steps.map((x) => x[1] || 0));
-    $("funnel").innerHTML = steps.map(([k, v]) => `<div class="bar"><span>${esc(k)}</span><div class="track"><div class="fill" style="width:${(100 * Math.log10(1 + (v || 0)) / Math.log10(1 + top)).toFixed(1)}%"></div></div><span class="n">${big(v)}</span></div>`).join("") + `<p class="note">Bar length is logarithmic.</p>`;
-    const p = s.pools;
-    $("poolsum").textContent = p.error ? "pools file: " + p.error : `${fmt(p.count)} pools (${Object.entries(p.by_kind).map(([k, v]) => v + " " + k).join(", ")}), ${fmt(p.tvl_sol_total)} SOL TVL · discovery ${ago(p.updated)}`;
-    $("pools").innerHTML = p.top ? `<tr><th>Pool</th><th>DEX</th><th class="num">TVL (SOL)</th></tr>` + p.top.map((x) => `<tr><td class="mono"><a href="https://solscan.io/account/${esc(x.address)}" target="_blank" rel="noopener" style="color:inherit">${esc(short(x.address))}</a></td><td>${esc(x.kind)}</td><td class="num">${fmt(x.tvl_sol)}</td></tr>`).join("") : "";
-    // The discovery service is a one-shot the timer starts every 10 minutes: "inactive" between runs is normal.
-    // The recorder is installed but off until the 3-day recording starts.
-    const unitView = (k, v) => {
-      if (k === "jito-arb-discover.service" && (v === "inactive" || v === "activating"))
-        return v === "activating" ? ["running now", "good"] : u.discovery_result === "success" ? ["idle · last run ok", "good"] : ["idle · last run " + (u.discovery_result || "?"), "bad"];
-      if (k === "jito-arb-recorder.service" && v === "inactive" && u.recorder_enabled === "disabled") return ["off (not enabled)", ""];
-      return [v, v === "active" ? "good" : v === "inactive" ? "" : v === "no systemd" ? "warn" : "bad"];
-    };
+    const view = (k, v) => k === "jito-arb-discover.service" && (v === "inactive" || v === "activating")
+      ? (v === "activating" ? ["running now", "good"] : [u.discovery_result === "success" ? "idle · last run ok" : "last run " + (u.discovery_result || "?"), u.discovery_result === "success" ? "good" : "bad"])
+      : k === "jito-arb-recorder.service" && v === "inactive" ? ["off", ""] : [v, v === "active" ? "good" : v === "inactive" ? "" : "bad"];
     $("units").innerHTML = Object.entries(u).filter(([k]) => k.endsWith(".service") || k.endsWith(".timer")).map(([k, v]) => {
-      const [label, cls] = unitView(k, v);
+      const [label, cls] = view(k, v);
       return `<tr><td class="mono">${esc(k)}</td><td><span class="pill ${cls}">${esc(label)}</span></td></tr>`;
-    }).join("") + `<tr><td>Last discovery run</td><td class="sub">${esc(u.last_discovery || "–")}</td></tr>`;
-  } catch (e) {
-    $("updated").textContent = "dashboard error: " + e.message;
-  }
+    }).join("");
+  } catch (e) { $("updated").textContent = "dashboard error: " + e.message; }
 }
 
-async function refreshHistory() {
+async function refreshSends() {
   try {
-    const h = await getJSON("/api/history?minutes=" + minutes);
-    $("charts").innerHTML = [
-      chart("Frames per second", h.t, h.arb_feed_frames_rate, "/s", 1),
-      chart("Newest update age", h.t, h.arb_feed_update_age_ms, "ms"),
-      chart("Cycle evaluations per second", h.t, h.arb_engine_cycles_seen_rate, "/s", 1),
-      chart("Quotable pools", h.t, h.arb_pools_quotable, ""),
+    const [x, d] = await Promise.all([getJSON("/api/sends"), getJSON("/api/decisions?hours=336")]);
+    const t = x.totals || {};
+    let quoted = 0, dispatched = 0;
+    for (const v of Object.values(d.by_day || {})) { quoted += v.net_lamports || 0; dispatched += v.dispatched || 0; }
+    const m = metrics;
+    $("results").innerHTML = [
+      tile("Bundles sent", fmt(t.sent || 0), `${fmt(t.today || 0)} today · ${fmt(dispatched)} since going live`),
+      tile("Landed", fmt(t.landed || 0), t.landed ? "trades on chain" : "none yet", t.landed ? "goodv" : ""),
+      tile("Edge gone", pct(t.edge_gone || 0, t.audited || 0), `${fmt(t.edge_gone || 0)} of ${fmt(t.audited || 0)} re-simulated: valid tx, price moved first`),
+      tile("Jito verdicts", `${fmt(t.not_landed || 0)} not landed`, `${fmt(t.rejected || 0)} rejected · ${fmt(t.accepted || 0)} accepted by Jito`),
+      tile("Hot wallet", m.arb_wallet_lamports >= 0 ? fmt(m.arb_wallet_lamports / 1e9, 4) + " SOL" : "–", "misses cost nothing: only landed bundles pay"),
+      tile("Quoted profit", fmt(quoted / 1e9, 4) + " SOL", "if every sent bundle had landed · not realized"),
     ].join("");
-    const toMs = (a) => a.map((v) => v == null ? null : v / 1000);
-    $("latcharts").innerHTML = [
-      chart("Feed lag p50", h.t, toMs(h.arb_feed_lag_us_p50), "ms", 1),
-      chart("Feed lag p99", h.t, toMs(h.arb_feed_lag_us_p99), "ms", 1),
-      chart("Detect to signed p99", h.t, h.arb_detect_to_signed_us_p99, "µs"),
-    ].join("");
-  } catch (e) { $("charts").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+    $("results_note").textContent = x.since ? "Bundle details since " + new Date(x.since).toLocaleString() + " (send log); \"since going live\" counts every bundle sent." : "";
+    const kinds = Object.entries(x.by_kind || {}).sort((a, b) => b[1].sent - a[1].sent);
+    $("kinds").innerHTML = kinds.length ? `<tr><th>Leader</th><th class="num">Sent</th><th class="num">Accepted</th><th class="num">Landed</th><th class="num">Edge gone</th></tr>` +
+      kinds.map(([k, v]) => `<tr><td>${esc(KIND[k] || k)}</td><td class="num">${fmt(v.sent)}</td><td class="num">${fmt(v.accepted)}</td><td class="num">${fmt(v.landed || 0)}</td><td class="num">${fmt(v.edge_gone || 0)} / ${fmt(v.audited || 0)}</td></tr>`).join("")
+      : `<tr><td class="empty">No bundles in the send log yet.</td></tr>`;
+    const regs = Object.entries(x.by_region || {}).sort((a, b) => b[1].sends - a[1].sends);
+    $("regions").innerHTML = regs.length ? `<tr><th>Region</th><th class="num">Sends</th><th class="num">Accepted</th><th class="num">Round trip</th></tr>` +
+      regs.map(([k, v]) => { const rt = m["arb_jito_keepalive_rtt_us_" + k]; return `<tr><td>${esc(k)}</td><td class="num">${fmt(v.sends)}</td><td class="num">${fmt(v.accepted)}</td><td class="num">${rt > 0 ? fmt(rt / 1000, 1) + " ms" : "–"}</td></tr>`; }).join("")
+      : `<tr><td class="empty">No sends yet.</td></tr>`;
+    const tag = (txt, cls) => `<span class="pill ${cls}">${esc(txt)}</span>`;
+    $("recent").innerHTML = (x.recent || []).length ? `<tr><th>Time</th><th>Route</th><th>Leader</th><th>Sent to</th><th>Jito</th><th>Re-simulation</th><th>Result</th></tr>` +
+      x.recent.map((b) => `<tr><td>${new Date(b.t).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", second: "2-digit"})}</td><td>${esc(b.route)}</td>` +
+        `<td>${esc(KIND[b.leader_kind] || b.leader_kind || "?")} <span class="sub">${esc(b.leader_place || "")}</span></td>` +
+        `<td class="sub">${b.regions.map((r) => esc(r.region) + (r.rtt_ms != null ? " " + fmt(r.rtt_ms, 1) + " ms" : "")).join(", ")}</td>` +
+        `<td>${b.accepted ? tag("accepted", "good") : tag("refused", "bad")}</td>` +
+        `<td>${b.audit === "min_out" ? tag("edge gone", "warn") : b.audit === "ok" ? tag("would succeed", "good") : b.audit === "failed" ? tag("tx error", "bad") : `<span class="sub">pending</span>`}</td>` +
+        `<td>${b.landing === "landed" ? tag("landed", "good") : b.landing === "rejected" ? tag("rejected", "bad") : b.landing === "not_landed" ? tag("not landed", "") : `<span class="sub">tracking</span>`}</td></tr>`).join("")
+      : `<tr><td class="empty">No bundles yet.</td></tr>`;
+    const rs = Object.entries(d.skipped_by_reason || {}).slice(0, 6);
+    const top = Math.max(1, ...rs.map((r) => r[1]));
+    $("reasons").innerHTML = rs.length ? rs.map(([k, v]) => `<div class="bar"><span>${esc(REASON[k] || k)}</span><div class="track"><div class="fill" style="width:${(100 * Math.log10(1 + v) / Math.log10(1 + top)).toFixed(1)}%"></div></div><span class="n">${big(v)}</span></div>`).join("") +
+      `<p class="note">Bar length is logarithmic. Skips are normal: most price gaps never fit a profitable trade.</p>` : `<div class="empty">No skips recorded.</div>`;
+  } catch (e) { $("recent").innerHTML = `<tr><td class="empty">${esc(e.message)}</td></tr>`; }
 }
 
-async function refreshDecisions() {
-  try {
-    const d = await getJSON("/api/decisions?hours=" + hours);
-    const days = Object.entries(d.by_day);
-    // Sums of gross, tip, net and EV cover dispatched candidates only (quoted, before landing). Sim columns are
-    // the archived dry-run simulations and stay empty for live records.
-    $("days").innerHTML = days.length ? `<tr><th>Day (UTC)</th><th class="num">Logged candidates</th><th class="num">Dispatched</th><th class="num">Skipped</th><th class="num">Gross SOL</th><th class="num">Tip SOL</th><th class="num">Net SOL</th><th class="num">EV SOL</th><th class="num">Net / bundle</th><th class="num">Sim OK</th><th class="num">Sim failed</th><th class="num" title="simulated net at or above min_net: passes the on-chain guard">Would land</th><th class="num" title="below the guard or failed: the bundle reverts and costs nothing">Would revert</th><th class="num" title="sum over bundles that would land; reverts count 0">Sim net SOL (guarded)</th><th class="num" title="landing bundles simulated over 20 slots after detection: later flow, not the route">of which late</th><th class="num" title="every simulated-OK bundle with min_out = 0, losses included; not reachable on chain">Unguarded</th></tr>` +
-      days.map(([k, v]) => `<tr><td>${esc(k)}</td><td class="num">${fmt(v.candidates)}</td><td class="num">${fmt(v.dispatched)}</td><td class="num">${fmt(v.candidates - v.dispatched)}</td><td class="num">${fmt(v.gross_lamports / 1e9, 4)}</td><td class="num">${fmt(v.tip_lamports / 1e9, 4)}</td><td class="num">${fmt(v.net_lamports / 1e9, 4)}</td><td class="num">${fmt(v.ev_lamports / 1e9, 5)}</td><td class="num">${v.dispatched ? fmt(v.net_lamports / 1e9 / v.dispatched, 5) : "–"}</td><td class="num">${fmt(v.sim_ok || 0)}</td><td class="num">${fmt(v.sim_failed || 0)}</td><td class="num">${fmt(v.sim_land || 0)}</td><td class="num">${fmt(v.sim_revert || 0)}</td><td class="num">${fmt((v.sim_landed_net_lamports || 0) / 1e9, 5)}</td><td class="num sub">${fmt((v.sim_landed_net_late_lamports || 0) / 1e9, 5)} (${fmt(v.sim_land_late || 0)})</td><td class="num sub">${fmt((v.sim_net_lamports || 0) / 1e9, 5)}</td></tr>`).join("")
-      : `<tr><td class="empty">No candidates in this window. A candidate is a sized cycle; most mainnet gaps close before they clear fees and the tip.</td></tr>`;
-    const rs = Object.entries(d.skipped_by_reason);
-    $("reasons").innerHTML = rs.length ? `<div class="note">Skipped: ${rs.map(([k, v]) => `${esc(k)} ${fmt(v)}`).join(" · ")}</div>` : "";
-    $("latest").innerHTML = d.latest.length ? `<tr><th>Time</th><th class="num">Slot</th><th class="num">Cycle</th><th class="num">Hops</th><th>Route</th><th>Base</th><th class="num">Size</th><th class="num">Gross SOL</th><th class="num">Tip SOL</th><th class="num">Net SOL</th><th class="num">EV SOL</th><th>Action</th><th>Reason</th><th>Simulation</th><th class="num" title="0 when the guard would revert it">Sim net SOL (guarded)</th></tr>` +
-      d.latest.map((x) => `<tr><td>${new Date(x.t).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit"})}</td><td class="num">${fmt(x.slot)}</td><td class="num">${fmt(x.cycle)}</td><td class="num">${fmt(x.hops)}</td><td>${esc(x.route)}</td><td>${esc(x.base)}</td><td class="num">${fmt(x.size, 3)}</td><td class="num">${fmt(x.gross_sol, 5)}</td><td class="num">${fmt(x.tip_sol, 5)}</td><td class="num">${fmt(x.net_sol, 5)}</td><td class="num">${fmt(x.ev_sol, 6)}</td><td>${x.action === "skipped" ? `<span class="sub">skipped</span>` : `<span class="pill good">${esc(x.action)}</span>`}</td><td class="sub">${esc(x.reason || "")}</td><td>${x.sim ? (x.sim.startsWith("ok") ? `<span class="pill ${x.sim.endsWith("land") ? "good" : ""}">${esc(x.sim.slice(4))}${x.sim_late ? " · late" : ""}</span>` : x.sim.startsWith("failed") ? `<span class="pill bad">${esc(x.sim)}</span>` : `<span class="sub">${esc(x.sim)}</span>`) : ""}</td><td class="num">${x.sim_net_sol == null ? "" : fmt(x.sim_net_sol, 5)}</td></tr>`).join("")
-      : `<tr><td class="empty">No decisions recorded yet.</td></tr>`;
-  } catch (e) { $("days").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
-}
-
-$("range").addEventListener("click", (e) => {
-  const b = e.target.closest("button"); if (!b) return;
-  minutes = +b.dataset.m;
-  [...$("range").children].forEach((x) => x.classList.toggle("on", x === b));
-  refreshHistory();
-});
-$("drange").addEventListener("click", (e) => {
-  const b = e.target.closest("button"); if (!b) return;
-  hours = +b.dataset.h;
-  [...$("drange").children].forEach((x) => x.classList.toggle("on", x === b));
-  refreshDecisions();
-});
-refreshState(); refreshHistory(); refreshDecisions();
-async function refreshQuarantine() {
-  try {
-    const q = await getJSON("/api/quarantine");
-    $("quarantine").innerHTML = q.pools.length
-      ? `<tr><th>Pool</th><th>DEX</th><th>Direction</th><th class="num">Strikes</th><th>Until</th></tr>` +
-        q.pools.map((p) => `<tr><td class="mono"><a href="https://solscan.io/account/${esc(p.pool)}" target="_blank" rel="noopener" style="color:inherit">${esc(short(p.pool))}</a></td><td>${esc(p.dex)}</td><td>${esc(p.dir)}</td><td class="num">${fmt(p.strikes)}</td><td>${new Date(p.until_ms).toLocaleTimeString()}</td></tr>`).join("")
-      : `<tr><td class="empty sub">None quarantined.</td></tr>`;
-  } catch (e) {}
-}
-refreshQuarantine();
-setInterval(refreshQuarantine, 15000);
+refreshState().then(refreshSends);
 setInterval(refreshState, 5000);
-setInterval(refreshHistory, 15000);
-setInterval(refreshDecisions, 30000);
+setInterval(refreshSends, 15000);
 </script>
 </body>
 </html>
