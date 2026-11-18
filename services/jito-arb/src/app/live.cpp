@@ -21,7 +21,9 @@
 #include "core/programs.hpp"
 #include "app/pools_file.hpp"
 #include "app/runtime.hpp"
+#include "app/send_audit.hpp"
 #include "core/base58.hpp"
+#include "core/base64.hpp"
 #include "core/rpc.hpp"
 #include "core/usage.hpp"
 #include "core/ring.hpp"
@@ -259,10 +261,18 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   auto last_tables = std::chrono::steady_clock::now();
   // Landing feedback: Jito's verdict on each sent bundle, polled off the engine thread.
   std::unique_ptr<LandingWatcher> watcher;
+  // Every sent bundle is re-simulated from its exact bytes on a side thread (read-only): tells a lost race
+  // (MinOutNotMet) from a transaction that cannot execute.
+  std::unique_ptr<SendAudit> audit;
+  if (live_send) audit = std::make_unique<SendAudit>(resolve_rpc_url(cfg));
   if (live_send) {
     watcher = std::make_unique<LandingWatcher>(jito_client({cfg.jito.regions.front()}), cfg.jito.status_poll_ms, cfg.jito.status_timeout_ms);
     watcher->start();
-    builder.set_sent_hook([&](const std::string& id, const Signature& sig, uint16_t rc, int64_t now_ms) { watcher->track(id, sig, rc, now_ms); });
+    builder.set_sent_hook([&](const std::string& id, const Signature& sig, uint16_t rc, int64_t now_ms) {
+      watcher->track(id, sig, rc, now_ms);
+      const tx::SignedTx& t = builder.last_tx();
+      audit->submit(b64(t.bytes, t.len), id.substr(0, 12) + " class " + std::to_string(rc));
+    });
   }
   // Wallet state from the wallet stream. Dry run signs with a key that holds nothing, so the values only reach
   // the float check and own-capital sizing when sending is live; the gauges show them either way.
@@ -377,6 +387,9 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   auto& g_no_room_memo = reg.gauge("arb_engine_no_room_memo", "evaluations skipped: x_max was below min_trade and nothing changed since");
   auto& g_signed = reg.gauge("arb_bundles_signed", "bundles built and signed");
   auto& g_sent = reg.gauge("arb_bundles_sent", "bundles accepted by at least one Jito region");
+  auto& g_audit_ok = reg.gauge("arb_send_audit_ok", "sent bundles whose bytes would still execute when re-simulated");
+  auto& g_audit_min = reg.gauge("arb_send_audit_min_out", "sent bundles that re-simulate to MinOutNotMet (edge gone: lost the race)");
+  auto& g_audit_other = reg.gauge("arb_send_audit_failed", "sent bundles that re-simulate to any other error (the transaction is wrong)");
   auto& g_shards = reg.gauge("arb_feed_shards_up", "LaserStream streams currently up");
   auto& g_healthy = reg.gauge("arb_feed_healthy", "1 while the feed passes the health gate (streams up, not flapping, fresh)");
   auto& g_flaps = reg.gauge("arb_feed_reconnects_last_min", "stream reconnects across all shards in the last 60 s");
@@ -592,6 +605,11 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       g_sp_gross.set(int64_t(n.spread_gross_lamports));
       g_signed.set(int64_t(builder.stats().signed_ok));
       g_sent.set(int64_t(builder.stats().sent));
+      if (audit) {
+        g_audit_ok.set(int64_t(audit->ok()));
+        g_audit_min.set(int64_t(audit->min_out()));
+        g_audit_other.set(int64_t(audit->other()));
+      }
       g_slot.set(int64_t(rt.clock().slot.load()));
       g_uptime.set(int64_t(std::chrono::duration_cast<std::chrono::seconds>(now - t0).count()));
       int up = 0;
