@@ -130,8 +130,8 @@ void LeaderMap::refresh() {
           std::string_view id;
           bool jito = false, bam = false;
           if (v["identity_account"].get(id) != simdjson::SUCCESS) continue;
-          (void)v["running_jito"].get(jito);
-          (void)v["running_bam"].get(bam);
+          if (v["running_jito"].get(jito) != simdjson::SUCCESS) jito = false;
+          if (v["running_bam"].get(bam) != simdjson::SUCCESS) bam = false;
           kinds[std::string(id)] = !jito ? LeaderKind::not_jito : bam ? LeaderKind::bam : LeaderKind::jito;
         }
     } else {
@@ -167,8 +167,8 @@ void LeaderMap::refresh() {
       std::string_view q, cc, city;
       double lat = 0, lon = 0;
       if (g["query"].get(q) != simdjson::SUCCESS || g["lat"].get(lat) != simdjson::SUCCESS || g["lon"].get(lon) != simdjson::SUCCESS) continue;
-      (void)g["countryCode"].get(cc);
-      (void)g["city"].get(city);
+      if (g["countryCode"].get(cc) != simdjson::SUCCESS) cc = "?";
+      if (g["city"].get(city) != simdjson::SUCCESS) city = "";
       geo_[std::string(q)] = {std::string(cc) + " " + std::string(city), {lat, lon}};
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(1500));  // ip-api: 15 batch requests a minute
