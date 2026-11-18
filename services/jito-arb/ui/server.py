@@ -43,7 +43,7 @@ REASONS = ["none", "base_price_unknown", "no_profit", "cu_over_budget", "below_m
            "guard_above_quote", "below_min_ev", "pool_conflict", "slot_cap", "send_lag", "sizer_failed",
            "boundary", "flash_disabled", "risk_block", "tx_build_failed", "sign_guard", "sizer_no_room",
            "sizer_no_profit", "sizer_partial_fill", "sizer_quote_error", "sizer_zero_out", "implausible_profit",
-           "quarantined", "not_armed"]
+           "quarantined", "not_armed", "leader_skipped"]
 ACTIONS = {0: "skipped", 1: "sent", 2: "dry_run"}
 # Outcome records (kind 2) of a dry-run bundle's simulation: reason byte = the failing piece (obs::SimFail).
 SIM_FAIL = {0: "", 1: "leg 1", 2: "leg 2", 3: "leg 3", 0x10: "setup", 0x20: "too large", 0x21: "no holder", 0x22: "rpc",
@@ -170,6 +170,98 @@ def pools_summary(data_dir):
         "top": [{"kind": p.get("kind"), "address": p.get("address"), "tvl_sol": round(p.get("tvl_sol", 0), 1),
                  "mint_a": p.get("mint_a"), "mint_b": p.get("mint_b")} for p in top],
     }
+
+
+ROUTE_DEX = ["raydium_v4", "whirlpool", "cpmm", "dlmm", "clmm", "pumpswap", "?", "?"]
+
+
+def route_name(cls):
+    """route_class = hops << 8 | one bit per DEX kind on the route."""
+    try:
+        cls = int(cls)
+    except (TypeError, ValueError):
+        return "?"
+    dexes = [ROUTE_DEX[i] for i in range(8) if cls & (1 << i)]
+    return "%d-hop %s" % (cls >> 8, "+".join(dexes) or "?")
+
+
+class SendsCache:
+    """Append-only reader of the bot's sent log (obs.sent_log_path): one line per region send, per audit verdict
+    and per Jito landing verdict. Joined per bundle by signature prefix and bundle id; survives bot restarts."""
+    def __init__(self, path):
+        self.path = path
+        self.offset = 0
+        self.inode = None
+        self.by_sig = collections.OrderedDict()
+        self.sig_of_id = {}
+        self.lock = threading.Lock()
+
+    def update(self):
+        try:
+            st = os.stat(self.path)
+        except OSError:
+            return
+        if self.inode != st.st_ino or st.st_size < self.offset:
+            self.__init__(self.path)
+            self.inode = st.st_ino
+        with open(self.path, "rb") as f:
+            f.seek(self.offset)
+            data = f.read()
+        cut = data.rfind(b"\n") + 1  # leave a partial last line for the next read
+        self.offset += cut
+        for raw in data[:cut].splitlines():
+            try:
+                x = json.loads(raw)
+            except ValueError:
+                continue
+            if "sent_region" in x:
+                b = self.by_sig.get(x["sig"])
+                if b is None:
+                    b = self.by_sig[x["sig"]] = {"t": x["t"], "slot": x.get("slot"), "route": route_name(x.get("class")),
+                                                 "leader_kind": x.get("kind"), "leader_place": x.get("place", ""),
+                                                 "regions": [], "accepted": False, "audit": None, "landing": None}
+                b["regions"].append({"region": x["sent_region"], "status": x.get("status"), "rtt_ms": x.get("rtt_ms"),
+                                     "stale": x.get("stale")})
+                if x.get("id"):
+                    b["accepted"] = True
+                    self.sig_of_id[x["id"]] = x["sig"]
+            elif "audit" in x and x.get("sig") in self.by_sig:
+                self.by_sig[x["sig"]]["audit"] = x["audit"]
+            elif "landing" in x:
+                sig = self.sig_of_id.get(x.get("id"))
+                if sig in self.by_sig:
+                    self.by_sig[sig]["landing"] = x["landing"]
+
+    def summary(self, recent=15):
+        with self.lock:
+            self.update()
+            bundles = list(self.by_sig.values())
+        day = time.strftime("%Y-%m-%d", time.gmtime())
+        tot = collections.Counter()
+        kinds = collections.defaultdict(collections.Counter)
+        regions = collections.defaultdict(collections.Counter)
+        for b in bundles:
+            k = b["leader_kind"] or "unknown"
+            for c in (tot, kinds[k]):
+                c["sent"] += 1
+                c["accepted"] += b["accepted"]
+                c["landed"] += b["landing"] == "landed"
+                c["not_landed"] += b["landing"] == "not_landed"
+                c["rejected"] += b["landing"] == "rejected"
+                c["audited"] += b["audit"] is not None
+                c["edge_gone"] += b["audit"] == "min_out"
+                c["tx_failed"] += b["audit"] == "failed"
+            tot["today"] += time.strftime("%Y-%m-%d", time.gmtime(b["t"] / 1000)) == day
+            for r in b["regions"]:
+                rc = regions[r["region"]]
+                rc["sends"] += 1
+                rc["accepted"] += r["status"] == 200
+        return {"since": bundles[0]["t"] if bundles else None, "totals": dict(tot),
+                "by_kind": {k: dict(v) for k, v in kinds.items()}, "by_region": {k: dict(v) for k, v in regions.items()},
+                "recent": bundles[-recent:][::-1]}
+
+
+_SENDS = {}
 
 
 MIN_NET_LAMPORTS = 10_000  # engine.min_net_lamports; set by --min-net-lamports
@@ -429,6 +521,10 @@ class Handler(BaseHTTPRequestHandler):
                         vals.append(d if d is not None and d >= 0 else None)
                     series[k + "_rate"] = vals
                 self.json(series)
+            elif u.path == "/api/sends":
+                path = os.path.join(self.data_dir, "sent.jsonl")
+                cache = _SENDS.setdefault(path, SendsCache(path))
+                self.json(cache.summary())
             elif u.path == "/api/decisions":
                 hours = max(1, min(24 * 14, int(q.get("hours", ["24"])[0])))
                 self.json(read_decisions(self.data_dir, hours))

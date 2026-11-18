@@ -50,7 +50,7 @@ class HttpPost {
 };
 using HttpFactory = std::function<std::unique_ptr<HttpPost>(const std::string& base_url)>;
 /** The production transport: core/Rpc's kept-alive TLS connection. */
-std::unique_ptr<HttpPost> make_rpc_http(const std::string& base_url, int timeout_ms);
+std::unique_ptr<HttpPost> make_rpc_http(const std::string& base_url, int timeout_ms, std::string headers = {});
 
 struct RegionResult {
   std::string region;
@@ -82,7 +82,9 @@ class JitoClient {
   uint64_t sends_ = 0;
 };
 
-enum class SubmitOutcome : uint8_t { Sent = 1, Stale, NoRegion };
+enum class SubmitOutcome : uint8_t { Sent = 1, Stale, NoRegion, Queued, SkippedLeader };
+
+class Router;
 
 class Submitter {
  public:
@@ -93,10 +95,13 @@ class Submitter {
    * (a stale arb is a new decision, never a retry).
    */
   SubmitOutcome submit(const tx::SignedTx& t, uint64_t built_slot, uint64_t current_slot, int64_t now_ms,
-                       std::vector<RegionResult>* results = nullptr);
+                       std::vector<RegionResult>* results = nullptr, uint16_t route_class = 0);
+  /** Leader-aware asynchronous routing: submit only enqueues (Queued / SkippedLeader); the router reports. */
+  void set_router(Router* r) { router_ = r; }
 
  private:
   std::unique_ptr<JitoClient> client_;
+  Router* router_ = nullptr;
 };
 
 /**

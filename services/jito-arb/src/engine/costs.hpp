@@ -2,6 +2,7 @@
 // Cost model (spec §6.5), tip policy (§6.6) and the on-chain guard value (§6.8). All values are
 // integers: lamports, base-token raw units, and parts-per-million for alpha and p_land.
 #include <cstdint>
+#include <deque>
 #include <map>
 #include <string>
 #include <string_view>
@@ -55,6 +56,18 @@ class TipPolicy {
   uint64_t tip_floor_p25() const { return floor_p25_; }
   /** Record one attempt's outcome (landed or not) and run the window adjustment. */
   void record(uint16_t route_class, bool landed);
+  /**
+   * Adaptive compute limits (18 Nov 2026): bundles asked for (sum of per-DEX estimates + overhead) x 1.15, e.g.
+   * ~391k CU for DLMM -> DLMM, while the send audit measured ~122k. BAM orders by fees per *requested* CU, so the
+   * over-request cut our priority about 3x at the same tip. Each route class keeps its last 16 audit-measured
+   * compute uses; with at least 3, its limit is max x 1.25 + 10k, never above the estimate (an upper bound) and
+   * never below 50k.
+   */
+  void observe_cu(uint16_t route_class, uint32_t units);
+  /** The compute limit to request for this class, given the estimate-based limit. */
+  uint32_t cu_limit(uint16_t route_class, uint32_t estimate) const;
+  /** Samples learned for a class (0 = still on the estimate). */
+  size_t cu_samples(uint16_t route_class) const;
   /** Total attempts recorded (changes whenever the learned state does). */
   uint64_t attempts() const;
   /**
@@ -74,6 +87,7 @@ class TipPolicy {
   Class& cls(uint16_t rc);
   Params p_;
   std::map<uint16_t, Class> classes_;
+  std::map<uint16_t, std::deque<uint32_t>> cu_;
   uint64_t floor_p25_ = 0;
 };
 
@@ -89,6 +103,8 @@ enum class Reason : uint8_t {
   implausible_profit, quarantined,
   // Appended: live only, a route through a pool whose lookup-table entries and token accounts are not set up.
   not_armed,
+  // Appended: the leaders of the bundle's slot and the next run no Jito path that could land it.
+  leader_skipped,
 };
 const char* reason_name(Reason r);
 

@@ -124,6 +124,8 @@ Config load_config(const std::string& path) {
   G(jito, regions); G(jito, block_engine_fmt); G(jito, tip_floor_url); G(jito, tip_min_lamports);
   G(jito, tip_max_lamports); G(jito, tip_floor_refresh_ms); G(jito, tip_floor_percentile); G(jito, tip_accounts_refresh_s); G(jito, backoff_429_ms);
   G(jito, status_poll_ms); G(jito, status_timeout_ms); G(jito, sender_enabled); G(jito, sender_url);
+  G(jito, route_by_leader); G(jito, route_regions); G(jito, always_regions); G(jito, skip_not_jito_leaders);
+  G(jito, skip_bam_leaders); G(jito, bam_dbi_fmt); G(jito, bam_uuid_env); G(jito, send_timeout_ms); G(jito, keepalive_s);
   G(engine, base_mints); G(engine, max_hops); G(engine, min_spot_edge); G(engine, min_ev_lamports);
   G(engine, min_net_lamports); G(engine, max_trade_lamports); G(engine, min_trade_lamports);
   G(engine, max_input_fraction); G(engine, target_land_rate); G(engine, max_bundles_per_slot);
@@ -136,7 +138,7 @@ Config load_config(const std::string& path) {
   G(dex, cpmm_enabled); G(dex, cpmm_cu); G(dex, pumpswap_enabled); G(dex, pumpswap_cu);
   G(dex, dlmm_enabled); G(dex, dlmm_cu);
   G(dex, clmm_enabled); G(dex, clmm_cu);
-  G(discovery, min_pool_tvl_sol); G(discovery, max_tracked_pools); G(discovery, interval_s);
+  G(discovery, candidates_path); G(discovery, min_pool_tvl_sol); G(discovery, max_tracked_pools); G(discovery, interval_s);
   G(discovery, track_whirlpool); G(discovery, raydium_fetch_cap);
   G(discovery, track_dlmm);
   G(discovery, track_cpmm); G(discovery, cpmm_fetch_cap); G(discovery, dlmm_fetch_cap); G(discovery, track_pumpswap); G(discovery, track_clmm);
@@ -146,7 +148,7 @@ Config load_config(const std::string& path) {
   G(risk, quote_mismatch_rate); G(risk, quote_mismatch_min_samples); G(risk, transfer_fee_max_bps);
   G(risk, freeze_allowlist); G(risk, denylist_path); G(risk, denylist_ttl_s);
   G(keys, hot_wallet_path); G(keys, cold_wallet_pubkey); G(keys, executor_program_id);
-  G(obs, metrics_addr); G(obs, metrics_port); G(obs, log_level); G(obs, log_path); G(obs, decision_log_dir);
+  G(obs, metrics_addr); G(obs, metrics_port); G(obs, log_level); G(obs, log_path); G(obs, decision_log_dir); G(obs, sent_log_path);
   G(obs, decision_log_rotate_s); G(obs, skip_log_max_per_s); G(obs, alert_name); G(obs, alert_after_s); G(obs, alert_repeat_s);
   G(recorder, dir); G(recorder, rotate_s);
   G(sim, enabled); G(sim, max_per_s); G(sim, holder_refresh_s); G(sim, min_payer_lamports); G(sim, holder_seed_path);

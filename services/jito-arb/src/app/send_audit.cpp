@@ -26,20 +26,20 @@ SendAudit::~SendAudit() {
   th_.join();
 }
 
-void SendAudit::submit(std::string tx_b64, std::string label) {
+void SendAudit::submit(std::string tx_b64, std::string label, uint16_t tag) {
   std::lock_guard<std::mutex> g(mu_);
   if (q_.size() >= 32) {
     dropped_.fetch_add(1);
     return;
   }
-  q_.emplace_back(std::move(tx_b64), std::move(label));
+  q_.push_back(Job{std::move(tx_b64), std::move(label), tag});
   cv_.notify_one();
 }
 
 void SendAudit::run() {
   Rpc rpc(url_, timeout_ms_);
   for (;;) {
-    std::pair<std::string, std::string> job;
+    Job job;
     {
       std::unique_lock<std::mutex> l(mu_);
       cv_.wait(l, [this] { return stop_ || !q_.empty(); });
@@ -48,18 +48,19 @@ void SendAudit::run() {
       q_.pop_front();
     }
     try {
-      auto r = rpc.simulate_full(job.first, {}, 0, "processed");
+      auto r = rpc.simulate_full(job.tx_b64, {}, 0, "processed");
       AuditVerdict v = r.ok ? AuditVerdict::ok : classify_sim_error(r.err);
       (v == AuditVerdict::ok ? ok_ : v == AuditVerdict::min_out ? min_out_ : other_).fetch_add(1);
+      if (on_verdict_) on_verdict_(job.label, v, r.err, r.units, job.tag);
       std::string tail;
       for (size_t i = r.logs.size() > 4 ? r.logs.size() - 4 : 0; i < r.logs.size(); ++i) tail += " | " + r.logs[i].substr(0, 160);
       if (v == AuditVerdict::other)
-        LOG_WARN("send audit %s: FAILED %s, %llu CU%s", job.second.c_str(), r.err.c_str(), (unsigned long long)r.units, tail.c_str());
+        LOG_WARN("send audit %s: FAILED %s, %llu CU%s", job.label.c_str(), r.err.c_str(), (unsigned long long)r.units, tail.c_str());
       else
-        LOG_INFO("send audit %s: %s, %llu CU", job.second.c_str(), v == AuditVerdict::ok ? "would succeed now" : "MinOutNotMet (edge gone)",
+        LOG_INFO("send audit %s: %s, %llu CU", job.label.c_str(), v == AuditVerdict::ok ? "would succeed now" : "MinOutNotMet (edge gone)",
                  (unsigned long long)r.units);
     } catch (const std::exception& e) {
-      LOG_WARN("send audit %s: rpc: %s", job.second.c_str(), e.what());
+      LOG_WARN("send audit %s: rpc: %s", job.label.c_str(), e.what());
     }
   }
 }

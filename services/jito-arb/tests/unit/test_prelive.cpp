@@ -248,3 +248,152 @@ TEST(send_audit_classifies_simulation_errors) {
   CHECK(app::classify_sim_error("{\"InstructionError\":[2,{\"Custom\":6018}]}") == app::AuditVerdict::other);
   CHECK(app::classify_sim_error("\"AccountNotFound\"") == app::AuditVerdict::other);
 }
+
+#include <thread>
+#include "submit/router.hpp"
+
+namespace {
+submit::LeaderInfo leader(submit::LeaderKind k, const char* region) {
+  submit::LeaderInfo l;
+  l.identity = "X";
+  l.kind = k;
+  l.region = region;
+  return l;
+}
+}  // namespace
+
+TEST(nearest_region_by_distance) {
+  std::vector<std::string> all{"frankfurt", "amsterdam", "london", "dublin", "ny", "slc", "tokyo", "singapore"};
+  CHECK_EQ(submit::nearest_region(50.1, 8.7, all), std::string("frankfurt"));   // Frankfurt
+  CHECK_EQ(submit::nearest_region(52.4, 4.9, all), std::string("amsterdam"));   // Amsterdam
+  CHECK_EQ(submit::nearest_region(51.5, -0.1, all), std::string("london"));
+  CHECK_EQ(submit::nearest_region(41.9, -87.6, all), std::string("ny"));        // Chicago -> ny
+  CHECK_EQ(submit::nearest_region(56.0, 23.3, all), std::string("frankfurt"));  // Siauliai, Lithuania
+  CHECK_EQ(submit::nearest_region(1.3, 103.8, all), std::string("singapore"));
+  CHECK_EQ(submit::nearest_region(41.9, -87.6, {"frankfurt"}), std::string("frankfurt"));
+}
+
+TEST(route_plan_rules) {
+  submit::RouterConfig c;
+  c.regions = {"frankfurt", "amsterdam"};
+  c.always = {"frankfurt"};
+  using K = submit::LeaderKind;
+  auto p = submit::plan_route(c, leader(K::jito, "london"), leader(K::jito, "ny"));
+  CHECK(!p.skip);
+  CHECK((p.block_engine == std::vector<std::string>{"frankfurt", "london", "ny"}));
+  CHECK(p.bam.empty());
+  p = submit::plan_route(c, leader(K::not_jito, "ny"), leader(K::not_jito, "tokyo"));
+  CHECK(p.skip);
+  p = submit::plan_route(c, leader(K::not_jito, "ny"), leader(K::jito, "tokyo"));
+  CHECK(!p.skip && (p.block_engine == std::vector<std::string>{"frankfurt", "tokyo"}));
+  p = submit::plan_route(c, leader(K::bam, "amsterdam"), leader(K::bam, "amsterdam"));
+  CHECK(!p.skip && p.bam.empty());  // no UUID: block engine only
+  c.skip_bam = true;
+  CHECK(submit::plan_route(c, leader(K::bam, "amsterdam"), leader(K::bam, "amsterdam")).skip);
+  c.bam_uuid = "u";
+  p = submit::plan_route(c, leader(K::bam, "amsterdam"), leader(K::jito, "london"));
+  CHECK(!p.skip && (p.bam == std::vector<std::string>{"amsterdam"}));
+  // Unknown leaders (map not loaded yet): the configured regions, never a skip.
+  p = submit::plan_route(c, submit::LeaderInfo{}, submit::LeaderInfo{});
+  CHECK(!p.skip && (p.block_engine == std::vector<std::string>{"frankfurt", "amsterdam"}));
+}
+
+namespace {
+class RecordingHttp final : public submit::HttpPost {
+ public:
+  RecordingHttp(std::string url, std::string headers, std::mutex* mu, std::vector<std::string>* log) : url_(std::move(url)), headers_(std::move(headers)), mu_(mu), log_(log) {}
+  int post(std::string_view path, std::string_view, std::string& out) override {
+    std::lock_guard<std::mutex> g(*mu_);
+    log_->push_back(url_ + "|" + headers_ + "|" + std::string(path));
+    out = "{\"jsonrpc\":\"2.0\",\"result\":\"bid1\",\"id\":1}";
+    return 200;
+  }
+ private:
+  std::string url_, headers_;
+  std::mutex* mu_;
+  std::vector<std::string>* log_;
+};
+}  // namespace
+
+TEST(router_sends_async_per_region_and_drops_passed_slots) {
+  std::mutex mu;
+  std::vector<std::string> posts;
+  std::vector<submit::SendResult> done;
+  submit::RouterConfig c;
+  c.regions = {"frankfurt", "amsterdam"};
+  c.always = {"frankfurt"};
+  c.keepalive_s = 0;  // count bundle posts only
+  c.http = [&](const std::string& url, const std::string& h) { return std::unique_ptr<submit::HttpPost>(new RecordingHttp(url, h, &mu, &posts)); };
+  std::atomic<uint64_t> slot{100};
+  submit::Router r(c, nullptr, &slot, [&](const submit::SendResult& s, const Signature&, uint16_t, uint64_t, const submit::LeaderInfo&, int64_t) {
+    std::lock_guard<std::mutex> g(mu);
+    done.push_back(s);
+  });
+  Signature sig{};
+  auto plan = r.route("dHg=", sig, 520, 100, 0);  // no leader map: the configured regions
+  CHECK(!plan.skip && plan.block_engine.size() == 2);
+  for (int i = 0; i < 200; ++i) {
+    {
+      std::lock_guard<std::mutex> g(mu);
+      if (done.size() == 2) break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  {
+    std::lock_guard<std::mutex> g(mu);
+    CHECK_EQ(done.size(), size_t(2));
+    for (auto& d : done) CHECK(d.bundle_id == "bid1" && d.http_status == 200 && !d.dropped_stale);
+    CHECK_EQ(posts.size(), size_t(2));
+  }
+  CHECK_EQ(r.accepted(), uint64_t(2));
+  slot = 105;  // the slot passed before a sender picked it up: dropped, never sent late
+  r.route("dHg=", sig, 520, 100, 0);
+  for (int i = 0; i < 200 && r.dropped() < 2; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  CHECK_EQ(r.dropped(), uint64_t(2));
+  std::lock_guard<std::mutex> g(mu);
+  CHECK_EQ(posts.size(), size_t(2));
+}
+
+TEST(adaptive_cu_limit_learns_from_measured_use) {
+  engine::TipPolicy t;
+  CHECK_EQ(t.cu_limit(520, 391'000), uint32_t(391'000));  // no samples: the estimate
+  t.observe_cu(520, 120'000);
+  t.observe_cu(520, 122'000);
+  CHECK_EQ(t.cu_limit(520, 391'000), uint32_t(391'000));  // fewer than 3
+  t.observe_cu(520, 126'000);
+  CHECK_EQ(t.cu_limit(520, 391'000), uint32_t(126'000 + 31'500 + 10'000));  // max x 1.25 + 10k
+  CHECK_EQ(t.cu_limit(520, 150'000), uint32_t(150'000));  // never above the estimate
+  CHECK_EQ(t.cu_limit(776, 391'000), uint32_t(391'000));  // other classes untouched
+  for (int i = 0; i < 20; ++i) t.observe_cu(9, 10'000);
+  CHECK_EQ(t.cu_limit(9, 300'000), uint32_t(50'000));     // never below 50k
+  CHECK_EQ(t.cu_samples(9), size_t(16));                  // last 16 kept
+  // price() uses it: same quote, the learned class asks for less compute.
+  engine::BasePrice bp;
+  engine::CostConfig cc;
+  cc.min_ev_lamports = 0;
+  auto a = engine::price(1'000'000'000, 5'000'000, 0, 280'000, 520, bp, t, cc);
+  auto b = engine::price(1'000'000'000, 5'000'000, 0, 280'000, 776, bp, t, cc);
+  CHECK(a.ok && b.ok);
+  CHECK(a.cu_limit < b.cu_limit && a.cu_limit == uint32_t(167'500));
+}
+
+TEST(router_warms_every_region_and_pings_idle_connections) {
+  std::mutex mu;
+  std::vector<std::string> posts;
+  submit::RouterConfig c;
+  c.keepalive_s = 1;
+  c.http = [&](const std::string& url, const std::string& h) { return std::unique_ptr<submit::HttpPost>(new RecordingHttp(url, h, &mu, &posts)); };
+  submit::Router r(c, nullptr, nullptr, [](const submit::SendResult&, const Signature&, uint16_t, uint64_t, const submit::LeaderInfo&, int64_t) {});
+  r.warm({"frankfurt", "tokyo"});
+  auto count = [&](const std::string& region) {
+    std::lock_guard<std::mutex> g(mu);
+    return size_t(std::count_if(posts.begin(), posts.end(), [&](const std::string& p) {
+      return p.find(region) != std::string::npos && p.find("getTipAccounts") != std::string::npos;
+    }));
+  };
+  for (int i = 0; i < 200 && (count("frankfurt") < 1 || count("tokyo") < 1); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  CHECK(count("frankfurt") >= 1 && count("tokyo") >= 1);  // opened at once, before any bundle
+  std::this_thread::sleep_for(std::chrono::milliseconds(2300));
+  CHECK(count("frankfurt") >= 2 && count("tokyo") >= 2);  // pinged again while idle
+  CHECK(r.keepalive_rtt().count("tokyo") == 1 && r.keepalive_failures() == 0);
+}

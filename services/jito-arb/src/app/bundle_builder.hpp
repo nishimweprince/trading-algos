@@ -30,6 +30,7 @@ Keypair test_keypair();
 struct BuilderStats {
   uint64_t built = 0, signed_ok = 0, too_large = 0, guard_blocked = 0, risk_blocked = 0, build_failed = 0, sent = 0, stale = 0;
   uint64_t not_armed = 0;  // routes skipped: through a pool outside the armed set
+  uint64_t leader_skipped = 0;  // signed, not sent: no Jito path reaches the slot's leaders
 };
 
 class BundleBuilder {
@@ -47,6 +48,9 @@ class BundleBuilder {
   /** Called for each bundle Jito accepted: (bundle id, signature, route class, wall ms). */
   using SentHook = std::function<void(const std::string&, const Signature&, uint16_t, int64_t)>;
   void set_sent_hook(SentHook h) { sent_hook_ = std::move(h); }
+  /** Called for each bundle queued on the router (engine thread): the signed bytes and route class. */
+  using QueuedHook = std::function<void(const tx::SignedTx&, uint16_t)>;
+  void set_queued_hook(QueuedHook h) { queued_hook_ = std::move(h); }
   const BuilderStats& stats() const { return n_; }
   const tx::SignedTx& last_tx() const { return last_; }
   const risk::SignGuard& guard() const { return guard_; }
@@ -61,6 +65,7 @@ class BundleBuilder {
  private:
   const ArmedSet* armed_ = nullptr;
   SentHook sent_hook_;
+  QueuedHook queued_hook_;
   const Config& cfg_;
   Runtime& rt_;
   Keypair wallet_;
