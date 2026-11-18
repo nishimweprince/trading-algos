@@ -108,6 +108,7 @@ struct Config {
   } dex;
 
   struct Discovery {
+    std::string candidates_path;   // every safe candidate (tracked or not), for the new-pool shadow ("" = off)
     double min_pool_tvl_sol = 50;
     int max_tracked_pools = 1500;
     int interval_s = 600;
