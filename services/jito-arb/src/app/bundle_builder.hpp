@@ -9,8 +9,10 @@
 #include "app/runtime.hpp"
 #include "obs/latency.hpp"
 #include "risk/limits.hpp"
+#include "risk/sender_budget.hpp"
 #include "risk/sign_guard.hpp"
 #include "submit/jito.hpp"
+#include "submit/sender.hpp"
 #include "tx/alt_manager.hpp"
 #include "tx/builders.hpp"
 
@@ -31,6 +33,8 @@ struct BuilderStats {
   uint64_t built = 0, signed_ok = 0, too_large = 0, guard_blocked = 0, risk_blocked = 0, build_failed = 0, sent = 0, stale = 0;
   uint64_t not_armed = 0;  // routes skipped: through a pool outside the armed set
   uint64_t leader_skipped = 0;  // signed, not sent: no Jito path reaches the slot's leaders
+  // Plain-transaction (Sender) path, per opportunity that reached the bundle stage.
+  uint64_t sender_queued = 0, sender_fee_skip = 0, sender_budget_blocked = 0, sender_build_failed = 0, sender_queue_full = 0;
 };
 
 class BundleBuilder {
@@ -51,7 +55,13 @@ class BundleBuilder {
   /** Called for each bundle queued on the router (engine thread): the signed bytes and route class. */
   using QueuedHook = std::function<void(const tx::SignedTx&, uint16_t)>;
   void set_queued_hook(QueuedHook h) { queued_hook_ = std::move(h); }
+  /**
+   * Enable the plain-transaction path: after the bundle, the same route goes out as a priority-fee transaction
+   * with a Sender tip, if the opportunity can pay the bid and the budget allows it. Null disables it.
+   */
+  void set_sender(submit::SenderClient* s, risk::SenderBudget* b, risk::SenderFeeConfig fc, uint64_t tip_max_lamports);
   const BuilderStats& stats() const { return n_; }
+  const tx::SignedTx& last_sender_tx() const { return last_sender_; }
   const tx::SignedTx& last_tx() const { return last_; }
   const risk::SignGuard& guard() const { return guard_; }
   /** Frame received -> bundle signed (everything before the HTTP write), microseconds. */
@@ -63,6 +73,15 @@ class BundleBuilder {
   obs::LatencyWindow& build_step_us(int i) { return step_us_[i]; }
 
  private:
+  /** Build, guard, sign and enqueue the plain variant. True when it was queued. */
+  bool send_plain(const engine::Opportunity& o, const engine::Cycle& c, std::span<const std::shared_ptr<const PoolState>> legs,
+                  const tx::RouteTxParams& bundle_params, uint64_t slot, int64_t wall);
+  submit::SenderClient* sender_ = nullptr;
+  risk::SenderBudget* sender_budget_ = nullptr;
+  risk::SenderFeeConfig sender_fee_cfg_;
+  risk::SignGuard sender_guard_;
+  tx::IxList sender_ixs_;
+  tx::SignedTx last_sender_;
   const ArmedSet* armed_ = nullptr;
   SentHook sent_hook_;
   QueuedHook queued_hook_;

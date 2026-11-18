@@ -104,6 +104,11 @@ class RpcHttp final : public HttpPost {
     out = rpc_.http("POST", full, body, headers_, status, "jito");
     return status;
   }
+  int get(std::string_view path, std::string& out) override {
+    int status = 0;
+    out = rpc_.http("GET", path, {}, headers_, status, "jito");
+    return status;
+  }
 
  private:
   Rpc rpc_;

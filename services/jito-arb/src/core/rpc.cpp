@@ -198,6 +198,31 @@ RpcTransaction Rpc::transaction(const std::string& sig, const char* commitment) 
   return t;
 }
 
+std::vector<RpcSigStatus> Rpc::signature_statuses(const std::vector<std::string>& sigs) {
+  std::vector<RpcSigStatus> out(sigs.size());
+  if (sigs.empty()) return out;
+  std::string params = "[[";
+  for (size_t i = 0; i < sigs.size(); ++i) params += (i ? ",\"" : "\"") + sigs[i] + "\"";
+  params += "],{\"searchTransactionHistory\":false}]";
+  std::string body = call("getSignatureStatuses", params);
+  simdjson::dom::parser p;
+  simdjson::dom::array arr;
+  if (p.parse(body)["result"]["value"].get(arr) != simdjson::SUCCESS) return out;
+  size_t i = 0;
+  for (element v : arr) {
+    if (i >= out.size()) break;
+    RpcSigStatus& st = out[i++];
+    if (v.is_null()) continue;
+    st.found = true;
+    st.slot = u64_of(v["slot"]);
+    element err;
+    st.failed = v["err"].get(err) == simdjson::SUCCESS && !err.is_null();
+    std::string_view c;
+    if (v["confirmationStatus"].get(c) == simdjson::SUCCESS) st.confirmation = c;
+  }
+  return out;
+}
+
 RpcSigStatus Rpc::signature_status(const std::string& sig) {
   std::string body = call("getSignatureStatuses", "[[\"" + sig + "\"],{\"searchTransactionHistory\":false}]");
   simdjson::dom::parser p;

@@ -47,6 +47,12 @@ class HttpPost {
  public:
   virtual ~HttpPost() = default;
   virtual int post(std::string_view path, std::string_view body, std::string& out) = 0;
+  /** GET on the same connection; `path` is absolute (from the host root, not under the base URL's path). */
+  virtual int get(std::string_view path, std::string& out) {
+    (void)path;
+    out.clear();
+    return 0;
+  }
 };
 using HttpFactory = std::function<std::unique_ptr<HttpPost>(const std::string& base_url)>;
 /** The production transport: core/Rpc's kept-alive TLS connection. */

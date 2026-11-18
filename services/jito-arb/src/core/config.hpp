@@ -54,8 +54,20 @@ struct Config {
     int backoff_429_ms = 1000;
     int status_poll_ms = 500;
     int status_timeout_ms = 30000;
+    // Plain-transaction path (Helius Sender, 19 Nov 2026): each arb also goes out as a priority-fee transaction.
+    // A failed one pays its fee, so the bid is a share of gross and failures have a daily cap. The Helius API key
+    // (helius.api_key_env) is appended to the URL at startup, never written here.
     bool sender_enabled = false;
-    std::string sender_url = "https://sender.helius-rpc.com/fast";
+    std::string sender_url = "http://fra-sender.helius-rpc.com/fast?swqos_only=true";
+    uint64_t sender_tip_lamports = 10'000;             // swqos_only minimum 5,000; paid only when it succeeds
+    uint32_t sender_fee_frac_ppm = 100'000;            // base + priority fee at most 10% of gross
+    uint64_t sender_max_cu_price = 5'000'000;          // micro-lamports per CU
+    uint64_t sender_min_cu_price = 1'000;
+    uint64_t sender_daily_fail_cap_lamports = 50'000'000;  // fees burnt by failed sends per UTC day
+    int sender_max_consecutive_fail = 50;
+    int sender_pause_s = 600;
+    int sender_status_timeout_s = 90;
+    int sender_keepalive_s = 4;
     // Leader-aware routing (18 Nov 2026): each bundle goes to the regions nearest the leaders of its slot and the
     // next, plus `always_regions`, on per-region sender threads. Off: every bundle to `regions`, as before.
     bool route_by_leader = true;
@@ -207,5 +219,7 @@ std::map<std::string, std::string> parse_toml(const std::string& text);
 
 /** The RPC URL with the API key appended when the env var is set; public mainnet otherwise. */
 std::string resolve_rpc_url(const Config& c);
+/** jito.sender_url with the Helius API key appended (unchanged when the key is unset: keyless, 1 request/s). */
+std::string resolve_sender_url(const Config& c);
 
 }  // namespace arb

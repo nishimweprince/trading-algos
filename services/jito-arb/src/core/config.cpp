@@ -124,6 +124,9 @@ Config load_config(const std::string& path) {
   G(jito, regions); G(jito, block_engine_fmt); G(jito, tip_floor_url); G(jito, tip_min_lamports);
   G(jito, tip_max_lamports); G(jito, tip_floor_refresh_ms); G(jito, tip_floor_percentile); G(jito, tip_accounts_refresh_s); G(jito, backoff_429_ms);
   G(jito, status_poll_ms); G(jito, status_timeout_ms); G(jito, sender_enabled); G(jito, sender_url);
+  G(jito, sender_tip_lamports); G(jito, sender_fee_frac_ppm); G(jito, sender_max_cu_price); G(jito, sender_min_cu_price);
+  G(jito, sender_daily_fail_cap_lamports); G(jito, sender_max_consecutive_fail); G(jito, sender_pause_s);
+  G(jito, sender_status_timeout_s); G(jito, sender_keepalive_s);
   G(jito, route_by_leader); G(jito, route_regions); G(jito, always_regions); G(jito, skip_not_jito_leaders);
   G(jito, skip_bam_leaders); G(jito, bam_dbi_fmt); G(jito, bam_uuid_env); G(jito, send_timeout_ms); G(jito, keepalive_s);
   G(engine, base_mints); G(engine, max_hops); G(engine, min_spot_edge); G(engine, min_ev_lamports);
@@ -168,6 +171,12 @@ std::string resolve_rpc_url(const Config& c) {
   const char* key = std::getenv(c.helius.api_key_env.c_str());
   if (key && *key) return c.helius.rpc_url + "/?api-key=" + key;
   return "https://api.mainnet-beta.solana.com";
+}
+
+std::string resolve_sender_url(const Config& c) {
+  const char* key = std::getenv(c.helius.api_key_env.c_str());
+  if (!key || !*key) return c.jito.sender_url;
+  return c.jito.sender_url + (c.jito.sender_url.find('?') == std::string::npos ? "?" : "&") + "api-key=" + key;
 }
 
 }  // namespace arb

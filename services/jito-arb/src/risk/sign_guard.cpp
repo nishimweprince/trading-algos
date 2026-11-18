@@ -18,6 +18,17 @@ const std::vector<Pubkey>& default_tip_accounts() {
   return v;
 }
 
+const std::vector<Pubkey>& sender_tip_accounts() {
+  static const std::vector<Pubkey> v = {
+      PK("4ACfpUFoaSD9bfPdeu6DBt89gB6ENTeHBXCAi87NhDEE"), PK("D2L6yPZ2FmmmTKPgzaMKdhu6EWZcTpLy1Vhx8uvZe7NZ"),
+      PK("9bnz4RShgq1hAnLnZbP8kbgBg1kEmcJBYQq3gQbmnSta"), PK("5VY91ws6B2hMmBFRsXkoAAdsPHBJwRfBht4DXox3xkwn"),
+      PK("2nyhqdwKcJZR2vcqCyrYsaPVdAnFoJjiksCXJ7hfEYgD"), PK("2q5pghRs6arqVjRvT5gfgWfWcHWmw1ZuCzphgd5KfWGJ"),
+      PK("wyvPkWjVZz1M8fHQnMMCDTQDbkManefNNhweYk5WkcF"),  PK("3KCKozbAaF75qEU33jtzozcJ29yJuaLJTy2jFdzUY8bT"),
+      PK("4vieeGHPYPG2MmyPRcYjdiDmmhN3ww7hsFNap8pVN3Ey"), PK("4TQLFNWK8AovT1gFvda5jfw2oJeRMKEmw7aH6MGBJ3or"),
+  };
+  return v;
+}
+
 Result<void> SignGuard::check(const tx::IxList& ixs) const {
   int transfers = 0;
   for (uint8_t i = 0; i < ixs.n; ++i) {
@@ -35,7 +46,7 @@ Result<void> SignGuard::check(const tx::IxList& ixs) const {
       if (tag != 2) return fail(Errc::sign_guard, "system instruction is not a transfer");
       if (ix.accounts[0].key != wallet) return fail(Errc::sign_guard, "transfer not from the wallet");
       if (std::find(tip_accounts.begin(), tip_accounts.end(), ix.accounts[1].key) == tip_accounts.end())
-        return fail(Errc::sign_guard, "transfer not to a Jito tip account");
+        return fail(Errc::sign_guard, "transfer not to an allowed tip account");
       if (lamports > tip_max_lamports) return fail(Errc::sign_guard, "tip above tip_max");
       ++transfers;
     }
