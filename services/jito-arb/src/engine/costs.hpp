@@ -89,6 +89,8 @@ enum class Reason : uint8_t {
   implausible_profit, quarantined,
   // Appended: live only, a route through a pool whose lookup-table entries and token accounts are not set up.
   not_armed,
+  // Appended: the leaders of the bundle's slot and the next run no Jito path that could land it.
+  leader_skipped,
 };
 const char* reason_name(Reason r);
 

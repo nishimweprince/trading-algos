@@ -7,6 +7,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -25,6 +26,9 @@ class SendAudit {
   SendAudit& operator=(const SendAudit&) = delete;
   /** Queue one sent transaction (base64); dropped when 32 are already waiting. Never blocks. */
   void submit(std::string tx_b64, std::string label);
+  /** Called on the audit thread with each verdict (label as submitted, the error JSON when it failed). */
+  using Verdict = std::function<void(const std::string& label, AuditVerdict v, const std::string& err)>;
+  void set_on_verdict(Verdict f) { on_verdict_ = std::move(f); }
   uint64_t ok() const { return ok_.load(); }
   uint64_t min_out() const { return min_out_.load(); }
   uint64_t other() const { return other_.load(); }
@@ -39,6 +43,7 @@ class SendAudit {
   std::deque<std::pair<std::string, std::string>> q_;
   bool stop_ = false;
   std::atomic<uint64_t> ok_{0}, min_out_{0}, other_{0}, dropped_{0};
+  Verdict on_verdict_;
   std::thread th_;
 };
 

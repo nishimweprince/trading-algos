@@ -1,6 +1,8 @@
 #include "obs/log.hpp"
 #include "submit/jito.hpp"
 
+#include "submit/router.hpp"
+
 #include <simdjson.h>
 
 #include <cmath>
@@ -92,25 +94,27 @@ namespace {
 
 class RpcHttp final : public HttpPost {
  public:
-  RpcHttp(const std::string& url, int timeout_ms) : rpc_(url, timeout_ms), path_(parse_url(url).path) {}
+  RpcHttp(const std::string& url, int timeout_ms, std::string headers)
+      : rpc_(url, timeout_ms), path_(parse_url(url).path), headers_(std::move(headers)) {}
   int post(std::string_view path, std::string_view body, std::string& out) override {
     int status = 0;
     std::string full = path_ == "/" ? std::string(path) : path_ + std::string(path);
     // No extra headers: format_request adds Content-Type itself, and Jito answers a request that carries the
     // header twice with 400 "Invalid content type" (seen on getTipAccounts, 2026-11-10).
-    out = rpc_.http("POST", full, body, {}, status, "jito");
+    out = rpc_.http("POST", full, body, headers_, status, "jito");
     return status;
   }
 
  private:
   Rpc rpc_;
   std::string path_;
+  std::string headers_;  // extra "Name: value\r\n" lines (the BAM DBI x-jito-auth UUID)
 };
 
 }  // namespace
 
-std::unique_ptr<HttpPost> make_rpc_http(const std::string& base_url, int timeout_ms) {
-  return std::make_unique<RpcHttp>(base_url, timeout_ms);
+std::unique_ptr<HttpPost> make_rpc_http(const std::string& base_url, int timeout_ms, std::string headers) {
+  return std::make_unique<RpcHttp>(base_url, timeout_ms, std::move(headers));
 }
 
 JitoClient::JitoClient(std::vector<std::string> regions, const std::string& url_fmt, HttpFactory factory, int backoff_429_ms)
@@ -178,9 +182,13 @@ std::vector<Pubkey> JitoClient::tip_accounts() {
 Submitter::Submitter(std::unique_ptr<JitoClient> client) : client_(std::move(client)) {}
 
 SubmitOutcome Submitter::submit(const tx::SignedTx& t, uint64_t built_slot, uint64_t current_slot, int64_t now_ms,
-                                std::vector<RegionResult>* results) {
-  if (!client_) return SubmitOutcome::NoRegion;
+                                std::vector<RegionResult>* results, uint16_t route_class) {
   if (current_slot > built_slot) return SubmitOutcome::Stale;
+  if (router_) {
+    auto plan = router_->route(b64(t.bytes, t.len), t.sig, route_class, built_slot, now_ms);
+    return plan.skip ? SubmitOutcome::SkippedLeader : SubmitOutcome::Queued;
+  }
+  if (!client_) return SubmitOutcome::NoRegion;
   std::string b64tx = b64(t.bytes, t.len);
   auto rr = client_->send_bundle(std::span<const std::string>(&b64tx, 1), now_ms);
   bool any = false;

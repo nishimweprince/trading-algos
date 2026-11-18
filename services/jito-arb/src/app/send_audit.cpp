@@ -51,6 +51,7 @@ void SendAudit::run() {
       auto r = rpc.simulate_full(job.first, {}, 0, "processed");
       AuditVerdict v = r.ok ? AuditVerdict::ok : classify_sim_error(r.err);
       (v == AuditVerdict::ok ? ok_ : v == AuditVerdict::min_out ? min_out_ : other_).fetch_add(1);
+      if (on_verdict_) on_verdict_(job.second, v, r.err);
       std::string tail;
       for (size_t i = r.logs.size() > 4 ? r.logs.size() - 4 : 0; i < r.logs.size(); ++i) tail += " | " + r.logs[i].substr(0, 160);
       if (v == AuditVerdict::other)

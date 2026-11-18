@@ -178,7 +178,17 @@ void BundleBuilder::operator()(const engine::Opportunity& o, const engine::Cycle
   }
   std::memcpy(rec.signature, last_.sig.data(), 64);
   std::vector<submit::RegionResult> regions;
-  switch (submitter_.submit(last_, slot, rt_.clock().slot.load(std::memory_order_relaxed), rec.wall_ms, &regions)) {
+  switch (submitter_.submit(last_, slot, rt_.clock().slot.load(std::memory_order_relaxed), rec.wall_ms, &regions, c.route_class)) {
+    case submit::SubmitOutcome::Queued:
+      // Leader-aware routing: queued on the region senders; acceptance and bundle ids arrive through the router.
+      ++n_.sent;
+      rec.action = uint8_t(obs::Action::Sent);
+      if (queued_hook_) queued_hook_(last_, c.route_class);
+      break;
+    case submit::SubmitOutcome::SkippedLeader:
+      ++n_.leader_skipped;
+      skip(engine::Reason::leader_skipped);
+      break;
     case submit::SubmitOutcome::Sent:
       ++n_.sent;
       rec.action = uint8_t(obs::Action::Sent);

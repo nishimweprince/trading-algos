@@ -8,6 +8,9 @@
 #include <cstdio>
 #include <fstream>
 #include <map>
+#include <atomic>
+#include <cstdlib>
+#include <mutex>
 #include <set>
 #include <memory>
 #include <sstream>
@@ -35,6 +38,8 @@
 #include "obs/log.hpp"
 #include "obs/metrics.hpp"
 #include "submit/jito.hpp"
+#include "submit/leaders.hpp"
+#include "submit/router.hpp"
 #include "submit/tip_floor.hpp"
 
 namespace arb::app {
@@ -265,14 +270,80 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   // (MinOutNotMet) from a transaction that cannot execute.
   std::unique_ptr<SendAudit> audit;
   if (live_send) audit = std::make_unique<SendAudit>(resolve_rpc_url(cfg));
+  // Sent log: one JSON line per region send and per audit verdict, joined by the signature prefix.
+  std::mutex sent_log_mu;
+  std::ofstream sent_log;
+  if (live_send && !cfg.obs.sent_log_path.empty()) sent_log.open(cfg.obs.sent_log_path, std::ios::app);
+  auto log_line = [&](const std::string& line) {
+    if (!sent_log.is_open()) return;
+    std::lock_guard<std::mutex> g(sent_log_mu);
+    sent_log << line << "\n" << std::flush;
+  };
+  auto json_str = [](const std::string& s) {
+    std::string o = "\"";
+    for (char ch : s) o += (ch == '"' || ch == '\\') ? std::string("\\") + ch : (unsigned char)ch < 0x20 ? std::string(" ") : std::string(1, ch);
+    return o + "\"";
+  };
+  std::unique_ptr<submit::LeaderMap> leaders;
+  std::unique_ptr<submit::Router> router;
+  std::atomic<uint64_t> sent_kind[4] = {0, 0, 0, 0};  // by leader kind at queue time: unknown, jito, bam, not_jito
+  std::mutex tracked_mu;
+  std::set<std::string> tracked;  // bundle ids already handed to the watcher (every region returns the same id)
   if (live_send) {
     watcher = std::make_unique<LandingWatcher>(jito_client({cfg.jito.regions.front()}), cfg.jito.status_poll_ms, cfg.jito.status_timeout_ms);
     watcher->start();
-    builder.set_sent_hook([&](const std::string& id, const Signature& sig, uint16_t rc, int64_t now_ms) {
-      watcher->track(id, sig, rc, now_ms);
-      const tx::SignedTx& t = builder.last_tx();
-      audit->submit(b64(t.bytes, t.len), id.substr(0, 12) + " class " + std::to_string(rc));
-    });
+    if (audit)
+      audit->set_on_verdict([&](const std::string& label, AuditVerdict v, const std::string& err) {
+        log_line("{\"t\":" + std::to_string(wall_ms()) + ",\"sig\":" + json_str(label) + ",\"audit\":\"" +
+                 (v == AuditVerdict::ok ? "ok" : v == AuditVerdict::min_out ? "min_out" : "failed") + "\",\"err\":" +
+                 json_str(err.substr(0, 200)) + "}");
+      });
+    if (cfg.jito.route_by_leader) {
+      submit::RouterConfig rc;
+      rc.block_engine_fmt = cfg.jito.block_engine_fmt;
+      rc.regions = cfg.jito.regions;
+      rc.always = cfg.jito.always_regions;
+      rc.skip_not_jito = cfg.jito.skip_not_jito_leaders;
+      rc.skip_bam = cfg.jito.skip_bam_leaders;
+      rc.bam_fmt = cfg.jito.bam_dbi_fmt;
+      if (const char* u = std::getenv(cfg.jito.bam_uuid_env.c_str())) rc.bam_uuid = u;
+      rc.timeout_ms = cfg.jito.send_timeout_ms;
+      rc.backoff_429_ms = cfg.jito.backoff_429_ms;
+      leaders = std::make_unique<submit::LeaderMap>(resolve_rpc_url(cfg), cfg.jito.route_regions);
+      router = std::make_unique<submit::Router>(
+          rc, leaders.get(), &rt.clock().slot,
+          [&](const submit::SendResult& r, const Signature& sig, uint16_t route_class, uint64_t built_slot, const submit::LeaderInfo& l,
+              int64_t t) {
+            if (!r.bundle_id.empty() && !r.bam) {
+              std::lock_guard<std::mutex> g(tracked_mu);
+              if (tracked.insert(r.bundle_id).second) watcher->track(r.bundle_id, sig, route_class, t);
+              if (tracked.size() > 10'000) tracked.clear();
+            }
+            char nums[160];
+            std::snprintf(nums, sizeof nums, ",\"status\":%d,\"rtt_ms\":%.2f,\"queued_ms\":%.2f,\"stale\":%s", r.http_status, r.rtt_us / 1000.0,
+                          r.queued_us / 1000.0, r.dropped_stale ? "true" : "false");
+            log_line("{\"t\":" + std::to_string(t) + ",\"slot\":" + std::to_string(built_slot) + ",\"sig\":" + json_str(b58(sig).substr(0, 12)) +
+                     ",\"class\":" + std::to_string(route_class) + ",\"leader\":" + json_str(l.identity.substr(0, 8)) + ",\"kind\":\"" +
+                     submit::leader_kind_name(l.kind) + "\",\"place\":" + json_str(l.place) + ",\"leader_region\":" + json_str(l.region) +
+                     ",\"sent_region\":" + json_str(r.region + (r.bam ? "/bam" : "")) + nums + ",\"id\":" + json_str(r.bundle_id) +
+                     ",\"err\":" + json_str(r.error.substr(0, 160)) + "}");
+          });
+      submitter.set_router(router.get());
+      LOG_INFO("routing: leader-aware to %zu regions (always %zu), BAM Direct Bundle Ingest %s", cfg.jito.route_regions.size(),
+               cfg.jito.always_regions.size(), rc.bam_uuid.empty() ? "off (no UUID)" : "on");
+      builder.set_queued_hook([&](const tx::SignedTx& t, uint16_t rc2) {
+        submit::LeaderInfo l = leaders->at(rt.clock().slot.load());
+        ++sent_kind[size_t(l.kind) & 3];
+        if (audit) audit->submit(b64(t.bytes, t.len), b58(t.sig).substr(0, 12));
+        (void)rc2;
+      });
+    } else {
+      builder.set_sent_hook([&](const std::string& id, const Signature& sig, uint16_t rc, int64_t now_ms) {
+        watcher->track(id, sig, rc, now_ms);
+        const tx::SignedTx& t = builder.last_tx();
+        if (audit) audit->submit(b64(t.bytes, t.len), b58(t.sig).substr(0, 12));
+      });
+    }
   }
   // Wallet state from the wallet stream. Dry run signs with a key that holds nothing, so the values only reach
   // the float check and own-capital sizing when sending is live; the gauges show them either way.
@@ -605,6 +676,23 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       g_sp_gross.set(int64_t(n.spread_gross_lamports));
       g_signed.set(int64_t(builder.stats().signed_ok));
       g_sent.set(int64_t(builder.stats().sent));
+      if (router) {
+        reg.gauge("arb_router_accepted", "region sends Jito accepted (a bundle id)").set(int64_t(router->accepted()));
+        reg.gauge("arb_router_failed", "region sends that failed or were refused").set(int64_t(router->failed()));
+        reg.gauge("arb_router_dropped", "queued sends dropped: slot passed or queue full").set(int64_t(router->dropped()));
+        reg.gauge("arb_bundles_leader_skipped", "signed bundles not sent: no Jito path to the slot's leaders").set(int64_t(builder.stats().leader_skipped));
+        static const char* kinds[4] = {"unknown", "jito", "bam", "not_jito"};
+        for (int k = 0; k < 4; ++k)
+          reg.gauge(std::string("arb_bundles_sent_leader_") + kinds[k], "bundles queued, by the leader's kind at that slot").set(int64_t(sent_kind[k].load()));
+        for (const auto& [region, st] : router->rtt_stats()) {
+          std::string n = region;
+          for (char& ch : n) if (ch == '/') ch = '_';
+          reg.gauge("arb_jito_rtt_us_p50_" + n, "sendBundle round trip to this region, us (1 h)").set(st.p50);
+          reg.gauge("arb_jito_rtt_us_p99_" + n, "sendBundle round trip to this region, us (1 h)").set(st.p99);
+          reg.gauge("arb_jito_rtt_samples_" + n, "sendBundle round trips measured (1 h)").set(int64_t(st.count));
+        }
+        reg.gauge("arb_leader_map_ready", "1 once the leader schedule and Jito flags are loaded").set(leaders && leaders->ready() ? 1 : 0);
+      }
       if (audit) {
         g_audit_ok.set(int64_t(audit->ok()));
         g_audit_min.set(int64_t(audit->min_out()));

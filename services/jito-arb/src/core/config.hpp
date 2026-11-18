@@ -56,6 +56,16 @@ struct Config {
     int status_timeout_ms = 30000;
     bool sender_enabled = false;
     std::string sender_url = "https://sender.helius-rpc.com/fast";
+    // Leader-aware routing (18 Nov 2026): each bundle goes to the regions nearest the leaders of its slot and the
+    // next, plus `always_regions`, on per-region sender threads. Off: every bundle to `regions`, as before.
+    bool route_by_leader = true;
+    std::vector<std::string> route_regions{"frankfurt", "amsterdam", "london", "dublin", "ny", "slc", "tokyo", "singapore"};
+    std::vector<std::string> always_regions{"frankfurt"};
+    bool skip_not_jito_leaders = true;   // both leaders run no Jito: no bundle path reaches them
+    bool skip_bam_leaders = false;       // both leaders run BAM and there is no Direct Bundle Ingest UUID
+    std::string bam_dbi_fmt = "http://%s.mainnet.bam.jito.wtf:9090";
+    std::string bam_uuid_env = "JITO_BAM_UUID";  // BAM Direct Bundle Ingest (Jito allowlist); unset = off
+    int send_timeout_ms = 2000;
   } jito;
 
   struct Engine {
@@ -165,6 +175,7 @@ struct Config {
     int metrics_port = 9100;
     std::string log_level = "info";
     std::string log_path;
+    std::string sent_log_path;           // one JSON line per region send and audit verdict ("" = off)
     std::string decision_log_dir = "data/decisions";
     int decision_log_rotate_s = 3600;
     uint32_t skip_log_max_per_s = 0;  // 0 keeps every skip; never limits signed candidates/outcomes
