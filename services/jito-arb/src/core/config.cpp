@@ -136,7 +136,7 @@ Config load_config(const std::string& path) {
   G(dex, cpmm_enabled); G(dex, cpmm_cu); G(dex, pumpswap_enabled); G(dex, pumpswap_cu);
   G(dex, dlmm_enabled); G(dex, dlmm_cu);
   G(dex, clmm_enabled); G(dex, clmm_cu);
-  G(discovery, min_pool_tvl_sol); G(discovery, max_tracked_pools); G(discovery, interval_s);
+  G(discovery, candidates_path); G(discovery, min_pool_tvl_sol); G(discovery, max_tracked_pools); G(discovery, interval_s);
   G(discovery, track_whirlpool); G(discovery, raydium_fetch_cap);
   G(discovery, track_dlmm);
   G(discovery, track_cpmm); G(discovery, cpmm_fetch_cap); G(discovery, dlmm_fetch_cap); G(discovery, track_pumpswap); G(discovery, track_clmm);
