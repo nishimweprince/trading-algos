@@ -37,6 +37,17 @@ min_sol_float = 0.3              # sending stops (and alerts) below this hot-wal
 max_sol_float = 2.0
 [jito]
 regions = ["frankfurt", "amsterdam"]
+# Plain-transaction path (Helius Sender, SWQoS only): each arb also goes out as a priority-fee transaction.
+# A failed one pays its fee (base + priority); the bid is at most sender_fee_frac_ppm of gross, and fees burnt by
+# failed sends stop the path for the day at sender_daily_fail_cap_lamports. The Helius key is added at startup.
+sender_enabled = false
+sender_url = "http://fra-sender.helius-rpc.com/fast?swqos_only=true"
+sender_tip_lamports = 10000
+sender_fee_frac_ppm = 100000
+sender_max_cu_price = 5000000
+sender_daily_fail_cap_lamports = 50000000
+sender_max_consecutive_fail = 50
+sender_pause_s = 600
 
 [dex]
 raydium_v4_enabled = true

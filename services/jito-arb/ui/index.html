@@ -233,6 +233,7 @@ async function refreshSends() {
   try {
     const [x, d, all] = await Promise.all([getJSON("/api/sends"), getJSON("/api/decisions?hours=24"), getJSON("/api/decisions?hours=336")]);
     const t = x.totals || {};
+    const sx = x.sender || {};
     let dispatched = 0;
     for (const v of Object.values(all.by_day || {})) dispatched += v.dispatched || 0;
     const m = metrics;
@@ -241,7 +242,11 @@ async function refreshSends() {
       tile("Landed", fmt(t.landed || 0), t.landed ? "trades on chain" : "none yet", t.landed ? "goodv" : ""),
       tile("Edge gone", pct(t.edge_gone || 0, t.audited || 0), `${fmt(t.edge_gone || 0)} of ${fmt(t.audited || 0)} post-send checks: valid tx, price moved first`),
       tile("Jito verdicts", `${fmt(t.not_landed || 0)} not landed`, `${fmt(t.rejected || 0)} rejected · ${fmt(t.accepted || 0)} accepted by Jito`),
-      tile("Hot wallet", m.arb_wallet_lamports >= 0 ? fmt(m.arb_wallet_lamports / 1e9, 4) + " SOL" : "–", "misses cost nothing: only landed bundles pay"),
+      tile("Hot wallet", m.arb_wallet_lamports >= 0 ? fmt(m.arb_wallet_lamports / 1e9, 4) + " SOL" : "–",
+           m.arb_sender_queued != null ? "missed bundles cost nothing; failed plain sends pay their fee" : "misses cost nothing: only landed bundles pay"),
+      ...(m.arb_sender_queued != null ? [tile("Plain sends (Sender)", `${fmt(sx.landed || 0)} landed`,
+           `${fmt(sx.failed || 0)} failed · ${fmt(sx.dropped || 0)} dropped · burnt today ${fmt((m.arb_sender_failed_fees_today || 0) / 1e9, 4)} of ${fmt((m.arb_sender_fail_cap || 0) / 1e9, 2)} SOL` +
+           (m.arb_sender_paused ? " · PAUSED" : ""), sx.landed ? "goodv" : "")] : []),
     ].join("");
     $("results_note").textContent = x.since ? "Bundle details since " + new Date(x.since).toLocaleString() + " (send log); \"since going live\" counts every bundle sent." : "";
     const kinds = Object.entries(x.by_kind || {}).sort((a, b) => b[1].sent - a[1].sent);

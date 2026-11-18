@@ -42,6 +42,8 @@
 #include "submit/jito.hpp"
 #include "submit/leaders.hpp"
 #include "submit/router.hpp"
+#include "submit/sender.hpp"
+#include "risk/sender_budget.hpp"
 #include "submit/tip_floor.hpp"
 
 namespace arb::app {
@@ -375,6 +377,61 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
         if (audit) audit->submit(b64(t.bytes, t.len), b58(t.sig).substr(0, 12), rc);
       });
     }
+  }
+  // Plain-transaction path (Helius Sender), off unless jito.sender_enabled. Each accepted send's outcome comes
+  // from getSignatureStatuses: a failed one paid its fee, which counts against the daily cap and the §10 fee cap.
+  risk::SenderBudgetConfig sbc;
+  sbc.daily_fail_cap_lamports = cfg.jito.sender_daily_fail_cap_lamports;
+  sbc.max_consecutive_fail = cfg.jito.sender_max_consecutive_fail;
+  sbc.pause_s = cfg.jito.sender_pause_s;
+  risk::SenderBudget sender_budget(sbc);
+  std::unique_ptr<submit::SenderClient> sender;
+  std::atomic<uint64_t> sender_fees_paid{0}, sender_tips_paid{0};
+  if (live_send && cfg.jito.sender_enabled) {
+    submit::SenderClientConfig scc;
+    scc.url = resolve_sender_url(cfg);
+    scc.timeout_ms = cfg.jito.send_timeout_ms;
+    scc.keepalive_s = cfg.jito.sender_keepalive_s;
+    scc.status_timeout_s = cfg.jito.sender_status_timeout_s;
+    sender = std::make_unique<submit::SenderClient>(
+        scc, resolve_rpc_url(cfg), &rt.clock().slot,
+        [&](const submit::SenderSendResult& r, const submit::SenderJob& j) {
+          // Refused or never sent: nothing can land, so nothing is at risk.
+          if (!r.accepted) sender_budget.on_result(j.sig, risk::SenderBudget::Result::dropped, wall_ms());
+          char nums[200];
+          std::snprintf(nums, sizeof nums, ",\"status\":%d,\"rtt_ms\":%.2f,\"queued_ms\":%.2f,\"stale\":%s,\"fee\":%llu,\"cu_price\":%llu,\"cu_limit\":%u,\"tip\":%llu",
+                        r.http_status, r.rtt_us / 1000.0, r.queued_us / 1000.0, r.dropped_stale ? "true" : "false",
+                        (unsigned long long)j.fee_lamports, (unsigned long long)j.cu_price, j.cu_limit, (unsigned long long)j.tip_lamports);
+          log_line("{\"t\":" + std::to_string(j.wall_ms) + ",\"slot\":" + std::to_string(j.built_slot) + ",\"sig\":" +
+                   json_str(j.sig.substr(0, 12)) + ",\"class\":" + std::to_string(j.route_class) + ",\"path\":\"sender\"" + nums +
+                   ",\"accepted\":" + (r.accepted ? "true" : "false") + ",\"err\":" + json_str(r.error.substr(0, 160)) + "}");
+        },
+        [&](const submit::SenderJob& j, submit::SenderOutcome o, uint64_t landed_slot) {
+          auto res = o == submit::SenderOutcome::landed   ? risk::SenderBudget::Result::landed
+                     : o == submit::SenderOutcome::failed ? risk::SenderBudget::Result::failed
+                                                          : risk::SenderBudget::Result::dropped;
+          int64_t now = wall_ms();
+          sender_budget.on_result(j.sig, res, now);
+          if (o != submit::SenderOutcome::dropped) {
+            limits.record_fee(now, j.fee_lamports);  // landed or failed, the fee was paid
+            sender_fees_paid += j.fee_lamports;
+          }
+          if (o == submit::SenderOutcome::landed) sender_tips_paid += j.tip_lamports;
+          log_line("{\"t\":" + std::to_string(now) + ",\"sig\":" + json_str(j.sig.substr(0, 12)) + ",\"path\":\"sender\",\"landing\":\"" +
+                   submit::sender_outcome_name(o) + "\",\"landed_slot\":" + std::to_string(landed_slot) + ",\"fee\":" +
+                   std::to_string(o == submit::SenderOutcome::dropped ? 0 : j.fee_lamports) + "}");
+          if (o == submit::SenderOutcome::landed) LOG_INFO("sender: %s LANDED in slot %llu", j.sig.substr(0, 12).c_str(), (unsigned long long)landed_slot);
+        });
+    risk::SenderFeeConfig sfc;
+    sfc.fee_frac_ppm = cfg.jito.sender_fee_frac_ppm;
+    sfc.max_cu_price = cfg.jito.sender_max_cu_price;
+    sfc.min_cu_price = cfg.jito.sender_min_cu_price;
+    sfc.base_fee_lamports = cfg.engine.base_fee_lamports;
+    sfc.tip_lamports = cfg.jito.sender_tip_lamports;
+    builder.set_sender(sender.get(), &sender_budget, sfc, std::max<uint64_t>(cfg.jito.sender_tip_lamports, 5'000));
+    LOG_INFO("sender: plain-transaction path ON (%s), tip %llu lamports, fee <= %.1f%% of gross, failed-fee cap %llu lamports/day",
+             cfg.jito.sender_url.c_str(), (unsigned long long)cfg.jito.sender_tip_lamports, cfg.jito.sender_fee_frac_ppm / 1e4,
+             (unsigned long long)cfg.jito.sender_daily_fail_cap_lamports);
   }
   // Wallet state from the wallet stream. Dry run signs with a key that holds nothing, so the values only reach
   // the float check and own-capital sizing when sending is live; the gauges show them either way.
@@ -738,6 +795,28 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
           reg.gauge("arb_jito_keepalive_rtt_us_" + region, "latest keepalive round trip on the warm connection, us").set(us);
         reg.gauge("arb_jito_keepalives", "keepalive calls on idle block-engine connections").set(int64_t(router->keepalives()));
         reg.gauge("arb_jito_keepalive_failures", "keepalive calls that did not return 200").set(int64_t(router->keepalive_failures()));
+      }
+      if (sender) {
+        const auto& bs = builder.stats();
+        int64_t now = wall_ms();
+        reg.gauge("arb_sender_queued", "plain transactions queued for Helius Sender").set(int64_t(bs.sender_queued));
+        reg.gauge("arb_sender_accepted", "plain transactions Sender accepted").set(int64_t(sender->accepted()));
+        reg.gauge("arb_sender_rejected", "plain transactions Sender refused or that failed to send").set(int64_t(sender->rejected()));
+        reg.gauge("arb_sender_stale", "plain transactions dropped before sending: slot passed").set(int64_t(sender->dropped_stale()));
+        reg.gauge("arb_sender_landed", "plain transactions that landed and succeeded").set(int64_t(sender->landed()));
+        reg.gauge("arb_sender_failed", "plain transactions that landed and failed (fee paid)").set(int64_t(sender->failed()));
+        reg.gauge("arb_sender_dropped", "accepted plain transactions never seen on chain (no fee)").set(int64_t(sender->dropped()));
+        reg.gauge("arb_sender_pending", "accepted plain transactions awaiting an outcome").set(int64_t(sender->pending()));
+        reg.gauge("arb_sender_fee_skip", "opportunities whose gross cannot pay the Sender bid").set(int64_t(bs.sender_fee_skip));
+        reg.gauge("arb_sender_budget_blocked", "plain sends blocked by the failed-fee cap or the pause").set(int64_t(bs.sender_budget_blocked));
+        reg.gauge("arb_sender_build_failed", "plain variants that failed to build, guard or sign").set(int64_t(bs.sender_build_failed));
+        reg.gauge("arb_sender_failed_fees_today", "lamports burnt by failed plain sends today (UTC)").set(int64_t(sender_budget.failed_today(now)));
+        reg.gauge("arb_sender_at_risk", "lamports of fees on accepted sends without an outcome yet").set(int64_t(sender_budget.at_risk()));
+        reg.gauge("arb_sender_fail_cap", "daily cap on failed-send fees, lamports").set(int64_t(cfg.jito.sender_daily_fail_cap_lamports));
+        reg.gauge("arb_sender_paused", "1 while paused after a run of failures").set(sender_budget.paused(now) ? 1 : 0);
+        reg.gauge("arb_sender_fees_paid", "fees paid by plain sends (landed + failed), lamports").set(int64_t(sender_fees_paid.load()));
+        reg.gauge("arb_sender_tips_paid", "Sender tips paid by landed plain sends, lamports").set(int64_t(sender_tips_paid.load()));
+        reg.gauge("arb_sender_ping_rtt_us", "latest Sender /ping round trip, us").set(sender->ping_rtt_us());
       }
       if (audit) {
         g_audit_ok.set(int64_t(audit->ok()));

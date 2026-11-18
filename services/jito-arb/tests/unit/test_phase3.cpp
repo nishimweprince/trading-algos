@@ -7,6 +7,10 @@
 #include <chrono>
 #include <climits>
 #include <cstring>
+#include <thread>
+#include <mutex>
+#include <atomic>
+#include <algorithm>
 
 #include "app/arming.hpp"
 #include "app/bundle_builder.hpp"
@@ -19,6 +23,8 @@
 #include "risk/sign_guard.hpp"
 #include "submit/conn.hpp"
 #include "submit/jito.hpp"
+#include "submit/sender.hpp"
+#include "risk/sender_budget.hpp"
 #include "test.hpp"
 #include "tx/alt_manager.hpp"
 #include "tx/builders.hpp"
@@ -458,6 +464,99 @@ TEST(replay_signs_and_sends_each_bundle_once) {
   CHECK_EQ(calls, sent_before);
   std::remove(K.cfg.mode.kill_file.c_str());
   rmdir(dir);
+}
+
+TEST(replay_sends_a_plain_sender_variant_beside_each_bundle) {
+  Loaded L;
+  L.cfg.risk.max_feed_lag_ms = INT32_MAX;
+  Keypair kp = app::test_keypair();
+  TestTables tt;
+  tx::BlockhashCache bh;
+  bh.set(Hash{}, UINT64_MAX >> 1, 0);
+  risk::Limits limits(risk::limits_config(L.cfg));
+  int calls = 0;
+  submit::Submitter sub(std::make_unique<submit::JitoClient>(
+      std::vector<std::string>{"frankfurt"}, "https://%s.x",
+      [&](const std::string&) { return std::unique_ptr<submit::HttpPost>(new MockHttp(&calls)); }));
+  app::BundleBuilder bb(L.cfg, *L.rt, kp, test_executor(), tt.alts, bh, limits, sub);
+  // Sender mock: records every body; statuses say each one landed and failed (fee paid).
+  std::mutex mu;
+  std::vector<std::string> bodies;
+  std::atomic<uint64_t> slot{0};
+  submit::SenderClientConfig scc;
+  scc.url = "http://sender.test/fast";
+  scc.keepalive_s = 0;
+  scc.status_poll_ms = 5;
+  scc.max_slot_lag = UINT64_MAX >> 1;  // the replay has no live slot clock
+  struct Rec final : submit::HttpPost {
+    std::mutex* mu;
+    std::vector<std::string>* b;
+    int post(std::string_view, std::string_view body, std::string& out) override {
+      std::lock_guard<std::mutex> g(*mu);
+      b->emplace_back(body);
+      out = "{\"jsonrpc\":\"2.0\",\"result\":\"s\",\"id\":1}";
+      return 200;
+    }
+  };
+  scc.http = [&](const std::string&) {
+    auto r = std::make_unique<Rec>();
+    r->mu = &mu;
+    r->b = &bodies;
+    return std::unique_ptr<submit::HttpPost>(std::move(r));
+  };
+  scc.statuses = [](const std::vector<std::string>& sigs) {
+    std::vector<RpcSigStatus> v(sigs.size());
+    for (auto& x : v) x.found = x.failed = true;
+    return v;
+  };
+  risk::SenderBudgetConfig sbc;
+  sbc.daily_fail_cap_lamports = UINT64_MAX >> 1;
+  sbc.max_consecutive_fail = 1 << 30;
+  risk::SenderBudget budget(sbc);
+  std::atomic<int> resolved{0};
+  submit::SenderClient sender(scc, "", &slot, nullptr, [&](const submit::SenderJob& j, submit::SenderOutcome, uint64_t) {
+    budget.on_result(j.sig, risk::SenderBudget::Result::failed, 0);
+    ++resolved;
+  });
+  risk::SenderFeeConfig fc;
+  fc.fee_frac_ppm = 1'000'000;  // replayed opportunities are small: bid all of gross so every one qualifies
+  fc.min_cu_price = 1;
+  fc.tip_lamports = 5'000;
+  fc.base_fee_lamports = 0;
+  bb.set_sender(&sender, &budget, fc, 5'000);
+  std::vector<std::vector<uint8_t>> plain;
+  L.rt->set_send_hook([&](const engine::Opportunity& o, const engine::Cycle& c, obs::DecisionRecord& r) {
+    tt.seed(*L.rt, L.cfg, kp.pubkey(), test_executor());
+    uint64_t before = bb.stats().sender_queued;
+    bb(o, c, r);
+    if (bb.stats().sender_queued > before)
+      plain.emplace_back(bb.last_sender_tx().bytes, bb.last_sender_tx().bytes + bb.last_sender_tx().len);
+  });
+  CHECK(L.rt->replay_file(fixture_path("frames.bin")));
+  const auto& s = bb.stats();
+  std::printf("    sender: queued=%llu fee_skip=%llu blocked=%llu build_failed=%llu (bundles sent=%llu)\n",
+              (unsigned long long)s.sender_queued, (unsigned long long)s.sender_fee_skip, (unsigned long long)s.sender_budget_blocked,
+              (unsigned long long)s.sender_build_failed, (unsigned long long)s.sent);
+  CHECK(s.sender_queued > 0 && s.sender_build_failed == 0);
+  CHECK_EQ(s.sender_queued + s.sender_fee_skip + s.sender_budget_blocked + s.sender_queue_full, s.sent);
+  for (const auto& t : plain) {
+    CHECK(t.size() <= tx::PACKET_DATA_SIZE && t[0] == 1);
+    CHECK(crypto_sign_verify_detached(t.data() + 1, t.data() + 65, t.size() - 65, kp.pubkey().data()) == 0);
+    // Tips a Sender account, never a Jito one; carries the compute-unit price instruction (tag 3).
+    auto has = [&](const Pubkey& k) { return std::search(t.begin(), t.end(), k.begin(), k.end()) != t.end(); };
+    bool sender_tip = false, jito_tip = false;
+    for (const Pubkey& k : risk::sender_tip_accounts()) sender_tip |= has(k);
+    for (const Pubkey& k : risk::default_tip_accounts()) jito_tip |= has(k);
+    CHECK(sender_tip && !jito_tip);
+  }
+  for (int i = 0; i < 400 && resolved.load() < int(s.sender_queued); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  CHECK_EQ(uint64_t(resolved.load()), s.sender_queued);
+  {
+    std::lock_guard<std::mutex> g(mu);
+    CHECK_EQ(uint64_t(bodies.size()), s.sender_queued);
+    for (const auto& b : bodies) CHECK(b.find("\"skipPreflight\":true,\"maxRetries\":0") != std::string::npos);
+  }
+  CHECK(budget.failed_today(0) > 0 && budget.at_risk() == 0);
 }
 
 TEST(http_parser_incremental_chunked_and_pipelined) {

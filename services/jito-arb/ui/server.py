@@ -182,6 +182,7 @@ class SendsCache:
         self.inode = None
         self.by_sig = collections.OrderedDict()
         self.sig_of_id = {}
+        self.sender = collections.OrderedDict()  # plain-transaction (Helius Sender) sends, by signature prefix
         self.lock = threading.Lock()
 
     def update(self):
@@ -201,6 +202,18 @@ class SendsCache:
             try:
                 x = json.loads(raw)
             except ValueError:
+                continue
+            if x.get("path") == "sender":
+                if "landing" in x:
+                    b = self.sender.get(x.get("sig"))
+                    if b is not None:
+                        b["landing"] = x["landing"]
+                        b["fee_paid"] = x.get("fee", 0)
+                else:
+                    self.sender[x["sig"]] = {"t": x["t"], "accepted": bool(x.get("accepted")), "stale": bool(x.get("stale")),
+                                             "fee": x.get("fee", 0), "cu_price": x.get("cu_price"), "landing": None, "fee_paid": 0}
+                    while len(self.sender) > 50000:
+                        self.sender.popitem(last=False)
                 continue
             if "sent_region" in x:
                 b = self.by_sig.get(x["sig"])
@@ -244,7 +257,18 @@ class SendsCache:
                 rc = regions[r["region"]]
                 rc["sends"] += 1
                 rc["accepted"] += r["status"] == 200
-        return {"since": bundles[0]["t"] if bundles else None, "totals": dict(tot),
+        with self.lock:
+            plain = list(self.sender.values())
+        sc = collections.Counter()
+        for b in plain:
+            sc["sent"] += 1
+            sc["accepted"] += b["accepted"]
+            sc["stale"] += b["stale"]
+            sc[b["landing"] or ("pending" if b["accepted"] else "refused")] += 1
+            sc["fees_paid"] += b["fee_paid"] or 0
+            if b["landing"] == "failed" and time.strftime("%Y-%m-%d", time.gmtime(b["t"] / 1000)) == day:
+                sc["failed_fees_today"] += b["fee_paid"] or 0
+        return {"since": bundles[0]["t"] if bundles else None, "totals": dict(tot), "sender": dict(sc),
                 "by_kind": {k: dict(v) for k, v in kinds.items()}, "by_region": {k: dict(v) for k, v in regions.items()},
                 "recent": bundles[-recent:][::-1]}
 

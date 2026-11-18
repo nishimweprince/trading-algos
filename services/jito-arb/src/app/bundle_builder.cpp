@@ -8,6 +8,7 @@
 #include <stdexcept>
 
 #include "core/base58.hpp"
+#include "core/base64.hpp"
 #include "core/programs.hpp"
 #include "core/sys.hpp"
 #include "tx/dex_ix.hpp"
@@ -87,6 +88,67 @@ BundleBuilder::BundleBuilder(const Config& cfg, Runtime& rt, Keypair wallet, Pub
   guard_.executor = executor_;
   guard_.tip_accounts = risk::default_tip_accounts();
   guard_.tip_max_lamports = cfg.jito.tip_max_lamports;
+}
+
+void BundleBuilder::set_sender(submit::SenderClient* s, risk::SenderBudget* b, risk::SenderFeeConfig fc, uint64_t tip_max) {
+  sender_ = s;
+  sender_budget_ = b;
+  sender_fee_cfg_ = fc;
+  sender_guard_ = guard_;
+  sender_guard_.tip_accounts = risk::sender_tip_accounts();
+  sender_guard_.tip_max_lamports = tip_max;
+}
+
+bool BundleBuilder::send_plain(const engine::Opportunity& o, const engine::Cycle& c,
+                               std::span<const std::shared_ptr<const PoolState>> legs, const tx::RouteTxParams& bp, uint64_t slot,
+                               int64_t wall) {
+  risk::SenderFee fee = risk::sender_fee(o.pr.gross_lamports, bp.cu_limit, sender_fee_cfg_);
+  if (!fee.ok) {
+    ++n_.sender_fee_skip;
+    return false;
+  }
+  if (sender_budget_ && sender_budget_->check(wall, fee.fee_lamports) != risk::SenderBlock::none) {
+    ++n_.sender_budget_blocked;
+    return false;
+  }
+  tx::RouteTxParams p = bp;
+  const auto& tips = sender_guard_.tip_accounts;
+  p.tip_account = tips[size_t(rng_() % tips.size())];
+  p.tip_lamports = sender_fee_cfg_.tip_lamports;
+  p.cu_price_micro_lamports = fee.cu_price;
+  if (!tx::build_route_ixs(sender_ixs_, p, c, legs) || !sender_guard_.check(sender_ixs_)) {
+    ++n_.sender_build_failed;
+    return false;
+  }
+  auto bh = blockhash_.get(slot);
+  if (!bh) {
+    ++n_.sender_build_failed;
+    return false;
+  }
+  std::vector<tx::LookupTable> tables = alts_.active(slot);
+  Pubkey statics[1] = {p.tip_account};
+  if (!tx::build_tx(wallet_.pubkey(), &wallet_, sender_ixs_, *bh, tables, last_sender_, statics)) {
+    ++n_.sender_build_failed;
+    return false;
+  }
+  submit::SenderJob j;
+  j.tx_b64 = b64(last_sender_.bytes, last_sender_.len);
+  j.sig = b58(last_sender_.sig);
+  j.built_slot = slot;
+  j.fee_lamports = fee.fee_lamports;
+  j.cu_price = fee.cu_price;
+  j.cu_limit = p.cu_limit;
+  j.tip_lamports = p.tip_lamports;
+  j.route_class = c.route_class;
+  j.wall_ms = wall;
+  std::string sig = j.sig;
+  if (!sender_->send(std::move(j))) {
+    ++n_.sender_queue_full;
+    return false;
+  }
+  if (sender_budget_) sender_budget_->on_send(sig, fee.fee_lamports, wall);
+  ++n_.sender_queued;
+  return true;
 }
 
 void BundleBuilder::operator()(const engine::Opportunity& o, const engine::Cycle& c, obs::DecisionRecord& rec) {
@@ -178,16 +240,25 @@ void BundleBuilder::operator()(const engine::Opportunity& o, const engine::Cycle
   }
   std::memcpy(rec.signature, last_.sig.data(), 64);
   std::vector<submit::RegionResult> regions;
+  const auto leg_span = std::span<const std::shared_ptr<const PoolState>>(legs, c.n);
+  auto plain = [&]() { return sender_ && send_plain(o, c, leg_span, p, slot, rec.wall_ms); };
   switch (submitter_.submit(last_, slot, rt_.clock().slot.load(std::memory_order_relaxed), rec.wall_ms, &regions, c.route_class)) {
     case submit::SubmitOutcome::Queued:
       // Leader-aware routing: queued on the region senders; acceptance and bundle ids arrive through the router.
       ++n_.sent;
       rec.action = uint8_t(obs::Action::Sent);
       if (queued_hook_) queued_hook_(last_, c.route_class);
+      plain();
       break;
     case submit::SubmitOutcome::SkippedLeader:
+      // No Jito path reaches these leaders, but a plain transaction does.
       ++n_.leader_skipped;
-      skip(engine::Reason::leader_skipped);
+      if (plain()) {
+        rec.action = uint8_t(obs::Action::Sent);
+        std::memcpy(rec.signature, last_sender_.sig.data(), 64);
+      } else {
+        skip(engine::Reason::leader_skipped);
+      }
       break;
     case submit::SubmitOutcome::Sent:
       ++n_.sent;
@@ -199,6 +270,7 @@ void BundleBuilder::operator()(const engine::Opportunity& o, const engine::Cycle
             sent_hook_(r.bundle_id, last_.sig, c.route_class, rec.wall_ms);
             break;
           }
+      plain();
       break;
     case submit::SubmitOutcome::Stale:
       ++n_.stale;

@@ -66,6 +66,8 @@ class Rpc {
   std::pair<uint64_t, uint64_t> balance(const Pubkey& key, const char* commitment = "confirmed");
   RpcTransaction transaction(const std::string& sig_b58, const char* commitment = "confirmed");
   RpcSigStatus signature_status(const std::string& sig_b58);
+  /** getSignatureStatuses for up to 256 signatures (recent status cache only), in the same order. */
+  std::vector<RpcSigStatus> signature_statuses(const std::vector<std::string>& sigs_b58);
   std::string latest_signature_for(const Pubkey& address);
   struct EpochInfo {
     uint64_t epoch = 0, absolute_slot = 0, slot_index = 0, slots_in_epoch = 0;

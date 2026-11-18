@@ -14,6 +14,8 @@ namespace arb::risk {
 
 /** Jito tip accounts as documented (getTipAccounts example; "have remained constant"). Refreshed live hourly. */
 const std::vector<Pubkey>& default_tip_accounts();
+/** Helius Sender's designated tip accounts (docs.helius.dev, Sender, "Designated Tip Accounts", checked 2026-11-19). */
+const std::vector<Pubkey>& sender_tip_accounts();
 
 struct SignGuard {
   Pubkey wallet{};
