@@ -66,6 +66,26 @@ void TipPolicy::record(uint16_t rc, bool landed) {
   c.window_attempts = c.window_landed = 0;
 }
 
+void TipPolicy::observe_cu(uint16_t rc, uint32_t units) {
+  if (!units) return;
+  auto& d = cu_[rc];
+  d.push_back(units);
+  while (d.size() > 16) d.pop_front();
+}
+
+size_t TipPolicy::cu_samples(uint16_t rc) const {
+  auto it = cu_.find(rc);
+  return it == cu_.end() ? 0 : it->second.size();
+}
+
+uint32_t TipPolicy::cu_limit(uint16_t rc, uint32_t estimate) const {
+  auto it = cu_.find(rc);
+  if (it == cu_.end() || it->second.size() < 3) return estimate;
+  uint64_t mx = *std::max_element(it->second.begin(), it->second.end());
+  uint64_t learned = mx + mx / 4 + 10'000;
+  return uint32_t(std::clamp<uint64_t>(learned, std::min<uint64_t>(50'000, estimate), estimate));
+}
+
 uint64_t TipPolicy::attempts() const {
   uint64_t n = 0;
   for (const auto& [rc, c] : classes_) n += c.attempts;
@@ -107,6 +127,7 @@ Pricing price(uint64_t x, int64_t profit_base, uint64_t flash_fee, uint32_t rout
   uint64_t cu = route_cu + cfg.cu_overhead;
   cu += uint32_t(uint64_t(cu) * cfg.cu_headroom_ppm / 1'000'000);
   if (cu > cfg.max_route_cu) { pr.reject = Reason::cu_over_budget; return pr; }
+  cu = tips.cu_limit(route_class, uint32_t(cu));  // measured use, once the class has audit samples
   pr.cu_limit = uint32_t(cu);
   pr.gross_lamports = bp.to_lamports(uint64_t(profit_base));
   pr.fee_lamports = cfg.base_fee_lamports + uint64_t(u128(cfg.cu_price_micro_lamports) * cu / 1'000'000);

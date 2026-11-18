@@ -7,6 +7,8 @@
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <deque>
+#include <cstring>
 #include <map>
 #include <atomic>
 #include <cstdlib>
@@ -270,6 +272,29 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   // (MinOutNotMet) from a transaction that cannot execute.
   std::unique_ptr<SendAudit> audit;
   if (live_send) audit = std::make_unique<SendAudit>(resolve_rpc_url(cfg));
+  // Audit-measured compute use per route class, handed from the audit thread to the engine thread (tick).
+  std::mutex cu_obs_mu;
+  std::vector<std::pair<uint16_t, uint32_t>> cu_obs;
+  // Relearn compute use after a restart from the audit lines already in the sent log (newest 2,000 lines).
+  if (live_send && !cfg.obs.sent_log_path.empty()) {
+    std::ifstream in(cfg.obs.sent_log_path);
+    std::deque<std::string> lines;
+    for (std::string l; std::getline(in, l);) {
+      if (l.find("\"audit\":\"failed\"") != std::string::npos || l.find("\"units\":") == std::string::npos) continue;
+      lines.push_back(std::move(l));
+      if (lines.size() > 2000) lines.pop_front();
+    }
+    size_t n = 0;
+    for (const std::string& l : lines) {
+      auto num = [&](const char* key) -> uint64_t {
+        auto p = l.find(key);
+        return p == std::string::npos ? 0 : std::strtoull(l.c_str() + p + std::strlen(key), nullptr, 10);
+      };
+      uint64_t units = num("\"units\":"), rc = num("\"class\":");
+      if (units && rc) { rt.tips().observe_cu(uint16_t(rc), uint32_t(units)); ++n; }
+    }
+    if (n) LOG_INFO("compute: %zu audit measurements restored from %s", n, cfg.obs.sent_log_path.c_str());
+  }
   // Sent log: one JSON line per region send and per audit verdict, joined by the signature prefix.
   std::mutex sent_log_mu;
   std::ofstream sent_log;
@@ -293,10 +318,15 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
     watcher = std::make_unique<LandingWatcher>(jito_client({cfg.jito.regions.front()}), cfg.jito.status_poll_ms, cfg.jito.status_timeout_ms);
     watcher->start();
     if (audit)
-      audit->set_on_verdict([&](const std::string& label, AuditVerdict v, const std::string& err) {
+      audit->set_on_verdict([&](const std::string& label, AuditVerdict v, const std::string& err, uint64_t units, uint16_t tag) {
         log_line("{\"t\":" + std::to_string(wall_ms()) + ",\"sig\":" + json_str(label) + ",\"audit\":\"" +
-                 (v == AuditVerdict::ok ? "ok" : v == AuditVerdict::min_out ? "min_out" : "failed") + "\",\"err\":" +
-                 json_str(err.substr(0, 200)) + "}");
+                 (v == AuditVerdict::ok ? "ok" : v == AuditVerdict::min_out ? "min_out" : "failed") + "\",\"units\":" +
+                 std::to_string(units) + ",\"class\":" + std::to_string(tag) + ",\"err\":" + json_str(err.substr(0, 200)) + "}");
+        // A route that ran to its end (success, or the final min_out check) measured its real compute use.
+        if (v != AuditVerdict::other && units) {
+          std::lock_guard<std::mutex> g(cu_obs_mu);
+          cu_obs.emplace_back(tag, uint32_t(units));
+        }
       });
     if (cfg.jito.route_by_leader) {
       submit::RouterConfig rc;
@@ -334,14 +364,13 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       builder.set_queued_hook([&](const tx::SignedTx& t, uint16_t rc2) {
         submit::LeaderInfo l = leaders->at(rt.clock().slot.load());
         ++sent_kind[size_t(l.kind) & 3];
-        if (audit) audit->submit(b64(t.bytes, t.len), b58(t.sig).substr(0, 12));
-        (void)rc2;
+        if (audit) audit->submit(b64(t.bytes, t.len), b58(t.sig).substr(0, 12), rc2);
       });
     } else {
       builder.set_sent_hook([&](const std::string& id, const Signature& sig, uint16_t rc, int64_t now_ms) {
         watcher->track(id, sig, rc, now_ms);
         const tx::SignedTx& t = builder.last_tx();
-        if (audit) audit->submit(b64(t.bytes, t.len), b58(t.sig).substr(0, 12));
+        if (audit) audit->submit(b64(t.bytes, t.len), b58(t.sig).substr(0, 12), rc);
       });
     }
   }
@@ -616,6 +645,18 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
           reload_tables();
         } catch (const std::exception& e) {
           LOG_WARN("lookup tables: %s", e.what());
+        }
+      }
+      {
+        std::vector<std::pair<uint16_t, uint32_t>> obs_now;
+        {
+          std::lock_guard<std::mutex> g(cu_obs_mu);
+          obs_now.swap(cu_obs);
+        }
+        for (auto [rc, units] : obs_now) {
+          rt.tips().observe_cu(rc, units);
+          LOG_INFO("compute: class %u used %u CU (%zu samples; limit %s)", unsigned(rc), units, rt.tips().cu_samples(rc),
+                   rt.tips().cu_samples(rc) >= 3 ? "learned" : "still the estimate");
         }
       }
       if (rt.tips().attempts() != saved_tip_attempts) {

@@ -25,9 +25,9 @@ class SendAudit {
   SendAudit(const SendAudit&) = delete;
   SendAudit& operator=(const SendAudit&) = delete;
   /** Queue one sent transaction (base64); dropped when 32 are already waiting. Never blocks. */
-  void submit(std::string tx_b64, std::string label);
+  void submit(std::string tx_b64, std::string label, uint16_t tag = 0);
   /** Called on the audit thread with each verdict (label as submitted, the error JSON when it failed). */
-  using Verdict = std::function<void(const std::string& label, AuditVerdict v, const std::string& err)>;
+  using Verdict = std::function<void(const std::string& label, AuditVerdict v, const std::string& err, uint64_t units, uint16_t tag)>;
   void set_on_verdict(Verdict f) { on_verdict_ = std::move(f); }
   uint64_t ok() const { return ok_.load(); }
   uint64_t min_out() const { return min_out_.load(); }
@@ -40,7 +40,11 @@ class SendAudit {
   int timeout_ms_;
   std::mutex mu_;
   std::condition_variable cv_;
-  std::deque<std::pair<std::string, std::string>> q_;
+  struct Job {
+    std::string tx_b64, label;
+    uint16_t tag = 0;
+  };
+  std::deque<Job> q_;
   bool stop_ = false;
   std::atomic<uint64_t> ok_{0}, min_out_{0}, other_{0}, dropped_{0};
   Verdict on_verdict_;

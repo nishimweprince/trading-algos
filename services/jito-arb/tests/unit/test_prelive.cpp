@@ -352,3 +352,26 @@ TEST(router_sends_async_per_region_and_drops_passed_slots) {
   std::lock_guard<std::mutex> g(mu);
   CHECK_EQ(posts.size(), size_t(2));
 }
+
+TEST(adaptive_cu_limit_learns_from_measured_use) {
+  engine::TipPolicy t;
+  CHECK_EQ(t.cu_limit(520, 391'000), uint32_t(391'000));  // no samples: the estimate
+  t.observe_cu(520, 120'000);
+  t.observe_cu(520, 122'000);
+  CHECK_EQ(t.cu_limit(520, 391'000), uint32_t(391'000));  // fewer than 3
+  t.observe_cu(520, 126'000);
+  CHECK_EQ(t.cu_limit(520, 391'000), uint32_t(126'000 + 31'500 + 10'000));  // max x 1.25 + 10k
+  CHECK_EQ(t.cu_limit(520, 150'000), uint32_t(150'000));  // never above the estimate
+  CHECK_EQ(t.cu_limit(776, 391'000), uint32_t(391'000));  // other classes untouched
+  for (int i = 0; i < 20; ++i) t.observe_cu(9, 10'000);
+  CHECK_EQ(t.cu_limit(9, 300'000), uint32_t(50'000));     // never below 50k
+  CHECK_EQ(t.cu_samples(9), size_t(16));                  // last 16 kept
+  // price() uses it: same quote, the learned class asks for less compute.
+  engine::BasePrice bp;
+  engine::CostConfig cc;
+  cc.min_ev_lamports = 0;
+  auto a = engine::price(1'000'000'000, 5'000'000, 0, 280'000, 520, bp, t, cc);
+  auto b = engine::price(1'000'000'000, 5'000'000, 0, 280'000, 776, bp, t, cc);
+  CHECK(a.ok && b.ok);
+  CHECK(a.cu_limit < b.cu_limit && a.cu_limit == uint32_t(167'500));
+}
