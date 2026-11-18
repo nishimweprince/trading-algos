@@ -55,12 +55,12 @@ void SendAudit::run() {
       std::string tail;
       for (size_t i = r.logs.size() > 4 ? r.logs.size() - 4 : 0; i < r.logs.size(); ++i) tail += " | " + r.logs[i].substr(0, 160);
       if (v == AuditVerdict::other)
-        LOG_WARN("send audit %s: FAILED %s, %llu CU%s", job.label.c_str(), r.err.c_str(), (unsigned long long)r.units, tail.c_str());
+        LOG_WARN("post-send check %s: FAILED %s, %llu CU%s", job.label.c_str(), r.err.c_str(), (unsigned long long)r.units, tail.c_str());
       else
-        LOG_INFO("send audit %s: %s, %llu CU", job.label.c_str(), v == AuditVerdict::ok ? "would succeed now" : "MinOutNotMet (edge gone)",
+        LOG_INFO("post-send check %s: %s, %llu CU", job.label.c_str(), v == AuditVerdict::ok ? "would succeed now" : "MinOutNotMet (edge gone)",
                  (unsigned long long)r.units);
     } catch (const std::exception& e) {
-      LOG_WARN("send audit %s: rpc: %s", job.label.c_str(), e.what());
+      LOG_WARN("post-send check %s: rpc: %s", job.label.c_str(), e.what());
     }
   }
 }

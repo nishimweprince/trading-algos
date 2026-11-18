@@ -119,7 +119,6 @@ struct Config {
   } dex;
 
   struct Discovery {
-    std::string candidates_path;   // every safe candidate (tracked or not), for the new-pool shadow ("" = off)
     double min_pool_tvl_sol = 50;
     int max_tracked_pools = 1500;
     int interval_s = 600;
@@ -185,24 +184,6 @@ struct Config {
     int alert_repeat_s = 1800;            // reminder while it stays down
   } obs;
 
-  // Read-only simulation of every dry-run bundle's swap legs (spec §9), paid by a public holder of the base token.
-  struct Sim {
-    bool enabled = true;
-    double max_per_s = 5;              // above this, bundles are sampled (dropped), never queued without bound
-    std::string holder_seed_path = "harness/holders_seed.json";
-    int holder_refresh_s = 600;        // re-read the base tokens' largest holders
-    uint64_t min_payer_lamports = 20'000'000;  // holder wallet SOL for fees and intermediate ATA rent
-    // Quarantine: a pool direction on a route that failed or came out short (by short_bps) quarantine_strikes
-    // times within quarantine_window_s is not dispatched for quarantine_s. A clean simulation clears its strikes.
-    int quarantine_strikes = 3;
-    int quarantine_window_s = 600;
-    int quarantine_s = 1800;
-    int short_bps = 50;
-    // Freshness: a job queued longer than max_wait_ms is dropped, not simulated late; only outcomes within
-    // strike_max_lag_slots of the candidate strike or clear quarantine (later ones are logged, never acted on).
-    int max_wait_ms = 1000;
-    int strike_max_lag_slots = 4;
-  } sim;
 
   struct Recorder {
     std::string dir = "data/frames";

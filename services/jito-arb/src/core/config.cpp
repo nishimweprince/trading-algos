@@ -138,7 +138,7 @@ Config load_config(const std::string& path) {
   G(dex, cpmm_enabled); G(dex, cpmm_cu); G(dex, pumpswap_enabled); G(dex, pumpswap_cu);
   G(dex, dlmm_enabled); G(dex, dlmm_cu);
   G(dex, clmm_enabled); G(dex, clmm_cu);
-  G(discovery, candidates_path); G(discovery, min_pool_tvl_sol); G(discovery, max_tracked_pools); G(discovery, interval_s);
+  G(discovery, min_pool_tvl_sol); G(discovery, max_tracked_pools); G(discovery, interval_s);
   G(discovery, track_whirlpool); G(discovery, raydium_fetch_cap);
   G(discovery, track_dlmm);
   G(discovery, track_cpmm); G(discovery, cpmm_fetch_cap); G(discovery, dlmm_fetch_cap); G(discovery, track_pumpswap); G(discovery, track_clmm);
@@ -151,9 +151,7 @@ Config load_config(const std::string& path) {
   G(obs, metrics_addr); G(obs, metrics_port); G(obs, log_level); G(obs, log_path); G(obs, decision_log_dir); G(obs, sent_log_path);
   G(obs, decision_log_rotate_s); G(obs, skip_log_max_per_s); G(obs, alert_name); G(obs, alert_after_s); G(obs, alert_repeat_s);
   G(recorder, dir); G(recorder, rotate_s);
-  G(sim, enabled); G(sim, max_per_s); G(sim, holder_refresh_s); G(sim, min_payer_lamports); G(sim, holder_seed_path);
-  G(sim, quarantine_strikes); G(sim, quarantine_window_s); G(sim, quarantine_s); G(sim, short_bps); G(sim, max_wait_ms);
-  G(sim, strike_max_lag_slots); G(engine, max_profit_ratio);
+  G(engine, max_profit_ratio);
 #undef G
   r.get("pools_path", c.pools_path);
   for (auto& [k, v] : kv)

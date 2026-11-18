@@ -182,10 +182,10 @@ p.write_text(json.dumps(s))
             self.assertEqual((archive / rel).read_bytes(), content)
         self.check_protected()
 
-    def test_install_preserves_operator_files_and_installs_probe_and_seed(self):
+    def test_install_preserves_operator_files_and_installs_tools(self):
         build = self.src / "build/vm"
         build.mkdir(parents=True)
-        for name in ("jito-arb", "quote-probe"):
+        for name in ("jito-arb", "live-plan"):
             p = build / name
             p.write_text("#!/bin/sh\necho test " + name + "\n")
             p.chmod(0o755)
@@ -194,10 +194,8 @@ p.write_text(json.dumps(s))
             result = self.run_script("install.sh")
             self.assertEqual(result.returncode, 0, result.stderr)
             self.check_protected()
-        self.assertEqual((self.opt / "bin/quote-probe").read_bytes(), (build / "quote-probe").read_bytes())
-        self.assertTrue(os.access(self.opt / "bin/quote-probe", os.X_OK))
-        self.assertEqual((self.opt / "share/holders_seed.json").read_bytes(),
-                         (self.src / "harness/holders_seed.json").read_bytes())
+        self.assertEqual((self.opt / "bin/live-plan").read_bytes(), (build / "live-plan").read_bytes())
+        self.assertTrue(os.access(self.opt / "bin/live-plan", os.X_OK))
         calls = (self.root / "calls").read_text().splitlines()
         self.assertEqual(calls, ["daemon-reload", "daemon-reload"])
         # A fresh denylist is still provisioned when no operator copy exists.

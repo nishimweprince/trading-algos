@@ -14,12 +14,11 @@ install -d -m 0755 /opt/jito-arb/bin /opt/jito-arb/share
 install -d -m 0750 -o root -g jito-arb /etc/jito-arb
 install -d -m 0750 -o jito-arb -g jito-arb /var/lib/jito-arb /var/lib/jito-arb/frames /var/lib/jito-arb/decisions
 
-for b in jito-arb discover recorder replay-report sim-parity sim-check fixture-frames quote-probe sim-replay pool-inventory live-plan arm-accounts newpool-shadow arb_tests arb_bench; do
+for b in jito-arb discover recorder replay-report fixture-frames pool-inventory live-plan arm-accounts arb_tests arb_bench; do
   [ -x "$BUILD/$b" ] && install -m 0755 "$BUILD/$b" /opt/jito-arb/bin/
 done
 [ -e /opt/jito-arb/share/denylist.json ] || install -m 0644 "$SRC/config/denylist.json" /opt/jito-arb/share/denylist.json
 install -m 0644 "$SRC/config/dex_programs.toml" /opt/jito-arb/share/
-install -m 0644 "$SRC/harness/holders_seed.json" /opt/jito-arb/share/holders_seed.json
 install -d -m 0755 /opt/jito-arb/ui
 install -m 0644 "$SRC/ui/server.py" "$SRC/ui/index.html" /opt/jito-arb/ui/
 # Anthropic Sans/Mono are proprietary and never committed: copy AnthropicSans-Roman-Web.woff2 and
