@@ -1,12 +1,16 @@
 // Revalidate recorded dry-run candidates against CURRENT chain state (not historical execution).
-// sim-replay --config FILE --input DECISIONS.bin [--limit N] [--output DIR]
+// sim-replay --config FILE --input DECISIONS.bin [--limit N] [--output DIR] [--live-skipped] [--min-hops N]
+// --live-skipped: take the newest live candidates skipped as not_armed (live has no dry-run records); --min-hops 3
+// keeps 3-hop routes only. Fixed quoted inputs at CURRENT state: a quote that is far from its simulation is not real.
 // Uses only getMultipleAccounts/getTokenAccounts/simulateTransaction. No signing or submission.
 #include <chrono>
 #include <cstdio>
 #include <fstream>
 #include <sstream>
 #include <thread>
+#include <algorithm>
 #include <filesystem>
+#include <vector>
 
 #include "app/bundle_sim.hpp"
 #include "app/pools_file.hpp"
@@ -22,8 +26,14 @@ int main(int argc, char** argv) {
   try {
     std::string config, input, output;
     size_t limit = 3;
+    bool live_skipped = false;
+    int min_hops = 2;
+    for (int i = 1; i < argc; ++i)
+      if (std::string(argv[i]) == "--live-skipped") live_skipped = true;
     for (int i = 1; i + 1 < argc; i += 2) {
       std::string a = argv[i];
+      if (a == "--live-skipped") { --i; continue; }
+      if (a == "--min-hops") { min_hops = std::stoi(argv[i + 1]); continue; }
       if (a == "--config") config = argv[i + 1];
       else if (a == "--input") input = argv[i + 1];
       else if (a == "--output") output = argv[i + 1];
@@ -50,10 +60,20 @@ int main(int argc, char** argv) {
     sim.start();
     obs::DecisionReader reader;
     if (!reader.open(input)) throw std::runtime_error("cannot open decision log");
-    obs::DecisionRecord cand;
+    std::vector<obs::DecisionRecord> picked;
+    {
+      obs::DecisionRecord r;
+      while (reader.next(r)) {
+        if (r.kind != uint8_t(obs::RecordKind::Candidate) || r.hops < min_hops || r.hops > 3) continue;
+        bool ok = live_skipped ? r.action == uint8_t(obs::Action::Skipped) && r.reason == uint8_t(engine::Reason::not_armed)
+                               : r.action == uint8_t(obs::Action::DryRun);
+        if (ok) picked.push_back(r);
+      }
+    }
+    if (live_skipped) std::reverse(picked.begin(), picked.end());  // newest first: closest to current state
     size_t count = 0;
-    while (count < limit && reader.next(cand)) {
-      if (cand.kind != uint8_t(obs::RecordKind::Candidate) || cand.action != uint8_t(obs::Action::DryRun) || cand.hops < 2 || cand.hops > 3) continue;
+    for (const obs::DecisionRecord& cand : picked) {
+      if (count >= limit) break;
       StateStore store;
       app::SimJob j;
       j.cand = cand;
