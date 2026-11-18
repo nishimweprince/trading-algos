@@ -239,3 +239,12 @@ TEST(arming_extend_plan_fills_existing_then_creates) {
   CHECK_EQ(creates, size_t(1));
   CHECK_EQ(added, missing.size());
 }
+
+#include "app/send_audit.hpp"
+
+TEST(send_audit_classifies_simulation_errors) {
+  CHECK(app::classify_sim_error("") == app::AuditVerdict::ok);
+  CHECK(app::classify_sim_error("{\"InstructionError\":[3,{\"Custom\":6002}]}") == app::AuditVerdict::min_out);
+  CHECK(app::classify_sim_error("{\"InstructionError\":[2,{\"Custom\":6018}]}") == app::AuditVerdict::other);
+  CHECK(app::classify_sim_error("\"AccountNotFound\"") == app::AuditVerdict::other);
+}
