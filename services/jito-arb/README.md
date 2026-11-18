@@ -11,6 +11,14 @@ is the default, replay mode is always a dry run, and in dry run the submitter ho
 The VM steps (live feed, recording, the phase-2 replay gate, the executor build and validator tests) are in
 [RUNBOOK-VM.md](RUNBOOK-VM.md). No mainnet send should happen before the owner has reviewed the gate.
 
+
+> **Live only (18 Nov 2026).** Dry run and every simulation tool were removed: `BundleSim`, `sim-check`,
+> `sim-replay`, `sim-parity`, `executor-probe`, `quote-probe`, `newpool-shadow`, the lead and preprocessed probes,
+> the validator scripts and the `[sim]` config. A config with `dry_run = true` refuses to start. The one remaining
+> re-run of a transaction is the **post-send check**: each sent bundle is re-run read-only after it is sent, to tell a
+> lost race (MinOutNotMet) from a broken transaction and to measure compute use for the adaptive limits. Sections
+> below that describe dry runs and the removed tools are kept as history.
+
 ## Documentation
 
 | Document | What it covers |
@@ -24,7 +32,7 @@ The VM steps (live feed, recording, the phase-2 replay gate, the executor build 
 | [config/denylist.json](config/denylist.json) | Mints and pools the bot must never touch |
 | [deploy/](deploy/) | `install.sh`, the VM config `bot.vm.toml`, the env template, and systemd units: `jito-arb` (live dry run), `jito-arb-discover` (+ 10-minute timer), `jito-arb-recorder`, `jito-arb-ui` |
 | [ui/server.py](ui/server.py) | Read-only dashboard on 127.0.0.1:8088 (metrics, decision log, discovery summary); the docstring lists its endpoints |
-| [harness/](harness/) | `sim_parity.cpp` (simulation oracle), `holders_seed.json`, `idl/`, and `parity-node/` (official-SDK parity harness, VM only) |
+| [harness/](harness/) | `idl/` and `parity-node/` (official-SDK parity harness, VM only) |
 | [program/executor/](program/executor/) | On-chain executor (Rust) and `tests/validator.sh` |
 
 ## DEX coverage (where is Orca?)
@@ -183,7 +191,7 @@ Everything below is a dry run. The build refuses `dry_run = false`, so nothing i
 
 | Unit | What it does | Needs |
 |---|---|---|
-| `jito-arb.service` | Live feed and engine, `--mode live --dry-run`; `/metrics` on 127.0.0.1:9100 | env file, `pools.json` |
+| `jito-arb.service` | Live feed and engine, `--mode live`; `/metrics` on 127.0.0.1:9100 | env file, `pools.json` |
 | `jito-arb-discover.service` + `.timer` | Pool discovery (gPA through Helius) every 10 min (first run 1 min after boot); writes `pools.json` | env file |
 | `jito-arb-recorder.service` | Optional. Raw LaserStream frames to `/var/lib/jito-arb/frames` (1–3 GB/hour) | env file, `pools.json` |
 | `jito-arb-ui.service` | Dashboard on 127.0.0.1:8088 | `jito-arb.service` metrics, read access to `/var/lib/jito-arb` |
@@ -197,7 +205,7 @@ in before you start anything:
 
 | Variable | Required | Used by | What it is |
 |---|---|---|---|
-| `HELIUS_API_KEY` | **Yes** | `jito-arb`, `discover`, `recorder`, `sim-parity`, `sim-check`, `quote-probe` | Helius API key. It is the LaserStream `x-token` and goes on the RPC URL (`https://mainnet.helius-rpc.com/?api-key=…`). If it is missing, RPC silently falls back to the public `api.mainnet-beta.solana.com` and LaserStream has no token, so always set it. You can change the variable's name with `helius.api_key_env` in `bot.toml`. |
+| `HELIUS_API_KEY` | **Yes** | `jito-arb`, `discover`, `recorder`, `arm-accounts` | Helius API key. It is the LaserStream `x-token` and goes on the RPC URL (`https://mainnet.helius-rpc.com/?api-key=…`). If it is missing, RPC silently falls back to the public `api.mainnet-beta.solana.com` and LaserStream has no token, so always set it. You can change the variable's name with `helius.api_key_env` in `bot.toml`. |
 | `LASERSTREAM_ENDPOINT` | **Yes** for `live` and `recorder` | `jito-arb` | The LaserStream gRPC endpoint for the region nearest the server, from the Helius dashboard (Frankfurt: `https://laserstream-mainnet-fra.helius-rpc.com`). It overrides `helius.laserstream_endpoint` in `bot.toml`, which ships as `"VERIFY"`. |
 
 ```bash
@@ -211,7 +219,6 @@ Variables used only by one-off tools, never by the services:
 | Variable | Used by |
 |---|---|
 | `RPC_URL` | `program/executor/tests/cloned_validator.py` (the RPC to clone mainnet accounts from) |
-| `PREPROC_ENDPOINT`, `PREPROC_ACCOUNTS_FILE`, `PREPROC_TOKEN` | `tools/preprocessed-probe` (research probe) |
 
 **The dashboard needs no environment variables.** It holds no secrets and is configured only by its
 command-line flags (below).
@@ -385,8 +392,8 @@ binaries. If you only want a restart and do not need the logs archived, run
 
 | Path | Contents | Owner, mode |
 |---|---|---|
-| `/opt/jito-arb/bin/` | `jito-arb`, `discover`, `recorder`, `replay-report`, `sim-parity`, `sim-check`, `quote-probe`, … | root, 0755 |
-| `/opt/jito-arb/share/` | `dex_programs.toml`, `denylist.json`, `holders_seed.json` | root, 0644 |
+| `/opt/jito-arb/bin/` | `jito-arb`, `discover`, `recorder`, `replay-report`, `live-plan`, `arm-accounts`, … | root, 0755 |
+| `/opt/jito-arb/share/` | `dex_programs.toml`, `denylist.json` | root, 0644 |
 | `/opt/jito-arb/ui/` | `server.py`, `index.html`, `fonts/` | root, 0644 |
 | `/etc/jito-arb/bot.toml` | Bot config | root:jito-arb, 0640 |
 | `/etc/jito-arb/jito-arb.env` | Secrets (`HELIUS_API_KEY`, `LASERSTREAM_ENDPOINT`) | root:root, 0600 |
@@ -517,12 +524,12 @@ src/dex       quoters (Raydium v4, Whirlpool)
 src/engine    route graph, sizer, costs and tips, dispatcher, engine
 src/flash     Kamino reserve and flash instructions
 src/tx        v0 compiler with ALTs, DEX swap ixs, route builders, ALT manager, blockhash cache
-src/submit    TLS keep-alive HTTP, Jito client, submitter (dry-run gate), bundle tracker
+src/submit    TLS keep-alive HTTP, Jito client, leader map, router (per-region senders), bundle tracker
 src/risk      token safety, sign guard, limits, denylist
 src/obs       logger, metrics, decision log, replay report
 src/app       runtime (feed -> engine -> log), bundle builder (send hook)
-src/tools     discover, recorder, fixture-frames, replay-report, sim-check
-harness/      sim-parity oracle, holders seed, parity-node (SDK harness, VM)
+src/tools     discover, recorder, fixture-frames, replay-report, live-plan, arm-accounts, pool-inventory
+harness/      idl, parity-node (SDK harness, VM)
 program/      executor (Rust, native solana-program; unbuilt here) + tests/validator.sh
 tests/        unit/, fixtures/ (mainnet account bytes, parity, frames), golden_tx/, bench/
 ```

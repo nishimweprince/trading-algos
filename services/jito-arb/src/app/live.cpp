@@ -268,8 +268,8 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   auto last_tables = std::chrono::steady_clock::now();
   // Landing feedback: Jito's verdict on each sent bundle, polled off the engine thread.
   std::unique_ptr<LandingWatcher> watcher;
-  // Every sent bundle is re-simulated from its exact bytes on a side thread (read-only): tells a lost race
-  // (MinOutNotMet) from a transaction that cannot execute.
+  // Post-send check: every sent bundle is re-run from its exact bytes on a side thread (read-only), which tells a
+  // lost race (MinOutNotMet) from a transaction that cannot execute and measures its compute use.
   std::unique_ptr<SendAudit> audit;
   if (live_send) audit = std::make_unique<SendAudit>(resolve_rpc_url(cfg));
   // Audit-measured compute use per route class, handed from the audit thread to the engine thread (tick).
@@ -433,7 +433,6 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   };
   int64_t last_blockhash_try = 0, last_resync_try = 0, last_bank_resync_try = 0, last_tables_try = 0;
   // Next to the decision logs (the data dir the dashboard reads).
-  std::string quarantine_path = cfg.obs.decision_log_dir + "/../quarantine.json";
   auto& g_decode = reg.gauge("arb_decode_failures", "account decode failures");
   auto& g_cand = reg.gauge("arb_engine_candidates", "candidates priced above min_ev");
   auto& g_rec = reg.gauge("arb_recorder_bytes", "bytes written by the recorder");
@@ -483,9 +482,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   auto& g_sp_priced = reg.gauge("arb_engine_spread_priced", "spread-stale cycles that sized and priced as a candidate (shadow)");
   auto& g_sp_gross = reg.gauge("arb_engine_spread_gross_lamports", "gross of spread-stale priced cycles (shadow), lamports");
   auto& g_untradable = reg.gauge("arb_engine_untradable", "evaluations skipped: a leg the program rejects in that direction");
-  auto& g_quarantined = reg.gauge("arb_engine_quarantined", "evaluations skipped: a leg quarantined by failed or short simulations");
   auto& g_implausible = reg.gauge("arb_engine_implausible_profit", "sized candidates skipped: profit above engine.max_profit_ratio");
-  auto& g_quarantine_pools = reg.gauge("arb_quarantined_pools", "pool directions quarantined now");
   auto& g_no_room_memo = reg.gauge("arb_engine_no_room_memo", "evaluations skipped: x_max was below min_trade and nothing changed since");
   auto& g_signed = reg.gauge("arb_bundles_signed", "bundles built and signed");
   auto& g_sent = reg.gauge("arb_bundles_sent", "bundles accepted by at least one Jito region");
@@ -711,7 +708,6 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       g_skipped.set(int64_t(n.skipped));
       g_untradable.set(int64_t(n.untradable));
       g_no_room_memo.set(int64_t(n.no_room_memo));
-      g_quarantined.set(int64_t(n.quarantined));
       g_implausible.set(int64_t(n.implausible));
       g_st_incomplete.set(int64_t(n.stale_incomplete));
       g_st_resync.set(int64_t(n.stale_resync));
@@ -801,25 +797,6 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       put(g_fprof, rt.engine().failed_profit_ppm(), tnow);
       const auto& dg = rt.engine().sizer_diag();
       for (auto& d : diag_gauges) d.g->set(int64_t(dg.*(d.field)));
-      {
-        // Quarantine list for the dashboard: <data dir>/quarantine.json, rewritten each second.
-        auto q = rt.engine().quarantined(wall_ms());
-        g_quarantine_pools.set(int64_t(q.size()));
-        std::string js = "{\"at_ms\":" + std::to_string(wall_ms()) + ",\"pools\":[";
-        for (size_t i = 0; i < q.size(); ++i) {
-          const PoolDef& d = rt.store().def(q[i].pool);
-          js += (i ? "," : "") + std::string("{\"pool\":\"") + b58(d.address) + "\",\"dex\":\"" + dex_name(d.kind) +
-                "\",\"dir\":\"" + (q[i].a_to_b ? "a>b" : "b>a") + "\",\"until_ms\":" + std::to_string(q[i].until_ms) +
-                ",\"strikes\":" + std::to_string(q[i].strikes) + "}";
-        }
-        js += "]}\n";
-        std::string qp = quarantine_path + ".tmp";
-        if (FILE* f = std::fopen(qp.c_str(), "w")) {
-          std::fwrite(js.data(), 1, js.size(), f);
-          std::fclose(f);
-          std::rename(qp.c_str(), quarantine_path.c_str());
-        }
-      }
       if (now - last_example >= std::chrono::seconds(30)) {
         last_example = now;
         // The largest predicted edge that sized to no profit: what the prefilter believed vs what quoting found.

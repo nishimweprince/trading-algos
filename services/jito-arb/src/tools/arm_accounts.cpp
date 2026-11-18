@@ -1,7 +1,7 @@
 // arm-accounts: create the hot wallet's token accounts and lookup tables for the armed pools (docs/LIVE-READINESS.md
-// Stage 3). Without --send it is read-only: it reads chain state, prints what is missing and what it costs, and
-// simulates the first transactions. With --send it signs with the hot wallet and sends them one at a time, each
-// confirmed before the next, after you type "yes". Safe to re-run: the plan is always rebuilt from chain state, so
+// Stage 3). Without --send it is read-only: it reads chain state and prints what is missing and what it costs.
+// With --send it signs with the hot wallet and sends them one at a time, each confirmed before the next, after you
+// type "yes". Safe to re-run: the plan is always rebuilt from chain state, so
 // an interrupted run continues where it stopped.
 //
 //   arm-accounts CONFIG [--send] [--yes] [--cu-price MICRO_LAMPORTS]
@@ -19,7 +19,6 @@
 #include <thread>
 
 #include "app/arming.hpp"
-#include "app/bundle_sim.hpp"
 #include "app/live_plan.hpp"
 #include "app/live_send.hpp"
 #include "app/pools_file.hpp"
@@ -215,19 +214,6 @@ int main(int argc, char** argv) {
     app::add_compute_budget(setup, 200'000, cu_price);
 
     if (!send) {
-      // Read-only check: simulate the first setup transaction and the first table transaction.
-      std::vector<tx::IxList> first;
-      if (!setup.empty()) first.push_back(setup.front());
-      std::vector<Pubkey> created;
-      auto tplan = alts.plan_extend(missing_keys, w, w, recent_table_slot(rpc), &created);
-      app::add_compute_budget(tplan, 200'000, cu_price);
-      if (!tplan.empty()) first.push_back(tplan.front());
-      for (const auto& l : first) {
-        // At "confirmed", the bank sendTransaction's preflight uses: a processed-bank simulation passed a table create
-        // that the preflight then rejected.
-        std::string res = rpc.simulate(app::unsigned_tx_b64(w, l), "confirmed");
-        std::printf("simulation           %s\n", res.empty() ? "ok" : res.c_str());
-      }
       std::printf("read-only: nothing sent. Run again with --send to create them.\n");
       return 0;
     }

@@ -290,19 +290,6 @@ int run(int argc, char** argv) {
     prev_body = pss.str();
   }
   std::ofstream(out) << app::to_json(pf);
-  // Every candidate that passed the safety gate, tracked or not (cut by the TVL floor or the pool cap): the
-  // new-pool shadow diffs successive lists to find pools that did not exist before.
-  if (!cfg.discovery.candidates_path.empty()) {
-    app::PoolsFile all;
-    for (auto& c : res.tracked) { all.pools.push_back(c.def); all.tvl_sol.push_back(c.tvl_sol); }
-    for (auto& c : res.rejected)
-      if (c.reject == "tvl" || c.reject == "max_tracked_pools") { all.pools.push_back(c.def); all.tvl_sol.push_back(c.tvl_sol); }
-    all.reserves = pf.reserves;
-    const std::string tmp = cfg.discovery.candidates_path + ".tmp";
-    std::ofstream(tmp) << app::to_json(all);
-    std::rename(tmp.c_str(), cfg.discovery.candidates_path.c_str());
-    std::fprintf(stderr, "candidates file: %zu safe pools -> %s\n", all.pools.size(), cfg.discovery.candidates_path.c_str());
-  }
   std::fprintf(stderr, "tracked %zu pools (SOL = %.2f USDC); rejected:", res.tracked.size(), res.sol_price_usdc);
   for (auto& [why, n] : res.reject_counts) std::fprintf(stderr, " %s=%zu", why.c_str(), n);
   std::fprintf(stderr, "\n");

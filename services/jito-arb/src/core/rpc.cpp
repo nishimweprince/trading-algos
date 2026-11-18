@@ -257,25 +257,6 @@ std::string Rpc::send_transaction(const std::string& tx_b64) {
   return std::string(sig);
 }
 
-std::string Rpc::simulate(const std::string& tx_b64, const char* commitment) {
-  std::string body = call("simulateTransaction", "[\"" + tx_b64 +
-                                                     "\",{\"encoding\":\"base64\",\"sigVerify\":false,\"replaceRecentBlockhash\":true,\"commitment\":\"" +
-                                                     commitment + "\"}]");
-  simdjson::dom::parser p;
-  element v = p.parse(body)["result"]["value"];
-  element err;
-  if (v["err"].get(err) != simdjson::SUCCESS || err.is_null()) return "";
-  std::string out = simdjson::to_string(err);
-  simdjson::dom::array logs;
-  if (v["logs"].get(logs) == simdjson::SUCCESS) {
-    for (element l : logs) {
-      std::string_view s;
-      if (l.get(s) == simdjson::SUCCESS) out += "\n  " + std::string(s);
-    }
-  }
-  return out;
-}
-
 Rpc::SimResult Rpc::simulate_full(const std::string& tx_b64, const std::vector<Pubkey>& accounts, uint64_t min_context_slot,
                                   const char* commitment) {
   std::string cfg = std::string("{\"encoding\":\"base64\",\"sigVerify\":false,\"replaceRecentBlockhash\":true,\"commitment\":\"") +
