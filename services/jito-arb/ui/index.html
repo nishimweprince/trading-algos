@@ -259,7 +259,7 @@ async function refreshSends() {
         `<td class="sub">${b.regions.map((r) => esc(r.region) + (r.rtt_ms != null ? " " + fmt(r.rtt_ms, 1) + " ms" : "")).join(", ")}</td>` +
         `<td>${b.accepted ? tag("accepted", "good") : tag("refused", "bad")}</td>` +
         `<td>${b.audit === "min_out" ? tag("edge gone", "warn") : b.audit === "ok" ? tag("would succeed", "good") : b.audit === "failed" ? tag("tx error", "bad") : `<span class="sub">pending</span>`}</td>` +
-        `<td>${b.landing === "landed" ? tag("landed", "good") : b.landing === "rejected" ? tag("rejected", "bad") : b.landing === "not_landed" ? tag("not landed", "") : `<span class="sub">tracking</span>`}</td></tr>`).join("")
+        `<td>${b.landing === "landed" ? tag("landed", "good") : b.landing === "rejected" ? tag("rejected", "bad") : b.landing === "not_landed" ? tag("not landed", "") : `<span class="sub">${Date.now() - b.t > 120000 ? "no record" : "tracking"}</span>`}</td></tr>`).join("")
       : `<tr><td class="empty">No bundles yet.</td></tr>`;
     const rs = Object.entries(d.skipped_by_reason || {}).slice(0, 6);
     const top = Math.max(1, ...rs.map((r) => r[1]));
