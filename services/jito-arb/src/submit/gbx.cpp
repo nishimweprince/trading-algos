@@ -55,7 +55,14 @@ bool gbx_parse_challenge(std::string_view resp, std::string& challenge) {
   return r.ok && !challenge.empty();
 }
 
-std::string gbx_challenge_message(const Pubkey& pubkey, const std::string& challenge) { return b58(pubkey) + "-" + challenge; }
+std::string gbx_challenge_message(const Pubkey& pubkey, const std::string& challenge, int variant) {
+  switch (variant) {
+    case 1: return std::string(key_view(pubkey)) + challenge;
+    case 2: return b58(pubkey) + challenge;
+    case 3: return challenge;
+    default: return b58(pubkey) + "-" + challenge;
+  }
+}
 
 std::string gbx_tokens_request(const std::string& challenge, const Pubkey& pubkey, const Signature& signed_challenge) {
   pb::Writer w;
@@ -231,12 +238,22 @@ bool GbxClient::ensure_auth(GbxTransport& t) {
     last_err_ = "auth challenge: code " + std::to_string(code) + " " + err;
     return false;
   }
-  const std::string msg = gbx_challenge_message(id_.pubkey(), challenge);
-  Signature sig{};
-  id_.sign(reinterpret_cast<const uint8_t*>(msg.data()), msg.size(), sig.data());
   GbxToken a, r;
-  code = t.call(AUTH_TOKENS, gbx_tokens_request(challenge, id_.pubkey(), sig), resp, "", err);
-  if (code != 0 || !gbx_parse_tokens(resp, a, r)) {
+  bool got = false;
+  const int first = sign_variant_ >= 0 ? sign_variant_ : 0, last = sign_variant_ >= 0 ? sign_variant_ : GBX_SIGN_VARIANTS - 1;
+  for (int v = first; v <= last && !got; ++v) {
+    const std::string msg = gbx_challenge_message(id_.pubkey(), challenge, v);
+    Signature sig{};
+    id_.sign(reinterpret_cast<const uint8_t*>(msg.data()), msg.size(), sig.data());
+    code = t.call(AUTH_TOKENS, gbx_tokens_request(challenge, id_.pubkey(), sig), resp, "", err);
+    if (code == 0 && gbx_parse_tokens(resp, a, r)) {
+      got = true;
+      if (sign_variant_ != v) LOG_INFO("gbx: challenge signature accepted with encoding %d", v);
+      sign_variant_ = v;
+    }
+  }
+  if (!got) {
+    sign_variant_ = -1;
     ++auth_fail_;
     std::lock_guard<std::mutex> g(info_mu_);
     last_err_ = "auth tokens: code " + std::to_string(code) + " " + err;

@@ -37,8 +37,14 @@ namespace arb::submit {
 // ---- wire format (pure; tested on the laptop) ----
 std::string gbx_challenge_request(const Pubkey& pubkey);
 bool gbx_parse_challenge(std::string_view resp, std::string& challenge);
-/** The bytes the challenge signature covers: "<pubkey base58>-<challenge>". */
-std::string gbx_challenge_message(const Pubkey& pubkey, const std::string& challenge);
+/**
+ * The bytes the challenge signature covers. Jito clients sign "<pubkey base58>-<challenge>" (variant 0), which the
+ * GBX broadcaster refused on 19 Nov ("invalid or expired signed authentication challenge"); its proto only says
+ * "the challenge token prepended with their pubkey". Variants: 0 "<b58>-<challenge>", 1 <32 raw bytes><challenge>,
+ * 2 "<b58><challenge>", 3 "<challenge>". The client tries them in order and keeps the first that is accepted.
+ */
+std::string gbx_challenge_message(const Pubkey& pubkey, const std::string& challenge, int variant = 0);
+constexpr int GBX_SIGN_VARIANTS = 4;
 std::string gbx_tokens_request(const std::string& challenge, const Pubkey& pubkey, const Signature& signed_challenge);
 struct GbxToken {
   std::string value;
@@ -129,6 +135,7 @@ class GbxClient {
   Sent sent_;
   Resolved resolved_;
   std::string access_, refresh_;
+  int sign_variant_ = -1;  // the accepted challenge encoding, once known
   int64_t access_exp_ = 0, refresh_exp_ = 0;
   std::mutex mu_;
   std::condition_variable cv_;
