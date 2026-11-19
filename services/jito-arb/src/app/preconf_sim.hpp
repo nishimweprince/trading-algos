@@ -37,6 +37,7 @@ struct SpecResult {
   uint64_t sim_slot = 0;      // simulation context slot
   uint64_t recv_ns = 0, sim_done_ns = 0;
   Signature sig{};
+  std::string tx;  // the trigger's wire bytes (back-run bundle: [trigger, ours])
   /** Views for StateStore::speculate (valid while this result lives). */
   std::vector<AccountUpdate> views() const;
 };

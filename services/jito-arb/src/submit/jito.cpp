@@ -187,15 +187,17 @@ std::vector<Pubkey> JitoClient::tip_accounts() {
 Submitter::Submitter(std::unique_ptr<JitoClient> client) : client_(std::move(client)) {}
 
 SubmitOutcome Submitter::submit(const tx::SignedTx& t, uint64_t built_slot, uint64_t current_slot, int64_t now_ms,
-                                std::vector<RegionResult>* results, uint16_t route_class) {
+                                std::vector<RegionResult>* results, uint16_t route_class, const std::vector<std::string>* prefix) {
   if (current_slot > built_slot) return SubmitOutcome::Stale;
   if (router_) {
-    auto plan = router_->route(b64(t.bytes, t.len), t.sig, route_class, built_slot, now_ms);
+    auto plan = router_->route(b64(t.bytes, t.len), t.sig, route_class, built_slot, now_ms, prefix);
     return plan.skip ? SubmitOutcome::SkippedLeader : SubmitOutcome::Queued;
   }
   if (!client_) return SubmitOutcome::NoRegion;
-  std::string b64tx = b64(t.bytes, t.len);
-  auto rr = client_->send_bundle(std::span<const std::string>(&b64tx, 1), now_ms);
+  std::vector<std::string> txs;
+  if (prefix) txs = *prefix;
+  txs.push_back(b64(t.bytes, t.len));
+  auto rr = client_->send_bundle(txs, now_ms);
   bool any = false;
   for (auto& r : rr) any |= !r.bundle_id.empty();
   if (results) *results = std::move(rr);

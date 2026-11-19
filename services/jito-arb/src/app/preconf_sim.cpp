@@ -145,6 +145,7 @@ void PreconfSim::run() {
       r.sim_slot = sim.slot;
       r.recv_ns = t.recv_ns;
       r.sig = keys.sig;
+      r.tx = std::move(t.tx);
       for (size_t i = 0; i < read.size() && i < sim.accounts.size(); ++i) {
         OwnedUpdate u;
         u.key = read[i];

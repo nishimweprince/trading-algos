@@ -371,7 +371,8 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       builder.set_queued_hook([&](const tx::SignedTx& t, uint16_t rc2) {
         submit::LeaderInfo l = leaders->at(rt.clock().slot.load());
         ++sent_kind[size_t(l.kind) & 3];
-        if (audit) audit->submit(b64(t.bytes, t.len), b58(t.sig).substr(0, 12), rc2);
+        // A back-run cannot be re-simulated alone: without its trigger the edge does not exist yet.
+        if (audit && !rt.trigger_tx()) audit->submit(b64(t.bytes, t.len), b58(t.sig).substr(0, 12), rc2);
       });
     } else {
       builder.set_sent_hook([&](const std::string& id, const Signature& sig, uint16_t rc, int64_t now_ms) {
@@ -745,7 +746,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
           overlays.emplace_back(id, std::move(snap));
         }
         preconf_spec_pools += overlays.size();
-        rt.evaluate_speculative(overlays, std::max(r.slot, r.sim_slot));
+        rt.evaluate_speculative(overlays, std::max(r.slot, r.sim_slot), &r.tx, b58(r.sig));
       }
     }
     auto now = std::chrono::steady_clock::now();

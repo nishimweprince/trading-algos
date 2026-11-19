@@ -15,6 +15,12 @@ std::string sender_send_body(const std::string& tx_b64, uint64_t id) {
          "\",{\"encoding\":\"base64\",\"skipPreflight\":true,\"maxRetries\":0}]}";
 }
 
+std::string sender_bundle_body(const std::vector<std::string>& prefix, const std::string& tx_b64, uint64_t id) {
+  std::string b = "{\"jsonrpc\":\"2.0\",\"id\":" + std::to_string(id) + ",\"method\":\"sendBundle\",\"params\":[[";
+  for (const auto& p : prefix) b += "\"" + p + "\",";
+  return b + "\"" + tx_b64 + "\"],{\"encoding\":\"base64\"}]}";
+}
+
 bool parse_sender_reply(std::string_view body, std::string& signature, std::string& error) {
   signature.clear();
   error.clear();
@@ -133,7 +139,7 @@ void SenderClient::run_send() {
     for (int attempt = 0; attempt < 2; ++attempt) {  // one reconnect when a kept-alive socket was closed
       if (!ensure()) break;
       try {
-        r.http_status = http_->post("", sender_send_body(j.tx_b64), out);
+        r.http_status = http_->post("", j.prefix_b64.empty() ? sender_send_body(j.tx_b64) : sender_bundle_body(j.prefix_b64, j.tx_b64), out);
         break;
       } catch (const std::exception& e) {
         http_.reset();

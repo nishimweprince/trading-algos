@@ -101,7 +101,8 @@ class Submitter {
    * (a stale arb is a new decision, never a retry).
    */
   SubmitOutcome submit(const tx::SignedTx& t, uint64_t built_slot, uint64_t current_slot, int64_t now_ms,
-                       std::vector<RegionResult>* results = nullptr, uint16_t route_class = 0);
+                       std::vector<RegionResult>* results = nullptr, uint16_t route_class = 0,
+                       const std::vector<std::string>* prefix = nullptr);
   /** Leader-aware asynchronous routing: submit only enqueues (Queued / SkippedLeader); the router reports. */
   void set_router(Router* r) { router_ = r; }
 

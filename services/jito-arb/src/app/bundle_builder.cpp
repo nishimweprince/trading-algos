@@ -164,6 +164,10 @@ bool BundleBuilder::send_plain(const engine::Opportunity& o, const engine::Cycle
   }
   submit::SenderJob j;
   j.path = path.name;
+  if (spec && rt_.trigger_tx()) {
+    const std::string& t = *rt_.trigger_tx();
+    j.prefix_b64.push_back(b64(reinterpret_cast<const uint8_t*>(t.data()), t.size()));
+  }
   j.tx_b64 = b64(last_sender_.bytes, last_sender_.len);
   j.sig = b58(last_sender_.sig);
   j.built_slot = slot;
@@ -279,7 +283,17 @@ void BundleBuilder::operator()(const engine::Opportunity& o, const engine::Cycle
   std::vector<submit::RegionResult> regions;
   const auto leg_span = std::span<const std::shared_ptr<const PoolState>>(legs, c.n);
   auto plain = [&]() { return !plain_.empty() && send_plain(o, c, leg_span, p, slot, rec.wall_ms); };
-  switch (submitter_.submit(last_, slot, rt_.clock().slot.load(std::memory_order_relaxed), rec.wall_ms, &regions, c.route_class)) {
+  // A preconfirmation-triggered candidate goes out as a back-run: [trigger, ours] in one bundle, so ours runs right
+  // after the transaction that made the edge, or not at all (an already-executed trigger fails the whole bundle).
+  std::vector<std::string> trigger_prefix;
+  if (rt_.speculative() && rt_.trigger_tx()) {
+    const std::string& t = *rt_.trigger_tx();
+    trigger_prefix.push_back(b64(reinterpret_cast<const uint8_t*>(t.data()), t.size()));
+  }
+  const std::vector<std::string>* prefix = trigger_prefix.empty() ? nullptr : &trigger_prefix;
+  if (prefix) LOG_INFO("preconf: back-run of trigger %s (slot %llu): bundle %s, gross %llu", rt_.trigger_sig().substr(0, 12).c_str(),
+                       (unsigned long long)slot, b58(last_.sig).substr(0, 12).c_str(), (unsigned long long)o.pr.gross_lamports);
+  switch (submitter_.submit(last_, slot, rt_.clock().slot.load(std::memory_order_relaxed), rec.wall_ms, &regions, c.route_class, prefix)) {
     case submit::SubmitOutcome::Queued:
       // Leader-aware routing: queued on the region senders; acceptance and bundle ids arrive through the router.
       ++n_.sent;

@@ -70,7 +70,9 @@ class Router {
   Router(const Router&) = delete;
   Router& operator=(const Router&) = delete;
   /** Enqueue (never blocks). Skipped when the plan says so; returns the plan. */
-  RoutePlan route(const std::string& tx_b64, const Signature& sig, uint16_t route_class, uint64_t built_slot, int64_t wall_ms);
+  /** `prefix`: transactions placed ahead of ours in the same bundle (a preconfirmed trigger we back-run). */
+  RoutePlan route(const std::string& tx_b64, const Signature& sig, uint16_t route_class, uint64_t built_slot, int64_t wall_ms,
+                  const std::vector<std::string>* prefix = nullptr);
   /** Open the block-engine connection of every region now (and keep it warm), instead of on its first bundle. */
   void warm(const std::vector<std::string>& regions);
   /** Latest keepalive round trip per region, us (-1 until one succeeded). */

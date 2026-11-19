@@ -172,12 +172,14 @@ void Runtime::note_preconf(uint32_t pool, uint64_t recv_ns) {
 }
 
 size_t Runtime::evaluate_speculative(const std::vector<std::pair<uint32_t, std::shared_ptr<const PoolState>>>& overlays,
-                                     uint64_t slot) {
+                                     uint64_t slot, const std::string* trigger_tx, const std::string& trigger_sig) {
   if (overlays.empty()) return 0;
   slot = std::max(slot, clock_.slot.load(std::memory_order_relaxed));
   refresh_slot_inputs(slot);
   for (const auto& [id, snap] : overlays) engine_->set_overlay(id, snap);
   speculative_ = true;
+  trigger_tx_ = trigger_tx;
+  trigger_sig_ = trigger_sig;
   size_t n = 0;
   for (const auto& [id, snap] : overlays) {
     eval_start_ns_ = now_ns();
@@ -186,6 +188,8 @@ size_t Runtime::evaluate_speculative(const std::vector<std::pair<uint32_t, std::
     ++n;
   }
   speculative_ = false;
+  trigger_tx_ = nullptr;
+  trigger_sig_.clear();
   engine_->clear_overlay();
   stats_.speculative += n;
   return n;
