@@ -440,7 +440,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
     risk::SenderFeeConfig f = sfc;
     f.tip_lamports = cfg.jito.sender_tip_lamports;
     builder.add_plain_path("sender", sender.get(), &sender_budget, f, risk::sender_tip_accounts(),
-                           std::max<uint64_t>(cfg.jito.sender_tip_lamports, 5'000));
+                           std::max<uint64_t>(cfg.jito.sender_tip_lamports, 5'000), false, cfg.helius.preconf_fallback_sender);
     LOG_INFO("plain route ON: Helius Sender (%s), tip %llu lamports, fee <= %.1f%% of gross, failed-fee cap %llu lamports/day",
              cfg.jito.sender_url.c_str(), (unsigned long long)cfg.jito.sender_tip_lamports, cfg.jito.sender_fee_frac_ppm / 1e4,
              (unsigned long long)cfg.jito.sender_daily_fail_cap_lamports);
@@ -491,6 +491,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       f.tip_frac_ppm = cfg.jito.sender_max_tip_frac_ppm;
       f.max_tip_share_ppm = cfg.jito.sender_max_max_tip_share_ppm;
       builder.add_plain_path("sender_max", sender_max.get(), &sender_budget, f, risk::sender_tip_accounts(), 50'000'000, true);
+      builder.set_backrun(cfg.helius.preconf_backrun);
       preconf_guard = std::make_unique<feed::CreditGuard>(cfg.helius.preconf_daily_credit_cap);
       if (preconf_guard->load(cfg.helius.preconf_credits_path, wall_ms()))
         LOG_INFO("preconf: %llu credits already used today (from %s)", (unsigned long long)preconf_guard->today(wall_ms()),

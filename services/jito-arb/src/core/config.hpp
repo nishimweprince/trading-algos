@@ -53,6 +53,11 @@ struct Config {
     // pool state current; every trade comes from a preconfirmation (owner, 19 Nov: the stream-triggered path sent
     // 256 bundles and 71 plain transactions with nothing landed). Needs preconf_enabled.
     std::string trigger = "all";
+    // Preconf candidates: back-run bundles [trigger, ours] (off: Jito refused both tries on 19 Nov, the trigger had
+    // already executed or referenced a vote account) and Sender (swqos) as the plain route when gross cannot pay
+    // the Sender Max tip.
+    bool preconf_backrun = false;
+    bool preconf_fallback_sender = true;
     uint64_t preconf_daily_credit_cap = 10'000'000;
     std::string preconf_credits_path = "/var/lib/jito-arb/preconf_credits.txt";  // today's total, survives restarts
     bool preconf_include_failed = false;
