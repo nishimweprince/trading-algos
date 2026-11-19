@@ -1,0 +1,12 @@
+{
+  "name": "pd-lp",
+  "private": true,
+  "type": "module",
+  "description": "Live LP on fresh PumpSwap pools (see README.md). Deployed to /opt/pd-lp on the jito FRA VM.",
+  "dependencies": {
+    "@pump-fun/pump-swap-sdk": "2.2.0",
+    "@solana/spl-token": "^0.4.9",
+    "@solana/web3.js": "^1.98.4",
+    "bn.js": "^5.2.1"
+  }
+}
