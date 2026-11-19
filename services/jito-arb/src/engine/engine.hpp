@@ -107,6 +107,12 @@ class Engine {
   void set_own_balance(const Pubkey& mint, uint64_t units) { own_balance_[mint] = units; }
 
   void on_pool_update(uint32_t pool, uint64_t slot);
+  /**
+   * Speculative snapshots (a preconfirmed transaction's simulated effect) used in place of the store's for these
+   * pools until clear_overlay(). Engine thread only; the store is never changed.
+   */
+  void set_overlay(uint32_t pool, std::shared_ptr<const PoolState> s) { overlay_.emplace_back(pool, std::move(s)); }
+  void clear_overlay() { overlay_.clear(); }
   /** Dispatch the pass's candidates at the given slot clock. */
   void dispatch_best(uint64_t current_slot);
   /** Evaluate one cycle now (tests, replay tools). Returns false when it produced no candidate. */
@@ -147,6 +153,7 @@ class Engine {
   bool x_max_for(const Cycle& c, const Snapshots& s, const BasePrice& bp, uint64_t& x_max, Reason& why) const;
   void shadow_spread(uint32_t cycle, const Cycle& c, const Snapshots& s, uint64_t spread_mask);
   const StateStore& store_;
+  std::vector<std::pair<uint32_t, std::shared_ptr<const PoolState>>> overlay_;
   const CycleIndex& idx_;
   Quoters q_;
   EngineConfig cfg_;

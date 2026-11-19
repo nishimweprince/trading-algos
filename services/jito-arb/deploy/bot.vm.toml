@@ -11,6 +11,10 @@ kill_file = "/var/lib/jito-arb/KILL"
 armed_path = "/var/lib/jito-arb/armed.json"   # written by live-plan; dry run only counts routes outside it
 
 [helius]
+# Preconfirmations (preconfSubscribe on the armed pools): off by default. The feed disconnects for the rest of the
+# UTC day once its estimated Helius credits reach the cap, so LaserStream never runs out because of it.
+preconf_enabled = false
+preconf_daily_credit_cap = 10000000
 laserstream_endpoint = "VERIFY"   # overridden by LASERSTREAM_ENDPOINT
 rpc_url = "https://mainnet.helius-rpc.com"
 api_key_env = "HELIUS_API_KEY"
@@ -55,6 +59,11 @@ astralane_enabled = false
 astralane_url = "http://fr.gateway.astralane.io/iris"
 astralane_tip_lamports = 1000000
 astralane_max_tip_share_ppm = 500000
+# Sender Max: the only route for preconfirmation-triggered plain sends (min tip 0.001 SOL, success only).
+sender_max_url = "http://fra-sender.helius-rpc.com/fast"
+sender_max_tip_lamports = 1000000
+sender_max_tip_frac_ppm = 200000
+sender_max_max_tip_share_ppm = 500000
 
 [dex]
 raydium_v4_enabled = true

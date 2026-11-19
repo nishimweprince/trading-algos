@@ -36,6 +36,7 @@ struct BuilderStats {
   uint64_t not_armed = 0;  // routes skipped: through a pool outside the armed set
   uint64_t leader_skipped = 0;  // signed, not sent: no Jito path reaches the slot's leaders
   // Plain-transaction (Sender) path, per opportunity that reached the bundle stage.
+  uint64_t spec_built = 0, spec_sent = 0;  // opportunities priced on a preconfirmation, and those sent
   uint64_t sender_queued = 0, sender_fee_skip = 0, sender_budget_blocked = 0, sender_build_failed = 0, sender_queue_full = 0;
 };
 
@@ -69,7 +70,7 @@ class BundleBuilder {
    * among those whose bid the opportunity can pay, so the routes can be compared; all share one failed-fee budget.
    */
   void add_plain_path(std::string name, submit::SenderClient* s, risk::SenderBudget* b, risk::SenderFeeConfig fc,
-                      std::vector<Pubkey> tip_accounts, uint64_t tip_max_lamports);
+                      std::vector<Pubkey> tip_accounts, uint64_t tip_max_lamports, bool for_preconf = false);
   /** Plain sends queued per route name. */
   const std::map<std::string, uint64_t>& plain_queued_by_path() const { return plain_by_path_; }
   const BuilderStats& stats() const { return n_; }
@@ -91,6 +92,7 @@ class BundleBuilder {
                   const tx::RouteTxParams& bundle_params, uint64_t slot, int64_t wall);
   struct PlainPath {
     std::string name;
+    bool for_preconf = false;  // used only (and only it) for opportunities priced on a preconfirmation
     submit::SenderClient* client = nullptr;
     risk::SenderFeeConfig fee;
     risk::SignGuard guard;

@@ -12,9 +12,14 @@ SenderFee sender_fee(uint64_t gross, uint32_t cu_limit, const SenderFeeConfig& c
   }
   // u128: gross * ppm and price * limit both stay far below 2^64 today, but this is cheap insurance.
   unsigned __int128 budget = (unsigned __int128)gross * c.fee_frac_ppm / 1'000'000;
-  uint64_t fixed = c.base_fee_lamports + c.tip_lamports;
+  uint64_t tip = c.tip_lamports;
+  if (c.tip_frac_ppm) tip = std::max<uint64_t>(tip, uint64_t((unsigned __int128)gross * c.tip_frac_ppm / 1'000'000));
+  if (c.max_tip_share_ppm && c.tip_frac_ppm)
+    tip = std::min<uint64_t>(tip, std::max<uint64_t>(c.tip_lamports, uint64_t((unsigned __int128)gross * c.max_tip_share_ppm / 1'000'000)));
+  f.tip_lamports = tip;
+  uint64_t fixed = c.base_fee_lamports + tip;
   if (c.max_tip_share_ppm) {
-    if ((unsigned __int128)c.tip_lamports * 1'000'000 > (unsigned __int128)gross * c.max_tip_share_ppm) {
+    if ((unsigned __int128)tip * 1'000'000 > (unsigned __int128)gross * c.max_tip_share_ppm) {
       f.why = "gross too small for the tip";
       return f;
     }

@@ -13,6 +13,7 @@
 #include "engine/engine.hpp"
 #include "feed/feed_handler.hpp"
 #include "obs/decision_log.hpp"
+#include "obs/latency.hpp"
 
 namespace arb::app {
 
@@ -21,6 +22,7 @@ obs::DecisionRecord make_record(const StateStore& store, const engine::Cycle& c,
 
 struct RuntimeStats {
   uint64_t frames = 0, bad_frames = 0, updates = 0, records = 0, sent = 0, skip_logs_dropped = 0;
+  uint64_t speculative = 0;  // pools priced on a preconfirmed transaction's simulated state
 };
 
 class Runtime {
@@ -42,6 +44,18 @@ class Runtime {
   void apply_frame(const uint8_t* data, size_t len, uint64_t recv_ns, int64_t wall_ms);
   /** Prices the pools changed since the last call, each once. Returns how many were evaluated. */
   size_t evaluate_changed();
+  /**
+   * Price the cycles of these pools on speculative snapshots (StateStore::speculate) through the normal engine,
+   * dispatcher and send hook. While it runs speculative() is true, so the send hook and the decision log can tell.
+   */
+  size_t evaluate_speculative(const std::vector<std::pair<uint32_t, std::shared_ptr<const PoolState>>>& overlays, uint64_t slot);
+  bool speculative() const { return speculative_; }
+  /** Receive time (ns) of the newest stream update that changed this pool; 0 when none yet. */
+  uint64_t last_update_ns(uint32_t pool) const { return pool < last_update_ns_.size() ? last_update_ns_[pool] : 0; }
+  /** A preconfirmed transaction touched this pool at recv_ns: the next stream update's delay is recorded. */
+  void note_preconf(uint32_t pool, uint64_t recv_ns);
+  /** Preconf receipt to the next stream update of the same pool, us (1 h window). */
+  obs::LatencyWindow& preconf_lead_us() { return preconf_lead_us_; }
   /** Replay a recorded frame file through the same path. False when the file cannot be opened. */
   bool replay_file(const std::string& path);
 
@@ -87,6 +101,9 @@ class Runtime {
   uint64_t eval_start_ns_ = 0;          // oldest receive time among frames applied since evaluate_changed
   std::vector<uint32_t> seen_epoch_;    // per pool: the evaluate_changed pass that last priced it
   uint32_t epoch_ = 0;
+  bool speculative_ = false;
+  std::vector<uint64_t> last_update_ns_, preconf_seen_ns_;
+  obs::LatencyWindow preconf_lead_us_{3600};
   uint64_t inputs_slot_ = 0;
 };
 

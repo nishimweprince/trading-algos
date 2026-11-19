@@ -89,6 +89,7 @@ Runtime::Runtime(const Config& cfg, const PoolsFile& pools)
     const engine::Cycle& c = idx_.cycle(o.cycle);
     obs::DecisionRecord r = make_record(store_, c, o, wall_ms_);
     r.action = uint8_t(obs::Action::DryRun);
+    if (speculative_) r.pad0[2] = 1;  // priced on a preconfirmed transaction's simulated state
     if (send_hook_) send_hook_(o, c, r);
     if (log_ && log_->write(r)) ++stats_.records;
   });
@@ -145,6 +146,13 @@ size_t Runtime::evaluate_changed() {
     }
     auto snap = store_.pool(id);
     uint64_t slot = std::max(clock_.slot.load(std::memory_order_relaxed), snap ? snap->slot : 0);
+    if (last_update_ns_.size() <= id) last_update_ns_.resize(store_.pool_count(), 0);
+    last_update_ns_[id] = frame_recv_ns_;
+    if (id < preconf_seen_ns_.size() && preconf_seen_ns_[id]) {
+      if (frame_recv_ns_ > preconf_seen_ns_[id])
+        preconf_lead_us_.add(frame_recv_ns_, int64_t(frame_recv_ns_ - preconf_seen_ns_[id]) / 1000);
+      preconf_seen_ns_[id] = 0;
+    }
     if (!refreshed) {
       refresh_slot_inputs(slot);
       refreshed = true;
@@ -155,6 +163,31 @@ size_t Runtime::evaluate_changed() {
     engine_->set_eval_start_ns(eval_start_ns_);
     engine_->on_pool_update(id, slot);
   }
+  return n;
+}
+
+void Runtime::note_preconf(uint32_t pool, uint64_t recv_ns) {
+  if (preconf_seen_ns_.size() <= pool) preconf_seen_ns_.resize(store_.pool_count(), 0);
+  if (pool < preconf_seen_ns_.size() && !preconf_seen_ns_[pool]) preconf_seen_ns_[pool] = recv_ns;
+}
+
+size_t Runtime::evaluate_speculative(const std::vector<std::pair<uint32_t, std::shared_ptr<const PoolState>>>& overlays,
+                                     uint64_t slot) {
+  if (overlays.empty()) return 0;
+  slot = std::max(slot, clock_.slot.load(std::memory_order_relaxed));
+  refresh_slot_inputs(slot);
+  for (const auto& [id, snap] : overlays) engine_->set_overlay(id, snap);
+  speculative_ = true;
+  size_t n = 0;
+  for (const auto& [id, snap] : overlays) {
+    eval_start_ns_ = now_ns();
+    engine_->set_eval_start_ns(eval_start_ns_);
+    engine_->on_pool_update(id, slot);
+    ++n;
+  }
+  speculative_ = false;
+  engine_->clear_overlay();
+  stats_.speculative += n;
   return n;
 }
 

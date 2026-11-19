@@ -23,12 +23,16 @@ struct SenderFeeConfig {
   // kept out of the fee share (which bounds what a failure costs) and instead must be at most this share of gross
   // (Astralane's free tier tips 0.001 SOL).
   uint32_t max_tip_share_ppm = 0;
+  // >0: tip = max(tip_lamports, this share of gross), still at most max_tip_share_ppm of gross (Sender Max: Helius
+  // advises tipping above the 0.001 SOL minimum when the transaction is contested).
+  uint32_t tip_frac_ppm = 0;
 };
 
 struct SenderFee {
   bool ok = false;
   uint64_t cu_price = 0;          // micro-lamports per CU
   uint64_t fee_lamports = 0;      // base + priority: what a failed send costs
+  uint64_t tip_lamports = 0;      // paid only when the transaction succeeds
   const char* why = "";
 };
 

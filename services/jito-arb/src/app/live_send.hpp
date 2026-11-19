@@ -28,6 +28,7 @@ class ArmedSet {
   bool contains(const Pubkey& pool) const { return pools_.count(pool) != 0; }
   size_t size() const { return pools_.size(); }
   void insert(const Pubkey& pool) { pools_.insert(pool); }
+  const std::set<Pubkey>& pools() const { return pools_; }
 
  private:
   std::set<Pubkey> pools_;

@@ -43,6 +43,9 @@
 #include "submit/leaders.hpp"
 #include "submit/router.hpp"
 #include "submit/sender.hpp"
+#include "app/preconf_sim.hpp"
+#include "core/sys.hpp"
+#include "feed/preconf.hpp"
 #include "risk/sender_budget.hpp"
 #include "submit/tip_floor.hpp"
 
@@ -463,6 +466,52 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
                (unsigned long long)cfg.jito.astralane_tip_lamports, cfg.jito.astralane_max_tip_share_ppm / 1e4);
     }
   }
+  // Preconfirmations: Helius preconfSubscribe on the armed pools -> simulation worker -> speculative pricing on
+  // the engine thread (below, in the main loop) -> bundle + a Sender Max plain send.
+  std::unique_ptr<submit::SenderClient> sender_max;
+  std::unique_ptr<feed::CreditGuard> preconf_guard;
+  std::unique_ptr<app::PreconfSim> preconf_sim;
+  std::unique_ptr<feed::PreconfFeed> preconf_feed;
+  uint64_t preconf_spec_pools = 0, preconf_late = 0, preconf_no_state = 0;
+  if (live_send && cfg.helius.preconf_enabled) {
+    const char* key = std::getenv(cfg.helius.api_key_env.c_str());
+    if (!key || !*key || armed.size() == 0) {
+      LOG_WARN("preconf: needs %s and an armed pool set; staying off", cfg.helius.api_key_env.c_str());
+    } else {
+      submit::SenderClientConfig scc;
+      scc.name = "sender_max";
+      scc.url = cfg.jito.sender_max_url + (cfg.jito.sender_max_url.find('?') == std::string::npos ? "?" : "&") + "api-key=" + key;
+      scc.timeout_ms = cfg.jito.send_timeout_ms;
+      scc.keepalive_s = cfg.jito.sender_keepalive_s;
+      scc.status_timeout_s = cfg.jito.sender_status_timeout_s;
+      sender_max = make_plain(scc);
+      risk::SenderFeeConfig f = sfc;
+      f.tip_lamports = cfg.jito.sender_max_tip_lamports;
+      f.tip_frac_ppm = cfg.jito.sender_max_tip_frac_ppm;
+      f.max_tip_share_ppm = cfg.jito.sender_max_max_tip_share_ppm;
+      builder.add_plain_path("sender_max", sender_max.get(), &sender_budget, f, risk::sender_tip_accounts(), 50'000'000, true);
+      preconf_guard = std::make_unique<feed::CreditGuard>(cfg.helius.preconf_daily_credit_cap);
+      std::unordered_map<Pubkey, uint32_t, PubkeyHash> pool_of;
+      std::unordered_map<uint32_t, std::vector<Pubkey>> keys_of;
+      feed::PreconfConfig pc;
+      pc.host = cfg.helius.preconf_host;
+      pc.api_key = key;
+      pc.include_failed = cfg.helius.preconf_include_failed;
+      pc.regions = cfg.helius.preconf_regions;
+      for (const Pubkey& addr : armed.pools()) {
+        auto id = rt.store().pool_id(addr);
+        if (!id) continue;
+        pool_of[addr] = *id;
+        keys_of[*id] = rt.store().keys_of_pool(*id);
+        pc.accounts.push_back(b58(addr));
+      }
+      preconf_sim = std::make_unique<app::PreconfSim>(resolve_rpc_url(cfg), std::move(pool_of), std::move(keys_of), preconf_guard.get());
+      preconf_feed = std::make_unique<feed::PreconfFeed>(pc, preconf_guard.get(), [&](feed::PreconfTx&& t) { preconf_sim->push(std::move(t)); });
+      preconf_feed->start();
+      LOG_INFO("preconf: ON for %zu armed pools, Sender Max tip >= %llu lamports, credit cap %llu/day", pc.accounts.size(),
+               (unsigned long long)cfg.jito.sender_max_tip_lamports, (unsigned long long)cfg.helius.preconf_daily_credit_cap);
+    }
+  }
   // Wallet state from the wallet stream. Dry run signs with a key that holds nothing, so the values only reach
   // the float check and own-capital sizing when sending is live; the gauges show them either way.
   auto& g_wallet = reg.gauge("arb_wallet_lamports", "hot wallet SOL balance, lamports (-1 until seen)");
@@ -662,6 +711,30 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       }
     }
     if (any && !recorder) rt.evaluate_changed();
+    if (preconf_sim) {
+      app::SpecResult r;
+      while (preconf_sim->pop(r)) {
+        std::vector<AccountUpdate> views = r.views();
+        std::vector<std::pair<uint32_t, std::shared_ptr<const PoolState>>> overlays;
+        for (uint32_t id : r.pools) {
+          // The stream already delivered a newer state for this pool: the normal path has priced it.
+          if (uint64_t lu = rt.last_update_ns(id); lu > r.recv_ns) {
+            ++preconf_late;
+            rt.preconf_lead_us().add(lu, int64_t(lu - r.recv_ns) / 1000);
+            continue;
+          }
+          rt.note_preconf(id, r.recv_ns);
+          auto snap = rt.store().speculate(id, views);
+          if (!snap) {
+            ++preconf_no_state;
+            continue;
+          }
+          overlays.emplace_back(id, std::move(snap));
+        }
+        preconf_spec_pools += overlays.size();
+        rt.evaluate_speculative(overlays, std::max(r.slot, r.sim_slot));
+      }
+    }
     auto now = std::chrono::steady_clock::now();
     if (now - last_tick >= std::chrono::seconds(1)) {
       last_tick = now;
@@ -825,6 +898,40 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
           reg.gauge("arb_jito_keepalive_rtt_us_" + region, "latest keepalive round trip on the warm connection, us").set(us);
         reg.gauge("arb_jito_keepalives", "keepalive calls on idle block-engine connections").set(int64_t(router->keepalives()));
         reg.gauge("arb_jito_keepalive_failures", "keepalive calls that did not return 200").set(int64_t(router->keepalive_failures()));
+      }
+      if (preconf_feed) {
+        const int64_t now_w = wall_ms();
+        const uint64_t now_n = arb::now_ns();
+        reg.gauge("arb_preconf_subscribed", "1 while the preconfSubscribe stream is open").set(preconf_feed->subscribed() ? 1 : 0);
+        reg.gauge("arb_preconf_capped", "1 while off for the day at the credit cap").set(preconf_feed->capped() ? 1 : 0);
+        reg.gauge("arb_preconf_messages", "preconfirmation messages received (billed)").set(int64_t(preconf_feed->messages()));
+        reg.gauge("arb_preconf_duplicates", "messages already seen from the other source").set(int64_t(preconf_feed->duplicates()));
+        reg.gauge("arb_preconf_failed_skipped", "preconfirmed transactions marked failed (skipped)").set(int64_t(preconf_feed->failed_skipped()));
+        reg.gauge("arb_preconf_reconnects", "preconf stream reconnects").set(int64_t(preconf_feed->reconnects()));
+        reg.gauge("arb_preconf_credits_today", "estimated Helius credits used by preconfs and their RPC calls today (UTC)").set(int64_t(preconf_guard->today(now_w)));
+        reg.gauge("arb_preconf_credit_cap", "daily credit cap for preconfs").set(int64_t(preconf_guard->cap()));
+        reg.gauge("arb_preconf_sims", "trigger transactions simulated").set(int64_t(preconf_sim->sims()));
+        reg.gauge("arb_preconf_sim_reverted", "triggers that would fail now (skipped)").set(int64_t(preconf_sim->sim_reverted()));
+        reg.gauge("arb_preconf_sim_errors", "simulation calls that errored").set(int64_t(preconf_sim->sim_failed()));
+        reg.gauge("arb_preconf_no_pool", "preconfs whose pools could not be matched").set(int64_t(preconf_sim->no_pool()));
+        reg.gauge("arb_preconf_dropped", "preconfs dropped: simulation queue full").set(int64_t(preconf_sim->dropped()));
+        reg.gauge("arb_preconf_spec_pools", "pools priced on a simulated preconf state").set(int64_t(preconf_spec_pools));
+        reg.gauge("arb_preconf_late", "preconf states that arrived after the stream's own update").set(int64_t(preconf_late));
+        reg.gauge("arb_preconf_no_state", "simulated states that did not decode for the pool").set(int64_t(preconf_no_state));
+        reg.gauge("arb_preconf_spec_sent", "opportunities sent from a preconf (bundle path)").set(int64_t(builder.stats().spec_sent));
+        auto ss = preconf_sim->sim_stats(now_n);
+        reg.gauge("arb_preconf_sim_us_p50", "preconf receipt to simulated state, us (1 h)").set(ss.count ? ss.p50 : -1);
+        reg.gauge("arb_preconf_sim_us_p99", "preconf receipt to simulated state, us (1 h)").set(ss.count ? ss.p99 : -1);
+        auto ls = rt.preconf_lead_us().stats(now_n);
+        reg.gauge("arb_preconf_lead_us_p50", "preconf receipt to the stream's update of the same pool, us (1 h)").set(ls.count ? ls.p50 : -1);
+        reg.gauge("arb_preconf_lead_us_p90", "preconf lead, 90th percentile, us").set(ls.count ? ls.p90 : -1);
+        reg.gauge("arb_preconf_lead_samples", "preconf lead samples (1 h)").set(int64_t(ls.count));
+      }
+      if (sender_max) {
+        reg.gauge("arb_sender_max_queued", "plain transactions queued on Sender Max (preconf-triggered)").set(int64_t(builder.plain_queued_by_path().count("sender_max") ? builder.plain_queued_by_path().at("sender_max") : 0));
+        reg.gauge("arb_sender_max_landed", "Sender Max plain transactions that landed and succeeded").set(int64_t(sender_max->landed()));
+        reg.gauge("arb_sender_max_failed", "Sender Max plain transactions that landed and failed").set(int64_t(sender_max->failed()));
+        reg.gauge("arb_sender_max_dropped", "Sender Max plain transactions never seen on chain").set(int64_t(sender_max->dropped()));
       }
       if (astralane) {
         reg.gauge("arb_astralane_queued", "plain transactions queued for Astralane").set(int64_t(builder.plain_queued_by_path().count("astralane") ? builder.plain_queued_by_path().at("astralane") : 0));
