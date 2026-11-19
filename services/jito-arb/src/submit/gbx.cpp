@@ -271,6 +271,7 @@ void GbxClient::refresh_leaders(GbxTransport& t) {
 
 void GbxClient::run() {
   std::unique_ptr<GbxTransport> t;
+  auto last_warn = std::chrono::steady_clock::now() - std::chrono::hours(1);
   auto last_leaders = std::chrono::steady_clock::now() - std::chrono::hours(1);
   while (!stop_) {
     if (!t) t = c_.transport ? c_.transport() : nullptr;
@@ -279,6 +280,10 @@ void GbxClient::run() {
       continue;
     }
     const bool have_auth = ensure_auth(*t);
+    if (!have_auth && std::chrono::steady_clock::now() - last_warn > std::chrono::seconds(60)) {
+      last_warn = std::chrono::steady_clock::now();
+      LOG_WARN("gbx: not authenticated (%llu failures): %s", (unsigned long long)auth_fail_.load(), last_error().c_str());
+    }
     if (have_auth && std::chrono::steady_clock::now() - last_leaders > std::chrono::seconds(c_.leaders_refresh_s)) {
       refresh_leaders(*t);
       last_leaders = std::chrono::steady_clock::now();
