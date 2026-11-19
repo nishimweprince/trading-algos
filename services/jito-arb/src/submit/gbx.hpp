@@ -127,6 +127,7 @@ class GbxClient {
   void run();
   void run_status();
   bool ensure_auth(GbxTransport& t);
+  bool authenticate(GbxTransport& t);
   void refresh_leaders(GbxTransport& t);
   GbxConfig c_;
   Keypair id_;
@@ -136,6 +137,8 @@ class GbxClient {
   Resolved resolved_;
   std::string access_, refresh_;
   int sign_variant_ = -1;  // the accepted challenge encoding, once known
+  int64_t next_auth_ms_ = 0;  // after a failed authentication, wait before trying again (60 s, up to 10 min)
+  int auth_backoff_ms_ = 60'000;
   int64_t access_exp_ = 0, refresh_exp_ = 0;
   std::mutex mu_;
   std::condition_variable cv_;

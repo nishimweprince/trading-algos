@@ -221,6 +221,21 @@ uint32_t GbxClient::coverage_ppm(uint64_t from, uint64_t window) const {
 bool GbxClient::ensure_auth(GbxTransport& t) {
   const int64_t now = wall_ms() / 1000;
   if (!access_.empty() && (access_exp_ == 0 || now < access_exp_ - 30)) return true;
+  // A key the broadcaster has not registered fails every time: back off instead of retrying each second.
+  if (wall_ms() < next_auth_ms_) return false;
+  const bool ok = authenticate(t);
+  if (ok) {
+    auth_backoff_ms_ = 60'000;
+    next_auth_ms_ = 0;
+  } else {
+    next_auth_ms_ = wall_ms() + auth_backoff_ms_;
+    auth_backoff_ms_ = std::min(auth_backoff_ms_ * 2, 600'000);
+  }
+  return ok;
+}
+
+bool GbxClient::authenticate(GbxTransport& t) {
+  const int64_t now = wall_ms() / 1000;
   std::string resp, err;
   if (!refresh_.empty() && (refresh_exp_ == 0 || now < refresh_exp_ - 30)) {
     GbxToken a;
