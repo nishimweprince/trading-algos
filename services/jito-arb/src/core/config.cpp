@@ -127,6 +127,8 @@ Config load_config(const std::string& path) {
   G(jito, sender_tip_lamports); G(jito, sender_fee_frac_ppm); G(jito, sender_max_cu_price); G(jito, sender_min_cu_price);
   G(jito, sender_daily_fail_cap_lamports); G(jito, sender_max_consecutive_fail); G(jito, sender_pause_s);
   G(jito, sender_status_timeout_s); G(jito, sender_keepalive_s);
+  G(jito, astralane_enabled); G(jito, astralane_url); G(jito, astralane_key_env); G(jito, astralane_tip_lamports);
+  G(jito, astralane_max_tip_share_ppm); G(jito, astralane_keepalive_s);
   G(jito, route_by_leader); G(jito, route_regions); G(jito, always_regions); G(jito, skip_not_jito_leaders);
   G(jito, skip_bam_leaders); G(jito, bam_dbi_fmt); G(jito, bam_uuid_env); G(jito, send_timeout_ms); G(jito, keepalive_s);
   G(engine, base_mints); G(engine, max_hops); G(engine, min_spot_edge); G(engine, min_ev_lamports);

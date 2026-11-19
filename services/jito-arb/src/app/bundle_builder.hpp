@@ -2,7 +2,9 @@
 // The send hook (spec §9): a dispatched opportunity becomes the §7.3 transaction (CU limit, Kamino
 // borrow, executor execute_route, repay, tip), checked by the sign guard and the §10 limits,
 // compiled against the bot's lookup tables (loaded from chain), signed, and handed to the Submitter.
+#include <map>
 #include <random>
+#include <string>
 
 #include <functional>
 #include "app/live_send.hpp"
@@ -59,9 +61,20 @@ class BundleBuilder {
    * Enable the plain-transaction path: after the bundle, the same route goes out as a priority-fee transaction
    * with a Sender tip, if the opportunity can pay the bid and the budget allows it. Null disables it.
    */
-  void set_sender(submit::SenderClient* s, risk::SenderBudget* b, risk::SenderFeeConfig fc, uint64_t tip_max_lamports);
+  void set_sender(submit::SenderClient* s, risk::SenderBudget* b, risk::SenderFeeConfig fc, uint64_t tip_max_lamports) {
+    add_plain_path("sender", s, b, fc, risk::sender_tip_accounts(), tip_max_lamports);
+  }
+  /**
+   * Add a plain-transaction route (Helius Sender, Astralane, ...). Per opportunity one route is chosen at random
+   * among those whose bid the opportunity can pay, so the routes can be compared; all share one failed-fee budget.
+   */
+  void add_plain_path(std::string name, submit::SenderClient* s, risk::SenderBudget* b, risk::SenderFeeConfig fc,
+                      std::vector<Pubkey> tip_accounts, uint64_t tip_max_lamports);
+  /** Plain sends queued per route name. */
+  const std::map<std::string, uint64_t>& plain_queued_by_path() const { return plain_by_path_; }
   const BuilderStats& stats() const { return n_; }
   const tx::SignedTx& last_sender_tx() const { return last_sender_; }
+  uint64_t last_plain_min_out() const { return last_plain_min_out_; }
   const tx::SignedTx& last_tx() const { return last_; }
   const risk::SignGuard& guard() const { return guard_; }
   /** Frame received -> bundle signed (everything before the HTTP write), microseconds. */
@@ -76,10 +89,16 @@ class BundleBuilder {
   /** Build, guard, sign and enqueue the plain variant. True when it was queued. */
   bool send_plain(const engine::Opportunity& o, const engine::Cycle& c, std::span<const std::shared_ptr<const PoolState>> legs,
                   const tx::RouteTxParams& bundle_params, uint64_t slot, int64_t wall);
-  submit::SenderClient* sender_ = nullptr;
+  struct PlainPath {
+    std::string name;
+    submit::SenderClient* client = nullptr;
+    risk::SenderFeeConfig fee;
+    risk::SignGuard guard;
+  };
+  std::vector<PlainPath> plain_;
+  uint64_t last_plain_min_out_ = 0;
+  std::map<std::string, uint64_t> plain_by_path_;
   risk::SenderBudget* sender_budget_ = nullptr;
-  risk::SenderFeeConfig sender_fee_cfg_;
-  risk::SignGuard sender_guard_;
   tx::IxList sender_ixs_;
   tx::SignedTx last_sender_;
   const ArmedSet* armed_ = nullptr;

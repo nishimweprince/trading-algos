@@ -84,7 +84,7 @@ void SenderClient::run_send() {
     try {
       http_ = c_.http(c_.url);
     } catch (const std::exception& e) {
-      LOG_WARN("sender: connect failed: %s", e.what());
+      LOG_WARN("%s: connect failed: %s", c_.name.c_str(), e.what());
     }
     return bool(http_);
   };
@@ -94,7 +94,7 @@ void SenderClient::run_send() {
     uint64_t t0 = now_ns();
     int st = 0;
     try {
-      st = http_->get(ping_path_, out);
+      st = c_.ping_body.empty() ? http_->get(c_.ping_path, out) : http_->post("", c_.ping_body, out);
     } catch (const std::exception&) {
       http_.reset();
     }
@@ -173,7 +173,7 @@ void SenderClient::run_status() {
     try {
       st = c_.statuses(sigs);
     } catch (const std::exception& e) {
-      LOG_WARN("sender: getSignatureStatuses failed: %s", e.what());
+      LOG_WARN("%s: getSignatureStatuses failed: %s", c_.name.c_str(), e.what());
       continue;
     }
     const int64_t now = wall_ms();

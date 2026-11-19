@@ -31,6 +31,7 @@ std::string sender_send_body(const std::string& tx_b64, uint64_t id = 1);
 bool parse_sender_reply(std::string_view body, std::string& signature, std::string& error);
 
 struct SenderJob {
+  std::string path;         // provider name ("sender" = Helius, "astralane"), for logs
   std::string tx_b64;
   std::string sig;          // base58, full
   uint64_t built_slot = 0;
@@ -54,7 +55,12 @@ enum class SenderOutcome : uint8_t { landed = 1, failed = 2, dropped = 3 };
 const char* sender_outcome_name(SenderOutcome o);
 
 struct SenderClientConfig {
+  std::string name = "sender";
   std::string url;               // full send URL, query included
+  // Keepalive: GET ping_path (Helius /ping), or, when ping_body is set, POST it to the send URL (Astralane has no
+  // documented ping; a getHealth call keeps the connection open whatever it answers).
+  std::string ping_path = "/ping";
+  std::string ping_body;
   int timeout_ms = 2000;
   int keepalive_s = 4;           // ping when idle this long (0 = off)
   int status_poll_ms = 1000;
@@ -100,7 +106,6 @@ class SenderClient {
   Sent sent_;
   Resolved resolved_;
   std::unique_ptr<HttpPost> http_;
-  std::string ping_path_ = "/ping";
   std::mutex mu_;
   std::condition_variable cv_;
   std::deque<SenderJob> q_;

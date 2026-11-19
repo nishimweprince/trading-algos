@@ -28,6 +28,13 @@ sender_max_cu_price = 5000000
 sender_daily_fail_cap_lamports = 50000000
 sender_max_consecutive_fail = 50
 sender_pause_s = 600
+# Astralane Iris: a second plain route, chosen at random per opportunity against Sender when both can pay their
+# bid. Free tier tips 0.001 SOL (success only), so it is used only when that is <= astralane_max_tip_share_ppm of
+# gross. Key from the ASTRALANE_API_KEY environment variable (jito-arb.env), never written here.
+astralane_enabled = false
+astralane_url = "http://fr.gateway.astralane.io/iris"
+astralane_tip_lamports = 1000000
+astralane_max_tip_share_ppm = 500000
 
 [engine]
 # A pool account/vault slot spread is accepted once the newest write is settle_slots old (0: never).
