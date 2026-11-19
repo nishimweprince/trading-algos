@@ -29,6 +29,21 @@ const std::vector<Pubkey>& sender_tip_accounts() {
   return v;
 }
 
+const std::vector<Pubkey>& astralane_tip_accounts() {
+  static const std::vector<Pubkey> v = {
+      PK("astrazznxsGUhWShqgNtAdfrzP2G83DzcWVJDxwV9bF"), PK("astra4uejePWneqNaJKuFFA8oonqCE1sqF6b45kDMZm"),
+      PK("astra9xWY93QyfG6yM8zwsKsRodscjQ2uU2HKNL5prk"), PK("astraRVUuTHjpwEVvNBeQEgwYx9w9CFyfxjYoobCZhL"),
+      PK("astraEJ2fEj8Xmy6KLG7B3VfbKfsHXhHrNdCQx7iGJK"), PK("astraubkDw81n4LuutzSQ8uzHCv4BhPVhfvTcYv8SKC"),
+      PK("astraZW5GLFefxNPAatceHhYjfA1ciq9gvfEg2S47xk"), PK("astrawVNP4xDBKT7rAdxrLYiTSTdqtUr63fSMduivXK"),
+      PK("AstrA1ejL4UeXC2SBP4cpeEmtcFPZVLxx3XGKXyCW6to"), PK("AsTra79FET4aCKWspPqeSFvjJNyp96SvAnrmyAxqg5b7"),
+      PK("AstrABAu8CBTyuPXpV4eSCJ5fePEPnxN8NqBaPKQ9fHR"), PK("AsTRADtvb6tTmrsqULQ9Wji9PigDMjhfEMza6zkynEvV"),
+      PK("AsTRAEoyMofR3vUPpf9k68Gsfb6ymTZttEtsAbv8Bk4d"), PK("AStrAJv2RN2hKCHxwUMtqmSxgdcNZbihCwc1mCSnG83W"),
+      PK("Astran35aiQUF57XZsmkWMtNCtXGLzs8upfiqXxth2bz"), PK("AStRAnpi6kFrKypragExgeRoJ1QnKH7pbSjLAKQVWUum"),
+      PK("ASTRaoF93eYt73TYvwtsv6fMWHWbGmMUZfVZPo3CRU9C"),
+  };
+  return v;
+}
+
 Result<void> SignGuard::check(const tx::IxList& ixs) const {
   int transfers = 0;
   for (uint8_t i = 0; i < ixs.n; ++i) {

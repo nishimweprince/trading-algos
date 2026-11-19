@@ -385,15 +385,11 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
   sbc.max_consecutive_fail = cfg.jito.sender_max_consecutive_fail;
   sbc.pause_s = cfg.jito.sender_pause_s;
   risk::SenderBudget sender_budget(sbc);
-  std::unique_ptr<submit::SenderClient> sender;
+  std::unique_ptr<submit::SenderClient> sender, astralane;
   std::atomic<uint64_t> sender_fees_paid{0}, sender_tips_paid{0};
-  if (live_send && cfg.jito.sender_enabled) {
-    submit::SenderClientConfig scc;
-    scc.url = resolve_sender_url(cfg);
-    scc.timeout_ms = cfg.jito.send_timeout_ms;
-    scc.keepalive_s = cfg.jito.sender_keepalive_s;
-    scc.status_timeout_s = cfg.jito.sender_status_timeout_s;
-    sender = std::make_unique<submit::SenderClient>(
+  // One client per plain-transaction route; all share the budget, the send log ("path" = route name) and the caps.
+  auto make_plain = [&](submit::SenderClientConfig scc) {
+    return std::make_unique<submit::SenderClient>(
         scc, resolve_rpc_url(cfg), &rt.clock().slot,
         [&](const submit::SenderSendResult& r, const submit::SenderJob& j) {
           // Refused or never sent: nothing can land, so nothing is at risk.
@@ -403,7 +399,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
                         r.http_status, r.rtt_us / 1000.0, r.queued_us / 1000.0, r.dropped_stale ? "true" : "false",
                         (unsigned long long)j.fee_lamports, (unsigned long long)j.cu_price, j.cu_limit, (unsigned long long)j.tip_lamports);
           log_line("{\"t\":" + std::to_string(j.wall_ms) + ",\"slot\":" + std::to_string(j.built_slot) + ",\"sig\":" +
-                   json_str(j.sig.substr(0, 12)) + ",\"class\":" + std::to_string(j.route_class) + ",\"path\":\"sender\"" + nums +
+                   json_str(j.sig.substr(0, 12)) + ",\"class\":" + std::to_string(j.route_class) + ",\"path\":" + json_str(j.path) + nums +
                    ",\"accepted\":" + (r.accepted ? "true" : "false") + ",\"err\":" + json_str(r.error.substr(0, 160)) + "}");
         },
         [&](const submit::SenderJob& j, submit::SenderOutcome o, uint64_t landed_slot) {
@@ -417,21 +413,55 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
             sender_fees_paid += j.fee_lamports;
           }
           if (o == submit::SenderOutcome::landed) sender_tips_paid += j.tip_lamports;
-          log_line("{\"t\":" + std::to_string(now) + ",\"sig\":" + json_str(j.sig.substr(0, 12)) + ",\"path\":\"sender\",\"landing\":\"" +
-                   submit::sender_outcome_name(o) + "\",\"landed_slot\":" + std::to_string(landed_slot) + ",\"fee\":" +
+          log_line("{\"t\":" + std::to_string(now) + ",\"sig\":" + json_str(j.sig.substr(0, 12)) + ",\"path\":" + json_str(j.path) +
+                   ",\"landing\":\"" + submit::sender_outcome_name(o) + "\",\"landed_slot\":" + std::to_string(landed_slot) + ",\"fee\":" +
                    std::to_string(o == submit::SenderOutcome::dropped ? 0 : j.fee_lamports) + "}");
-          if (o == submit::SenderOutcome::landed) LOG_INFO("sender: %s LANDED in slot %llu", j.sig.substr(0, 12).c_str(), (unsigned long long)landed_slot);
+          if (o == submit::SenderOutcome::landed)
+            LOG_INFO("%s: %s LANDED in slot %llu", j.path.c_str(), j.sig.substr(0, 12).c_str(), (unsigned long long)landed_slot);
         });
-    risk::SenderFeeConfig sfc;
-    sfc.fee_frac_ppm = cfg.jito.sender_fee_frac_ppm;
-    sfc.max_cu_price = cfg.jito.sender_max_cu_price;
-    sfc.min_cu_price = cfg.jito.sender_min_cu_price;
-    sfc.base_fee_lamports = cfg.engine.base_fee_lamports;
-    sfc.tip_lamports = cfg.jito.sender_tip_lamports;
-    builder.set_sender(sender.get(), &sender_budget, sfc, std::max<uint64_t>(cfg.jito.sender_tip_lamports, 5'000));
-    LOG_INFO("sender: plain-transaction path ON (%s), tip %llu lamports, fee <= %.1f%% of gross, failed-fee cap %llu lamports/day",
+  };
+  risk::SenderFeeConfig sfc;
+  sfc.fee_frac_ppm = cfg.jito.sender_fee_frac_ppm;
+  sfc.max_cu_price = cfg.jito.sender_max_cu_price;
+  sfc.min_cu_price = cfg.jito.sender_min_cu_price;
+  sfc.base_fee_lamports = cfg.engine.base_fee_lamports;
+  if (live_send && cfg.jito.sender_enabled) {
+    submit::SenderClientConfig scc;
+    scc.name = "sender";
+    scc.url = resolve_sender_url(cfg);
+    scc.timeout_ms = cfg.jito.send_timeout_ms;
+    scc.keepalive_s = cfg.jito.sender_keepalive_s;
+    scc.status_timeout_s = cfg.jito.sender_status_timeout_s;
+    sender = make_plain(scc);
+    risk::SenderFeeConfig f = sfc;
+    f.tip_lamports = cfg.jito.sender_tip_lamports;
+    builder.add_plain_path("sender", sender.get(), &sender_budget, f, risk::sender_tip_accounts(),
+                           std::max<uint64_t>(cfg.jito.sender_tip_lamports, 5'000));
+    LOG_INFO("plain route ON: Helius Sender (%s), tip %llu lamports, fee <= %.1f%% of gross, failed-fee cap %llu lamports/day",
              cfg.jito.sender_url.c_str(), (unsigned long long)cfg.jito.sender_tip_lamports, cfg.jito.sender_fee_frac_ppm / 1e4,
              (unsigned long long)cfg.jito.sender_daily_fail_cap_lamports);
+  }
+  if (live_send && cfg.jito.astralane_enabled) {
+    const char* key = std::getenv(cfg.jito.astralane_key_env.c_str());
+    if (!key || !*key) {
+      LOG_WARN("plain route: astralane_enabled but %s is unset; Astralane stays off", cfg.jito.astralane_key_env.c_str());
+    } else {
+      submit::SenderClientConfig scc;
+      scc.name = "astralane";
+      scc.url = cfg.jito.astralane_url + (cfg.jito.astralane_url.find('?') == std::string::npos ? "?" : "&") + "api-key=" + key;
+      scc.timeout_ms = cfg.jito.send_timeout_ms;
+      scc.keepalive_s = cfg.jito.astralane_keepalive_s;
+      scc.ping_body = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getHealth\"}";
+      scc.status_timeout_s = cfg.jito.sender_status_timeout_s;
+      astralane = make_plain(scc);
+      risk::SenderFeeConfig f = sfc;
+      f.tip_lamports = cfg.jito.astralane_tip_lamports;
+      f.max_tip_share_ppm = cfg.jito.astralane_max_tip_share_ppm;
+      builder.add_plain_path("astralane", astralane.get(), &sender_budget, f, risk::astralane_tip_accounts(),
+                             cfg.jito.astralane_tip_lamports);
+      LOG_INFO("plain route ON: Astralane (%s), tip %llu lamports when the tip is <= %.0f%% of gross", cfg.jito.astralane_url.c_str(),
+               (unsigned long long)cfg.jito.astralane_tip_lamports, cfg.jito.astralane_max_tip_share_ppm / 1e4);
+    }
   }
   // Wallet state from the wallet stream. Dry run signs with a key that holds nothing, so the values only reach
   // the float check and own-capital sizing when sending is live; the gauges show them either way.
@@ -796,17 +826,30 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
         reg.gauge("arb_jito_keepalives", "keepalive calls on idle block-engine connections").set(int64_t(router->keepalives()));
         reg.gauge("arb_jito_keepalive_failures", "keepalive calls that did not return 200").set(int64_t(router->keepalive_failures()));
       }
-      if (sender) {
+      if (astralane) {
+        reg.gauge("arb_astralane_queued", "plain transactions queued for Astralane").set(int64_t(builder.plain_queued_by_path().count("astralane") ? builder.plain_queued_by_path().at("astralane") : 0));
+        reg.gauge("arb_astralane_accepted", "plain transactions Astralane accepted").set(int64_t(astralane->accepted()));
+        reg.gauge("arb_astralane_rejected", "plain transactions Astralane refused or that failed to send").set(int64_t(astralane->rejected()));
+        reg.gauge("arb_astralane_landed", "Astralane plain transactions that landed and succeeded").set(int64_t(astralane->landed()));
+        reg.gauge("arb_astralane_failed", "Astralane plain transactions that landed and failed (fee paid)").set(int64_t(astralane->failed()));
+        reg.gauge("arb_astralane_dropped", "accepted Astralane transactions never seen on chain").set(int64_t(astralane->dropped()));
+        reg.gauge("arb_astralane_ping_rtt_us", "latest Astralane keepalive round trip, us").set(astralane->ping_rtt_us());
+      }
+      if (sender || astralane) {
         const auto& bs = builder.stats();
         int64_t now = wall_ms();
-        reg.gauge("arb_sender_queued", "plain transactions queued for Helius Sender").set(int64_t(bs.sender_queued));
-        reg.gauge("arb_sender_accepted", "plain transactions Sender accepted").set(int64_t(sender->accepted()));
-        reg.gauge("arb_sender_rejected", "plain transactions Sender refused or that failed to send").set(int64_t(sender->rejected()));
-        reg.gauge("arb_sender_stale", "plain transactions dropped before sending: slot passed").set(int64_t(sender->dropped_stale()));
-        reg.gauge("arb_sender_landed", "plain transactions that landed and succeeded").set(int64_t(sender->landed()));
-        reg.gauge("arb_sender_failed", "plain transactions that landed and failed (fee paid)").set(int64_t(sender->failed()));
-        reg.gauge("arb_sender_dropped", "accepted plain transactions never seen on chain (no fee)").set(int64_t(sender->dropped()));
-        reg.gauge("arb_sender_pending", "accepted plain transactions awaiting an outcome").set(int64_t(sender->pending()));
+        reg.gauge("arb_plain_queued", "plain transactions queued, every route").set(int64_t(bs.sender_queued));
+        if (sender) {
+          reg.gauge("arb_sender_queued", "plain transactions queued for Helius Sender").set(int64_t(builder.plain_queued_by_path().count("sender") ? builder.plain_queued_by_path().at("sender") : 0));
+          reg.gauge("arb_sender_accepted", "plain transactions Sender accepted").set(int64_t(sender->accepted()));
+          reg.gauge("arb_sender_rejected", "plain transactions Sender refused or that failed to send").set(int64_t(sender->rejected()));
+          reg.gauge("arb_sender_stale", "plain transactions dropped before sending: slot passed").set(int64_t(sender->dropped_stale()));
+          reg.gauge("arb_sender_landed", "plain transactions that landed and succeeded").set(int64_t(sender->landed()));
+          reg.gauge("arb_sender_failed", "plain transactions that landed and failed (fee paid)").set(int64_t(sender->failed()));
+          reg.gauge("arb_sender_dropped", "accepted plain transactions never seen on chain (no fee)").set(int64_t(sender->dropped()));
+          reg.gauge("arb_sender_pending", "accepted plain transactions awaiting an outcome").set(int64_t(sender->pending()));
+          reg.gauge("arb_sender_ping_rtt_us", "latest Sender /ping round trip, us").set(sender->ping_rtt_us());
+        }
         reg.gauge("arb_sender_fee_skip", "opportunities whose gross cannot pay the Sender bid").set(int64_t(bs.sender_fee_skip));
         reg.gauge("arb_sender_budget_blocked", "plain sends blocked by the failed-fee cap or the pause").set(int64_t(bs.sender_budget_blocked));
         reg.gauge("arb_sender_build_failed", "plain variants that failed to build, guard or sign").set(int64_t(bs.sender_build_failed));
@@ -816,7 +859,6 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
         reg.gauge("arb_sender_paused", "1 while paused after a run of failures").set(sender_budget.paused(now) ? 1 : 0);
         reg.gauge("arb_sender_fees_paid", "fees paid by plain sends (landed + failed), lamports").set(int64_t(sender_fees_paid.load()));
         reg.gauge("arb_sender_tips_paid", "Sender tips paid by landed plain sends, lamports").set(int64_t(sender_tips_paid.load()));
-        reg.gauge("arb_sender_ping_rtt_us", "latest Sender /ping round trip, us").set(sender->ping_rtt_us());
       }
       if (audit) {
         g_audit_ok.set(int64_t(audit->ok()));

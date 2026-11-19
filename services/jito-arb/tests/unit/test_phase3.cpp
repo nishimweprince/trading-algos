@@ -524,13 +524,41 @@ TEST(replay_sends_a_plain_sender_variant_beside_each_bundle) {
   fc.tip_lamports = 5'000;
   fc.base_fee_lamports = 0;
   bb.set_sender(&sender, &budget, fc, 5'000);
+  // A second route (Astralane-style: its own tip accounts, a success-only tip kept out of the fee share).
+  std::vector<std::string> bodies2;
+  submit::SenderClientConfig scc2 = scc;
+  scc2.name = "astralane";
+  scc2.http = [&](const std::string&) {
+    auto r = std::make_unique<Rec>();
+    r->mu = &mu;
+    r->b = &bodies2;
+    return std::unique_ptr<submit::HttpPost>(std::move(r));
+  };
+  submit::SenderClient astra(scc2, "", &slot, nullptr, [&](const submit::SenderJob& j, submit::SenderOutcome, uint64_t) {
+    budget.on_result(j.sig, risk::SenderBudget::Result::failed, 0);
+    ++resolved;
+  });
+  risk::SenderFeeConfig fc2 = fc;
+  fc2.tip_lamports = 1;
+  fc2.max_tip_share_ppm = 1'000'000;
+  bb.add_plain_path("astralane", &astra, &budget, fc2, risk::astralane_tip_accounts(), 1);
   std::vector<std::vector<uint8_t>> plain;
+  std::vector<bool> plain_is_astra;
+  int guard_lowered = 0, guard_checked = 0;
   L.rt->set_send_hook([&](const engine::Opportunity& o, const engine::Cycle& c, obs::DecisionRecord& r) {
     tt.seed(*L.rt, L.cfg, kp.pubkey(), test_executor());
     uint64_t before = bb.stats().sender_queued;
+    uint64_t astra_before = bb.plain_queued_by_path().count("astralane") ? bb.plain_queued_by_path().at("astralane") : 0;
     bb(o, c, r);
-    if (bb.stats().sender_queued > before)
+    if (bb.stats().sender_queued > before) {
       plain.emplace_back(bb.last_sender_tx().bytes, bb.last_sender_tx().bytes + bb.last_sender_tx().len);
+      plain_is_astra.push_back((bb.plain_queued_by_path().count("astralane") ? bb.plain_queued_by_path().at("astralane") : 0) > astra_before);
+      // The plain guard reserves its own (small) tip and fee instead of the bundle's tip: never above the bundle's.
+      ++guard_checked;
+      CHECK(bb.last_plain_min_out() <= o.pr.min_out);
+      if (bb.last_plain_min_out() < o.pr.min_out) ++guard_lowered;
+      CHECK(bb.last_plain_min_out() > o.x);
+    }
   });
   CHECK(L.rt->replay_file(fixture_path("frames.bin")));
   const auto& s = bb.stats();
@@ -539,24 +567,30 @@ TEST(replay_sends_a_plain_sender_variant_beside_each_bundle) {
               (unsigned long long)s.sender_build_failed, (unsigned long long)s.sent);
   CHECK(s.sender_queued > 0 && s.sender_build_failed == 0);
   CHECK_EQ(s.sender_queued + s.sender_fee_skip + s.sender_budget_blocked + s.sender_queue_full, s.sent);
-  for (const auto& t : plain) {
+  for (size_t pi = 0; pi < plain.size(); ++pi) {
+    const auto& t = plain[pi];
     CHECK(t.size() <= tx::PACKET_DATA_SIZE && t[0] == 1);
     CHECK(crypto_sign_verify_detached(t.data() + 1, t.data() + 65, t.size() - 65, kp.pubkey().data()) == 0);
     // Tips a Sender account, never a Jito one; carries the compute-unit price instruction (tag 3).
     auto has = [&](const Pubkey& k) { return std::search(t.begin(), t.end(), k.begin(), k.end()) != t.end(); };
-    bool sender_tip = false, jito_tip = false;
+    bool sender_tip = false, jito_tip = false, astra_tip = false;
     for (const Pubkey& k : risk::sender_tip_accounts()) sender_tip |= has(k);
     for (const Pubkey& k : risk::default_tip_accounts()) jito_tip |= has(k);
-    CHECK(sender_tip && !jito_tip);
+    for (const Pubkey& k : risk::astralane_tip_accounts()) astra_tip |= has(k);
+    CHECK(!jito_tip && (plain_is_astra[pi] ? astra_tip && !sender_tip : sender_tip && !astra_tip));
   }
   for (int i = 0; i < 400 && resolved.load() < int(s.sender_queued); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(5));
   CHECK_EQ(uint64_t(resolved.load()), s.sender_queued);
   {
     std::lock_guard<std::mutex> g(mu);
-    CHECK_EQ(uint64_t(bodies.size()), s.sender_queued);
+    CHECK_EQ(uint64_t(bodies.size() + bodies2.size()), s.sender_queued);
+    CHECK(!bodies.empty() && !bodies2.empty());  // the route is picked at random per opportunity
+    std::printf("    plain routes: sender=%zu astralane=%zu, guard lowered on %d of %d\n", bodies.size(), bodies2.size(), guard_lowered, guard_checked);
+    for (const auto& b : bodies2) CHECK(b.find("\"skipPreflight\":true") != std::string::npos);
     for (const auto& b : bodies) CHECK(b.find("\"skipPreflight\":true,\"maxRetries\":0") != std::string::npos);
   }
   CHECK(budget.failed_today(0) > 0 && budget.at_risk() == 0);
+  CHECK(guard_lowered > 0);
 }
 
 TEST(http_parser_incremental_chunked_and_pipelined) {

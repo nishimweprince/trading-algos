@@ -39,6 +39,23 @@ TEST(sender_fee_bids_a_share_of_gross) {
   CHECK(!risk::sender_fee(372'000, 0, c).ok);
 }
 
+TEST(sender_fee_keeps_a_large_success_only_tip_out_of_the_fee_share) {
+  risk::SenderFeeConfig c;
+  c.tip_lamports = 1'000'000;      // Astralane free tier: 0.001 SOL, paid only when it succeeds
+  c.max_tip_share_ppm = 500'000;   // ... and only when it is at most half of gross
+  CHECK(!risk::sender_fee(1'999'999, 150'000, c).ok);
+  auto f = risk::sender_fee(2'000'000, 150'000, c);
+  CHECK(f.ok);
+  // The failure cost (base + priority) still fits 10% of gross; the tip is not in it.
+  CHECK_EQ(f.fee_lamports, uint64_t(5'000 + 195'000));
+  CHECK(f.fee_lamports <= 200'000);
+  // Without the share rule the same tip would need 10x the gross.
+  c.max_tip_share_ppm = 0;
+  CHECK(!risk::sender_fee(2'000'000, 150'000, c).ok);
+  CHECK(risk::sender_fee(10'100'000, 150'000, c).ok);
+  CHECK_EQ(risk::astralane_tip_accounts().size(), size_t(17));
+}
+
 TEST(sender_budget_caps_failed_fees_and_pauses_after_a_run) {
   risk::SenderBudgetConfig c;
   c.daily_fail_cap_lamports = 100'000;

@@ -16,6 +16,8 @@ namespace arb::risk {
 const std::vector<Pubkey>& default_tip_accounts();
 /** Helius Sender's designated tip accounts (docs.helius.dev, Sender, "Designated Tip Accounts", checked 2026-11-19). */
 const std::vector<Pubkey>& sender_tip_accounts();
+/** Astralane (Iris) tip accounts (astralane.gitbook.io, Endpoints and configs, incl. "Recently Added", checked 2026-11-19). */
+const std::vector<Pubkey>& astralane_tip_accounts();
 
 struct SignGuard {
   Pubkey wallet{};

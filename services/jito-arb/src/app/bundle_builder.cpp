@@ -90,33 +90,60 @@ BundleBuilder::BundleBuilder(const Config& cfg, Runtime& rt, Keypair wallet, Pub
   guard_.tip_max_lamports = cfg.jito.tip_max_lamports;
 }
 
-void BundleBuilder::set_sender(submit::SenderClient* s, risk::SenderBudget* b, risk::SenderFeeConfig fc, uint64_t tip_max) {
-  sender_ = s;
+void BundleBuilder::add_plain_path(std::string name, submit::SenderClient* s, risk::SenderBudget* b, risk::SenderFeeConfig fc,
+                                   std::vector<Pubkey> tip_accounts, uint64_t tip_max) {
+  if (!s) return;
+  PlainPath p;
+  p.name = std::move(name);
+  p.client = s;
+  p.fee = fc;
+  p.guard = guard_;
+  p.guard.tip_accounts = std::move(tip_accounts);
+  p.guard.tip_max_lamports = tip_max;
+  plain_.push_back(std::move(p));
   sender_budget_ = b;
-  sender_fee_cfg_ = fc;
-  sender_guard_ = guard_;
-  sender_guard_.tip_accounts = risk::sender_tip_accounts();
-  sender_guard_.tip_max_lamports = tip_max;
 }
 
 bool BundleBuilder::send_plain(const engine::Opportunity& o, const engine::Cycle& c,
                                std::span<const std::shared_ptr<const PoolState>> legs, const tx::RouteTxParams& bp, uint64_t slot,
                                int64_t wall) {
-  risk::SenderFee fee = risk::sender_fee(o.pr.gross_lamports, bp.cu_limit, sender_fee_cfg_);
-  if (!fee.ok) {
+  // Routes whose bid this opportunity can pay; one is chosen at random so they can be compared like for like.
+  PlainPath* eligible[4];
+  risk::SenderFee fees[4];
+  int n = 0;
+  for (PlainPath& p : plain_) {
+    if (n == 4) break;
+    risk::SenderFee f = risk::sender_fee(o.pr.gross_lamports, bp.cu_limit, p.fee);
+    if (f.ok) {
+      eligible[n] = &p;
+      fees[n++] = f;
+    }
+  }
+  if (n == 0) {
     ++n_.sender_fee_skip;
     return false;
   }
+  const int pick = n == 1 ? 0 : int(rng_() % uint64_t(n));
+  PlainPath& path = *eligible[pick];
+  const risk::SenderFee fee = fees[pick];
   if (sender_budget_ && sender_budget_->check(wall, fee.fee_lamports) != risk::SenderBlock::none) {
     ++n_.sender_budget_blocked;
     return false;
   }
   tx::RouteTxParams p = bp;
-  const auto& tips = sender_guard_.tip_accounts;
+  const auto& tips = path.guard.tip_accounts;
   p.tip_account = tips[size_t(rng_() % tips.size())];
-  p.tip_lamports = sender_fee_cfg_.tip_lamports;
+  p.tip_lamports = path.fee.tip_lamports;
   p.cu_price_micro_lamports = fee.cu_price;
-  if (!tx::build_route_ixs(sender_ixs_, p, c, legs) || !sender_guard_.check(sender_ixs_)) {
+  // The bundle's min_out reserves its Jito tip (about half of gross). A plain transaction never pays that tip, so its
+  // guard reserves only what it does pay, its own tip and fee, plus the same profit floor: a smaller edge that is
+  // still profitable no longer fails MinOutNotMet.
+  if (const engine::BasePrice* price = rt_.engine().base_price(c.base); price && price->known) {
+    uint64_t bundle_guard = price->from_lamports_ceil(o.pr.tip_lamports);
+    uint64_t plain_guard = price->from_lamports_ceil(p.tip_lamports + fee.fee_lamports);
+    if (bp.min_out > bundle_guard && plain_guard < bundle_guard) p.min_out = bp.min_out - bundle_guard + plain_guard;
+  }
+  if (!tx::build_route_ixs(sender_ixs_, p, c, legs) || !path.guard.check(sender_ixs_)) {
     ++n_.sender_build_failed;
     return false;
   }
@@ -132,6 +159,7 @@ bool BundleBuilder::send_plain(const engine::Opportunity& o, const engine::Cycle
     return false;
   }
   submit::SenderJob j;
+  j.path = path.name;
   j.tx_b64 = b64(last_sender_.bytes, last_sender_.len);
   j.sig = b58(last_sender_.sig);
   j.built_slot = slot;
@@ -141,13 +169,15 @@ bool BundleBuilder::send_plain(const engine::Opportunity& o, const engine::Cycle
   j.tip_lamports = p.tip_lamports;
   j.route_class = c.route_class;
   j.wall_ms = wall;
+  last_plain_min_out_ = p.min_out;
   std::string sig = j.sig;
-  if (!sender_->send(std::move(j))) {
+  if (!path.client->send(std::move(j))) {
     ++n_.sender_queue_full;
     return false;
   }
   if (sender_budget_) sender_budget_->on_send(sig, fee.fee_lamports, wall);
   ++n_.sender_queued;
+  ++plain_by_path_[path.name];
   return true;
 }
 
@@ -241,7 +271,7 @@ void BundleBuilder::operator()(const engine::Opportunity& o, const engine::Cycle
   std::memcpy(rec.signature, last_.sig.data(), 64);
   std::vector<submit::RegionResult> regions;
   const auto leg_span = std::span<const std::shared_ptr<const PoolState>>(legs, c.n);
-  auto plain = [&]() { return sender_ && send_plain(o, c, leg_span, p, slot, rec.wall_ms); };
+  auto plain = [&]() { return !plain_.empty() && send_plain(o, c, leg_span, p, slot, rec.wall_ms); };
   switch (submitter_.submit(last_, slot, rt_.clock().slot.load(std::memory_order_relaxed), rec.wall_ms, &regions, c.route_class)) {
     case submit::SubmitOutcome::Queued:
       // Leader-aware routing: queued on the region senders; acceptance and bundle ids arrive through the router.

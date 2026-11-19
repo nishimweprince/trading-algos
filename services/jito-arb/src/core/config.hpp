@@ -68,6 +68,15 @@ struct Config {
     int sender_pause_s = 600;
     int sender_status_timeout_s = 90;
     int sender_keepalive_s = 4;
+    // Astralane Iris (second plain route, 19 Nov 2026). Free tier: 5 transactions/s, 0.001 SOL minimum tip (paid only
+    // on success), so it is used only when the tip is at most astralane_max_tip_share_ppm of gross. Shares the
+    // sender_* fee share, price caps, failed-fee budget and pause. The key is read from astralane_key_env.
+    bool astralane_enabled = false;
+    std::string astralane_url = "http://fr.gateway.astralane.io/iris";
+    std::string astralane_key_env = "ASTRALANE_API_KEY";
+    uint64_t astralane_tip_lamports = 1'000'000;
+    uint32_t astralane_max_tip_share_ppm = 500'000;
+    int astralane_keepalive_s = 4;
     // Leader-aware routing (18 Nov 2026): each bundle goes to the regions nearest the leaders of its slot and the
     // next, plus `always_regions`, on per-region sender threads. Off: every bundle to `regions`, as before.
     bool route_by_leader = true;

@@ -19,6 +19,10 @@ struct SenderFeeConfig {
   uint64_t min_cu_price = 1'000;              // below this the bid is pointless: skip the Sender path
   uint64_t base_fee_lamports = 5'000;         // one signature
   uint64_t tip_lamports = 10'000;             // Sender tip (paid only when the transaction succeeds)
+  // 0: the tip comes out of the fee share (Helius Sender, small tips). >0: the tip is paid only on success, so it is
+  // kept out of the fee share (which bounds what a failure costs) and instead must be at most this share of gross
+  // (Astralane's free tier tips 0.001 SOL).
+  uint32_t max_tip_share_ppm = 0;
 };
 
 struct SenderFee {
@@ -29,8 +33,8 @@ struct SenderFee {
 };
 
 /**
- * Bid for one opportunity: the priority fee fills fee_frac of gross minus the base fee and the tip, capped at
- * max_cu_price. Priority fee lamports = ceil(cu_price * cu_limit / 1e6). Not ok when the opportunity cannot
+ * Bid for one opportunity: the priority fee fills fee_frac of gross minus the base fee and the tip (minus the base
+ * fee only, when max_tip_share_ppm is set and the tip is at most that share of gross), capped at max_cu_price. Priority fee lamports = ceil(cu_price * cu_limit / 1e6). Not ok when the opportunity cannot
  * pay at least min_cu_price.
  */
 SenderFee sender_fee(uint64_t gross_lamports, uint32_t cu_limit, const SenderFeeConfig& c);

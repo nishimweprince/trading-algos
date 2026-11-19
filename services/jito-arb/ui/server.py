@@ -203,14 +203,14 @@ class SendsCache:
                 x = json.loads(raw)
             except ValueError:
                 continue
-            if x.get("path") == "sender":
+            if x.get("path") in ("sender", "astralane"):
                 if "landing" in x:
                     b = self.sender.get(x.get("sig"))
                     if b is not None:
                         b["landing"] = x["landing"]
                         b["fee_paid"] = x.get("fee", 0)
                 else:
-                    self.sender[x["sig"]] = {"t": x["t"], "accepted": bool(x.get("accepted")), "stale": bool(x.get("stale")),
+                    self.sender[x["sig"]] = {"t": x["t"], "path": x["path"], "accepted": bool(x.get("accepted")), "stale": bool(x.get("stale")),
                                              "fee": x.get("fee", 0), "cu_price": x.get("cu_price"), "landing": None, "fee_paid": 0}
                     while len(self.sender) > 50000:
                         self.sender.popitem(last=False)
@@ -260,7 +260,11 @@ class SendsCache:
         with self.lock:
             plain = list(self.sender.values())
         sc = collections.Counter()
+        by_path = collections.defaultdict(collections.Counter)
         for b in plain:
+            bp = by_path[b.get("path", "sender")]
+            bp["sent"] += 1
+            bp[b["landing"] or ("pending" if b["accepted"] else "refused")] += 1
             sc["sent"] += 1
             sc["accepted"] += b["accepted"]
             sc["stale"] += b["stale"]
@@ -268,7 +272,7 @@ class SendsCache:
             sc["fees_paid"] += b["fee_paid"] or 0
             if b["landing"] == "failed" and time.strftime("%Y-%m-%d", time.gmtime(b["t"] / 1000)) == day:
                 sc["failed_fees_today"] += b["fee_paid"] or 0
-        return {"since": bundles[0]["t"] if bundles else None, "totals": dict(tot), "sender": dict(sc),
+        return {"since": bundles[0]["t"] if bundles else None, "totals": dict(tot), "sender": dict(sc), "plain_by_path": {k: dict(v) for k, v in by_path.items()},
                 "by_kind": {k: dict(v) for k, v in kinds.items()}, "by_region": {k: dict(v) for k, v in regions.items()},
                 "recent": bundles[-recent:][::-1]}
 
