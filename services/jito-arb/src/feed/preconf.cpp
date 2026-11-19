@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 
 #include "core/sys.hpp"
@@ -195,6 +196,30 @@ uint64_t CreditGuard::today(int64_t wall_ms) {
 }
 
 bool CreditGuard::blocked(int64_t wall_ms) { return today(wall_ms) + 300 > cap_; }
+
+bool CreditGuard::load(const std::string& path, int64_t wall_ms) {
+  FILE* f = std::fopen(path.c_str(), "r");
+  if (!f) return false;
+  long long day = -1;
+  unsigned long long credits = 0;
+  bool ok = std::fscanf(f, "%lld %llu", &day, &credits) == 2;
+  std::fclose(f);
+  if (!ok) return false;
+  std::lock_guard<std::mutex> g(mu_);
+  roll(wall_ms);
+  if (day == day_) finalized_ = std::max<uint64_t>(finalized_, credits);
+  return true;
+}
+
+bool CreditGuard::save(const std::string& path, int64_t wall_ms) {
+  const uint64_t t = today(wall_ms);
+  const std::string tmp = path + ".tmp";
+  FILE* f = std::fopen(tmp.c_str(), "w");
+  if (!f) return false;
+  std::fprintf(f, "%lld %llu\n", (long long)(wall_ms / 86'400'000), (unsigned long long)t);
+  bool ok = std::fclose(f) == 0;
+  return ok && std::rename(tmp.c_str(), path.c_str()) == 0;
+}
 
 // ---- WebSocket client (RFC 6455; client frames masked), one thread: reads with a 1 s timeout, pings when idle ----
 

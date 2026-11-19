@@ -63,6 +63,12 @@ class CreditGuard {
   uint64_t today(int64_t wall_ms);
   bool blocked(int64_t wall_ms);
   uint64_t cap() const { return cap_; }
+  /**
+   * Persist today's total so a restart cannot reset the cap: "<utc_day> <credits>". load() takes the file's total
+   * only when it is for the current UTC day. Both return false on an I/O error.
+   */
+  bool load(const std::string& path, int64_t wall_ms);
+  bool save(const std::string& path, int64_t wall_ms);
 
  private:
   void roll(int64_t wall_ms);
