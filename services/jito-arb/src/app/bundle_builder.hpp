@@ -70,7 +70,14 @@ class BundleBuilder {
    * among those whose bid the opportunity can pay, so the routes can be compared; all share one failed-fee budget.
    */
   void add_plain_path(std::string name, submit::SenderClient* s, risk::SenderBudget* b, risk::SenderFeeConfig fc,
-                      std::vector<Pubkey> tip_accounts, uint64_t tip_max_lamports, bool for_preconf = false);
+                      std::vector<Pubkey> tip_accounts, uint64_t tip_max_lamports, bool for_preconf = false,
+                      bool preconf_fallback = false);
+  /**
+   * Back-run bundles [trigger, ours] for preconf candidates. Off by default: on 19 Nov both tries were refused by
+   * Jito, one because the trigger had already executed (a preconf arrives once the leader has scheduled it), one
+   * because the trigger referenced a vote account.
+   */
+  void set_backrun(bool on) { backrun_ = on; }
   /** Plain sends queued per route name. */
   const std::map<std::string, uint64_t>& plain_queued_by_path() const { return plain_by_path_; }
   const BuilderStats& stats() const { return n_; }
@@ -92,13 +99,15 @@ class BundleBuilder {
                   const tx::RouteTxParams& bundle_params, uint64_t slot, int64_t wall);
   struct PlainPath {
     std::string name;
-    bool for_preconf = false;  // used only (and only it) for opportunities priced on a preconfirmation
+    bool for_preconf = false;       // used only (and only it) for opportunities priced on a preconfirmation
+    bool preconf_fallback = false;  // a normal route also used for preconf candidates no preconf route can pay
     submit::SenderClient* client = nullptr;
     risk::SenderFeeConfig fee;
     risk::SignGuard guard;
   };
   std::vector<PlainPath> plain_;
   uint64_t last_plain_min_out_ = 0;
+  bool backrun_ = false;
   std::map<std::string, uint64_t> plain_by_path_;
   risk::SenderBudget* sender_budget_ = nullptr;
   tx::IxList sender_ixs_;

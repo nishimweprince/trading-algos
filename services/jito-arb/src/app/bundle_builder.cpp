@@ -92,11 +92,12 @@ BundleBuilder::BundleBuilder(const Config& cfg, Runtime& rt, Keypair wallet, Pub
 }
 
 void BundleBuilder::add_plain_path(std::string name, submit::SenderClient* s, risk::SenderBudget* b, risk::SenderFeeConfig fc,
-                                   std::vector<Pubkey> tip_accounts, uint64_t tip_max, bool for_preconf) {
+                                   std::vector<Pubkey> tip_accounts, uint64_t tip_max, bool for_preconf, bool preconf_fallback) {
   if (!s) return;
   PlainPath p;
   p.name = std::move(name);
   p.for_preconf = for_preconf;
+  p.preconf_fallback = preconf_fallback;
   p.client = s;
   p.fee = fc;
   p.guard = guard_;
@@ -114,14 +115,24 @@ bool BundleBuilder::send_plain(const engine::Opportunity& o, const engine::Cycle
   risk::SenderFee fees[4];
   int n = 0;
   const bool spec = rt_.speculative();
-  for (PlainPath& p : plain_) {
-    if (n == 4) break;
-    if (p.for_preconf != spec) continue;
-    risk::SenderFee f = risk::sender_fee(o.pr.gross_lamports, bp.cu_limit, p.fee);
-    if (f.ok) {
-      eligible[n] = &p;
-      fees[n++] = f;
+  // A preconfirmed trigger is already scheduled by the leader, so a plain transaction sent now lands after it.
+  // Preconf candidates use the preconf route (Sender Max) when they can pay its tip, else a fallback route (Sender).
+  auto collect = [&](auto&& want) {
+    for (PlainPath& p : plain_) {
+      if (n == 4) break;
+      if (!want(p)) continue;
+      risk::SenderFee f = risk::sender_fee(o.pr.gross_lamports, bp.cu_limit, p.fee);
+      if (f.ok) {
+        eligible[n] = &p;
+        fees[n++] = f;
+      }
     }
+  };
+  if (spec) {
+    collect([](const PlainPath& p) { return p.for_preconf; });
+    if (n == 0) collect([](const PlainPath& p) { return p.preconf_fallback; });
+  } else {
+    collect([](const PlainPath& p) { return !p.for_preconf; });
   }
   if (n == 0) {
     ++n_.sender_fee_skip;
@@ -164,7 +175,7 @@ bool BundleBuilder::send_plain(const engine::Opportunity& o, const engine::Cycle
   }
   submit::SenderJob j;
   j.path = path.name;
-  if (spec && rt_.trigger_tx()) {
+  if (spec && backrun_ && rt_.trigger_tx()) {
     const std::string& t = *rt_.trigger_tx();
     j.prefix_b64.push_back(b64(reinterpret_cast<const uint8_t*>(t.data()), t.size()));
   }
@@ -286,13 +297,14 @@ void BundleBuilder::operator()(const engine::Opportunity& o, const engine::Cycle
   // A preconfirmation-triggered candidate goes out as a back-run: [trigger, ours] in one bundle, so ours runs right
   // after the transaction that made the edge, or not at all (an already-executed trigger fails the whole bundle).
   std::vector<std::string> trigger_prefix;
-  if (rt_.speculative() && rt_.trigger_tx()) {
+  if (backrun_ && rt_.speculative() && rt_.trigger_tx()) {
     const std::string& t = *rt_.trigger_tx();
     trigger_prefix.push_back(b64(reinterpret_cast<const uint8_t*>(t.data()), t.size()));
   }
   const std::vector<std::string>* prefix = trigger_prefix.empty() ? nullptr : &trigger_prefix;
-  if (prefix) LOG_INFO("preconf: back-run of trigger %s (slot %llu): bundle %s, gross %llu", rt_.trigger_sig().substr(0, 12).c_str(),
-                       (unsigned long long)slot, b58(last_.sig).substr(0, 12).c_str(), (unsigned long long)o.pr.gross_lamports);
+  if (rt_.speculative())
+    LOG_INFO("preconf: trigger %s (slot %llu): %s %s, gross %llu", rt_.trigger_sig().substr(0, 12).c_str(), (unsigned long long)slot,
+             prefix ? "back-run bundle" : "bundle", b58(last_.sig).substr(0, 12).c_str(), (unsigned long long)o.pr.gross_lamports);
   switch (submitter_.submit(last_, slot, rt_.clock().slot.load(std::memory_order_relaxed), rec.wall_ms, &regions, c.route_class, prefix)) {
     case submit::SubmitOutcome::Queued:
       // Leader-aware routing: queued on the region senders; acceptance and bundle ids arrive through the router.
