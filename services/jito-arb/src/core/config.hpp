@@ -40,6 +40,14 @@ struct Config {
     int ping_interval_ms = 10000;
     bool replay_from_slot = false;  // VERIFY: LaserStream from_slot on the Business plan
     int rpc_timeout_ms = 5000;
+    // Preconfirmations (19 Nov 2026): act on transactions as the leader schedules them (see feed/preconf.hpp).
+    // Billing can reach millions of credits a day; the feed disconnects for the rest of the UTC day at the cap,
+    // so the LaserStream feed never runs out of credits because of it.
+    bool preconf_enabled = false;
+    std::string preconf_host = "beta.helius-rpc.com";
+    uint64_t preconf_daily_credit_cap = 10'000'000;
+    bool preconf_include_failed = false;
+    std::vector<std::string> preconf_regions;  // regionInclude; empty = every region
   } helius;
 
   struct Jito {
@@ -77,6 +85,13 @@ struct Config {
     uint64_t astralane_tip_lamports = 1'000'000;
     uint32_t astralane_max_tip_share_ppm = 500'000;
     int astralane_keepalive_s = 4;
+    // Sender Max (all Helius pathways at once; min tip 0.001 SOL): the only route for preconfirmation-triggered
+    // plain sends. Tip = max(sender_max_tip_lamports, sender_max_tip_frac_ppm of gross), at most
+    // sender_max_max_tip_share_ppm of gross; the tip is paid only on success, the fee share bounds a failure.
+    std::string sender_max_url = "http://fra-sender.helius-rpc.com/fast";
+    uint64_t sender_max_tip_lamports = 1'000'000;
+    uint32_t sender_max_tip_frac_ppm = 200'000;
+    uint32_t sender_max_max_tip_share_ppm = 500'000;
     // Leader-aware routing (18 Nov 2026): each bundle goes to the regions nearest the leaders of its slot and the
     // next, plus `always_regions`, on per-region sender threads. Off: every bundle to `regions`, as before.
     bool route_by_leader = true;

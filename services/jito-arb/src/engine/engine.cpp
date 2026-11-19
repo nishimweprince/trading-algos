@@ -131,7 +131,10 @@ StaleCause Engine::load(const Cycle& c, Snapshots& s, uint64_t slot, uint64_t* s
   StaleCause cause = StaleCause::fresh;
   *spread_mask = 0;
   for (int i = 0; i < c.n; ++i) {
-    s[i] = store_.pool(c.legs[i].pool);
+    s[i] = nullptr;
+    for (const auto& [id, snap] : overlay_)
+      if (id == c.legs[i].pool) s[i] = snap;
+    if (!s[i]) s[i] = store_.pool(c.legs[i].pool);
     const PoolState* p = s[i].get();
     if (!p || !p->complete) return StaleCause::incomplete;
     if (p->awaiting_push) return StaleCause::resync;

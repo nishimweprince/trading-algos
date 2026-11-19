@@ -172,14 +172,7 @@ void StateStore::mark_suspect(const Pubkey& key) {
   for (uint32_t id : it->second.pools) rebuild(id);
 }
 
-bool StateStore::apply(const AccountUpdate& u) {
-  auto it = accounts_.find(u.key);
-  if (it == accounts_.end()) return true;  // not ours (a stale subscription)
-  AccountEntry& e = it->second;
-  // Per-account ordering: never go back in (slot, write_version).
-  if (e.seen && (u.slot < e.slot || (u.slot == e.slot && u.write_version && u.write_version < e.write_version))) return true;
-  updates_.fetch_add(1, std::memory_order_relaxed);
-  if (u.slot > newest_slot_.load(std::memory_order_relaxed)) newest_slot_.store(u.slot, std::memory_order_relaxed);
+bool StateStore::decode_into(AccountEntry& e, const AccountUpdate& u) {
   bool ok = true;
   if (u.missing) {
     e.missing = true;
@@ -295,6 +288,18 @@ bool StateStore::apply(const AccountUpdate& u) {
       e.seen = true;
     }
   }
+  return ok;
+}
+
+bool StateStore::apply(const AccountUpdate& u) {
+  auto it = accounts_.find(u.key);
+  if (it == accounts_.end()) return true;  // not ours (a stale subscription)
+  AccountEntry& e = it->second;
+  // Per-account ordering: never go back in (slot, write_version).
+  if (e.seen && (u.slot < e.slot || (u.slot == e.slot && u.write_version && u.write_version < e.write_version))) return true;
+  updates_.fetch_add(1, std::memory_order_relaxed);
+  if (u.slot > newest_slot_.load(std::memory_order_relaxed)) newest_slot_.store(u.slot, std::memory_order_relaxed);
+  bool ok = decode_into(e, u);
   if (!ok) {
     // A malformed CLMM update must revoke its previously published decoded value.
     if (e.kind == AccountKind::ClmmBitmapExtension || e.kind == AccountKind::ClmmTickArray ||
@@ -328,7 +333,9 @@ bool StateStore::apply(const AccountUpdate& u) {
   return true;
 }
 
-void StateStore::rebuild(uint32_t id) {
+void StateStore::rebuild(uint32_t id) { pools_[id]->snap.store(build(id)); }
+
+std::shared_ptr<PoolState> StateStore::build(uint32_t id) {
   const PoolDef& d = pools_[id]->def;
   auto s = std::make_shared<PoolState>();
   s->kind = d.kind;
@@ -472,7 +479,44 @@ void StateStore::rebuild(uint32_t id) {
   s->slot = std::max({s->pool_slot, s->vault_a_slot, s->vault_b_slot});
   s->complete = complete;
   s->seq = ++seq_;
-  pools_[id]->snap.store(std::move(s));
+  return s;
+}
+
+std::shared_ptr<const PoolState> StateStore::speculate(uint32_t id, std::span<const AccountUpdate> ups) {
+  if (id >= pools_.size()) return nullptr;
+  // Decode the simulated accounts into the live entries, build a snapshot, then put every entry back: the live
+  // state and the published snapshot are never changed. Engine thread only (the store's single writer).
+  std::vector<std::pair<AccountEntry*, AccountEntry>> saved;
+  saved.reserve(ups.size());
+  bool ok = true;
+  for (const AccountUpdate& u : ups) {
+    auto it = accounts_.find(u.key);
+    if (it == accounts_.end()) continue;
+    AccountEntry& e = it->second;
+    if (std::find(e.pools.begin(), e.pools.end(), id) == e.pools.end()) continue;
+    saved.emplace_back(&e, e);
+    if (!decode_into(e, u)) {
+      ok = false;
+      break;
+    }
+    e.slot = std::max(e.slot, u.slot);
+    e.awaiting_push = false;
+  }
+  std::shared_ptr<const PoolState> out;
+  if (ok && !saved.empty()) out = build(id);
+  for (auto it = saved.rbegin(); it != saved.rend(); ++it) *it->first = std::move(it->second);
+  return out;
+}
+
+std::vector<Pubkey> StateStore::keys_of_pool(uint32_t id) const {
+  std::vector<Pubkey> v;
+  if (id >= pools_.size()) return v;
+  for (const auto& [k, e] : accounts_)
+    if (std::find(e.pools.begin(), e.pools.end(), id) != e.pools.end() && e.kind != AccountKind::DlmmClock &&
+        e.kind != AccountKind::Mint && e.kind != AccountKind::PumpGlobalConfig && e.kind != AccountKind::PumpFeeConfig &&
+        e.kind != AccountKind::CpmmConfig && e.kind != AccountKind::ClmmConfig)
+      v.push_back(k);
+  return v;
 }
 
 }  // namespace arb

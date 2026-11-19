@@ -121,6 +121,8 @@ Config load_config(const std::string& path) {
   G(helius, laserstream_endpoint); G(helius, rpc_url); G(helius, api_key_env); G(helius, max_grpc_connections);
   G(helius, shard_size); G(helius, max_frames_per_pass); G(helius, resync_lag_ms); G(helius, reconnect_min_ms); G(helius, reconnect_max_ms);
   G(helius, ping_interval_ms); G(helius, replay_from_slot); G(helius, rpc_timeout_ms);
+  G(helius, preconf_enabled); G(helius, preconf_host); G(helius, preconf_daily_credit_cap); G(helius, preconf_include_failed);
+  G(helius, preconf_regions);
   G(jito, regions); G(jito, block_engine_fmt); G(jito, tip_floor_url); G(jito, tip_min_lamports);
   G(jito, tip_max_lamports); G(jito, tip_floor_refresh_ms); G(jito, tip_floor_percentile); G(jito, tip_accounts_refresh_s); G(jito, backoff_429_ms);
   G(jito, status_poll_ms); G(jito, status_timeout_ms); G(jito, sender_enabled); G(jito, sender_url);
@@ -129,6 +131,7 @@ Config load_config(const std::string& path) {
   G(jito, sender_status_timeout_s); G(jito, sender_keepalive_s);
   G(jito, astralane_enabled); G(jito, astralane_url); G(jito, astralane_key_env); G(jito, astralane_tip_lamports);
   G(jito, astralane_max_tip_share_ppm); G(jito, astralane_keepalive_s);
+  G(jito, sender_max_url); G(jito, sender_max_tip_lamports); G(jito, sender_max_tip_frac_ppm); G(jito, sender_max_max_tip_share_ppm);
   G(jito, route_by_leader); G(jito, route_regions); G(jito, always_regions); G(jito, skip_not_jito_leaders);
   G(jito, skip_bam_leaders); G(jito, bam_dbi_fmt); G(jito, bam_uuid_env); G(jito, send_timeout_ms); G(jito, keepalive_s);
   G(engine, base_mints); G(engine, max_hops); G(engine, min_spot_edge); G(engine, min_ev_lamports);

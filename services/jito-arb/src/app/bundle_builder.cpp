@@ -11,6 +11,7 @@
 #include "core/base64.hpp"
 #include "core/programs.hpp"
 #include "core/sys.hpp"
+#include "obs/log.hpp"
 #include "tx/dex_ix.hpp"
 
 namespace arb::app {
@@ -91,10 +92,11 @@ BundleBuilder::BundleBuilder(const Config& cfg, Runtime& rt, Keypair wallet, Pub
 }
 
 void BundleBuilder::add_plain_path(std::string name, submit::SenderClient* s, risk::SenderBudget* b, risk::SenderFeeConfig fc,
-                                   std::vector<Pubkey> tip_accounts, uint64_t tip_max) {
+                                   std::vector<Pubkey> tip_accounts, uint64_t tip_max, bool for_preconf) {
   if (!s) return;
   PlainPath p;
   p.name = std::move(name);
+  p.for_preconf = for_preconf;
   p.client = s;
   p.fee = fc;
   p.guard = guard_;
@@ -111,8 +113,10 @@ bool BundleBuilder::send_plain(const engine::Opportunity& o, const engine::Cycle
   PlainPath* eligible[4];
   risk::SenderFee fees[4];
   int n = 0;
+  const bool spec = rt_.speculative();
   for (PlainPath& p : plain_) {
     if (n == 4) break;
+    if (p.for_preconf != spec) continue;
     risk::SenderFee f = risk::sender_fee(o.pr.gross_lamports, bp.cu_limit, p.fee);
     if (f.ok) {
       eligible[n] = &p;
@@ -133,7 +137,7 @@ bool BundleBuilder::send_plain(const engine::Opportunity& o, const engine::Cycle
   tx::RouteTxParams p = bp;
   const auto& tips = path.guard.tip_accounts;
   p.tip_account = tips[size_t(rng_() % tips.size())];
-  p.tip_lamports = path.fee.tip_lamports;
+  p.tip_lamports = fee.tip_lamports;
   p.cu_price_micro_lamports = fee.cu_price;
   // The bundle's min_out reserves its Jito tip (about half of gross). A plain transaction never pays that tip, so its
   // guard reserves only what it does pay, its own tip and fee, plus the same profit floor: a smaller edge that is
@@ -178,6 +182,8 @@ bool BundleBuilder::send_plain(const engine::Opportunity& o, const engine::Cycle
   if (sender_budget_) sender_budget_->on_send(sig, fee.fee_lamports, wall);
   ++n_.sender_queued;
   ++plain_by_path_[path.name];
+  if (spec) LOG_INFO("preconf: %s plain send %s queued (gross %llu, tip %llu, fee %llu)", path.name.c_str(), sig.substr(0, 12).c_str(),
+                     (unsigned long long)o.pr.gross_lamports, (unsigned long long)p.tip_lamports, (unsigned long long)fee.fee_lamports);
   return true;
 }
 
@@ -187,6 +193,7 @@ void BundleBuilder::operator()(const engine::Opportunity& o, const engine::Cycle
     rec.reason = uint8_t(r);
   };
   ++n_.built;
+  if (rt_.speculative()) ++n_.spec_built;
   const uint64_t t_enter = now_ns();
   uint8_t dex_mask = 0;
   std::shared_ptr<const PoolState> legs[engine::MAX_LEGS];
@@ -276,6 +283,7 @@ void BundleBuilder::operator()(const engine::Opportunity& o, const engine::Cycle
     case submit::SubmitOutcome::Queued:
       // Leader-aware routing: queued on the region senders; acceptance and bundle ids arrive through the router.
       ++n_.sent;
+      if (rt_.speculative()) ++n_.spec_sent;
       rec.action = uint8_t(obs::Action::Sent);
       if (queued_hook_) queued_hook_(last_, c.route_class);
       plain();

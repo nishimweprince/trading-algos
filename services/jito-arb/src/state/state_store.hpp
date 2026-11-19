@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <variant>
@@ -92,6 +93,14 @@ class StateStore {
    * slot). Its pools stop being quotable until a newer push or a trusted resync replaces it.
    */
   void mark_suspect(const Pubkey& key);
+  /**
+   * A snapshot of pool `id` as if `ups` (accounts read from a simulation, e.g. after a preconfirmed transaction)
+   * had been applied, without changing the store or the published snapshot. Null when none of the updates belongs
+   * to the pool or one fails to decode. Engine thread only.
+   */
+  std::shared_ptr<const PoolState> speculate(uint32_t id, std::span<const AccountUpdate> ups);
+  /** The market-state accounts of a pool (pool, vaults, arrays, bitmaps; not mints, configs or the clock). */
+  std::vector<Pubkey> keys_of_pool(uint32_t id) const;
   /** Engine side: next changed pool id. */
   bool pop_changed(uint32_t& pool_id) { return changed_.pop(pool_id); }
 
@@ -147,6 +156,8 @@ class StateStore {
     return false;
   }
   void rebuild(uint32_t id);
+  std::shared_ptr<PoolState> build(uint32_t id);
+  bool decode_into(AccountEntry& e, const AccountUpdate& u);
 
   std::vector<std::unique_ptr<PoolSlot>> pools_;
   std::unordered_map<Pubkey, uint32_t, PubkeyHash> pool_index_;
