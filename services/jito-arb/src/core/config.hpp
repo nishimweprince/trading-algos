@@ -49,6 +49,10 @@ struct Config {
     // from Frankfurt against 12-30 ms on mainnet.helius-rpc.com, and the first live hour showed simulation (33 ms
     // median) eating more than the preconf lead (22 ms). The API key is appended.
     std::string preconf_rpc_url = "https://beta.helius-rpc.com";
+    // "all": stream updates and preconfirmations both trigger pricing. "preconf": the LaserStream feed only keeps
+    // pool state current; every trade comes from a preconfirmation (owner, 19 Nov: the stream-triggered path sent
+    // 256 bundles and 71 plain transactions with nothing landed). Needs preconf_enabled.
+    std::string trigger = "all";
     uint64_t preconf_daily_credit_cap = 10'000'000;
     std::string preconf_credits_path = "/var/lib/jito-arb/preconf_credits.txt";  // today's total, survives restarts
     bool preconf_include_failed = false;

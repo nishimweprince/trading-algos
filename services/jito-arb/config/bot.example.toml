@@ -11,6 +11,8 @@ kill_file = "KILL"
 # UTC day once its estimated Helius credits reach the cap, so LaserStream never runs out because of it.
 preconf_enabled = false
 preconf_daily_credit_cap = 10000000
+# "all": stream updates and preconfs both trigger trades; "preconf": the stream only keeps pool state current.
+trigger = "all"
 laserstream_endpoint = "VERIFY" # from the Helius dashboard, Frankfurt region
 rpc_url = "https://mainnet.helius-rpc.com"
 api_key_env = "HELIUS_API_KEY"

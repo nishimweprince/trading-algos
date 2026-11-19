@@ -191,6 +191,25 @@ size_t Runtime::evaluate_speculative(const std::vector<std::pair<uint32_t, std::
   return n;
 }
 
+size_t Runtime::drain_changed() {
+  frame_recv_ns_ = batch_recv_ns_;
+  batch_recv_ns_ = 0;
+  uint32_t id;
+  size_t n = 0;
+  while (store_.pop_changed(id)) {
+    if (last_update_ns_.size() <= id) last_update_ns_.resize(store_.pool_count(), 0);
+    last_update_ns_[id] = frame_recv_ns_;
+    if (id < preconf_seen_ns_.size() && preconf_seen_ns_[id]) {
+      if (frame_recv_ns_ > preconf_seen_ns_[id])
+        preconf_lead_us_.add(frame_recv_ns_, int64_t(frame_recv_ns_ - preconf_seen_ns_[id]) / 1000);
+      preconf_seen_ns_[id] = 0;
+    }
+    ++stats_.updates;
+    ++n;
+  }
+  return n;
+}
+
 bool Runtime::replay_file(const std::string& path) {
   feed::FrameReader rd;
   if (!rd.open(path)) return false;

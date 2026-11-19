@@ -186,16 +186,6 @@ const REASON = {
   risk_block: "Held by a safety limit (KILL, fees, float, feed)", leader_skipped: "Slot leader not on Jito",
 };
 
-// Postpack (Astralane) vs our Helius feed, per transaction on our pools over the last 10 minutes.
-function postpackTile(p) {
-  const ms = (x) => x == null ? "–" : (x > 0 ? "+" : "") + fmt(x, 1) + " ms";
-  const head = p.lead_ms_p50 == null ? "no matches yet" : `${ms(p.lead_ms_p50)} vs Helius`;
-  const sub = `${p.live ? "" : "recorder stopped · "}median, + = Postpack first · p10 ${ms(p.lead_ms_p10)} · p90 ${ms(p.lead_ms_p90)}` +
-    ` · first ${p.first_pct == null ? "–" : fmt(p.first_pct, 0) + "%"} · covers ${p.coverage_pct == null ? "–" : fmt(p.coverage_pct, 1) + "%"} of our pools' txs` +
-    ` · ${fmt(p.per_min, 1)} msgs/min ≈ ${fmt(p.credits_per_hour)} credits/h`;
-  return tile("Postpack lead", head, sub, p.lead_ms_p50 > 0 ? "goodv" : "");
-}
-
 function tile(k, v, d = "", cls = "") {
   return `<div class="panel tile"><div class="k">${esc(k)}</div><div class="v ${cls}">${v}</div><div class="d">${d}</div></div>`;
 }
@@ -204,7 +194,7 @@ async function getJSON(u) { const r = await fetch(u, {cache: "no-store"}); if (!
 let metrics = {}, units = {};
 async function refreshState() {
   try {
-    const [s, feeds] = await Promise.all([getJSON("/api/state"), getJSON("/api/feeds").catch(() => null)]);
+    const s = await getJSON("/api/state");
     const m = metrics = s.metrics; const u = units = s.units;
     const up = u["jito-arb.service"] === "active" && m.arb_uptime_seconds != null;
     $("mode").textContent = !up ? "bot down" : m.arb_kill_switch ? "KILL switch on" : "LIVE";
@@ -220,14 +210,27 @@ async function refreshState() {
     if (m.arb_wallet_lamports >= 0 && m.arb_wallet_lamports < 3e8) issues.push("Hot wallet below the 0.3 SOL floor: sending is paused.");
     $("alert").hidden = issues.length === 0;
     $("alert").innerHTML = issues.map((t) => `<div>${esc(t)}</div>`).join("");
-    const age = m.arb_feed_update_age_ms, lag = m.arb_feed_lag_us_p50, det = m.arb_detect_to_signed_us_p50;
+    const age = m.arb_feed_update_age_ms, det = m.arb_detect_to_signed_us_p50;
+    const ms = (us) => us == null || us < 0 ? "–" : fmt(us / 1000, 1) + " ms";
+    const preconfOn = m.arb_preconf_subscribed != null;
+    const preconfOnly = m.arb_trigger_preconf_only === 1;
+    const pcState = !preconfOn ? "off" : m.arb_preconf_capped ? "capped for today" : m.arb_preconf_subscribed ? "subscribed" : "reconnecting";
     $("health").innerHTML = [
-      tile("Streams up", `${fmt(m.arb_feed_shards_up)} of 9`, `${fmt(m.arb_feed_reconnects_last_min)} reconnects in the last minute`, m.arb_feed_shards_up >= 9 ? "goodv" : "badv"),
-      tile("Newest update", age == null || age < 0 ? "–" : fmt(age) + " ms", "sending pauses above 800 ms", age > 800 ? "badv" : ""),
-      tile("Helius feed lag", lag == null || lag < 0 ? "–" : fmt(lag / 1000, 1) + " ms",
-           `Helius to us, median · p99 ${m.arb_feed_lag_us_p99 > 0 ? fmt(m.arb_feed_lag_us_p99 / 1000, 1) + " ms" : "–"} · updates ${m.arb_slot_offset_us_p50 > 0 ? fmt(m.arb_slot_offset_us_p50 / 1000) + " ms" : "–"} into the slot`),
-      ...(feeds && feeds.postpack ? [postpackTile(feeds.postpack)] : []),
-      tile("Detect to signed", det == null || det < 0 ? "–" : fmt(det / 1000, 1) + " ms", "update in to bundle signed, median"),
+      tile("Trades triggered by", preconfOnly ? "Preconfs only" : preconfOn ? "Stream + preconfs" : "Stream only",
+           preconfOnly ? "LaserStream keeps pool state current; it triggers nothing" : "every stream update and preconf can trigger a trade"),
+      ...(preconfOn ? [
+        tile("Preconf feed", pcState, `${fmt(m.arb_preconf_messages)} messages · ${fmt(m.arb_preconf_reconnects)} reconnects · Frankfurt + Amsterdam leaders`,
+             m.arb_preconf_subscribed ? "goodv" : "badv"),
+        tile("Preconf lead", ms(m.arb_preconf_lead_us_p50),
+             `before the stream's update of the same pool, median · p90 ${ms(m.arb_preconf_lead_us_p90)} · prediction ${ms(m.arb_preconf_sim_us_p50)}`,
+             m.arb_preconf_lead_us_p50 > m.arb_preconf_sim_us_p50 ? "goodv" : ""),
+        tile("Preconf credits", `${big(m.arb_preconf_credits_today)} of ${big(m.arb_preconf_credit_cap)}`,
+             "Helius credits today (UTC), estimated; the feed stops at the cap", m.arb_preconf_credits_today > 0.9 * m.arb_preconf_credit_cap ? "badv" : ""),
+      ] : []),
+      tile("State feed", `${fmt(m.arb_feed_shards_up)} of 9 streams`,
+           `LaserStream · lag ${ms(m.arb_feed_lag_us_p50)} median · newest update ${age == null || age < 0 ? "–" : fmt(age) + " ms"} ago (sending pauses above 800 ms)`,
+           m.arb_feed_shards_up >= 9 && !(age > 800) ? "goodv" : "badv"),
+      tile("Detect to signed", det == null || det < 0 ? "–" : fmt(det / 1000, 1) + " ms", "trigger in to bundle signed, median"),
       tile("Pools", fmt(m.arb_pools), `${fmt(m.arb_armed_pools)} set up for trading`),
       tile("Tip floor", m.arb_tip_floor_lamports > 0 ? fmt(m.arb_tip_floor_lamports) + " lamports" : "–", "Jito landed-tip 25th percentile"),
     ].join("");
@@ -256,6 +259,9 @@ async function refreshSends() {
       tile("Jito verdicts", `${fmt(t.not_landed || 0)} not landed`, `${fmt(t.rejected || 0)} rejected · ${fmt(t.accepted || 0)} accepted by Jito`),
       tile("Hot wallet", m.arb_wallet_lamports >= 0 ? fmt(m.arb_wallet_lamports / 1e9, 4) + " SOL" : "–",
            (m.arb_plain_queued != null || m.arb_sender_queued != null) ? "missed bundles cost nothing; failed plain sends pay their fee" : "misses cost nothing: only landed bundles pay"),
+      ...(m.arb_preconf_subscribed != null ? [tile("Preconf trades", `${fmt(m.arb_preconf_spec_sent || 0)} sent`,
+           `${fmt(m.arb_preconf_spec_pools || 0)} pools priced on predicted state · Sender Max ${fmt(m.arb_sender_max_landed || 0)} landed / ` +
+           `${fmt(m.arb_sender_max_failed || 0)} failed of ${fmt(m.arb_sender_max_queued || 0)}`, m.arb_sender_max_landed ? "goodv" : "")] : []),
       ...(m.arb_plain_queued != null || m.arb_sender_queued != null ? [tile("Plain sends", `${fmt(sx.landed || 0)} landed`,
            `${fmt(sx.failed || 0)} failed · ${fmt(sx.dropped || 0)} dropped · burnt today ${fmt((m.arb_sender_failed_fees_today || 0) / 1e9, 4)} of ${fmt((m.arb_sender_fail_cap || 0) / 1e9, 2)} SOL` +
            (m.arb_sender_paused ? " · PAUSED" : "") +

@@ -45,6 +45,11 @@ class Runtime {
   /** Prices the pools changed since the last call, each once. Returns how many were evaluated. */
   size_t evaluate_changed();
   /**
+   * Preconf-only trigger mode: take the stream's changed pools off the queue (their snapshots are already current)
+   * and record when each changed, without pricing anything. Trades then come only from evaluate_speculative.
+   */
+  size_t drain_changed();
+  /**
    * Price the cycles of these pools on speculative snapshots (StateStore::speculate) through the normal engine,
    * dispatcher and send hook. While it runs speculative() is true, so the send hook and the decision log can tell.
    */
