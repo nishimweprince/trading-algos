@@ -118,7 +118,7 @@ struct MockGbx final : submit::GbxTransport {
         if (f == 3) sig = r.bytes();
         else r.skip(wt);
       }
-      const std::string msg = b58(id.pubkey()) + "-chal";
+      const std::string msg = std::string(reinterpret_cast<const char*>(id.pubkey().data()), 32) + "chal";  // variant 1
       if (sig.size() != 64 || crypto_sign_verify_detached(reinterpret_cast<const uint8_t*>(sig.data()), reinterpret_cast<const uint8_t*>(msg.data()),
                                                           msg.size(), id.pubkey().data()) != 0) {
         err = "bad signature";
@@ -189,6 +189,9 @@ TEST(gbx_client_authenticates_sends_and_tracks_landing) {
   int challenges = 0;
   for (auto& s : calls) challenges += s.rfind("/auth.AuthService/GenerateAuthChallenge", 0) == 0;
   CHECK(challenges == 2);  // once at start, once after the expired token
+  int token_calls = 0;
+  for (auto& s : calls) token_calls += s.rfind("/auth.AuthService/GenerateAuthTokens", 0) == 0;
+  CHECK(token_calls == 3);  // variants 0 and 1 the first time; only the known variant 1 the second
 }
 
 TEST(gbx_tipless_transaction_passes_only_a_guard_that_allows_it) {
