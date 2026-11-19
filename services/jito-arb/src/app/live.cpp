@@ -515,6 +515,13 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
                (unsigned long long)cfg.jito.sender_max_tip_lamports, (unsigned long long)cfg.helius.preconf_daily_credit_cap);
     }
   }
+  // Trigger mode: with "preconf", stream updates refresh state only and every trade comes from a preconfirmation.
+  const bool preconf_only = cfg.helius.trigger == "preconf" && preconf_feed != nullptr;
+  if (cfg.helius.trigger == "preconf" && !preconf_feed)
+    LOG_WARN("trigger = preconf but preconfirmations are off: stream updates keep triggering trades");
+  else if (preconf_only)
+    LOG_INFO("trigger: preconfirmations only (the LaserStream feed keeps pool state current, it triggers nothing)");
+  reg.gauge("arb_trigger_preconf_only", "1: trades come only from preconfirmations").set(preconf_only ? 1 : 0);
   // Wallet state from the wallet stream. Dry run signs with a key that holds nothing, so the values only reach
   // the float check and own-capital sizing when sending is live; the gauges show them either way.
   auto& g_wallet = reg.gauge("arb_wallet_lamports", "hot wallet SOL balance, lamports (-1 until seen)");
@@ -713,7 +720,10 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
         s.ring->release(++s.next);
       }
     }
-    if (any && !recorder) rt.evaluate_changed();
+    if (any && !recorder) {
+      if (preconf_only) rt.drain_changed();
+      else rt.evaluate_changed();
+    }
     if (preconf_sim) {
       app::SpecResult r;
       while (preconf_sim->pop(r)) {
