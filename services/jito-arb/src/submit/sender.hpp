@@ -27,12 +27,15 @@
 namespace arb::submit {
 
 std::string sender_send_body(const std::string& tx_b64, uint64_t id = 1);
+/** sendBundle [[prefix..., tx], {"encoding":"base64"}] (Sender: up to 4 transactions, landing tracked by signature). */
+std::string sender_bundle_body(const std::vector<std::string>& prefix, const std::string& tx_b64, uint64_t id = 1);
 /** The signature Sender returned, or its error message in `error`. */
 bool parse_sender_reply(std::string_view body, std::string& signature, std::string& error);
 
 struct SenderJob {
   std::string path;         // provider name ("sender" = Helius, "astralane"), for logs
   std::string tx_b64;
+  std::vector<std::string> prefix_b64;  // non-empty: sent as a bundle with these ahead of ours (a back-run)
   std::string sig;          // base58, full
   uint64_t built_slot = 0;
   uint64_t fee_lamports = 0;  // base + priority: what a failure costs

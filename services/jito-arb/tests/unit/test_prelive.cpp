@@ -302,9 +302,9 @@ namespace {
 class RecordingHttp final : public submit::HttpPost {
  public:
   RecordingHttp(std::string url, std::string headers, std::mutex* mu, std::vector<std::string>* log) : url_(std::move(url)), headers_(std::move(headers)), mu_(mu), log_(log) {}
-  int post(std::string_view path, std::string_view, std::string& out) override {
+  int post(std::string_view path, std::string_view body, std::string& out) override {
     std::lock_guard<std::mutex> g(*mu_);
-    log_->push_back(url_ + "|" + headers_ + "|" + std::string(path));
+    log_->push_back(url_ + "|" + headers_ + "|" + std::string(path) + "|" + std::string(body));
     out = "{\"jsonrpc\":\"2.0\",\"result\":\"bid1\",\"id\":1}";
     return 200;
   }
@@ -346,12 +346,21 @@ TEST(router_sends_async_per_region_and_drops_passed_slots) {
     CHECK_EQ(posts.size(), size_t(2));
   }
   CHECK_EQ(r.accepted(), uint64_t(2));
+  // A back-run: the preconfirmed trigger goes first in the same bundle, ours last (it carries the tip).
+  {
+    std::vector<std::string> prefix{"dHJpZw=="};
+    r.route("dHg=", sig, 520, 100, 0, &prefix);
+    for (int i = 0; i < 200 && r.accepted() < 4; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    std::lock_guard<std::mutex> g(mu);
+    CHECK_EQ(posts.size(), size_t(4));
+    CHECK(posts[2].find("[[\"dHJpZw==\",\"dHg=\"]") != std::string::npos);
+  }
   slot = 105;  // the slot passed before a sender picked it up: dropped, never sent late
   r.route("dHg=", sig, 520, 100, 0);
   for (int i = 0; i < 200 && r.dropped() < 2; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(5));
   CHECK_EQ(r.dropped(), uint64_t(2));
   std::lock_guard<std::mutex> g(mu);
-  CHECK_EQ(posts.size(), size_t(2));
+  CHECK_EQ(posts.size(), size_t(4));
 }
 
 TEST(adaptive_cu_limit_learns_from_measured_use) {

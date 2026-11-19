@@ -70,7 +70,8 @@ Router::Sender* Router::sender(const std::string& region, bool bam) {
   return raw;
 }
 
-RoutePlan Router::route(const std::string& tx_b64, const Signature& sig, uint16_t route_class, uint64_t built_slot, int64_t wall_ms) {
+RoutePlan Router::route(const std::string& tx_b64, const Signature& sig, uint16_t route_class, uint64_t built_slot, int64_t wall_ms,
+                        const std::vector<std::string>* prefix) {
   LeaderInfo now = leaders_ ? leaders_->at(built_slot) : LeaderInfo{};
   LeaderInfo next = leaders_ ? leaders_->at(built_slot + 1) : LeaderInfo{};
   RoutePlan p = plan_route(c_, now, next);
@@ -78,7 +79,10 @@ RoutePlan Router::route(const std::string& tx_b64, const Signature& sig, uint16_
     ++skipped_;
     return p;
   }
-  std::string body = send_bundle_body(std::span<const std::string>(&tx_b64, 1));
+  std::vector<std::string> txs;
+  if (prefix) txs = *prefix;
+  txs.push_back(tx_b64);
+  std::string body = send_bundle_body(txs);
   auto enqueue = [&](const std::string& region, bool bam) {
     Sender* s = sender(region, bam);
     Job j{body, sig, route_class, built_slot, now.identity.empty() ? next : now, wall_ms, now_ns()};

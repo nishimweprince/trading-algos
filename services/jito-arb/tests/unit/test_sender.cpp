@@ -97,6 +97,8 @@ TEST(sender_wire_format_and_reply) {
   std::string body = submit::sender_send_body("QUJD", 7);
   CHECK_EQ(body, std::string("{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"sendTransaction\",\"params\":[\"QUJD\",{\"encoding\":\"base64\","
                              "\"skipPreflight\":true,\"maxRetries\":0}]}"));
+  CHECK_EQ(submit::sender_bundle_body({"VFJJRw=="}, "QUJD", 3),
+           std::string("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"sendBundle\",\"params\":[[\"VFJJRw==\",\"QUJD\"],{\"encoding\":\"base64\"}]}"));
   std::string sig, err;
   CHECK(submit::parse_sender_reply("{\"jsonrpc\":\"2.0\",\"result\":\"5sig\",\"id\":1}", sig, err) && sig == "5sig" && err.empty());
   CHECK(!submit::parse_sender_reply("{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32602,\"message\":\"missing tip\"},\"id\":1}", sig, err));
