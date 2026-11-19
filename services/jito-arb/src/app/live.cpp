@@ -44,6 +44,7 @@
 #include "submit/router.hpp"
 #include "submit/sender.hpp"
 #include "app/preconf_sim.hpp"
+#include "submit/gbx.hpp"
 #include "core/sys.hpp"
 #include "feed/preconf.hpp"
 #include "risk/sender_budget.hpp"
@@ -517,6 +518,48 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
                (unsigned long long)cfg.jito.sender_max_tip_lamports, (unsigned long long)cfg.helius.preconf_daily_credit_cap);
     }
   }
+  // GBX route for preconf candidates (Astralane's Gravity Block Exchange; free misses, fee only when it lands).
+  std::unique_ptr<submit::GbxClient> gbx;
+  std::atomic<uint64_t> gbx_fees_paid{0};
+  if (live_send && cfg.helius.gbx_enabled && preconf_feed) {
+    try {
+      Keypair id = Keypair::load_file(cfg.helius.gbx_auth_keypair);
+      submit::GbxConfig gc;
+      gc.url = cfg.helius.gbx_url;
+      gc.timeout_ms = cfg.jito.send_timeout_ms;
+      gc.status_timeout_s = cfg.jito.sender_status_timeout_s;
+      const std::string gurl = gc.url;
+      const int gto = gc.timeout_ms;
+      gc.transport = [gurl, gto] { return submit::make_gbx_transport(gurl, gto); };
+      gbx = std::make_unique<submit::GbxClient>(
+          gc, id, resolve_rpc_url(cfg), &rt.clock().slot,
+          [&](const submit::GbxJob& j, int code, const std::string& uuid, const std::string& err, int64_t rtt_us) {
+            char nums[160];
+            std::snprintf(nums, sizeof nums, ",\"code\":%d,\"rtt_ms\":%.2f,\"fee\":%llu,\"with_trigger\":%s,\"targets\":%zu", code,
+                          rtt_us / 1000.0, (unsigned long long)j.fee_lamports, j.with_trigger ? "true" : "false", j.targets.size());
+            log_line("{\"t\":" + std::to_string(j.wall_ms) + ",\"slot\":" + std::to_string(j.built_slot) + ",\"sig\":" +
+                     json_str(j.sig.substr(0, 12)) + ",\"class\":" + std::to_string(j.route_class) + ",\"path\":\"gbx\"" + nums +
+                     ",\"accepted\":" + (code == 0 ? "true" : "false") + ",\"id\":" + json_str(uuid) + ",\"err\":" + json_str(err.substr(0, 160)) + "}");
+          },
+          [&](const submit::GbxJob& j, submit::GbxOutcome o, uint64_t landed_slot) {
+            int64_t now = wall_ms();
+            if (o != submit::GbxOutcome::dropped) {
+              limits.record_fee(now, j.fee_lamports);
+              gbx_fees_paid += j.fee_lamports;
+            }
+            log_line("{\"t\":" + std::to_string(now) + ",\"sig\":" + json_str(j.sig.substr(0, 12)) + ",\"path\":\"gbx\",\"landing\":\"" +
+                     submit::gbx_outcome_name(o) + "\",\"landed_slot\":" + std::to_string(landed_slot) + ",\"fee\":" +
+                     std::to_string(o == submit::GbxOutcome::dropped ? 0 : j.fee_lamports) + "}");
+            if (o == submit::GbxOutcome::landed) LOG_INFO("gbx: %s LANDED in slot %llu", j.sig.substr(0, 12).c_str(), (unsigned long long)landed_slot);
+          });
+      builder.set_gbx(gbx.get(), cfg.helius.gbx_fee_frac_ppm, cfg.helius.gbx_min_priority_lamports, cfg.helius.gbx_max_cu_price);
+      LOG_INFO("gbx: ON (%s) as %s, priority fee %.0f%% of gross (>= %llu lamports), paid only when a bundle lands",
+               cfg.helius.gbx_url.c_str(), b58(id.pubkey()).c_str(), cfg.helius.gbx_fee_frac_ppm / 1e4,
+               (unsigned long long)cfg.helius.gbx_min_priority_lamports);
+    } catch (const std::exception& e) {
+      LOG_WARN("gbx: off: %s", e.what());
+    }
+  }
   // Trigger mode: with "preconf", stream updates refresh state only and every trade comes from a preconfirmation.
   const bool preconf_only = cfg.helius.trigger == "preconf" && preconf_feed != nullptr;
   if (cfg.helius.trigger == "preconf" && !preconf_feed)
@@ -942,6 +985,23 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
         reg.gauge("arb_preconf_lead_us_p50", "preconf receipt to the stream's update of the same pool, us (1 h)").set(ls.count ? ls.p50 : -1);
         reg.gauge("arb_preconf_lead_us_p90", "preconf lead, 90th percentile, us").set(ls.count ? ls.p90 : -1);
         reg.gauge("arb_preconf_lead_samples", "preconf lead samples (1 h)").set(int64_t(ls.count));
+      }
+      if (gbx) {
+        const uint64_t cs = rt.clock().slot.load();
+        const auto& bs = builder.stats();
+        reg.gauge("arb_gbx_authed", "1 once authenticated with the GBX broadcaster").set(gbx->authed() ? 1 : 0);
+        reg.gauge("arb_gbx_validators", "validators connected to GBX (latest GetConnectedLeaders)").set(int64_t(gbx->connected_validators()));
+        reg.gauge("arb_gbx_coverage_ppm", "share of the next 1,000 slots led by GBX-connected validators, ppm").set(int64_t(gbx->coverage_ppm(cs, 1000)));
+        reg.gauge("arb_gbx_queued", "GBX bundles built for preconf candidates").set(int64_t(bs.gbx_queued));
+        reg.gauge("arb_gbx_skipped", "preconf candidates that could not pay the GBX minimum priority fee").set(int64_t(bs.gbx_skipped));
+        reg.gauge("arb_gbx_build_failed", "GBX variants that failed to build, guard, sign or queue").set(int64_t(bs.gbx_build_failed));
+        reg.gauge("arb_gbx_accepted", "GBX bundles the broadcaster accepted").set(int64_t(gbx->sent_ok()));
+        reg.gauge("arb_gbx_rejected", "GBX bundles refused (or not sent: auth)").set(int64_t(gbx->rejected()));
+        reg.gauge("arb_gbx_stale", "GBX bundles dropped before sending: slot passed").set(int64_t(gbx->stale()));
+        reg.gauge("arb_gbx_landed", "GBX bundles that landed").set(int64_t(gbx->landed()));
+        reg.gauge("arb_gbx_dropped", "accepted GBX bundles that never landed (no cost)").set(int64_t(gbx->dropped()));
+        reg.gauge("arb_gbx_auth_failures", "GBX authentication failures").set(int64_t(gbx->auth_failures()));
+        reg.gauge("arb_gbx_fees_paid", "priority fees paid by landed GBX bundles, lamports").set(int64_t(gbx_fees_paid.load()));
       }
       if (sender_max) {
         reg.gauge("arb_sender_max_queued", "plain transactions queued on Sender Max (preconf-triggered)").set(int64_t(builder.plain_queued_by_path().count("sender_max") ? builder.plain_queued_by_path().at("sender_max") : 0));

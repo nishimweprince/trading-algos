@@ -58,7 +58,7 @@ endif()
 file(GLOB_RECURSE ARB_CORE_SRC CONFIGURE_DEPENDS
   src/core/*.cpp src/feed/*.cpp src/state/*.cpp src/dex/*.cpp src/engine/*.cpp src/flash/*.cpp
   src/tx/*.cpp src/submit/*.cpp src/risk/*.cpp src/obs/*.cpp src/app/*.cpp)
-list(FILTER ARB_CORE_SRC EXCLUDE REGEX "(laserstream_client|laserstream_stub|app/live)\\.cpp$")
+list(FILTER ARB_CORE_SRC EXCLUDE REGEX "(laserstream_client|laserstream_stub|gbx_grpc|gbx_grpc_stub|app/live)\\.cpp$")
 add_library(arbcore STATIC ${ARB_CORE_SRC})
 target_include_directories(arbcore PUBLIC src)
 target_link_libraries(arbcore PUBLIC arb_sodium simdjson::simdjson OpenSSL::SSL OpenSSL::Crypto Threads::Threads)
@@ -70,7 +70,7 @@ if(ARB_WITH_GRPC)
   # prefix), pkg-config otherwise (as pump-desk's ingest does).
   find_package(Protobuf QUIET)  # gRPCConfig references protobuf::libprotobuf without finding it
   find_package(gRPC CONFIG QUIET)
-  target_sources(jito-arb PRIVATE src/feed/laserstream_client.cpp)
+  target_sources(jito-arb PRIVATE src/feed/laserstream_client.cpp src/submit/gbx_grpc.cpp)
   target_compile_definitions(jito-arb PRIVATE ARB_WITH_GRPC=1)
   if(TARGET gRPC::grpc++)
     target_link_libraries(jito-arb PRIVATE gRPC::grpc++)
@@ -80,7 +80,7 @@ if(ARB_WITH_GRPC)
     target_link_libraries(jito-arb PRIVATE PkgConfig::GRPCPP)
   endif()
 else()
-  target_sources(jito-arb PRIVATE src/feed/laserstream_stub.cpp)
+  target_sources(jito-arb PRIVATE src/feed/laserstream_stub.cpp src/submit/gbx_grpc_stub.cpp)
 endif()
 
 foreach(tool discover recorder replay_report fetch_fixtures fixture_frames pool_inventory live_plan arm_accounts)

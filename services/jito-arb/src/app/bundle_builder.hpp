@@ -15,6 +15,7 @@
 #include "risk/sign_guard.hpp"
 #include "submit/jito.hpp"
 #include "submit/sender.hpp"
+#include "submit/gbx.hpp"
 #include "tx/alt_manager.hpp"
 #include "tx/builders.hpp"
 
@@ -36,7 +37,8 @@ struct BuilderStats {
   uint64_t not_armed = 0;  // routes skipped: through a pool outside the armed set
   uint64_t leader_skipped = 0;  // signed, not sent: no Jito path reaches the slot's leaders
   // Plain-transaction (Sender) path, per opportunity that reached the bundle stage.
-  uint64_t spec_built = 0, spec_sent = 0;  // opportunities priced on a preconfirmation, and those sent
+  uint64_t spec_built = 0, spec_sent = 0;
+  uint64_t gbx_queued = 0, gbx_skipped = 0, gbx_build_failed = 0;  // opportunities priced on a preconfirmation, and those sent
   uint64_t sender_queued = 0, sender_fee_skip = 0, sender_budget_blocked = 0, sender_build_failed = 0, sender_queue_full = 0;
 };
 
@@ -78,6 +80,18 @@ class BundleBuilder {
    * because the trigger referenced a vote account.
    */
   void set_backrun(bool on) { backrun_ = on; }
+  /**
+   * GBX route for preconf candidates: [trigger (droppable), our arb without a tip] with the route's pools as target
+   * accounts; the priority fee is `fee_frac_ppm` of gross (>= `min_priority_lamports`), paid only if it lands.
+   */
+  void set_gbx(submit::GbxClient* c, uint32_t fee_frac_ppm, uint64_t min_priority_lamports, uint64_t max_cu_price) {
+    gbx_ = c;
+    gbx_fee_frac_ppm_ = fee_frac_ppm;
+    gbx_min_priority_ = min_priority_lamports;
+    gbx_max_cu_price_ = max_cu_price;
+    gbx_guard_ = guard_;
+    gbx_guard_.allow_no_tip = true;
+  }
   /** Plain sends queued per route name. */
   const std::map<std::string, uint64_t>& plain_queued_by_path() const { return plain_by_path_; }
   const BuilderStats& stats() const { return n_; }
@@ -108,6 +122,14 @@ class BundleBuilder {
   std::vector<PlainPath> plain_;
   uint64_t last_plain_min_out_ = 0;
   bool backrun_ = false;
+  bool send_gbx(const engine::Opportunity& o, const engine::Cycle& c, std::span<const std::shared_ptr<const PoolState>> legs,
+                const tx::RouteTxParams& bundle_params, uint64_t slot, int64_t wall);
+  submit::GbxClient* gbx_ = nullptr;
+  uint32_t gbx_fee_frac_ppm_ = 500'000;
+  uint64_t gbx_min_priority_ = 5'000, gbx_max_cu_price_ = 50'000'000;
+  risk::SignGuard gbx_guard_;
+  tx::IxList gbx_ixs_;
+  tx::SignedTx last_gbx_;
   std::map<std::string, uint64_t> plain_by_path_;
   risk::SenderBudget* sender_budget_ = nullptr;
   tx::IxList sender_ixs_;

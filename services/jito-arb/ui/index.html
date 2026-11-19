@@ -259,6 +259,10 @@ async function refreshSends() {
       tile("Jito verdicts", `${fmt(t.not_landed || 0)} not landed`, `${fmt(t.rejected || 0)} rejected · ${fmt(t.accepted || 0)} accepted by Jito`),
       tile("Hot wallet", m.arb_wallet_lamports >= 0 ? fmt(m.arb_wallet_lamports / 1e9, 4) + " SOL" : "–",
            (m.arb_plain_queued != null || m.arb_sender_queued != null) ? "missed bundles cost nothing; failed plain sends pay their fee" : "misses cost nothing: only landed bundles pay"),
+      ...(m.arb_gbx_authed != null ? [tile("GBX bundles", `${fmt(m.arb_gbx_landed || 0)} landed`,
+           `${fmt(m.arb_gbx_accepted || 0)} accepted of ${fmt(m.arb_gbx_queued || 0)} · ${fmt(m.arb_gbx_rejected || 0)} refused · ` +
+           `GBX leads ${fmt((m.arb_gbx_coverage_ppm || 0) / 1e4, 1)}% of the next 1,000 slots (${fmt(m.arb_gbx_validators || 0)} validators)` +
+           (m.arb_gbx_authed ? "" : " · NOT AUTHENTICATED"), m.arb_gbx_landed ? "goodv" : m.arb_gbx_authed ? "" : "badv")] : []),
       ...(m.arb_preconf_subscribed != null ? [tile("Preconf trades", `${fmt(m.arb_preconf_spec_sent || 0)} sent`,
            `${fmt(m.arb_preconf_spec_pools || 0)} pools priced on predicted state · Sender Max ${fmt(m.arb_sender_max_landed || 0)} landed / ` +
            `${fmt(m.arb_sender_max_failed || 0)} failed of ${fmt(m.arb_sender_max_queued || 0)}`, m.arb_sender_max_landed ? "goodv" : "")] : []),

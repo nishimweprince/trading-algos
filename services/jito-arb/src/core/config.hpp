@@ -58,6 +58,16 @@ struct Config {
     // the Sender Max tip.
     bool preconf_backrun = false;
     bool preconf_fallback_sender = true;
+    // GBX (Astralane's Gravity Block Exchange) route for preconf candidates, alongside the others: a bundle
+    // [trigger (droppable), our arb without a tip] with the route's pools as target accounts. It lands all or
+    // nothing, so a miss costs nothing; the priority fee (gbx_fee_frac_ppm of gross, at least
+    // gbx_min_priority_lamports) is paid only when it lands. Authenticates with gbx_auth_keypair (no funds needed).
+    bool gbx_enabled = false;
+    std::string gbx_url = "http://fra-gbx.astralane.io:5064";
+    std::string gbx_auth_keypair = "/etc/jito-arb/shredstream/auth.json";
+    uint32_t gbx_fee_frac_ppm = 500'000;
+    uint64_t gbx_min_priority_lamports = 5'000;
+    uint64_t gbx_max_cu_price = 50'000'000;
     uint64_t preconf_daily_credit_cap = 10'000'000;
     std::string preconf_credits_path = "/var/lib/jito-arb/preconf_credits.txt";  // today's total, survives restarts
     bool preconf_include_failed = false;

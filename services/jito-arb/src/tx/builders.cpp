@@ -91,8 +91,10 @@ Result<RouteTxLayout> build_route_ixs(IxList& l, const RouteTxParams& p, const e
     lay.repay_index = l.n;
     flash::repay_ix(l, *p.reserve, p.wallet, base_ata, p.amount_in, lay.borrow_index);
   }
-  lay.tip_index = l.n;
-  system_transfer(l, p.wallet, p.tip_account, p.tip_lamports);
+  if (p.tip_lamports) {  // 0: no tip transfer (GBX: builders order by priority fee, there are no tip accounts)
+    lay.tip_index = l.n;
+    system_transfer(l, p.wallet, p.tip_account, p.tip_lamports);
+  }
   return lay;
 }
 

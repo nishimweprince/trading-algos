@@ -68,7 +68,7 @@ Result<void> SignGuard::check(const tx::IxList& ixs) const {
     if (p == executor && (ix.n_accounts == 0 || ix.accounts[0].key != wallet || !ix.accounts[0].signer))
       return fail(Errc::sign_guard, "executor signer is not the wallet");
   }
-  if (transfers != 1) return fail(Errc::sign_guard, "exactly one tip transfer required");
+  if (transfers > 1 || (transfers == 0 && !allow_no_tip)) return fail(Errc::sign_guard, "exactly one tip transfer required");
   return {};
 }
 

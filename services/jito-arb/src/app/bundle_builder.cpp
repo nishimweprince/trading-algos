@@ -202,6 +202,68 @@ bool BundleBuilder::send_plain(const engine::Opportunity& o, const engine::Cycle
   return true;
 }
 
+bool BundleBuilder::send_gbx(const engine::Opportunity& o, const engine::Cycle& c,
+                             std::span<const std::shared_ptr<const PoolState>> legs, const tx::RouteTxParams& bp, uint64_t slot,
+                             int64_t wall) {
+  // Priority fee: a share of gross, at least the broadcaster's minimum. Nothing is paid unless the bundle lands
+  // (it lands all or nothing), so the share can be generous.
+  const uint32_t cu = bp.cu_limit ? bp.cu_limit : 200'000;
+  unsigned __int128 budget = (unsigned __int128)o.pr.gross_lamports * gbx_fee_frac_ppm_ / 1'000'000;
+  uint64_t priority = uint64_t(std::max<unsigned __int128>(budget, gbx_min_priority_));
+  uint64_t price = (uint64_t(priority) * 1'000'000 + cu - 1) / cu;
+  price = std::min(price, gbx_max_cu_price_);
+  if (uint64_t(((unsigned __int128)price * cu + 999'999) / 1'000'000) < gbx_min_priority_) {
+    ++n_.gbx_skipped;
+    return false;
+  }
+  tx::RouteTxParams p = bp;
+  p.tip_lamports = 0;
+  p.cu_price_micro_lamports = price;
+  // No tip: the guard reserves only our fee (paid in SOL, outside the route) and the profit floor.
+  if (const engine::BasePrice* bpz = rt_.engine().base_price(c.base); bpz && bpz->known) {
+    uint64_t bundle_guard = bpz->from_lamports_ceil(o.pr.tip_lamports);
+    uint64_t fee_guard = bpz->from_lamports_ceil(5'000 + uint64_t(((unsigned __int128)price * cu + 999'999) / 1'000'000));
+    if (bp.min_out > bundle_guard && fee_guard < bundle_guard) p.min_out = bp.min_out - bundle_guard + fee_guard;
+  }
+  if (!tx::build_route_ixs(gbx_ixs_, p, c, legs) || !gbx_guard_.check(gbx_ixs_)) {
+    ++n_.gbx_build_failed;
+    return false;
+  }
+  auto bh = blockhash_.get(slot);
+  if (!bh) {
+    ++n_.gbx_build_failed;
+    return false;
+  }
+  std::vector<tx::LookupTable> tables = alts_.active(slot);
+  if (!tx::build_tx(wallet_.pubkey(), &wallet_, gbx_ixs_, *bh, tables, last_gbx_, {})) {
+    ++n_.gbx_build_failed;
+    return false;
+  }
+  submit::GbxJob j;
+  if (rt_.trigger_tx()) {
+    j.txs.push_back(*rt_.trigger_tx());
+    j.dropping.push_back(0);  // dropped if it already landed or fails: ours still runs
+    j.with_trigger = true;
+  }
+  j.txs.emplace_back(reinterpret_cast<const char*>(last_gbx_.bytes), last_gbx_.len);
+  for (const auto& leg : legs)
+    if (j.targets.size() < 16) j.targets.push_back(leg->address);
+  j.sig = b58(last_gbx_.sig);
+  j.built_slot = slot;
+  j.fee_lamports = 5'000 + uint64_t(((unsigned __int128)price * cu + 999'999) / 1'000'000);
+  j.route_class = c.route_class;
+  j.wall_ms = wall;
+  const std::string sig = j.sig;
+  if (!gbx_->send(std::move(j))) {
+    ++n_.gbx_build_failed;
+    return false;
+  }
+  ++n_.gbx_queued;
+  LOG_INFO("preconf: gbx bundle %s queued (trigger %s, gross %llu, priority price %llu)", sig.substr(0, 12).c_str(),
+           rt_.trigger_sig().substr(0, 12).c_str(), (unsigned long long)o.pr.gross_lamports, (unsigned long long)price);
+  return true;
+}
+
 void BundleBuilder::operator()(const engine::Opportunity& o, const engine::Cycle& c, obs::DecisionRecord& rec) {
   auto skip = [&](engine::Reason r) {
     rec.action = uint8_t(obs::Action::Skipped);
@@ -293,7 +355,12 @@ void BundleBuilder::operator()(const engine::Opportunity& o, const engine::Cycle
   std::memcpy(rec.signature, last_.sig.data(), 64);
   std::vector<submit::RegionResult> regions;
   const auto leg_span = std::span<const std::shared_ptr<const PoolState>>(legs, c.n);
-  auto plain = [&]() { return !plain_.empty() && send_plain(o, c, leg_span, p, slot, rec.wall_ms); };
+  auto plain = [&]() {
+    bool any = false;
+    if (gbx_ && rt_.speculative()) any |= send_gbx(o, c, leg_span, p, slot, rec.wall_ms);
+    if (!plain_.empty()) any |= send_plain(o, c, leg_span, p, slot, rec.wall_ms);
+    return any;
+  };
   // A preconfirmation-triggered candidate goes out as a back-run: [trigger, ours] in one bundle, so ours runs right
   // after the transaction that made the edge, or not at all (an already-executed trigger fails the whole bundle).
   std::vector<std::string> trigger_prefix;

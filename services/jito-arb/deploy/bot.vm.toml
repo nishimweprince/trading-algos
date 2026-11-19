@@ -17,6 +17,11 @@ preconf_enabled = false
 preconf_daily_credit_cap = 10000000
 # "all": stream updates and preconfs both trigger trades; "preconf": the stream only keeps pool state current.
 trigger = "all"
+# GBX (Astralane Gravity Block Exchange) route for preconf trades: [trigger (droppable), our arb, no tip], the
+# route's pools as target accounts; a miss costs nothing, the priority fee is paid only when it lands.
+gbx_enabled = false
+gbx_url = "http://fra-gbx.astralane.io:5064"
+gbx_fee_frac_ppm = 500000
 laserstream_endpoint = "VERIFY"   # overridden by LASERSTREAM_ENDPOINT
 rpc_url = "https://mainnet.helius-rpc.com"
 api_key_env = "HELIUS_API_KEY"
