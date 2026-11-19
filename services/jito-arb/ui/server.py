@@ -9,6 +9,7 @@ It samples the bot's Prometheus endpoint every 5 s into a 6-hour ring buffer, re
   /api/history      sampled series for the charts (?minutes=60)
   /api/decisions    decision-log counts and skip reasons (?hours=24)
   /api/sends        sent bundles from the send log: Jito acceptance, post-send check, landing
+  /api/feeds        postpack (Astralane) vs Helius processed on our pools, from the trial recorders (last 10 min)
 
   python3 server.py [--bind 127.0.0.1] [--port 8088] [--metrics URL] [--data /var/lib/jito-arb]
 
@@ -425,6 +426,8 @@ class Handler(BaseHTTPRequestHandler):
                 path = os.path.join(self.data_dir, "sent.jsonl")
                 cache = _SENDS.setdefault(path, SendsCache(path))
                 self.json(cache.summary())
+            elif u.path == "/api/feeds":
+                self.json(feeds_compare(self.data_dir))
             elif u.path == "/api/decisions":
                 hours = max(1, min(24 * 14, int(q.get("hours", ["24"])[0])))
                 self.json(read_decisions(self.data_dir, hours))
@@ -434,6 +437,97 @@ class Handler(BaseHTTPRequestHandler):
             pass
         except Exception as e:
             self.send(500, json.dumps({"error": str(e)}), "application/json")
+
+
+_B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+_B58I = {c: i for i, c in enumerate(_B58)}
+
+
+def _sig_key(s):
+    """First 8 bytes of a signature, hex: from a hex16 key (shred recorders) or a base58 signature."""
+    if len(s) == 16:
+        return s
+    n = 0
+    for c in s:
+        n = n * 58 + _B58I[c]
+    b = n.to_bytes((n.bit_length() + 7) // 8, "big")
+    b = (b"\0" * (len(s) - len(s.lstrip("1"))) + b).rjust(64, b"\0")
+    return b[:8].hex()
+
+
+def _tail_lines(path, max_bytes):
+    """Whole lines from the last max_bytes of a file (the first, partial one dropped)."""
+    with open(path, "rb") as f:
+        f.seek(0, 2)
+        size = f.tell()
+        f.seek(max(0, size - max_bytes))
+        data = f.read()
+    lines = data.split(b"\n")
+    if size > max_bytes:
+        lines = lines[1:]
+    return [l.decode("ascii", "replace") for l in lines if l]
+
+
+def _newest(pattern):
+    paths = [p for p in glob.glob(pattern) if "raw" not in os.path.basename(p)]
+    return max(paths, key=os.path.getmtime) if paths else None
+
+
+_FEEDS = {"t": 0, "v": None}
+
+
+def feeds_compare(data_dir, minutes=10):
+    """Postpack vs Helius processed, per transaction on our pools, over the last `minutes`.
+
+    Both trial recorders write "unix_us slot sig" per transaction: lead = Helius arrival - postpack arrival
+    (positive = postpack first). Coverage = share of the transactions Helius saw that postpack also carried."""
+    now = time.time()
+    if _FEEDS["v"] is not None and now - _FEEDS["t"] < 10:
+        return _FEEDS["v"]
+    shreds = os.path.join(data_dir, "shreds")
+    pp_path = _newest(os.path.join(shreds, "postpack-*.txt"))
+    he_path = _newest(os.path.join(shreds, "processed-sigs-postpack-*.txt"))
+    out = {"postpack": None, "minutes": minutes}
+    if pp_path and he_path:
+        cutoff_us = int((now - minutes * 60) * 1e6)
+        recent_us = int((now - 120) * 1e6)
+        pp = {}
+        pp_n = 0
+        for line in _tail_lines(pp_path, 8 << 20):
+            parts = line.split()
+            if len(parts) != 3 or not parts[0].isdigit() or int(parts[0]) < cutoff_us:
+                continue
+            pp_n += 1
+            k = _sig_key(parts[2])
+            pp.setdefault(k, int(parts[0]))
+        leads, he_n = [], 0
+        he_last = 0
+        for line in _tail_lines(he_path, 24 << 20):
+            parts = line.split()
+            if len(parts) != 3 or not parts[0].isdigit():
+                continue
+            t = int(parts[0])
+            he_last = max(he_last, t)
+            # Leave the last 5 s out: postpack may not have arrived yet for the newest Helius rows, or the reverse.
+            if t < cutoff_us or t > int((now - 5) * 1e6):
+                continue
+            he_n += 1
+            p = pp.get(_sig_key(parts[2]))
+            if p is not None:
+                leads.append((t - p) / 1000.0)
+        leads.sort()
+        q = lambda x: round(leads[min(len(leads) - 1, int(x * len(leads)))], 1) if leads else None
+        live = os.path.getmtime(pp_path) > now - 120 and he_last > recent_us
+        out["postpack"] = {
+            "live": live, "file": os.path.basename(pp_path), "messages": pp_n, "per_min": round(pp_n / minutes, 1),
+            "credits_per_hour": int(pp_n / minutes * 60 * 10),  # 10 credits a message (portal, 19 Nov)
+            "helius_txs": he_n, "matched": len(leads),
+            "coverage_pct": round(100.0 * len(leads) / he_n, 1) if he_n else None,
+            "first_pct": round(100.0 * sum(1 for x in leads if x > 0) / len(leads), 1) if leads else None,
+            "lead_ms_p10": q(0.1), "lead_ms_p50": q(0.5), "lead_ms_p90": q(0.9),
+        }
+    _FEEDS.update(t=now, v=out)
+    return out
 
 
 def main():
