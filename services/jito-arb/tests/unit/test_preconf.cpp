@@ -1,5 +1,9 @@
 // Preconfirmations: notification and transaction parsing, the subscribe body, credit billing, pool matching through
 // lookup tables, the Sender Max tip rule, and speculative snapshots that never change the live store.
+#include <unistd.h>
+
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -113,6 +117,25 @@ TEST(preconf_credit_guard_bills_per_slot_and_caps_the_day) {
   g.on_message(151, t);
   CHECK(g.blocked(t));   // 9,452 + 300 > 9,500
   CHECK(!g.blocked(t + 86'400'000) && g.today(t + 86'400'000) == 0);
+}
+
+TEST(preconf_credit_total_survives_a_restart_within_the_day) {
+  const int64_t t = 1'795'000'000'000;
+  char path[] = "/tmp/arb_preconf_credits_XXXXXX";
+  int fd = mkstemp(path);
+  CHECK(fd >= 0);
+  close(fd);
+  feed::CreditGuard a(1'000'000);
+  for (int i = 0; i < 50; ++i) a.on_message(10, t);
+  a.add(7, t);
+  CHECK(a.save(path, t));
+  feed::CreditGuard b(1'000'000);  // the restarted process
+  CHECK(b.load(path, t + 60'000) && b.today(t + 60'000) == 507);
+  feed::CreditGuard c(1'000'000);  // a file from yesterday is ignored
+  CHECK(c.load(path, t + 86'400'000) && c.today(t + 86'400'000) == 0);
+  std::remove(path);
+  feed::CreditGuard d(1'000'000);
+  CHECK(!d.load("/nonexistent/arb_preconf_credits", t));
 }
 
 TEST(preconf_matches_pools_through_lookup_tables) {

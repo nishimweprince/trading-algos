@@ -491,6 +491,9 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       f.max_tip_share_ppm = cfg.jito.sender_max_max_tip_share_ppm;
       builder.add_plain_path("sender_max", sender_max.get(), &sender_budget, f, risk::sender_tip_accounts(), 50'000'000, true);
       preconf_guard = std::make_unique<feed::CreditGuard>(cfg.helius.preconf_daily_credit_cap);
+      if (preconf_guard->load(cfg.helius.preconf_credits_path, wall_ms()))
+        LOG_INFO("preconf: %llu credits already used today (from %s)", (unsigned long long)preconf_guard->today(wall_ms()),
+                 cfg.helius.preconf_credits_path.c_str());
       std::unordered_map<Pubkey, uint32_t, PubkeyHash> pool_of;
       std::unordered_map<uint32_t, std::vector<Pubkey>> keys_of;
       feed::PreconfConfig pc;
@@ -901,6 +904,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
       }
       if (preconf_feed) {
         const int64_t now_w = wall_ms();
+        if (!preconf_guard->save(cfg.helius.preconf_credits_path, now_w)) LOG_WARN("preconf: cannot save %s", cfg.helius.preconf_credits_path.c_str());
         const uint64_t now_n = arb::now_ns();
         reg.gauge("arb_preconf_subscribed", "1 while the preconfSubscribe stream is open").set(preconf_feed->subscribed() ? 1 : 0);
         reg.gauge("arb_preconf_capped", "1 while off for the day at the credit cap").set(preconf_feed->capped() ? 1 : 0);

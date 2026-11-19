@@ -50,6 +50,7 @@ struct Config {
     // median) eating more than the preconf lead (22 ms). The API key is appended.
     std::string preconf_rpc_url = "https://beta.helius-rpc.com";
     uint64_t preconf_daily_credit_cap = 10'000'000;
+    std::string preconf_credits_path = "/var/lib/jito-arb/preconf_credits.txt";  // today's total, survives restarts
     bool preconf_include_failed = false;
     std::vector<std::string> preconf_regions;  // regionInclude; empty = every region
   } helius;

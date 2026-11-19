@@ -121,7 +121,7 @@ Config load_config(const std::string& path) {
   G(helius, laserstream_endpoint); G(helius, rpc_url); G(helius, api_key_env); G(helius, max_grpc_connections);
   G(helius, shard_size); G(helius, max_frames_per_pass); G(helius, resync_lag_ms); G(helius, reconnect_min_ms); G(helius, reconnect_max_ms);
   G(helius, ping_interval_ms); G(helius, replay_from_slot); G(helius, rpc_timeout_ms);
-  G(helius, preconf_enabled); G(helius, preconf_host); G(helius, preconf_rpc_url); G(helius, preconf_daily_credit_cap); G(helius, preconf_include_failed);
+  G(helius, preconf_enabled); G(helius, preconf_host); G(helius, preconf_rpc_url); G(helius, preconf_daily_credit_cap); G(helius, preconf_credits_path); G(helius, preconf_include_failed);
   G(helius, preconf_regions);
   G(jito, regions); G(jito, block_engine_fmt); G(jito, tip_floor_url); G(jito, tip_min_lamports);
   G(jito, tip_max_lamports); G(jito, tip_floor_refresh_ms); G(jito, tip_floor_percentile); G(jito, tip_accounts_refresh_s); G(jito, backoff_429_ms);
