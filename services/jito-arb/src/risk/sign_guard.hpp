@@ -24,6 +24,7 @@ struct SignGuard {
   Pubkey executor{};
   std::vector<Pubkey> tip_accounts;
   uint64_t tip_max_lamports = 50'000'000;
+  bool allow_no_tip = false;  // GBX: a transaction with no tip transfer at all is allowed
 
   /** ok, or Errc::sign_guard with the rule that failed in `what`. */
   Result<void> check(const tx::IxList& ixs) const;
