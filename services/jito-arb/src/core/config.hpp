@@ -45,6 +45,10 @@ struct Config {
     // so the LaserStream feed never runs out of credits because of it.
     bool preconf_enabled = false;
     std::string preconf_host = "beta.helius-rpc.com";
+    // Where trigger transactions are simulated. On 19 Nov the Gatekeeper host answered in ~1-2 ms of server time
+    // from Frankfurt against 12-30 ms on mainnet.helius-rpc.com, and the first live hour showed simulation (33 ms
+    // median) eating more than the preconf lead (22 ms). The API key is appended.
+    std::string preconf_rpc_url = "https://beta.helius-rpc.com";
     uint64_t preconf_daily_credit_cap = 10'000'000;
     bool preconf_include_failed = false;
     std::vector<std::string> preconf_regions;  // regionInclude; empty = every region

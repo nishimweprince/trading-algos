@@ -505,7 +505,7 @@ int run_live(const Config& cfg, bool recorder, std::atomic<bool>& stop, int run_
         keys_of[*id] = rt.store().keys_of_pool(*id);
         pc.accounts.push_back(b58(addr));
       }
-      preconf_sim = std::make_unique<app::PreconfSim>(resolve_rpc_url(cfg), std::move(pool_of), std::move(keys_of), preconf_guard.get());
+      preconf_sim = std::make_unique<app::PreconfSim>(cfg.helius.preconf_rpc_url + "/?api-key=" + key, std::move(pool_of), std::move(keys_of), preconf_guard.get());
       preconf_feed = std::make_unique<feed::PreconfFeed>(pc, preconf_guard.get(), [&](feed::PreconfTx&& t) { preconf_sim->push(std::move(t)); });
       preconf_feed->start();
       LOG_INFO("preconf: ON for %zu armed pools, Sender Max tip >= %llu lamports, credit cap %llu/day", pc.accounts.size(),
