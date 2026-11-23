@@ -43,3 +43,21 @@ systemd unit: `deploy/deriv-jev.service` (edit User and paths).
 - The Deriv cTrader DSI symbols are CLOSE_ONLY (cTrader synthetics retired 2026-11-19), hence
   shadow mode. The MT5 symbols are unaffected; an MT5 order adapter is the next step.
 - Jev answers are nondeterministic; the live gate uses the median of 3 asks.
+
+## MT5 runner (70%+ win-rate group on Deriv MT5)
+
+`mt5_runner.py` trades the `wr70` strategies on a Deriv MT5 account through the RPyC bridge to the
+Windows `MetaTrader5` package (Wine, `127.0.0.1:18812`). Signals are the same as the backtest
+(`engine.resample`, `engine.atr`, `rules.generic_rules` on completed tf bars).
+
+- Stops and targets are widened to the broker minimum (`trade_stops_level` + spread + 20%) when the
+  strategy's own distance is smaller. Every widening is written to the order's `note`.
+- Size: `RISK_PCT` (5%) of equity per trade, compounding; one position per strategy (magic 707001-707009).
+- Time exit after `max_hold` + 1 minutes.
+- `MT5_MODE=shadow` (default): `order_check` + virtual positions on a virtual `SHADOW_EQUITY` ($100)
+  account. `MT5_MODE=live`: real orders. Set in `.env.mt5` (see `.env.mt5.example`), then
+  `systemctl restart mt5-runner`.
+- Kill switch: `touch data/KILL_MT5`. Report: `.venv/bin/python mt5_report.py`. Log: `logs/mt5_runner.log`.
+
+Note: at Deriv MT5 spreads (DSI10 ~2.6, DSI20 ~3.2, DSI30 ~9.4) these strategies were
+not profitable in the cost analysis; the widened stops also change them from what was backtested.
