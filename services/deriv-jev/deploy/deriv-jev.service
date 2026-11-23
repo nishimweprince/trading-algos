@@ -1,0 +1,17 @@
+[Unit]
+Description=deriv-jev: Jev-gated DSI strategies on Deriv (SHADOW: market data only, no orders; UI 127.0.0.1:8091)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Adjust User/paths to the host. The checkout lives at <repo>/services/deriv-jev.
+User=root
+WorkingDirectory=/opt/trading-algos/services/deriv-jev
+ExecStart=/opt/trading-algos/services/deriv-jev/.venv/bin/python -u service.py
+Restart=always
+RestartSec=15
+StandardOutput=append:/opt/trading-algos/services/deriv-jev/logs/service.log
+StandardError=append:/opt/trading-algos/services/deriv-jev/logs/service.log
+
+[Install]
+WantedBy=multi-user.target

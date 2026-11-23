@@ -56,6 +56,8 @@ exclude = [
   "services/jito-arb",
   # solcarry is a standalone research package with its own venv (services/solcarry/.venv).
   "services/solcarry",
+  # deriv-jev is a standalone shadow service with its own venv (services/deriv-jev/.venv).
+  "services/deriv-jev",
 ]
 
 [tool.ruff]

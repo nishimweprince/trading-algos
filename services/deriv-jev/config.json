@@ -1,0 +1,388 @@
+{
+ "strategies": [
+  {
+   "tag": "JEV-DSI30-M1-mom16-q20-trend",
+   "code": "DSI30",
+   "tf": 1,
+   "rule": "mom16_q2.0_trend",
+   "stop_atr": 2.0,
+   "trail_R": 1.5,
+   "max_hold": 480,
+   "jev_threshold": 0.5,
+   "backtest": {
+    "jev": {
+     "meanR": 1.294,
+     "tpw": 24.0,
+     "n": 1248
+    },
+    "ungated": {
+     "n": 2036,
+     "tpw": 39.2,
+     "meanR": 0.786,
+     "sumR": 1600.8,
+     "weekly_t": 10.43,
+     "folds_pos": 4,
+     "hit": 0.448
+    },
+    "jev_base": {
+     "n": 1278,
+     "tpw": 24.6,
+     "meanR": 1.252,
+     "sumR": 1600.5,
+     "weekly_t": 11.03,
+     "folds_pos": 4,
+     "hit": 0.522
+    }
+   },
+   "jev_threshold_base": 0.5,
+   "group": "jev"
+  },
+  {
+   "tag": "JEV-DSI30-M15-mom4-q15-trend",
+   "code": "DSI30",
+   "tf": 15,
+   "rule": "mom4_q1.5_trend",
+   "stop_atr": 2.0,
+   "trail_R": 1.5,
+   "max_hold": 480,
+   "jev_threshold": 0.35,
+   "backtest": {
+    "jev": {
+     "meanR": 0.212,
+     "tpw": 10.1,
+     "n": 524
+    },
+    "ungated": {
+     "n": 845,
+     "tpw": 16.2,
+     "meanR": 0.194,
+     "sumR": 163.5,
+     "weekly_t": 4.32,
+     "folds_pos": 4,
+     "hit": 0.434
+    },
+    "jev_base": {
+     "n": 527,
+     "tpw": 10.1,
+     "meanR": 0.179,
+     "sumR": 94.2,
+     "weekly_t": 2.87,
+     "folds_pos": 4,
+     "hit": 0.435
+    }
+   },
+   "jev_threshold_base": 0.34,
+   "group": "jev"
+  },
+  {
+   "tag": "JEV-DSI30-M5-mom16-q20-trend",
+   "code": "DSI30",
+   "tf": 5,
+   "rule": "mom16_q2.0_trend",
+   "stop_atr": 2.0,
+   "trail_R": 1.5,
+   "max_hold": 480,
+   "jev_threshold": 0.53,
+   "backtest": {
+    "jev": {
+     "meanR": 0.365,
+     "tpw": 14.1,
+     "n": 731
+    },
+    "ungated": {
+     "n": 1267,
+     "tpw": 24.4,
+     "meanR": 0.312,
+     "sumR": 395.4,
+     "weekly_t": 4.39,
+     "folds_pos": 4,
+     "hit": 0.412
+    },
+    "jev_base": {
+     "n": 781,
+     "tpw": 15.0,
+     "meanR": 0.306,
+     "sumR": 239.3,
+     "weekly_t": 3.68,
+     "folds_pos": 4,
+     "hit": 0.407
+    }
+   },
+   "jev_threshold_base": 0.52,
+   "group": "jev"
+  },
+  {
+   "tag": "JEV-DSI10-M1-rsi20-trend",
+   "code": "DSI10",
+   "tf": 1,
+   "rule": "rsi20_trend",
+   "stop_atr": 2.0,
+   "trail_R": 1.5,
+   "max_hold": 480,
+   "jev_threshold": 0.51,
+   "backtest": {
+    "jev": {
+     "meanR": 0.588,
+     "tpw": 55.1,
+     "n": 2864
+    },
+    "ungated": {
+     "n": 5142,
+     "tpw": 98.9,
+     "meanR": 0.376,
+     "sumR": 1932.2,
+     "weekly_t": 8.32,
+     "folds_pos": 4,
+     "hit": 0.411
+    },
+    "jev_base": {
+     "n": 3282,
+     "tpw": 63.1,
+     "meanR": 0.567,
+     "sumR": 1859.5,
+     "weekly_t": 8.95,
+     "folds_pos": 4,
+     "hit": 0.432
+    }
+   },
+   "jev_threshold_base": 0.51,
+   "group": "jev"
+  },
+  {
+   "tag": "JEV-DSI10-M5-mom4-q15-trend",
+   "code": "DSI10",
+   "tf": 5,
+   "rule": "mom4_q1.5_trend",
+   "stop_atr": 2.0,
+   "trail_R": 1.5,
+   "max_hold": 480,
+   "jev_threshold": 0.33,
+   "backtest": {
+    "jev": {
+     "meanR": 0.113,
+     "tpw": 46.5,
+     "n": 2416
+    },
+    "ungated": {
+     "n": 4031,
+     "tpw": 77.5,
+     "meanR": 0.112,
+     "sumR": 451.4,
+     "weekly_t": 3.56,
+     "folds_pos": 4,
+     "hit": 0.405
+    },
+    "jev_base": {
+     "n": 2518,
+     "tpw": 48.4,
+     "meanR": 0.118,
+     "sumR": 297.2,
+     "weekly_t": 3.46,
+     "folds_pos": 4,
+     "hit": 0.406
+    }
+   },
+   "jev_threshold_base": 0.32,
+   "group": "jev"
+  },
+  {
+   "tag": "WR70-DSI10-M5-mom4-q10-trend-1atr-0.5R",
+   "group": "wr70",
+   "code": "DSI10",
+   "tf": 5,
+   "rule": "mom4_q1.0_trend",
+   "stop_atr": 1.0,
+   "target_R": 0.5,
+   "trail_R": 0.0,
+   "max_hold": 480,
+   "spread_override": 0.0,
+   "backtest": {
+    "wr": 0.727,
+    "meanR": 0.09,
+    "tpw": 213.4,
+    "sumR": 1000.0,
+    "base_wr": 0.636,
+    "weekly_t": 14.7
+   }
+  },
+  {
+   "tag": "WR70-DSI30-M1-mom16-q15-trend-1atr-0.75R",
+   "group": "wr70",
+   "code": "DSI30",
+   "tf": 1,
+   "rule": "mom16_q1.5_trend",
+   "stop_atr": 1.0,
+   "target_R": 0.75,
+   "trail_R": 0.0,
+   "max_hold": 480,
+   "spread_override": 0.0,
+   "backtest": {
+    "wr": 0.72,
+    "meanR": 0.164,
+    "tpw": 325.8,
+    "sumR": 2773.0,
+    "base_wr": 0.605,
+    "weekly_t": 17.9
+   }
+  },
+  {
+   "tag": "WR70-DSI20-M5-mom4-q10-trend-2atr-0.5R",
+   "group": "wr70",
+   "code": "DSI20",
+   "tf": 5,
+   "rule": "mom4_q1.0_trend",
+   "stop_atr": 2.0,
+   "target_R": 0.5,
+   "trail_R": 0.0,
+   "max_hold": 480,
+   "spread_override": 0.0,
+   "backtest": {
+    "wr": 0.745,
+    "meanR": 0.117,
+    "tpw": 207.1,
+    "sumR": 1257.0,
+    "base_wr": 0.638,
+    "weekly_t": 19.2
+   }
+  },
+  {
+   "tag": "WR70-DSI20-M15-brk12-trend-1atr-0.5R",
+   "group": "wr70",
+   "code": "DSI20",
+   "tf": 15,
+   "rule": "brk12_trend",
+   "stop_atr": 1.0,
+   "target_R": 0.5,
+   "trail_R": 0.0,
+   "max_hold": 480,
+   "spread_override": 0.0,
+   "backtest": {
+    "wr": 0.736,
+    "meanR": 0.103,
+    "tpw": 73.9,
+    "sumR": 395.0,
+    "base_wr": 0.635,
+    "weekly_t": 10.1
+   }
+  },
+  {
+   "tag": "WR70-DSI30-M15-brk12-trend-1atr-0.5R",
+   "group": "wr70",
+   "code": "DSI30",
+   "tf": 15,
+   "rule": "brk12_trend",
+   "stop_atr": 1.0,
+   "target_R": 0.5,
+   "trail_R": 0.0,
+   "max_hold": 480,
+   "spread_override": 0.0,
+   "backtest": {
+    "wr": 0.716,
+    "meanR": 0.073,
+    "tpw": 75.1,
+    "sumR": 283.0,
+    "base_wr": 0.646,
+    "weekly_t": 6.7
+   }
+  },
+  {
+   "tag": "WR70-DSI30-M5-mom4-q10-trend-2atr-0.5R",
+   "group": "wr70",
+   "code": "DSI30",
+   "tf": 5,
+   "rule": "mom4_q1.0_trend",
+   "stop_atr": 2.0,
+   "target_R": 0.5,
+   "trail_R": 0.0,
+   "max_hold": 480,
+   "spread_override": 0.0,
+   "backtest": {
+    "wr": 0.74,
+    "meanR": 0.108,
+    "tpw": 180.4,
+    "sumR": 1016.0,
+    "base_wr": 0.643,
+    "weekly_t": 17.4
+   }
+  },
+  {
+   "tag": "WR70-DSI10-M1-mom4-q10-trend-3atr-0.5R",
+   "group": "wr70",
+   "code": "DSI10",
+   "tf": 1,
+   "rule": "mom4_q1.0_trend",
+   "stop_atr": 3.0,
+   "target_R": 0.5,
+   "trail_R": 0.0,
+   "max_hold": 480,
+   "spread_override": 0.0,
+   "backtest": {
+    "wr": 0.769,
+    "meanR": 0.114,
+    "tpw": 800.7,
+    "sumR": 4748.0,
+    "base_wr": 0.652,
+    "weekly_t": 29.0
+   }
+  },
+  {
+   "tag": "WR70-DSI20-M1-mom16-q15-trend-1atr-0.75R",
+   "group": "wr70",
+   "code": "DSI20",
+   "tf": 1,
+   "rule": "mom16_q1.5_trend",
+   "stop_atr": 1.0,
+   "target_R": 0.75,
+   "trail_R": 0.0,
+   "max_hold": 480,
+   "spread_override": 0.0,
+   "backtest": {
+    "wr": 0.728,
+    "meanR": 0.271,
+    "tpw": 275.3,
+    "sumR": 3885.0,
+    "base_wr": 0.559,
+    "weekly_t": 34.1
+   }
+  },
+  {
+   "tag": "WR70-DSI10-M15-brk24-trend-1atr-0.5R",
+   "group": "wr70",
+   "code": "DSI10",
+   "tf": 15,
+   "rule": "brk24_trend",
+   "stop_atr": 1.0,
+   "target_R": 0.5,
+   "trail_R": 0.0,
+   "max_hold": 480,
+   "spread_override": 0.0,
+   "backtest": {
+    "wr": 0.745,
+    "meanR": 0.072,
+    "tpw": 41.3,
+    "sumR": 155.0,
+    "base_wr": 0.66,
+    "weekly_t": 5.3
+   }
+  }
+ ],
+ "symbols": {
+  "DSI10": {
+   "id": 2464,
+   "spread": 2.37
+  },
+  "DSI30": {
+   "id": 2470,
+   "spread": 3.15
+  },
+  "DSI20": {
+   "id": 2469,
+   "spread": 3.99
+  }
+ },
+ "swap_per_min": 1.4269406392694064e-07,
+ "jev_model": "jev-1.14.0",
+ "risk_usd_per_R": 50,
+ "jev_state": "v1-history",
+ "jev_asks": 3
+}
