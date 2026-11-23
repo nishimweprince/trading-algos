@@ -61,3 +61,12 @@ Windows `MetaTrader5` package (Wine, `127.0.0.1:18812`). Signals are the same as
 
 Note: at Deriv MT5 spreads (DSI10 ~2.6, DSI20 ~3.2, DSI30 ~9.4) these strategies were
 not profitable in the cost analysis; the widened stops also change them from what was backtested.
+
+## MT5 runner for the Jev group (`jev_mt5.py`)
+
+Trades the 5 Jev-gated strategies on Deriv MT5: an ungated `engine.Track` per strategy fed by MT5 M1
+bars (7-day replay, then live), Jev history-v1 state, median of 3 answers, per-strategy threshold.
+Approved signals: market order, stop = max(2 ATR, broker minimum + spread + 20%), no target, trailing
+stop at best - 1.5R after +1R, time exit after 481 minutes, size = `JEV_RISK_PCT` (5%) of equity.
+Magic 708001-708005. `JEV_MT5_MODE=shadow|live` in `.env.mt5`; Jev key from `.env` (`JEV_API_KEY`).
+Kill switch `data/KILL_JEV`; data in `data/jev_mt5.db`; log `logs/jev_mt5.log`; unit `deploy/mt5-jev.service`.

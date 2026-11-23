@@ -52,6 +52,8 @@ MAX_RISK_PCT = float(ENV.get('MAX_RISK_PCT', '7.5'))
 BRIDGE = (ENV.get('BRIDGE_HOST', '127.0.0.1'), int(ENV.get('BRIDGE_PORT', '18812')))
 SHADOW_EQUITY = float(ENV.get('SHADOW_EQUITY', '100'))
 STOP_BUFFER = float(ENV.get('STOP_BUFFER_PCT', '20')) / 100.0   # extra margin over the broker minimum
+# Explicit terminal path: with several MT5 terminals on the host, initialize() without a path may attach to the wrong one.
+MT5_TERMINAL = ENV.get('MT5_TERMINAL', r'C:\Program Files\MetaTrader 5 Terminal\terminal64.exe')
 HIST_MIN = 7 * 1440
 MAGIC_BASE = 707000
 SYMBOLS = {'DSI10': 'Drift Switch Index 10', 'DSI20': 'Drift Switch Index 20', 'DSI30': 'Drift Switch Index 30'}
@@ -108,11 +110,13 @@ class Runner:
         self.conn = rpyc.classic.connect(*BRIDGE)
         self.conn._config['sync_request_timeout'] = 120
         self.mt5 = self.conn.modules.MetaTrader5
-        if not self.mt5.initialize():
+        if not self.mt5.initialize(path=MT5_TERMINAL):
             raise RuntimeError(f'initialize failed: {self.mt5.last_error()}')
         for n in SYMBOLS.values():
             self.mt5.symbol_select(n, True)
         a = self.mt5.account_info()
+        if ENV.get('MT5_LOGIN') and str(a.login) != ENV['MT5_LOGIN']:
+            raise RuntimeError(f'attached to account {a.login}, expected {ENV["MT5_LOGIN"]}')
         log.info('connected: login %s server %s mode %s equity %.2f %s', a.login, a.server, MODE, a.equity, a.currency)
 
     def rcall(self, fn, req):

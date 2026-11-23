@@ -1,0 +1,13 @@
+[Unit]
+Description=deriv-jev MT5 runner: 5 Jev-gated DSI strategies on Deriv MT5 (mode in .env.mt5: JEV_MT5_MODE)
+After=mt5.service network-online.target
+Wants=mt5.service
+
+[Service]
+WorkingDirectory=/opt/trading-algos/services/deriv-jev
+ExecStart=/opt/trading-algos/services/deriv-jev/.venv/bin/python -u jev_mt5.py
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target
