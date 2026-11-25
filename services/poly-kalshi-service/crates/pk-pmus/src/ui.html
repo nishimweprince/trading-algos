@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Polymarket US · Kalshi gap</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&amp;display=swap">
+<style>
+:root { color-scheme:light dark; --bg:#fff; --surface:#f2f2f2; --text:#000; --muted:#595959;
+  background:var(--bg); color:var(--text); font:13px/1.55 "DM Sans",system-ui,sans-serif; }
+@media (prefers-color-scheme:dark) {
+  :root { --bg:#000; --surface:#141414; --text:#fff; --muted:#aaa; }
+}
+::selection { background:var(--text); color:var(--bg); }
+* { box-sizing:border-box; }
+body { max-width:1120px; margin:auto; padding:clamp(18px,5vw,52px) clamp(14px,4vw,38px); }
+h1,h2,p,dl,dd { margin:0; }
+h1 { font-size:24px; line-height:1.2; font-weight:650; letter-spacing:-.045em; }
+h2 { font-size:14px; font-weight:650; letter-spacing:-.015em; }
+.muted,dt { color:var(--muted); font-size:12px; }
+header p, section > p { margin-top:5px; }
+main { display:grid; gap:30px; margin-top:24px; }
+.summaries { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+.summary { background:var(--surface); padding:14px 16px; border-radius:8px; }
+dl { display:flex; gap:12px 24px; flex-wrap:wrap; margin-top:14px; }
+dd { font-size:18px; font-weight:600; letter-spacing:-.035em; font-variant-numeric:tabular-nums; }
+table { width:100%; border-collapse:collapse; margin-top:10px; font-size:12px; font-variant-numeric:tabular-nums; }
+td,th { text-align:left; padding:7px 8px; overflow-wrap:anywhere; }
+td:first-child,th:first-child { padding-left:0; }
+td:last-child,th:last-child { text-align:right; padding-right:0; }
+th { color:var(--muted); font-size:11px; font-weight:600; }
+.chart { position:relative; margin-top:10px; }
+.chart svg { display:block; width:100%; height:200px; overflow:visible; }
+.chart text { fill:var(--muted); font-size:11px; font-variant-numeric:tabular-nums; font-family:inherit; }
+.tip { position:absolute; pointer-events:none; background:var(--surface); padding:6px 10px; border-radius:8px;
+  font-size:12px; display:none; white-space:nowrap; font-variant-numeric:tabular-nums; }
+.tip b { font-weight:600; }
+.err { margin-top:5px; font-size:12px; }
+@media (max-width:760px) {
+  table,tbody { display:block; }
+  thead { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+  tr { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,100px),1fr)); gap:5px 12px; padding:10px 0; }
+  td,td:first-child,td:last-child { display:block; min-width:0; padding:0; text-align:left; }
+  td::before { content:attr(data-label); display:block; color:var(--muted); font-size:11px; }
+  td.lead { grid-column:1/-1; font-weight:600; }
+  td.lead::before { display:none; }
+}
+@media (max-width:360px) { .summaries { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<header><h1 id="title">Polymarket US · Kalshi gap</h1><p class="muted" id="sub">Loading…</p><p class="err" id="err"></p></header>
+<main>
+  <div class="summaries">
+    <section class="summary"><h2>Results</h2><p class="muted" id="results-note"></p><dl id="results"></dl></section>
+    <section class="summary"><h2>Today (UTC)</h2><p class="muted" id="today-note"></p><dl id="today"></dl></section>
+    <section class="summary"><h2>Progress to going live</h2><p class="muted" id="gate-note"></p><dl id="gate"></dl></section>
+    <section class="summary"><h2>Feeds</h2><p class="muted" id="feeds-note"></p><dl id="feeds"></dl></section>
+  </div>
+  <section><h2>Cumulative P&amp;L</h2><p class="muted" id="chart-note"></p><div class="chart" id="chart"></div></section>
+  <section><h2>Recent decisions</h2><p class="muted" id="recent-note"></p><div id="recent"></div></section>
+  <section><h2>By coin</h2><div id="by-asset"></div></section>
+  <section><h2>By seconds before the close</h2><div id="by-left"></div></section>
+  <section><h2>Calibration</h2><p class="muted">How often the side won against Kalshi's mid at the decision.</p><div id="calibration"></div></section>
+  <section><h2>Why windows did not trade</h2><p class="muted">The last gate each window met, last 24 hours.</p><div id="gates24"></div></section>
+</main>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const el = (tag, text, cls) => { const e = document.createElement(tag); if (text != null) e.textContent = text; if (cls) e.className = cls; return e; };
+const num = (x) => typeof x === "number" && isFinite(x);
+const usd = (x) => num(x) ? (x > 0 ? "+" : x < 0 ? "-" : "+") + Math.abs(x).toFixed(2) + " USD" : "—";
+const cents = (x) => num(x) ? (x > 0 ? "+" : x < 0 ? "-" : "+") + Math.abs(x).toFixed(2) + "¢" : "—";
+const pct = (x, d = 0) => num(x) ? (100 * x).toFixed(d) + "%" : "—";
+const fx = (x, d) => num(x) ? x.toFixed(d) : "—";
+const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const p2 = (n) => String(n).padStart(2, "0");
+const utc = (ms) => { const d = new Date(ms); return `${MON[d.getUTCMonth()]} ${d.getUTCDate()} ${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}:${p2(d.getUTCSeconds())}`; };
+const utcShort = (ms) => { const d = new Date(ms); return `${MON[d.getUTCMonth()]} ${d.getUTCDate()} ${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}`; };
+const GATE_NAMES = {
+  fired: "Entered", edge: "Gap under 3¢ after fee", price_range: "Price outside 0.05–0.95",
+  edge_too_big: "Gap over 15¢ (taken for a stale book)", no_kalshi: "No fresh Kalshi book",
+  kalshi_spread: "Kalshi spread over 3¢", no_pm_quote: "No Polymarket US quote", stale_pm_quote: "Polymarket US quote stale",
+  halted: "Daily loss halt", kill: "Kill file", entries_done: "Already entered", max_open_cost: "Open-cost cap",
+  "not reached": "Entry window not reached",
+};
+
+function pairs(id, items) {
+  const dl = $(id);
+  dl.replaceChildren(...items.map(([k, v]) => { const d = el("div"); d.append(el("dt", k), el("dd", v)); return d; }));
+}
+
+function table(cols, rows, empty) {
+  if (!rows.length) return el("p", empty || "Nothing yet.", "muted");
+  const t = el("table"), thead = el("thead"), hr = el("tr");
+  cols.forEach((c) => { const th = el("th", c.h); th.scope = "col"; hr.appendChild(th); });
+  thead.appendChild(hr); t.appendChild(thead);
+  const tb = el("tbody");
+  rows.forEach((r) => {
+    const tr = el("tr");
+    cols.forEach((c, i) => { const td = el("td", c.v(r), i === 0 ? "lead" : ""); td.dataset.label = c.h; tr.appendChild(td); });
+    tb.appendChild(tr);
+  });
+  t.appendChild(tb);
+  return t;
+}
+
+const ROWS = (first) => [
+  { h: first, v: (r) => r.label },
+  { h: "Positions", v: (r) => String(r.n) },
+  { h: "Net per share", v: (r) => cents(r.net_c) },
+  { h: "t", v: (r) => fx(r.t, 2) },
+  { h: "P&L", v: (r) => usd(r.pnl) },
+];
+
+function chart(series) {
+  const box = $("chart");
+  box.replaceChildren();
+  if (series.length < 2) {
+    $("chart-note").textContent = series.length ? "One settled position so far." : "No settled positions yet.";
+    return;
+  }
+  $("chart-note").textContent = `After fees, ${series.length} settled positions. Hover for values.`;
+  const W = box.clientWidth || 900, H = 200, L = 64, R = 4, T = 8, B = 24;
+  const xs = series.map((p) => p[0]), ys = series.map((p) => p[1]);
+  const x0 = xs[0], x1 = xs[xs.length - 1];
+  let y0 = Math.min(0, ...ys), y1 = Math.max(0, ...ys);
+  if (y1 - y0 < 1) { y1 += 0.5; y0 -= 0.5; }
+  const pad = (y1 - y0) * 0.08; y0 -= pad; y1 += pad;
+  const X = (t) => L + (W - L - R) * ((t - x0) / (x1 - x0 || 1));
+  const Y = (v) => T + (H - T - B) * (1 - (v - y0) / (y1 - y0));
+  const NS = "http://www.w3.org/2000/svg";
+  const mk = (tag, a) => { const e = document.createElementNS(NS, tag); for (const k in a) e.setAttribute(k, a[k]); return e; };
+  const svg = mk("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `Cumulative P&L, now ${usd(ys[ys.length - 1])}` });
+  const raw = (y1 - y0) / 4, p = Math.pow(10, Math.floor(Math.log10(raw))), f = raw / p;
+  const step = (f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10) * p;
+  for (let v = Math.ceil(y0 / step) * step; v <= y1; v += step) {
+    const zero = Math.abs(v) < step / 1e6;
+    svg.appendChild(mk("line", { x1: L, x2: W - R, y1: Y(v), y2: Y(v), stroke: zero ? "var(--muted)" : "var(--surface)", "stroke-width": 1 }));
+    const t = mk("text", { x: L - 8, y: Y(v) + 4, "text-anchor": "end" }); t.textContent = usd(v).replace(" USD", ""); svg.appendChild(t);
+  }
+  const nt = W < 600 ? 1 : 4;
+  for (let k = 0; k <= nt; k++) {
+    const t = x0 + (x1 - x0) * k / nt;
+    const lab = mk("text", { x: X(t), y: H - 4, "text-anchor": k === 0 ? "start" : k === nt ? "end" : "middle" });
+    lab.textContent = utcShort(t); svg.appendChild(lab);
+  }
+  let d = "";
+  series.forEach((q, k) => { d += (k ? "L" : "M") + X(q[0]).toFixed(1) + " " + Y(q[1]).toFixed(1); });
+  svg.appendChild(mk("path", { d, fill: "none", stroke: "var(--text)", "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+  const hair = mk("line", { y1: T, y2: H - B, stroke: "var(--muted)", "stroke-width": 1, visibility: "hidden" });
+  const dot = mk("circle", { r: 4, fill: "var(--text)", stroke: "var(--bg)", "stroke-width": 2, visibility: "hidden" });
+  const hit = mk("rect", { x: L, y: 0, width: W - L - R, height: H - B, fill: "transparent" });
+  svg.append(hair, dot, hit);
+  const tip = el("div", null, "tip");
+  box.append(svg, tip);
+  hit.addEventListener("pointermove", (e) => {
+    const r = svg.getBoundingClientRect(), sx = (e.clientX - r.left) * W / r.width;
+    const t = x0 + (sx - L) / (W - L - R) * (x1 - x0);
+    let lo = 0, hi = xs.length - 1;
+    while (hi - lo > 1) { const m = (lo + hi) >> 1; if (xs[m] < t) lo = m; else hi = m; }
+    const k = Math.abs(xs[lo] - t) < Math.abs(xs[hi] - t) ? lo : hi;
+    const px = X(xs[k]), py = Y(ys[k]);
+    hair.setAttribute("x1", px); hair.setAttribute("x2", px); hair.setAttribute("visibility", "visible");
+    dot.setAttribute("cx", px); dot.setAttribute("cy", py); dot.setAttribute("visibility", "visible");
+    tip.replaceChildren(el("b", usd(ys[k])), el("span", ` · position ${k + 1} · ${utc(xs[k])} UTC`));
+    tip.style.display = "block";
+    tip.style.left = Math.min(r.width - tip.offsetWidth, Math.max(0, px * r.width / W + 12)) + "px";
+    tip.style.top = Math.max(0, py * r.height / H - 40) + "px";
+  });
+  hit.addEventListener("pointerleave", () => { hair.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); tip.style.display = "none"; });
+}
+
+function dur(s) {
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+}
+
+function render(s) {
+  const live = s.live || {}, k = s.kpi || {}, all = s.all || {}, g = s.gate || {};
+  const isLive = live.mode === "live";
+  $("title").textContent = "Polymarket US · Kalshi gap" + (isLive ? " · LIVE" : " · Paper") + (s.epoch ? " · Epoch " + s.epoch : "");
+  document.title = $("title").textContent;
+  const kalshiOk = live.kalshi_connected && num(live.kalshi_age_ms) && live.kalshi_age_ms < 5000;
+  const pmOk = num(live.pm_age_ms) && live.pm_age_ms < 3000;
+  const feedsOk = kalshiOk && (pmOk || live.pm_age_ms == null);
+  const state = live.halted ? "Entries halted (daily loss limit)" : live.killed ? "Entries paused (kill file)"
+    : feedsOk ? "Feeds connected" : "Feeds degraded";
+  $("sub").textContent = [state, live.host, live.uptime_s != null ? "up " + dur(live.uptime_s) : null, "Updated " + utc(s.now_ms) + " UTC"].filter(Boolean).join(" · ");
+
+  const base = (s.baseline || {}).all || {};
+  const since = s.epoch_since_ms ? ` since ${utcShort(s.epoch_since_ms)} UTC` : "";
+  $("results-note").textContent = (all.n ? `${all.n} settled${since}` : `Waiting for the first settled position${since}`)
+    + (base.n ? ` · epoch ${((s.baseline || {}).epochs || []).join(", ")} baseline: ${base.n} settled, ${cents(base.net_c)}/share, ${usd(base.pnl)}` : "");
+  pairs("results", [
+    ["Net P&L after fees", usd(all.pnl)],
+    ["Net per share", cents(all.net_c)],
+    ["t (window-clustered)", fx(all.t, 2)],
+  ]);
+  $("today-note").textContent = `${k.decisions || 0} decisions in total · fill rate ${pct(k.fill_rate)}`;
+  pairs("today", [
+    ["P&L", usd(k.pnl_today)],
+    ["Decisions", String(k.decisions_today ?? 0)],
+    ["Open positions", String(live.open_positions ?? "—")],
+  ]);
+  const met = [g.settled, g.days, g.us_hours, g.edge, g.agree].filter((x) => x && x.ok).length;
+  const rf = s.refit && s.refit.bands ? " · weekly re-fit: sd ×" + s.refit.bands.map((b) => `${b.mult} (${b.label})`).join(", ") : "";
+  $("gate-note").textContent = `${met} of 5 conditions met` + (met === 5 ? " · ready for live review" : "") + rf;
+  pairs("gate", [
+    ["Settled", `${k.settled || 0} / ${g.settled.need}`],
+    ["Days", `${fx(g.days.have, 1)} / ${g.days.need}`],
+    ["US hours", `${g.us_hours.have || 0} / 30`],
+    ["Edge t", `${fx(all.t, 2)} / ${g.edge.need_t}`],
+    ["Kalshi same result", `${pct(g.agree.have, 2)} / 99%`],
+  ]);
+  const c = live.counters || {};
+  const conn = (x) => x ? "connected" : x === false ? "disconnected" : "off";
+  $("feeds-note").textContent = `Kalshi ${conn(live.kalshi_connected)} · Polymarket US polled every ${live.poll_ms ?? 250} ms`;
+  pairs("feeds", [
+    ["Kalshi", num(live.kalshi_age_ms) ? (live.kalshi_age_ms / 1000).toFixed(1) + " s · " + (live.kalshi_books ?? 0) + " books" : "—"],
+    ["Polymarket US quote", num(live.pm_age_ms) ? (live.pm_age_ms / 1000).toFixed(2) + " s" : "—"],
+    ["Kalshi frames", String(c.kalshi_frames ?? 0)],
+    ["Quote polls", String(c.pm_polls ?? 0)],
+    ["Same result", `${c.agree ?? 0} of ${(c.agree ?? 0) + (c.disagree ?? 0)}`],
+    ["Windows", String(k.windows ?? 0)],
+  ]);
+
+  chart(s.series || []);
+  const recent = s.recent || [];
+  $("recent-note").textContent = recent.length
+    ? `Showing the latest ${recent.length} of ${k.decisions} decisions. Paper fills land 150 ms after the decision against the book as it is then.`
+    : "";
+  $("recent").replaceChildren(table([
+    { h: "Time (UTC)", v: (r) => utc(r.t_ns / 1e6) }, { h: "Coin", v: (r) => r.asset },
+    { h: "Side", v: (r) => r.side === "up" ? "Up" : "Down" }, { h: "Seconds left", v: (r) => fx(r.left, 1) },
+    { h: "Kalshi mid", v: (r) => fx(r.kalshi_side, 3) },
+    { h: "Ask", v: (r) => fx(r.ask, 3) }, { h: "Edge", v: (r) => fx(r.edge, 3) },
+    { h: "Filled", v: (r) => r.filled != null ? `${fx(r.filled, 0)} @ ${fx(r.avg, 3)}` : r.status === "missed" ? `Missed (ask ${fx(r.ask_now, 3)})` : "—" },
+    { h: "Result", v: (r) => r.status === "settled" ? (r.won ? "Won" : "Lost") : r.status === "open" ? "Open" : r.status === "missed" ? "—" : "Waiting" },
+    { h: "Net (USD)", v: (r) => r.pnl != null ? usd(r.pnl).replace(" USD", "") : "—" },
+  ], recent, "No decisions yet. Entries fire from 60 s after the open to 60 s before the close when Polymarket US is 3–15¢ cheaper than Kalshi's mid after the fee."));
+  $("by-asset").replaceChildren(table(ROWS("Coin"), s.by_asset || [], "No settled positions yet."));
+  $("by-left").replaceChildren(table(ROWS("Seconds left"), s.by_left || [], "No settled positions yet."));
+  $("calibration").replaceChildren(table([
+    { h: "Kalshi P", v: (r) => r.label }, { h: "Positions", v: (r) => String(r.n) },
+    { h: "Kalshi", v: (r) => fx(r.model, 3) }, { h: "Won", v: (r) => fx(r.won, 3) }, { h: "Paid", v: (r) => fx(r.paid, 3) },
+  ], s.calibration || [], "No settled positions yet."));
+  $("gates24").replaceChildren(table([
+    { h: "Last gate", v: (r) => GATE_NAMES[r.gate] || r.gate }, { h: "Windows", v: (r) => String(r.n) },
+  ], s.gates_24h || [], "No windows closed yet."));
+}
+
+let last = null;
+async function refresh() {
+  try {
+    const r = await fetch("api/summary", { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    last = await r.json();
+    $("err").textContent = "";
+    render(last);
+  } catch (e) {
+    $("err").textContent = "Could not refresh: " + e.message;
+  }
+}
+refresh();
+setInterval(refresh, 10000);
+let rt; window.addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => last && chart(last.series || []), 150); });
+</script>
+</body>
+</html>

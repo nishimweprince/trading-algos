@@ -1,0 +1,825 @@
+//! The Kalshi-priced rule on Polymarket US, its paper venue and book-keeping.
+//! No I/O: the runtime feeds Kalshi frames, Polymarket US quotes and books,
+//! and clock ticks, and carries out the actions.
+//!
+//! Both venues list the same 15-minute Up/Down contract on the same CF
+//! Benchmarks index ("Yes" when the 60 s average at the close is at least the
+//! one at the open), so Kalshi's mid is a fair value for Polymarket US. From
+//! `entry_after_open_s` after the open to `stop_before_close_s` before the
+//! close, buy the Polymarket US side that is cheaper than Kalshi's by
+//! `min_edge`..=`max_edge` after the fee. Buying No takes Yes bids: its price
+//! is 1 − the Yes bid. Paper fills land `paper_latency_ms` after the decision
+//! against the book fetched then. Positions settle on Polymarket US's own
+//! settlement; Kalshi's result is journaled beside it.
+//!
+//! | Journal record | |
+//! |---|---|
+//! | `pu_window` | a window found on both venues |
+//! | `pu_sec` | each second: both quotes and the gaps |
+//! | `pu_decision`, `pu_fill`, `pu_no_fill` | an entry and what its order got |
+//! | `pu_close`, `pu_resolution`, `pu_settle` | the window's last gate, both outcomes, P&L |
+//! | `pu_halt`, `pu_ack`, `pu_kill`, `pu_status` | risk and housekeeping |
+
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+use chrono::{DateTime, Utc};
+use pk_core::num::{key_px, px_key};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+
+use crate::config::Config;
+
+pub const NS: i64 = 1_000_000_000;
+pub const WINDOW_S: i64 = 900;
+const RESOLVE_FOR_S: i64 = 2 * 3_600;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WindowInfo {
+    pub asset: String,
+    pub open: i64,
+    pub slug: String,
+    pub kalshi_ticker: Option<String>,
+    pub tick: f64,
+    pub min_qty: f64,
+    pub index: String,
+}
+
+impl WindowInfo {
+    pub fn close(&self) -> i64 {
+        self.open + WINDOW_S
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Position {
+    pub id: u64,
+    pub asset: String,
+    pub open: i64,
+    /// Bought Yes (Up) or No (Down).
+    pub up: bool,
+    pub slug: String,
+    pub shares: f64,
+    pub usd: f64,
+    pub fee: f64,
+    pub entry_ns: i64,
+    pub outcome: Option<String>,
+    pub pnl: Option<f64>,
+    pub epoch: String,
+}
+
+impl Position {
+    fn won(&self) -> Option<bool> {
+        self.outcome.as_deref().map(|o| (o == "yes") == self.up)
+    }
+}
+
+#[derive(Default, Serialize, Deserialize)]
+pub struct Persisted {
+    pub positions: Vec<Position>,
+    pub realized: BTreeMap<String, f64>,
+    pub halted_day: Option<String>,
+    pub acked_day: Option<String>,
+    pub next_id: u64,
+}
+
+/// Ask the runtime to fetch a Polymarket US book at `at_ns` for a paper fill.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FetchBook {
+    pub id: u64,
+    pub slug: String,
+    pub at_ns: i64,
+}
+
+#[derive(Default)]
+struct KBook {
+    yes: BTreeMap<i32, f64>,
+    no: BTreeMap<i32, f64>,
+    snapshot: bool,
+    last_ns: i64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Quote {
+    pub bid: f64,
+    pub ask: f64,
+    pub age_ms: i64,
+}
+
+impl Quote {
+    pub fn mid(&self) -> f64 {
+        (self.bid + self.ask) / 2.0
+    }
+}
+
+impl KBook {
+    fn quote(&self, t_ns: i64) -> Option<Quote> {
+        if !self.snapshot {
+            return None;
+        }
+        let bid = key_px(*self.yes.keys().next_back()?);
+        let ask = key_px(px_key(1.0) - *self.no.keys().next_back()?);
+        (ask > bid).then(|| Quote { bid, ask, age_ms: (t_ns - self.last_ns) / 1_000_000 })
+    }
+}
+
+/// The Polymarket US Yes quote, as polled.
+#[derive(Clone, Copy, Default)]
+struct PmQuote {
+    bid: Option<f64>,
+    ask: Option<f64>,
+    t_ns: i64,
+}
+
+#[derive(Clone, Debug)]
+struct Order {
+    asset: usize,
+    open: i64,
+    up: bool,
+    limit: f64,
+    shares: f64,
+    decision_ns: i64,
+}
+
+#[derive(Default)]
+struct WinState {
+    entries: usize,
+    gate: Option<&'static str>,
+    best_edge: Option<f64>,
+    closed: bool,
+    resolved: bool,
+}
+
+#[derive(Default, Serialize)]
+struct Counters {
+    kalshi_frames: u64,
+    kalshi_resets: u64,
+    pm_polls: u64,
+    decisions: u64,
+    fills: u64,
+    no_fills: u64,
+    settled: u64,
+    agree: u64,
+    disagree: u64,
+}
+
+pub struct Engine {
+    pub cfg: Config,
+    windows: BTreeMap<(usize, i64), WindowInfo>,
+    wstate: HashMap<(usize, i64), WinState>,
+    kbooks: HashMap<String, KBook>,
+    kowner: HashMap<String, (usize, i64)>,
+    k_last_frame_ns: i64,
+    pm: HashMap<(usize, i64), PmQuote>,
+    pending: HashMap<u64, Order>,
+    pub p: Persisted,
+    killed: bool,
+    last_grid: Vec<i64>,
+    counters: Counters,
+    records: Vec<Value>,
+    pub dirty: bool,
+}
+
+fn iso(t_ns: i64) -> String {
+    DateTime::<Utc>::from_timestamp_nanos(t_ns).format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
+}
+
+pub fn day_of(t_s: i64) -> String {
+    DateTime::<Utc>::from_timestamp(t_s, 0).map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_default()
+}
+
+fn r4(x: f64) -> Value {
+    if x.is_finite() { ((x * 1e4).round() / 1e4).into() } else { Value::Null }
+}
+
+fn r6(x: f64) -> Value {
+    if x.is_finite() { ((x * 1e6).round() / 1e6).into() } else { Value::Null }
+}
+
+fn floor_to(x: f64, step: f64) -> f64 {
+    let v = ((x / step) + 1e-9).floor() * step;
+    (v * 1e4).round() / 1e4
+}
+
+impl Engine {
+    pub fn new(cfg: Config, persisted: Persisted) -> Self {
+        let n = cfg.assets.len();
+        Self {
+            cfg,
+            windows: BTreeMap::new(),
+            wstate: HashMap::new(),
+            kbooks: HashMap::new(),
+            kowner: HashMap::new(),
+            k_last_frame_ns: 0,
+            pm: HashMap::new(),
+            pending: HashMap::new(),
+            p: persisted,
+            killed: false,
+            last_grid: vec![0; n],
+            counters: Counters::default(),
+            records: Vec::new(),
+            dirty: false,
+        }
+    }
+
+    /// Polymarket US taker fee per contract at price `p`.
+    pub fn fee(&self, p: f64) -> f64 {
+        self.cfg.fee_theta * p * (1.0 - p)
+    }
+
+    fn record(&mut self, t_ns: i64, kind: &str, mut body: Value) {
+        if let Some(m) = body.as_object_mut() {
+            m.insert("type".into(), kind.into());
+            m.insert("t".into(), iso(t_ns).into());
+            m.insert("t_ns".into(), t_ns.into());
+        }
+        self.records.push(body);
+    }
+
+    pub fn take_records(&mut self) -> Vec<Value> {
+        std::mem::take(&mut self.records)
+    }
+
+    pub fn asset_index(&self, asset: &str) -> Option<usize> {
+        self.cfg.assets.iter().position(|a| a.eq_ignore_ascii_case(asset))
+    }
+
+    pub fn window(&self, asset: usize, open: i64) -> Option<&WindowInfo> {
+        self.windows.get(&(asset, open))
+    }
+
+    pub fn set_window(&mut self, w: WindowInfo, t_ns: i64) {
+        let Some(i) = self.asset_index(&w.asset) else { return };
+        if self.windows.contains_key(&(i, w.open)) {
+            return;
+        }
+        if let Some(t) = &w.kalshi_ticker {
+            self.kowner.insert(t.clone(), (i, w.open));
+        }
+        self.record(
+            t_ns,
+            "pu_window",
+            json!({"asset": w.asset, "open": w.open, "slug": w.slug, "kalshi": w.kalshi_ticker, "tick": w.tick,
+                   "min_qty": w.min_qty, "index": w.index, "epoch": self.cfg.epoch}),
+        );
+        self.windows.insert((i, w.open), w);
+    }
+
+    /// Kalshi markets to subscribe to: windows not yet closed, opening within 15 min.
+    pub fn wanted_kalshi(&self, now_s: i64) -> BTreeSet<String> {
+        self.windows
+            .values()
+            .filter(|w| w.close() > now_s - 5 && w.open <= now_s + WINDOW_S)
+            .filter_map(|w| w.kalshi_ticker.clone())
+            .collect()
+    }
+
+    /// Windows whose Polymarket US quote should be polled now: (asset index, open, slug).
+    pub fn to_poll(&self, now_s: i64) -> Vec<(usize, i64, String)> {
+        self.windows
+            .iter()
+            .filter(|(_, w)| w.open <= now_s && now_s < w.close())
+            .map(|((i, o), w)| (*i, *o, w.slug.clone()))
+            .collect()
+    }
+
+    pub fn on_pm_quote(&mut self, asset: usize, open: i64, bid: Option<f64>, ask: Option<f64>, t_ns: i64) {
+        self.pm.insert((asset, open), PmQuote { bid, ask, t_ns });
+        self.counters.pm_polls += 1;
+    }
+
+    /// A Kalshi `orderbook_snapshot` / `orderbook_delta` frame.
+    pub fn on_kalshi(&mut self, text: &str, t_ns: i64) {
+        let Ok(f) = serde_json::from_str::<pk_engine::parse::KalshiFrame<'_>>(text) else { return };
+        self.k_last_frame_ns = t_ns;
+        self.counters.kalshi_frames += 1;
+        let Some(m) = f.msg.as_ref() else { return };
+        let Some(ticker) = m.market_ticker.as_ref().map(|t| t.as_str()) else { return };
+        if !self.kowner.contains_key(ticker) {
+            return;
+        }
+        let b = self.kbooks.entry(ticker.to_owned()).or_default();
+        match f.kind.as_deref() {
+            Some("orderbook_snapshot") => {
+                b.yes = m.levels(true).into_iter().filter(|l| l.1 > 0.0).map(|(p, q)| (px_key(p), q)).collect();
+                b.no = m.levels(false).into_iter().filter(|l| l.1 > 0.0).map(|(p, q)| (px_key(p), q)).collect();
+                b.snapshot = true;
+                b.last_ns = t_ns;
+            }
+            Some("orderbook_delta") if b.snapshot => {
+                let Some((price, delta)) = m.delta() else { return };
+                let side = if m.side.as_deref() == Some("no") { &mut b.no } else { &mut b.yes };
+                let k = px_key(price);
+                let q = side.get(&k).copied().unwrap_or(0.0) + delta;
+                if q > 1e-9 {
+                    side.insert(k, q);
+                } else {
+                    side.remove(&k);
+                }
+                b.last_ns = t_ns;
+            }
+            _ => {}
+        }
+    }
+
+    pub fn invalidate_kalshi(&mut self) {
+        self.kbooks.clear();
+        self.counters.kalshi_resets += 1;
+    }
+
+    fn kalshi_quote(&self, i: usize, open: i64, t_ns: i64) -> Option<Quote> {
+        let w = self.windows.get(&(i, open))?;
+        if t_ns - self.k_last_frame_ns > self.cfg.kalshi_max_age_ms * 1_000_000 {
+            return None;
+        }
+        self.kbooks.get(w.kalshi_ticker.as_ref()?)?.quote(t_ns)
+    }
+
+    fn pm_quote(&self, i: usize, open: i64, t_ns: i64) -> Option<(Option<f64>, Option<f64>, i64)> {
+        let q = self.pm.get(&(i, open))?;
+        Some((q.bid, q.ask, (t_ns - q.t_ns) / 1_000_000))
+    }
+
+    pub fn set_kill(&mut self, on: bool, t_ns: i64) {
+        if on != self.killed {
+            self.killed = on;
+            self.record(t_ns, "pu_kill", json!({"on": on}));
+        }
+    }
+
+    pub fn halted(&self, t_ns: i64) -> bool {
+        self.p.halted_day.as_deref() == Some(day_of(t_ns / NS).as_str())
+    }
+
+    pub fn ack(&mut self, t_ns: i64) {
+        if self.halted(t_ns) {
+            let day = day_of(t_ns / NS);
+            self.p.halted_day = None;
+            self.p.acked_day = Some(day.clone());
+            self.dirty = true;
+            self.record(t_ns, "pu_ack", json!({"day": day}));
+        }
+    }
+
+    fn open_cost(&self) -> f64 {
+        let held: f64 = self.p.positions.iter().filter(|p| p.outcome.is_none()).map(|p| p.usd + p.fee).sum();
+        held + self.pending.values().map(|o| o.limit * o.shares).sum::<f64>()
+    }
+
+    /// One clock step: closes, the per-second grid, entries.
+    pub fn tick(&mut self, t_ns: i64) -> Vec<FetchBook> {
+        let mut out = Vec::new();
+        let now_s = t_ns / NS;
+        let open_now = now_s - now_s.rem_euclid(WINDOW_S);
+        for i in 0..self.cfg.assets.len() {
+            let prev = open_now - WINDOW_S;
+            if now_s >= open_now + 3 && self.windows.contains_key(&(i, prev)) {
+                self.close_window(i, prev, t_ns);
+            }
+            if !self.windows.contains_key(&(i, open_now)) {
+                continue;
+            }
+            if self.last_grid[i] != now_s {
+                self.last_grid[i] = now_s;
+                self.grid(i, open_now, t_ns);
+            }
+            let since_open = now_s - open_now;
+            let left = open_now + WINDOW_S - now_s;
+            if since_open >= self.cfg.entry_after_open_s
+                && left > self.cfg.stop_before_close_s
+                && let Some(a) = self.evaluate(i, open_now, t_ns)
+            {
+                out.push(a);
+            }
+        }
+        out
+    }
+
+    /// The gap on each side: (Kalshi side mid, Polymarket US ask, fee, edge).
+    fn gaps(&self, k: &Quote, bid: Option<f64>, ask: Option<f64>) -> [Option<(f64, f64, f64, f64)>; 2] {
+        let mid = k.mid();
+        let yes = ask.map(|a| (mid, a, self.fee(a), mid - a - self.fee(a)));
+        let no = bid.map(|b| {
+            let a = 1.0 - b;
+            (1.0 - mid, a, self.fee(a), (1.0 - mid) - a - self.fee(a))
+        });
+        [yes, no]
+    }
+
+    fn grid(&mut self, i: usize, open: i64, t_ns: i64) {
+        let Some(w) = self.windows.get(&(i, open)) else { return };
+        let asset = w.asset.clone();
+        let kq = self.kalshi_quote(i, open, t_ns);
+        let pq = self.pm_quote(i, open, t_ns);
+        let gaps = match (kq, pq) {
+            (Some(k), Some((b, a, _))) => self.gaps(&k, b, a),
+            _ => [None, None],
+        };
+        let left = open + WINDOW_S - t_ns / NS;
+        self.record(
+            t_ns,
+            "pu_sec",
+            json!({
+                "asset": asset, "open": open, "left": left,
+                "kalshi": kq.map(|q| json!({"bid": r4(q.bid), "ask": r4(q.ask), "age_ms": q.age_ms})),
+                "pm": pq.map(|(b, a, age)| json!({"bid": b, "ask": a, "age_ms": age})),
+                "edge_yes": gaps[0].map(|g| r6(g.3)), "edge_no": gaps[1].map(|g| r6(g.3)),
+                "epoch": self.cfg.epoch,
+            }),
+        );
+    }
+
+    fn evaluate(&mut self, i: usize, open: i64, t_ns: i64) -> Option<FetchBook> {
+        let gate = |e: &mut Self, why: &'static str| {
+            e.wstate.entry((i, open)).or_default().gate = Some(why);
+            None
+        };
+        if self.killed {
+            return gate(self, "kill");
+        }
+        if self.halted(t_ns) {
+            return gate(self, "halted");
+        }
+        if self.wstate.get(&(i, open)).is_some_and(|s| s.entries >= self.cfg.max_entries_per_window) {
+            return gate(self, "entries_done");
+        }
+        let Some(k) = self.kalshi_quote(i, open, t_ns) else { return gate(self, "no_kalshi") };
+        if k.ask - k.bid > self.cfg.kalshi_max_spread + 1e-9 {
+            return gate(self, "kalshi_spread");
+        }
+        let Some((bid, ask, age_ms)) = self.pm_quote(i, open, t_ns) else { return gate(self, "no_pm_quote") };
+        if age_ms > self.cfg.pm_max_age_ms {
+            return gate(self, "stale_pm_quote");
+        }
+        let sides: Vec<(bool, (f64, f64, f64, f64))> = self
+            .gaps(&k, bid, ask)
+            .into_iter()
+            .zip([true, false])
+            .filter_map(|(g, up)| g.map(|g| (up, g)))
+            .filter(|(_, g)| (self.cfg.min_px..=self.cfg.max_px).contains(&g.1))
+            .collect();
+        if sides.is_empty() {
+            return gate(self, "price_range");
+        }
+        {
+            let top = sides.iter().map(|x| x.1.3).fold(f64::NEG_INFINITY, f64::max);
+            let ws = self.wstate.entry((i, open)).or_default();
+            ws.best_edge = Some(ws.best_edge.map_or(top, |e: f64| e.max(top)));
+        }
+        let pick = sides
+            .iter()
+            .filter(|x| x.1.3 >= self.cfg.min_edge - 1e-12 && x.1.3 <= self.cfg.max_edge + 1e-12)
+            .copied()
+            .max_by(|a, b| a.1.3.total_cmp(&b.1.3));
+        let Some((up, (fair, px, fee, edge))) = pick else {
+            let over = sides.iter().any(|x| x.1.3 > self.cfg.max_edge);
+            return gate(self, if over { "edge_too_big" } else { "edge" });
+        };
+        let w = self.windows.get(&(i, open))?.clone();
+        let tick = if w.tick > 0.0 { w.tick } else { 0.01 };
+        let cap = fair - fee - self.cfg.min_net_edge;
+        let limit = floor_to((px + self.cfg.limit_offset).min(cap), tick).max(px);
+        let shares = self.cfg.shares.max(w.min_qty);
+        if self.open_cost() + limit * shares > self.cfg.max_open_cost_usd + 1e-9 {
+            return gate(self, "max_open_cost");
+        }
+        self.p.next_id += 1;
+        let id = self.p.next_id;
+        {
+            let ws = self.wstate.entry((i, open)).or_default();
+            ws.entries += 1;
+            ws.gate = Some("fired");
+        }
+        self.counters.decisions += 1;
+        self.dirty = true;
+        let left = (open + WINDOW_S) as f64 - t_ns as f64 / NS as f64;
+        self.record(
+            t_ns,
+            "pu_decision",
+            json!({
+                "id": id, "asset": w.asset, "open": open, "slug": w.slug, "side": if up { "up" } else { "down" },
+                "left": r4(left), "p_side": r4(fair), "kalshi_side": r4(fair),
+                "kalshi_bid": r4(k.bid), "kalshi_ask": r4(k.ask), "kalshi_age_ms": k.age_ms,
+                "pm_bid": bid, "pm_ask": ask, "pm_age_ms": age_ms,
+                "ask": r4(px), "fee": r6(fee), "edge": r6(edge), "limit": r4(limit), "shares": shares,
+                "epoch": self.cfg.epoch, "mode": "paper",
+            }),
+        );
+        let at_ns = t_ns + self.cfg.paper_latency_ms * 1_000_000;
+        self.pending.insert(id, Order { asset: i, open, up, limit, shares, decision_ns: t_ns });
+        Some(FetchBook { id, slug: w.slug, at_ns })
+    }
+
+    /// The book fetched for a paper fill: Yes bids and offers as (price, qty).
+    pub fn on_book(&mut self, id: u64, bids: &[(f64, f64)], offers: &[(f64, f64)], t_ns: i64) {
+        let Some(o) = self.pending.remove(&id) else { return };
+        let Some(w) = self.windows.get(&(o.asset, o.open)).cloned() else { return };
+        // A Yes buy walks the offers up; a No buy sells into Yes bids, at 1 − bid.
+        let mut levels: Vec<(f64, f64)> = if o.up {
+            let mut v: Vec<(f64, f64)> = offers.to_vec();
+            v.sort_by(|a, b| a.0.total_cmp(&b.0));
+            v
+        } else {
+            let mut v: Vec<(f64, f64)> = bids.iter().map(|(p, q)| (1.0 - p, *q)).collect();
+            v.sort_by(|a, b| a.0.total_cmp(&b.0));
+            v
+        };
+        levels.retain(|(p, q)| *p <= o.limit + 1e-9 && *q > 0.0);
+        let (mut got, mut usd, mut fee) = (0.0, 0.0, 0.0);
+        for (p, q) in levels {
+            let take = q.min(o.shares - got);
+            if take <= 1e-9 {
+                break;
+            }
+            got += take;
+            usd += take * p;
+            fee += self.fee(p) * take;
+        }
+        let best = if o.up {
+            offers.iter().map(|x| x.0).fold(f64::INFINITY, f64::min)
+        } else {
+            bids.iter().map(|x| 1.0 - x.0).fold(f64::INFINITY, f64::min)
+        };
+        let body = json!({
+            "id": id, "asset": w.asset, "open": o.open, "side": if o.up { "up" } else { "down" }, "mode": "paper",
+            "limit": r4(o.limit), "ask_now": if best.is_finite() { r4(best) } else { Value::Null },
+            "held_ms": (t_ns - o.decision_ns) / 1_000_000,
+            "shares": r4(got), "usd": r4(usd), "fee": r6(fee),
+            "avg": if got > 0.0 { r4(usd / got) } else { Value::Null },
+        });
+        if got > 1e-9 {
+            self.counters.fills += 1;
+            self.record(t_ns, "pu_fill", body);
+            self.p.positions.push(Position {
+                id,
+                asset: w.asset.clone(),
+                open: o.open,
+                up: o.up,
+                slug: w.slug.clone(),
+                shares: got,
+                usd,
+                fee,
+                entry_ns: t_ns,
+                outcome: None,
+                pnl: None,
+                epoch: self.cfg.epoch.clone(),
+            });
+            self.dirty = true;
+        } else {
+            self.counters.no_fills += 1;
+            self.record(t_ns, "pu_no_fill", body);
+        }
+    }
+
+    /// The book could not be fetched: the paper order did not fill.
+    pub fn on_book_error(&mut self, id: u64, error: &str, t_ns: i64) {
+        if let Some(o) = self.pending.remove(&id) {
+            self.counters.no_fills += 1;
+            let asset = self.cfg.assets[o.asset].clone();
+            self.record(t_ns, "pu_no_fill", json!({"id": id, "asset": asset, "open": o.open, "error": error}));
+        }
+    }
+
+    fn close_window(&mut self, i: usize, open: i64, t_ns: i64) {
+        let Some(asset) = self.windows.get(&(i, open)).map(|w| w.asset.clone()) else { return };
+        let ws = self.wstate.entry((i, open)).or_default();
+        if ws.closed {
+            return;
+        }
+        ws.closed = true;
+        let (gate, best, entries) = (ws.gate, ws.best_edge, ws.entries);
+        self.record(
+            t_ns,
+            "pu_close",
+            json!({"asset": asset, "open": open, "last_gate": gate, "best_edge": best.map(r6), "entries": entries,
+                   "epoch": self.cfg.epoch}),
+        );
+    }
+
+    /// Windows to ask Polymarket US about: closed at least 20 s ago, recent, unresolved.
+    pub fn to_resolve(&self, now_s: i64) -> Vec<WindowInfo> {
+        self.windows
+            .iter()
+            .filter(|(key, w)| {
+                !self.wstate.get(key).is_some_and(|s| s.resolved) && now_s >= w.close() + 20 && now_s < w.close() + RESOLVE_FOR_S
+            })
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// Polymarket US settled a window (`yes` = Up); `kalshi` is Kalshi's result, if known.
+    pub fn on_resolved(&mut self, asset: &str, open: i64, outcome: &str, kalshi: Option<&str>, t_ns: i64) {
+        let Some(i) = self.asset_index(asset) else { return };
+        let ws = self.wstate.entry((i, open)).or_default();
+        if ws.resolved {
+            return;
+        }
+        ws.resolved = true;
+        match kalshi {
+            Some(k) if k == outcome => self.counters.agree += 1,
+            Some(_) => self.counters.disagree += 1,
+            None => {}
+        }
+        self.record(
+            t_ns,
+            "pu_resolution",
+            json!({"asset": asset, "open": open, "poly": outcome, "kalshi": kalshi, "agree": kalshi.map(|k| k == outcome)}),
+        );
+        let day = day_of(open + WINDOW_S);
+        let mut settled = Vec::new();
+        for p in self.p.positions.iter_mut().filter(|p| p.asset == asset && p.open == open && p.outcome.is_none()) {
+            p.outcome = Some(outcome.to_owned());
+            let payout = if p.won() == Some(true) { p.shares } else { 0.0 };
+            p.pnl = Some(payout - p.usd - p.fee);
+            settled.push(p.clone());
+        }
+        for p in settled {
+            let pnl = p.pnl.unwrap_or(0.0);
+            *self.p.realized.entry(day.clone()).or_default() += pnl;
+            self.counters.settled += 1;
+            self.dirty = true;
+            self.record(
+                t_ns,
+                "pu_settle",
+                json!({"id": p.id, "asset": p.asset, "open": p.open, "side": if p.up { "up" } else { "down" },
+                       "outcome": outcome, "won": p.won(), "shares": r4(p.shares), "usd": r4(p.usd), "fee": r6(p.fee),
+                       "pnl": r4(pnl), "per_share": r4(pnl / p.shares.max(1e-9)), "live": false, "epoch": p.epoch,
+                       "day_pnl": r4(self.p.realized.get(&day).copied().unwrap_or(0.0))}),
+            );
+        }
+        let today = day_of(t_ns / NS);
+        let pnl_today = self.p.realized.get(&today).copied().unwrap_or(0.0);
+        if pnl_today <= -self.cfg.daily_loss_usd
+            && self.p.halted_day.as_deref() != Some(&today)
+            && self.p.acked_day.as_deref() != Some(&today)
+        {
+            self.p.halted_day = Some(today.clone());
+            self.dirty = true;
+            self.record(t_ns, "pu_halt", json!({"day": today, "pnl": r4(pnl_today), "limit": self.cfg.daily_loss_usd}));
+        }
+    }
+
+    pub fn prune(&mut self, now_s: i64) {
+        let old: Vec<(usize, i64)> =
+            self.windows.iter().filter(|(_, w)| w.close() + RESOLVE_FOR_S + 600 < now_s).map(|(k, _)| *k).collect();
+        for key in old {
+            if let Some(w) = self.windows.remove(&key)
+                && let Some(t) = &w.kalshi_ticker
+            {
+                self.kowner.remove(t);
+                self.kbooks.remove(t);
+            }
+            self.wstate.remove(&key);
+            self.pm.remove(&key);
+        }
+        let before = self.p.positions.len();
+        self.p.positions.retain(|p| p.outcome.is_none());
+        if self.p.positions.len() != before {
+            self.dirty = true;
+        }
+        let keep_from = day_of(now_s - 40 * 86_400);
+        self.p.realized.retain(|d, _| d.as_str() >= keep_from.as_str());
+    }
+
+    pub fn status_value(&self, t_ns: i64) -> Value {
+        let today = day_of(t_ns / NS);
+        json!({
+            "mode": "paper",
+            "venue": "polymarket-us",
+            "counters": serde_json::to_value(&self.counters).unwrap_or(Value::Null),
+            "day_pnl": r4(self.p.realized.get(&today).copied().unwrap_or(0.0)),
+            "open_positions": self.p.positions.iter().filter(|p| p.outcome.is_none()).count(),
+            "open_cost": r4(self.open_cost()),
+            "halted": self.halted(t_ns), "killed": self.killed,
+            "windows": self.windows.len(),
+            "epoch": self.cfg.epoch,
+            "kalshi_age_ms": if self.k_last_frame_ns > 0 { Value::from((t_ns - self.k_last_frame_ns) / 1_000_000) } else { Value::Null },
+            "kalshi_books": self.kbooks.values().filter(|b| b.snapshot).count(),
+            "pm_age_ms": self.pm.values().map(|q| (t_ns - q.t_ns) / 1_000_000).min(),
+        })
+    }
+
+    pub fn status(&mut self, t_ns: i64) {
+        let body = self.status_value(t_ns);
+        self.record(t_ns, "pu_status", body);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::tests::vars;
+
+    const OPEN: i64 = 1_800_000_000 - 1_800_000_000 % WINDOW_S;
+
+    fn engine() -> Engine {
+        let mut e = Engine::new(Config::from_vars(vars(&[("PK_PU_ASSETS", "BTC")])).unwrap(), Persisted::default());
+        e.set_window(
+            WindowInfo {
+                asset: "BTC".into(),
+                open: OPEN,
+                slug: "cpc-btc-updown-15m-x".into(),
+                kalshi_ticker: Some("KX".into()),
+                tick: 0.01,
+                min_qty: 0.01,
+                index: "BRTI".into(),
+            },
+            OPEN * NS,
+        );
+        e
+    }
+
+    fn kalshi(e: &mut Engine, bid: f64, ask: f64, t: i64) {
+        let f = json!({"type": "orderbook_snapshot", "sid": 1, "seq": 1,
+                       "msg": {"market_ticker": "KX", "yes_dollars_fp": [[format!("{bid:.4}"), "100.00"]],
+                               "no_dollars_fp": [[format!("{:.4}", 1.0 - ask), "100.00"]]}});
+        e.on_kalshi(&f.to_string(), t);
+    }
+
+    fn decisions(e: &mut Engine) -> Vec<Value> {
+        e.take_records().into_iter().filter(|r| r["type"] == "pu_decision").collect()
+    }
+
+    #[test]
+    fn buys_yes_when_polymarket_us_is_cheaper_than_kalshi() {
+        let mut e = engine();
+        let t = (OPEN + 300) * NS;
+        kalshi(&mut e, 0.59, 0.61, t);
+        e.on_pm_quote(0, OPEN, Some(0.54), Some(0.55), t);
+        let acts = e.tick(t);
+        assert_eq!(acts.len(), 1);
+        let d = &decisions(&mut e)[0];
+        assert_eq!(d["side"], "up");
+        // 0.60 − 0.55 − 0.0695 · 0.55 · 0.45 ≈ 0.0328
+        assert!((d["edge"].as_f64().unwrap() - 0.0328).abs() < 1e-3, "{d}");
+        assert_eq!(d["limit"].as_f64().unwrap(), 0.56);
+        // Paper fill against the fetched book: 10 at 0.55, nothing at 0.57.
+        e.on_book(acts[0].id, &[(0.54, 50.0)], &[(0.55, 6.0), (0.56, 2.0), (0.57, 100.0)], t + 150_000_000);
+        let f = e.take_records().into_iter().find(|r| r["type"] == "pu_fill").unwrap();
+        assert_eq!(f["shares"].as_f64().unwrap(), 8.0);
+        assert!((f["avg"].as_f64().unwrap() - 0.5525).abs() < 1e-4);
+    }
+
+    #[test]
+    fn buys_no_by_taking_yes_bids() {
+        let mut e = engine();
+        let t = (OPEN + 300) * NS;
+        kalshi(&mut e, 0.39, 0.41, t); // No worth 0.60
+        e.on_pm_quote(0, OPEN, Some(0.45), Some(0.47), t); // No costs 0.55
+        let acts = e.tick(t);
+        let d = &decisions(&mut e)[0];
+        assert_eq!(d["side"], "down");
+        e.on_book(acts[0].id, &[(0.45, 20.0)], &[(0.47, 20.0)], t + 150_000_000);
+        let f = e.take_records().into_iter().find(|r| r["type"] == "pu_fill").unwrap();
+        assert_eq!(f["shares"].as_f64().unwrap(), 10.0);
+        assert!((f["avg"].as_f64().unwrap() - 0.55).abs() < 1e-9);
+        // Settles on Polymarket US: No won.
+        e.on_resolved("BTC", OPEN, "no", Some("no"), (OPEN + 930) * NS);
+        let s = e.take_records().into_iter().find(|r| r["type"] == "pu_settle").unwrap();
+        let want = 10.0 - 5.5 - 10.0 * 0.0695 * 0.55 * 0.45;
+        assert!((s["pnl"].as_f64().unwrap() - want).abs() < 1e-3);
+    }
+
+    #[test]
+    fn gates() {
+        let t = (OPEN + 300) * NS;
+        // No gap.
+        let mut e = engine();
+        kalshi(&mut e, 0.54, 0.56, t);
+        e.on_pm_quote(0, OPEN, Some(0.54), Some(0.56), t);
+        assert!(e.tick(t).is_empty());
+        // Too early in the window.
+        let mut e = engine();
+        kalshi(&mut e, 0.59, 0.61, OPEN * NS + 30 * NS);
+        e.on_pm_quote(0, OPEN, Some(0.54), Some(0.55), OPEN * NS + 30 * NS);
+        assert!(e.tick(OPEN * NS + 30 * NS).is_empty());
+        // A gap over the cap is taken for a stale book.
+        let mut e = engine();
+        kalshi(&mut e, 0.79, 0.81, t);
+        e.on_pm_quote(0, OPEN, Some(0.54), Some(0.55), t);
+        assert!(e.tick(t).is_empty());
+        // A stale Polymarket US quote.
+        let mut e = engine();
+        kalshi(&mut e, 0.59, 0.61, t);
+        e.on_pm_quote(0, OPEN, Some(0.54), Some(0.55), t - 2 * NS);
+        assert!(e.tick(t).is_empty());
+        // A wide Kalshi book.
+        let mut e = engine();
+        kalshi(&mut e, 0.55, 0.65, t);
+        e.on_pm_quote(0, OPEN, Some(0.50), Some(0.51), t);
+        assert!(e.tick(t).is_empty());
+    }
+
+    #[test]
+    fn one_entry_per_window_and_agreement() {
+        let mut e = engine();
+        let t = (OPEN + 300) * NS;
+        kalshi(&mut e, 0.59, 0.61, t);
+        e.on_pm_quote(0, OPEN, Some(0.54), Some(0.55), t);
+        assert_eq!(e.tick(t).len(), 1);
+        e.on_pm_quote(0, OPEN, Some(0.54), Some(0.55), t + NS);
+        assert!(e.tick(t + NS).is_empty());
+        e.on_resolved("BTC", OPEN, "yes", Some("no"), (OPEN + 930) * NS);
+        let r = e.take_records().into_iter().find(|r| r["type"] == "pu_resolution").unwrap();
+        assert_eq!(r["agree"], false);
+    }
+}

@@ -1,0 +1,456 @@
+//! `pk-pmus`: the poly-kalshi gap rule with Polymarket US as the venue, in
+//! paper. Kalshi's order book (WebSocket, read-only) is the fair value;
+//! Polymarket US's public gateway is polled for the quote, its book for paper
+//! fills and its settlement for results. Nothing is ever sent to either venue.
+//!
+//! | Command | |
+//! |---|---|
+//! | `pk-pmus --env FILE` | run (paper only) |
+//! | `touch <state>/KILL` | stop new entries (remove the file to resume) |
+//! | `touch <state>/ACK` | clear today's loss halt |
+//! | `http://<PK_PU_UI_ADDR>/` | the monitoring page (`/api/summary` is its JSON) |
+
+mod config;
+mod engine;
+mod summary;
+mod web;
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+
+use clap::Parser;
+use parking_lot::Mutex;
+use pk_core::journal::{JsonlDaily, Sink};
+use pk_core::window::Window;
+use pk_feeds::{Discovery, FeedHandle, FeedKind, KalshiSigner, spawn_feed};
+use serde_json::Value;
+
+use crate::config::{Config, slug_prefix};
+use crate::engine::{Engine, FetchBook, NS, Persisted, WINDOW_S, WindowInfo};
+use crate::summary::Summary;
+
+#[derive(Parser)]
+#[command(name = "pk-pmus", about = "Kalshi-priced paper entries on Polymarket US 15-minute crypto markets")]
+struct Args {
+    /// Settings file (KEY=VALUE); the process environment wins over it.
+    #[arg(long)]
+    env: Option<PathBuf>,
+}
+
+pub fn now_ns() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as i64).unwrap_or(0)
+}
+
+struct App {
+    engine: Mutex<Engine>,
+    journal: Mutex<JsonlDaily>,
+    http: reqwest::Client,
+    gateway: String,
+    discovery: Discovery,
+    state_path: PathBuf,
+    summary: Mutex<Summary>,
+    started_ns: i64,
+    kalshi: Mutex<Option<FeedHandle>>,
+    poll_errors: std::sync::atomic::AtomicU64,
+}
+
+fn load_state(p: &Path) -> anyhow::Result<Persisted> {
+    if !p.is_file() {
+        return Ok(Persisted::default());
+    }
+    Ok(serde_json::from_str(&std::fs::read_to_string(p)?)?)
+}
+
+fn save_state(p: &Path, s: &Persisted) {
+    let tmp = p.with_extension("json.tmp");
+    let r = serde_json::to_vec_pretty(s)
+        .map_err(std::io::Error::other)
+        .and_then(|b| std::fs::write(&tmp, b))
+        .and_then(|()| std::fs::rename(&tmp, p));
+    if let Err(e) = r {
+        tracing::error!(error = %e, "state_write");
+    }
+}
+
+/// `cpc-btc-updown-15m-2026-11-25-1415z` for the window opening at 14:15 UTC.
+pub fn pm_slug(asset: &str, open: i64) -> Option<String> {
+    let p = slug_prefix(asset)?;
+    let d = chrono::DateTime::<chrono::Utc>::from_timestamp(open, 0)?;
+    Some(format!("{p}-updown-15m-{}", d.format("%Y-%m-%d-%H%Mz")))
+}
+
+fn f(v: &Value) -> Option<f64> {
+    v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+}
+
+/// `[{"px":{"value":"0.36"},"qty":"72"}, …]` as (price, qty).
+fn levels(v: &Value) -> Vec<(f64, f64)> {
+    v.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|l| Some((f(l.get("px")?.get("value")?)?, f(l.get("qty")?)?)))
+        .collect()
+}
+
+impl App {
+    async fn get(&self, path: &str) -> anyhow::Result<Value> {
+        let r = self.http.get(format!("{}{path}", self.gateway)).send().await?;
+        let status = r.status();
+        anyhow::ensure!(status.is_success(), "{path}: HTTP {status}");
+        Ok(r.json().await?)
+    }
+
+    fn flush(&self) {
+        let (records, dirty) = {
+            let mut e = self.engine.lock();
+            let d = std::mem::take(&mut e.dirty);
+            (e.take_records(), d.then(|| serde_json::to_value(&e.p).ok()).flatten())
+        };
+        if !records.is_empty() {
+            {
+                let mut sm = self.summary.lock();
+                for r in records.iter().filter(|r| r["type"] != "pu_sec") {
+                    sm.ingest(r);
+                }
+            }
+            let mut j = self.journal.lock();
+            for r in &records {
+                j.write(r.get("t_ns").and_then(Value::as_i64).unwrap_or_else(now_ns), r);
+                if matches!(
+                    r["type"].as_str(),
+                    Some("pu_decision" | "pu_fill" | "pu_no_fill" | "pu_settle" | "pu_halt" | "pu_kill" | "pu_window")
+                ) {
+                    tracing::info!(target: "pu", "{r}");
+                }
+            }
+        }
+        if let Some(v) = dirty
+            && let Ok(p) = serde_json::from_value::<Persisted>(v)
+        {
+            save_state(&self.state_path, &p);
+        }
+    }
+
+    fn snapshot(&self) -> Value {
+        let t = now_ns();
+        let mut live = {
+            let e = self.engine.lock();
+            let mut v = e.status_value(t);
+            v["host"] = e.cfg.host_tag.clone().into();
+            v["poll_ms"] = e.cfg.poll_ms.into();
+            v
+        };
+        live["uptime_s"] = ((t - self.started_ns) / NS).into();
+        live["kalshi_connected"] = self.kalshi.lock().as_ref().map(FeedHandle::connected).into();
+        live["poll_errors"] = self.poll_errors.load(std::sync::atomic::Ordering::Relaxed).into();
+        self.summary.lock().snapshot(live, t)
+    }
+
+    async fn discover(&self, assets: &[String]) {
+        let now = now_ns() / NS;
+        let open = now - now.rem_euclid(WINDOW_S);
+        for asset in assets {
+            for o in [open, open + WINDOW_S] {
+                let known = {
+                    let e = self.engine.lock();
+                    e.asset_index(asset).is_some_and(|i| e.window(i, o).is_some())
+                };
+                if known {
+                    continue;
+                }
+                let Some(slug) = pm_slug(asset, o) else { continue };
+                let m = match self.get(&format!("/v1/market/slug/{slug}")).await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::debug!(slug, error = %e, "pu_discovery");
+                        continue;
+                    }
+                };
+                let m = m.get("market").unwrap_or(&m);
+                let terms = m.get("assetPriceTerms").cloned().unwrap_or(Value::Null);
+                let ws = terms.get("windowStart").and_then(Value::as_str).and_then(|s| {
+                    chrono::DateTime::parse_from_rfc3339(s).ok().map(|d| d.timestamp())
+                });
+                if ws.is_some_and(|w| w != o) {
+                    tracing::warn!(slug, window_start = ?ws, "pu_window_mismatch");
+                    continue;
+                }
+                let kalshi = match self.discovery.kalshi_market(asset, o).await {
+                    Ok(Some(k)) => k.get("ticker").and_then(Value::as_str).map(str::to_owned),
+                    Ok(None) => None,
+                    Err(e) => {
+                        tracing::warn!(asset, open = o, error = %e, "pu_kalshi_discovery");
+                        None
+                    }
+                };
+                let Some(kalshi) = kalshi else { continue };
+                let w = WindowInfo {
+                    asset: asset.clone(),
+                    open: o,
+                    slug,
+                    kalshi_ticker: Some(kalshi),
+                    tick: m.get("orderPriceMinTickSize").and_then(f).unwrap_or(0.01),
+                    min_qty: m.get("minimumTradeQty").and_then(f).unwrap_or(1.0),
+                    index: terms.get("indexSymbol").and_then(Value::as_str).unwrap_or_default().to_owned(),
+                };
+                self.engine.lock().set_window(w, now_ns());
+            }
+        }
+    }
+
+    async fn poll_quotes(self: &Arc<Self>) {
+        let due = self.engine.lock().to_poll(now_ns() / NS);
+        let futs = due.into_iter().map(|(i, open, slug)| {
+            let app = self.clone();
+            async move {
+                // The book, not /bbo: /bbo was seen frozen for 10 s while the book moved.
+                match app.get(&format!("/v1/markets/{slug}/book")).await {
+                    Ok(v) => {
+                        let md = v.get("marketData").unwrap_or(&v);
+                        let bid = levels(md.get("bids").unwrap_or(&Value::Null))
+                            .into_iter()
+                            .filter(|l| l.1 > 0.0)
+                            .map(|l| l.0)
+                            .reduce(f64::max);
+                        let ask = levels(md.get("offers").unwrap_or(&Value::Null))
+                            .into_iter()
+                            .filter(|l| l.1 > 0.0)
+                            .map(|l| l.0)
+                            .reduce(f64::min);
+                        app.engine.lock().on_pm_quote(i, open, bid, ask, now_ns());
+                    }
+                    Err(e) => {
+                        let n = app.poll_errors.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if n.is_multiple_of(50) {
+                            tracing::warn!(slug, error = %e, errors = n + 1, "pu_book_poll");
+                        }
+                    }
+                }
+            }
+        });
+        futures_util::future::join_all(futs).await;
+    }
+
+    fn paper_fill(self: &Arc<Self>, a: FetchBook) {
+        let app = self.clone();
+        tokio::spawn(async move {
+            let wait = (a.at_ns - now_ns()).max(0);
+            tokio::time::sleep(Duration::from_nanos(wait as u64)).await;
+            match app.get(&format!("/v1/markets/{}/book", a.slug)).await {
+                Ok(v) => {
+                    let md = v.get("marketData").unwrap_or(&v);
+                    let bids = levels(md.get("bids").unwrap_or(&Value::Null));
+                    let offers = levels(md.get("offers").unwrap_or(&Value::Null));
+                    app.engine.lock().on_book(a.id, &bids, &offers, now_ns());
+                }
+                Err(e) => app.engine.lock().on_book_error(a.id, &format!("{e:#}"), now_ns()),
+            }
+            app.flush();
+        });
+    }
+
+    async fn resolve(&self) {
+        let due = self.engine.lock().to_resolve(now_ns() / NS);
+        for w in due.into_iter().take(20) {
+            let v = match self.get(&format!("/v1/markets/{}/settlement", w.slug)).await {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::debug!(slug = w.slug, error = %e, "pu_settlement");
+                    continue;
+                }
+            };
+            let outcome = match v.get("settlement").and_then(f) {
+                Some(x) if x >= 0.5 => "yes",
+                Some(_) => "no",
+                None => continue,
+            };
+            let kalshi = match &w.kalshi_ticker {
+                Some(t) => {
+                    let win = Window {
+                        asset: w.asset.clone(),
+                        open_unix: w.open,
+                        kalshi_ticker: t.clone(),
+                        yes_token: String::new(),
+                        no_token: String::new(),
+                        condition_id: String::new(),
+                        fee_rate: 0.0,
+                        fee_exponent: 0.0,
+                    };
+                    self.discovery.kalshi_outcome(&win).await.ok().flatten()
+                }
+                None => None,
+            };
+            // Wait a little for Kalshi's result so the comparison is recorded.
+            if kalshi.is_none() && now_ns() / NS < w.close() + 300 {
+                continue;
+            }
+            self.engine.lock().on_resolved(&w.asset, w.open, outcome, kalshi, now_ns());
+        }
+        self.flush();
+    }
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+        .init();
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let args = Args::parse();
+    let cfg = Config::load(args.env.as_deref())?;
+    std::fs::create_dir_all(&cfg.state_dir)?;
+    run(cfg).await
+}
+
+async fn run(cfg: Config) -> anyhow::Result<()> {
+    let state_path = cfg.state_dir.join("state.json");
+    let persisted = load_state(&state_path)?;
+    tracing::info!("pk-pmus paper: Polymarket US decisions and fills are simulated, nothing is sent");
+    let http = reqwest::Client::builder()
+        .user_agent(pk_feeds::discovery::USER_AGENT)
+        .timeout(Duration::from_secs(5))
+        .pool_max_idle_per_host(8)
+        .tcp_nodelay(true)
+        .build()?;
+    let app = Arc::new(App {
+        engine: Mutex::new(Engine::new(cfg.clone(), persisted)),
+        journal: Mutex::new(JsonlDaily::new(cfg.state_dir.join("journal"))),
+        http,
+        gateway: cfg.gateway_url.trim_end_matches('/').to_owned(),
+        discovery: Discovery::new("https://gamma-api.polymarket.com", &cfg.kalshi_rest_url),
+        summary: Mutex::new(Summary::load(&cfg.state_dir.join("journal"), &cfg.epoch)),
+        started_ns: now_ns(),
+        state_path,
+        kalshi: Mutex::new(None),
+        poll_errors: Default::default(),
+    });
+    if let Some(addr) = cfg.ui_addr {
+        let a = app.clone();
+        let token = cfg.ui_token.clone();
+        tokio::spawn(async move {
+            if let Err(e) = web::serve(addr, token, Arc::new(move || a.snapshot())).await {
+                tracing::error!(error = %e, "pu_ui_failed");
+            }
+        });
+    }
+
+    // Kalshi order books (read-only).
+    let (id, path) = (
+        cfg.kalshi_key_id.clone().ok_or_else(|| anyhow::anyhow!("KALSHI_API_KEY_ID is required"))?,
+        cfg.kalshi_key_path.clone().ok_or_else(|| anyhow::anyhow!("KALSHI_PRIVATE_KEY_PATH is required"))?,
+    );
+    let pem =
+        std::fs::read_to_string(&path).map_err(|e| anyhow::anyhow!("KALSHI_PRIVATE_KEY_PATH {}: {e}", path.display()))?;
+    let signer = Arc::new(KalshiSigner::from_pem(&id, &pem)?);
+    let a = app.clone();
+    let feed = spawn_feed(
+        cfg.kalshi_ws_url.clone(),
+        FeedKind::Kalshi { signer },
+        Arc::new(move |venue, text| {
+            let t = now_ns();
+            let mut e = a.engine.lock();
+            match venue {
+                'k' => e.on_kalshi(&text, t),
+                'c' if text.contains("\"venue\":\"k\"") => e.invalidate_kalshi(),
+                _ => {}
+            }
+        }),
+    );
+    *app.kalshi.lock() = Some(feed);
+
+    // Discovery, every 15 s.
+    let a = app.clone();
+    let assets = cfg.assets.clone();
+    tokio::spawn(async move {
+        loop {
+            a.discover(&assets).await;
+            let wanted = a.engine.lock().wanted_kalshi(now_ns() / NS);
+            if let Some(k) = a.kalshi.lock().as_ref() {
+                k.set_wanted(wanted);
+            }
+            a.flush();
+            tokio::time::sleep(Duration::from_secs(15)).await;
+        }
+    });
+    // Polymarket US quotes.
+    let a = app.clone();
+    let poll = Duration::from_millis(cfg.poll_ms);
+    tokio::spawn(async move {
+        let mut iv = tokio::time::interval(poll);
+        iv.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            iv.tick().await;
+            a.poll_quotes().await;
+        }
+    });
+    // Settlements, every 15 s.
+    let a = app.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(15)).await;
+            a.resolve().await;
+        }
+    });
+
+    // The clock: entries, kill and ack files, status.
+    let kill = cfg.kill_file.clone();
+    let ack = cfg.state_dir.join("ACK");
+    let mut step = tokio::time::interval(Duration::from_millis(100));
+    step.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut last_status = 0i64;
+    let shutdown = tokio::signal::ctrl_c();
+    tokio::pin!(shutdown);
+    let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    loop {
+        tokio::select! {
+            _ = &mut shutdown => break,
+            _ = term.recv() => break,
+            _ = step.tick() => {}
+        }
+        let t = now_ns();
+        let fetches = {
+            let mut e = app.engine.lock();
+            e.set_kill(kill.exists(), t);
+            if ack.exists() {
+                e.ack(t);
+                let _ = std::fs::remove_file(&ack);
+            }
+            e.tick(t)
+        };
+        for f in fetches {
+            app.paper_fill(f);
+        }
+        if t - last_status >= 60 * NS {
+            last_status = t;
+            let mut e = app.engine.lock();
+            e.prune(t / NS);
+            e.status(t);
+            let s = e.status_value(t);
+            drop(e);
+            tracing::info!(status = %s, "pu_alive");
+        }
+        app.flush();
+    }
+    tracing::info!("stopping");
+    let p = serde_json::to_value(&app.engine.lock().p)?;
+    save_state(&app.state_path, &serde_json::from_value(p)?);
+    app.flush();
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slugs_and_levels() {
+        // 2026-11-25 14:15 UTC
+        let open = 1_764_080_100 + 365 * 86_400;
+        let s = pm_slug("BTC", open).unwrap();
+        assert!(s.starts_with("cpc-btc-updown-15m-") && s.ends_with('z'), "{s}");
+        assert_eq!(pm_slug("ETH", 0).unwrap(), "cpceth-eth-updown-15m-1970-01-01-0000z");
+        let v: Value = serde_json::from_str(r#"[{"px":{"value":"0.36"},"qty":"72"},{"px":{"value":"0.35"},"qty":"5"}]"#).unwrap();
+        assert_eq!(levels(&v), vec![(0.36, 72.0), (0.35, 5.0)]);
+    }
+}

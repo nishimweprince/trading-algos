@@ -1,0 +1,24 @@
+[Unit]
+Description=pk-pmus dry run (paper only): Kalshi-priced entries on Polymarket US 15-minute markets, page on 127.0.0.1:8095
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=pkpu
+Group=pkpu
+WorkingDirectory=/opt/pk-pmus
+EnvironmentFile=/etc/pk-pmus.env
+ExecStart=/opt/pk-pmus/bin/pk-pmus --env /etc/pk-pmus.env
+Restart=always
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=20
+MemoryMax=512M
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/opt/pk-pmus/data
+
+[Install]
+WantedBy=multi-user.target

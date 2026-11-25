@@ -3743,6 +3743,8 @@ name = "pk-endgame"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "axum 0.8.9",
+ "base64 0.22.1",
  "chrono",
  "clap",
  "dotenvy",
@@ -3752,6 +3754,7 @@ dependencies = [
  "pk-engine",
  "pk-exec",
  "pk-feeds",
+ "reqwest 0.13.5",
  "rust_decimal",
  "rustls",
  "serde",
@@ -3904,6 +3907,30 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "pk-pmus"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum 0.8.9",
+ "base64 0.22.1",
+ "chrono",
+ "clap",
+ "dotenvy",
+ "futures-util",
+ "parking_lot",
+ "pk-core",
+ "pk-engine",
+ "pk-feeds",
+ "reqwest 0.13.5",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
