@@ -70,3 +70,38 @@ Approved signals: market order, stop = max(2 ATR, broker minimum + spread + 20%)
 stop at best - 1.5R after +1R, time exit after 481 minutes, size = `JEV_RISK_PCT` (5%) of equity.
 Magic 708001-708005. `JEV_MT5_MODE=shadow|live` in `.env.mt5`; Jev key from `.env` (`JEV_API_KEY`).
 Kill switch `data/KILL_JEV`; data in `data/jev_mt5.db`; log `logs/jev_mt5.log`; unit `deploy/mt5-jev.service`.
+
+## Live MT5 dashboard
+
+`mt5_live_ui.py` serves broker positions, seven days of attributed deals, and WR70/Jev
+runner status at `http://127.0.0.1:8092/`. It reads the existing MT5 bridge through
+the same virtual environment as the runners. Install `deploy/mt5-live-ui.service`
+on the trading host and enable it with `systemctl enable --now mt5-live-ui`.
+For a tunnel on the same host, use `http://127.0.0.1:8092` as the origin and protect
+the hostname with Cloudflare Access because the dashboard exposes trading activity.
+
+## IC Markets synthetic history
+
+`icmarkets_history.py` runs inside a dedicated MT5 research terminal on
+`ICMarketsSC-MT5-3`. It exports only the 12 verified Stochastic, Boom, Crash,
+and Jump instruments. Use an investor login where available. The exporter
+checks the terminal path and server before requesting history.
+
+After signing into the research terminal, run on the VPS:
+
+```bash
+env WINEPREFIX=/opt/icmarkets-research/wine DISPLAY=:98 WINEDEBUG=-all \
+  flock -n /opt/icmarkets-research/export.lock \
+  wine 'C:\Program Files\Python311\python.exe' \
+  'Z:\opt\icmarkets-research\icmarkets_history.py' \
+  --terminal 'C:\IC Markets Research\terminal64.exe' \
+  --output 'Z:\opt\icmarkets-research\history' \
+  --start 2026-09-24 --end 2026-11-24
+```
+
+The end date is exclusive. Each successful UTC day is written atomically to a
+NumPy archive with a structured `rows` array. Re-running skips existing files
+and retries missing days. Use `--kind m1` for a faster candle-only pass or
+`--symbols Stochastic_Core` for a single-symbol probe. The per-symbol JSON
+contains current contract settings. Check gaps and coverage before using the
+exports for a walk-forward replay.

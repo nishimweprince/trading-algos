@@ -1,0 +1,14 @@
+[Unit]
+Description=Isolated IC Markets MT5 research terminal
+
+[Service]
+Environment=WINEPREFIX=/opt/icmarkets-research/wine
+Environment=WINEDEBUG=-all
+Environment=DISPLAY=:98
+ExecStartPre=/usr/bin/test -f "/opt/icmarkets-research/wine/drive_c/IC Markets Research/terminal64.exe"
+ExecStart=/usr/bin/xvfb-run --server-num=98 "--server-args=-screen 0 1280x800x24 -nolisten tcp -ac" /usr/bin/wine "C:\\IC Markets Research\\terminal64.exe" /portable
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

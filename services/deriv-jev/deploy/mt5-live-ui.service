@@ -1,0 +1,13 @@
+[Unit]
+Description=Read-only Deriv MT5 live trading dashboard
+After=mt5.service
+
+[Service]
+WorkingDirectory=/opt/trading-algos/services/deriv-jev
+ExecStart=/opt/trading-algos/services/deriv-jev/.venv/bin/python -u mt5_live_ui.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
