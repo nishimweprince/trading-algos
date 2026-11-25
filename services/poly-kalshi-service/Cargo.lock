@@ -3739,6 +3739,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "pk-endgame"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "dotenvy",
+ "futures-util",
+ "parking_lot",
+ "pk-core",
+ "pk-engine",
+ "pk-exec",
+ "pk-feeds",
+ "rust_decimal",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "pk-engine"
 version = "0.1.0"
 dependencies = [

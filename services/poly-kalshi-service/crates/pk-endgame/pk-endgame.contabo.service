@@ -1,0 +1,27 @@
+[Unit]
+Description=pk-endgame dry run (paper only): Chainlink-TWAP endgame on Polymarket 15-minute markets, page on 127.0.0.1:8095
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=pkeg
+Group=pkeg
+WorkingDirectory=/opt/pk-endgame
+ExecStart=/opt/pk-endgame/bin/pk-endgame --env /etc/pk-endgame.env run
+Restart=always
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=20
+# A guest on a busy box: below the MT5 runners, capped at one core.
+Nice=10
+CPUQuota=100%
+MemoryMax=512M
+# Locked down: it writes only its own state.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/opt/pk-endgame/data
+
+[Install]
+WantedBy=multi-user.target

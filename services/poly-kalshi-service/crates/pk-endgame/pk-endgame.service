@@ -1,0 +1,21 @@
+[Unit]
+Description=pk-endgame: Chainlink-TWAP endgame entries on Polymarket 15-minute markets (paper unless PK_EG_MODE=live)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# The Dublin host runs units as `poly` from /home/poly/trading-algos (RUNBOOK.md).
+User=poly
+Group=poly
+WorkingDirectory=/home/poly/trading-algos/services/poly-kalshi-service
+ExecStart=/home/poly/trading-algos/services/poly-kalshi-service/target/release/pk-endgame --env /etc/pk-endgame.env run
+Restart=always
+RestartSec=5
+# Off pkm's hot cores (2 and 3), below its priority.
+CPUAffinity=0-1
+Nice=5
+KillSignal=SIGINT
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,9 @@
+[Unit]
+Description=pk-endgame weekly re-fit of the model's sd multiplier (reports only)
+
+[Service]
+Type=oneshot
+User=pkeg
+Group=pkeg
+Nice=15
+ExecStart=/usr/bin/python3 /opt/pk-endgame/bin/eg_refit.py /opt/pk-endgame/data/state/endgame/journal --days 7 --out /opt/pk-endgame/data/state/endgame/refit.json
