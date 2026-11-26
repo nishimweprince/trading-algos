@@ -44,6 +44,38 @@ pub struct Summary {
     probe_settles: Vec<Value>,
     windows: u64,
     first_ns: Option<i64>,
+    /// Gap calibration: settled shadows of `cal_epochs`, with their entry's
+    /// seconds left and near-side gap.
+    cal_epochs: Vec<String>,
+    cal_meta: HashMap<(String, i64), (f64, f64)>,
+    cal: Vec<CalRow>,
+}
+
+/// One settled shadow: predicted gap to Kalshi's mid (x), to its near side
+/// (x_cons), seconds left at entry, realized gap (won − cost).
+#[derive(Clone)]
+struct CalRow {
+    open: i64,
+    x: f64,
+    x_cons: f64,
+    left: f64,
+    r: f64,
+}
+
+/// β of r on x through the origin, its window-clustered s.e., and n.
+fn fit(rows: &[&CalRow], x_of: impl Fn(&CalRow) -> f64) -> (f64, f64, usize) {
+    let rows: Vec<(&CalRow, f64)> = rows.iter().map(|c| (*c, x_of(c))).filter(|(_, x)| x.is_finite()).collect();
+    let sxx: f64 = rows.iter().map(|(_, x)| x * x).sum();
+    if sxx <= 0.0 {
+        return (f64::NAN, f64::NAN, 0);
+    }
+    let b = rows.iter().map(|(c, x)| x * c.r).sum::<f64>() / sxx;
+    let mut by: HashMap<i64, f64> = HashMap::new();
+    for (c, x) in &rows {
+        *by.entry(c.open).or_default() += x * (c.r - b * x);
+    }
+    let se = if by.len() >= 20 { by.values().map(|v| v * v).sum::<f64>().sqrt() / sxx } else { f64::NAN };
+    (b, se, rows.len())
 }
 
 fn f(v: &Value, k: &str) -> f64 {
@@ -98,8 +130,9 @@ fn us_hours(t_s: i64) -> bool {
 
 impl Summary {
     /// Every record already in the journal (oldest file first).
-    pub fn load(dir: &Path, epoch: &str) -> Self {
-        let mut s = Summary { epoch: epoch.to_owned(), ..Summary::default() };
+    pub fn load(dir: &Path, epoch: &str, cal_epochs: &[String]) -> Self {
+        let mut s =
+            Summary { epoch: epoch.to_owned(), cal_epochs: cal_epochs.to_vec(), ..Summary::default() };
         let Ok(rd) = std::fs::read_dir(dir) else { return s };
         let mut files: Vec<_> = rd
             .filter_map(Result::ok)
@@ -125,7 +158,32 @@ impl Summary {
         let kind = r.get("type").and_then(Value::as_str).unwrap_or_default();
         let id = r.get("id").and_then(Value::as_u64).unwrap_or(0);
         // Records from before epochs were written are epoch "1".
-        let mine = r.get("epoch").and_then(Value::as_str).unwrap_or("1") == self.epoch;
+        let ep = r.get("epoch").and_then(Value::as_str).unwrap_or("1");
+        let mine = ep == self.epoch;
+        if self.cal_epochs.iter().any(|e| e == ep) {
+            let key = (r["asset"].as_str().unwrap_or_default().to_owned(), i(r, "open"));
+            match kind {
+                "pu_shadow" => {
+                    // Epoch 4 shadows have no x_cons: the near side is half Kalshi's spread under the mid.
+                    let xc = r
+                        .get("x_cons")
+                        .and_then(Value::as_f64)
+                        .unwrap_or_else(|| f(r, "edge") - f(r, "kalshi_spread") / 2.0);
+                    self.cal_meta.insert(key, (f(r, "left"), xc));
+                }
+                "pu_shadow_settle" => {
+                    let (left, xc) = self.cal_meta.remove(&key).unwrap_or((f64::NAN, f64::NAN));
+                    self.cal.push(CalRow {
+                        open: key.1,
+                        x: f(r, "edge"),
+                        x_cons: r.get("x_cons").and_then(Value::as_f64).unwrap_or(xc),
+                        left,
+                        r: f(r, "per_share"),
+                    });
+                }
+                _ => {}
+            }
+        }
         match kind {
             "pu_window" => {
                 self.windows += 1;
@@ -326,6 +384,7 @@ impl Summary {
 
         let sizing = self.sizing();
         let delays = self.delays();
+        let gap_cal = self.gap_cal();
         let min_edge = self.min_edge_compare();
         let mut base_epochs: Vec<&str> =
             self.baseline.iter().map(|s| s["epoch"].as_str().unwrap_or("1")).collect();
@@ -370,7 +429,52 @@ impl Summary {
             "sizing": sizing,
             "min_edge": min_edge,
             "delays": delays,
+            "gap_cal": gap_cal,
         })
+    }
+
+    /// The settled shadows that fit calibrated Kelly's β, as (x, r), oldest first.
+    pub fn cal_seed(&self) -> Vec<(f64, f64)> {
+        self.cal.iter().map(|c| (c.x, c.r)).collect()
+    }
+
+    /// Does a gap to Kalshi pay? Settled shadows of `cal_epochs` by predicted
+    /// gap and by seconds left: mean predicted gap to the mid and to the near
+    /// side, mean realized gap (won − cost) with a window-clustered s.e., and
+    /// β (realized ÷ predicted, fitted through the origin) for both.
+    fn gap_cal(&self) -> Value {
+        let row = |label: String, rs: Vec<&CalRow>| {
+            let k = rs.len() as f64;
+            let mean = |g: &dyn Fn(&CalRow) -> f64| {
+                let v: Vec<f64> = rs.iter().map(|c| g(c)).filter(|x| x.is_finite()).collect();
+                if v.is_empty() { f64::NAN } else { v.iter().sum::<f64>() / v.len() as f64 }
+            };
+            let rows: Vec<Row> =
+                rs.iter().map(|c| Row { key: (String::new(), c.open), shares: 1.0, pnl: c.r }).collect();
+            let cl = clustered(&rows);
+            let (b, b_se, _) = fit(&rs, |c| c.x);
+            let (bc, _, _) = fit(&rs, |c| c.x_cons);
+            json!({"label": label, "n": k as u64, "windows": cl["windows"], "pred_c": round(100.0 * mean(&|c| c.x), 2),
+                   "cons_c": round(100.0 * mean(&|c| c.x_cons), 2), "real_c": cl["net_c"], "se_c": cl["se_c"],
+                   "t": cl["t"], "beta": round(b, 2), "beta_se": round(b_se, 2), "beta_cons": round(bc, 2)})
+        };
+        let all: Vec<&CalRow> = self.cal.iter().collect();
+        let mut by_gap = Vec::new();
+        for (lo, hi) in [(0.03, 0.05), (0.05, 0.07), (0.07, 0.09), (0.09, 0.11), (0.11, 0.151)] {
+            let rs: Vec<&CalRow> = all.iter().copied().filter(|c| (lo..hi).contains(&c.x)).collect();
+            if !rs.is_empty() {
+                by_gap.push(row(format!("{:.0}–{:.0}¢", 100.0 * lo, (100.0 * hi).floor()), rs));
+            }
+        }
+        let mut by_left = Vec::new();
+        for (lo, hi) in [(0.0, 300.0), (300.0, 600.0), (600.0, 901.0)] {
+            let rs: Vec<&CalRow> = all.iter().copied().filter(|c| (lo..hi).contains(&c.left)).collect();
+            if !rs.is_empty() {
+                by_left.push(row(format!("{lo:.0}–{:.0} s left", hi.min(900.0)), rs));
+            }
+        }
+        json!({"epochs": self.cal_epochs, "all": if all.is_empty() { Value::Null } else { row("All".into(), all) },
+               "by_gap": by_gap, "by_left": by_left})
     }
 
     /// Each counterfactual sizing rule over the settled positions (settle order):
@@ -541,6 +645,33 @@ mod tests {
         assert_eq!(tiers["max_dd"], 5.0);
         assert_eq!(v["min_edge"][1]["n"], 1);
         assert_eq!(v["min_edge"][0]["pnl"], 0.1);
+    }
+
+    #[test]
+    fn gap_calibration_pools_cal_epochs() {
+        let mut s = Summary::load(Path::new("/nonexistent"), "5", &["4".into(), "5".into()]);
+        // Epoch 4 shadow: no x_cons, so the near side is half Kalshi's spread under the mid.
+        s.ingest(&json!({"type": "pu_shadow", "epoch": "4", "asset": "BTC", "open": 0, "left": 700.0,
+                         "edge": 0.06, "kalshi_spread": 0.02}));
+        s.ingest(&json!({"type": "pu_shadow_settle", "epoch": "4", "asset": "BTC", "open": 0, "edge": 0.06,
+                         "per_share": 0.5}));
+        s.ingest(&json!({"type": "pu_shadow", "epoch": "5", "asset": "ETH", "open": 900, "left": 200.0,
+                         "edge": 0.04, "x_cons": 0.02}));
+        s.ingest(&json!({"type": "pu_shadow_settle", "epoch": "5", "asset": "ETH", "open": 900, "edge": 0.04,
+                         "x_cons": 0.02, "per_share": -0.5}));
+        // Epoch 3 is not a calibration epoch.
+        s.ingest(&json!({"type": "pu_shadow_settle", "epoch": "3", "asset": "SOL", "open": 0, "edge": 0.1,
+                         "per_share": 0.9}));
+        assert_eq!(s.cal_seed(), vec![(0.06, 0.5), (0.04, -0.5)]);
+        let v = s.snapshot(json!({}), NS);
+        let g = &v["gap_cal"];
+        assert_eq!(g["all"]["n"], 2);
+        assert_eq!(g["all"]["cons_c"], 3.5); // (5 + 2) / 2 ¢
+        assert_eq!(g["by_gap"][0]["label"], "3–5¢");
+        assert_eq!(g["by_gap"][1]["label"], "5–7¢");
+        assert_eq!(g["by_left"][0]["label"], "0–300 s left");
+        // β = Σxr / Σx² = (0.03 − 0.02) / (0.0036 + 0.0016)
+        assert!((g["all"]["beta"].as_f64().unwrap() - 1.92).abs() < 0.01);
     }
 
     #[test]

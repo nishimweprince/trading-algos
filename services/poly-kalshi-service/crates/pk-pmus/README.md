@@ -63,6 +63,31 @@ report one. `pu_window.fee_coef` and `pu_decision.fee_theta` record the rate use
 0.11 the fee is about 2.7¢ at p = 0.5, against 1.7¢ before, so fewer gaps clear 5¢.
 Epoch 3 (about 1.5 h at Θ = 0.0695) is superseded.
 
+## Epoch 5: does the gap pay? (2026-11-26)
+
+Every Kelly rule trusted Kalshi's mid as the win probability, the same number that fires
+the trade. Epoch 5 adds two measured rules (both quarter Kelly) and a page table:
+
+- **Calibrated Kelly (`kelly_cal`).** q_cal = c + β·(q − c), with β fitted through the origin
+  on settled shadows: x = the gap to Kalshi's mid after fee, r = won − cost. β ≈ 1 means
+  Kalshi is right; β ≈ 0 means the gap is noise. Shadows (one per coin-window, from 3¢) are
+  used rather than fills because they are several times as many and never double-count a
+  window. β is shrunk toward `PK_PU_KELLY_SHRINK` (0.5) by `PK_PU_CAL_PRIOR_N` (20)
+  pseudo-shadows at a 6¢ gap and clamped to [0, 1]. Only shadows settled before a fill count
+  (no look-ahead). At start β is seeded from the journal's shadows of `PK_PU_CAL_EPOCHS`
+  (4,5: the first epochs on uncached books at the 0.11 fee); each `pu_fill.cal` records the
+  β, n and q used.
+- **Near-side Kelly (`kelly_c`).** q is Kalshi's near side, the Yes bid for Up and 1 − the
+  Yes ask for Down, and the gap to it halves every `PK_PU_CONS_AGE_HALF_MS` (10 s) of
+  Kalshi book age (`pu_decision.q_cons`, `kalshi_book_age_ms`). A wide or stale Kalshi book
+  now counts for less.
+- **"Does the gap pay?"** Settled shadows by predicted gap and by seconds left: predicted
+  gap to the mid and to the near side, realized gap with a window-clustered s.e., and β for
+  both. `pu_shadow` and `pu_shadow_settle` carry `x_cons`; for epoch 4 shadows it is
+  approximated as the gap minus half Kalshi's spread.
+
+Paper still trades a flat 10; nothing here changes the decision or the fill.
+
 ## Measured, never traded (epoch 2)
 
 - **Minimum edge.** Epoch 1 (3¢) lost on 3–4¢ gaps, so the rule is 5¢. The first gap of
