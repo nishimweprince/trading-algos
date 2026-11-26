@@ -87,7 +87,7 @@ serves it at `http://127.0.0.1:8092/`, with a second tab at `/trek`.
 
 `trek_paper.py` (unit `deploy/deriv-trek-paper.service`) is a prospective paper test of the one lead from
 `research/dsi_analogs`: on Trek Up and Trek Down, fade an apparent drift flip 120 s after a spike, and hold for 30 s.
-The rule and the pass criteria were fixed before the test: from 2026-11-27 to 2026-12-25 UTC, the pooled mean net
+The rule and the pass criteria were fixed before the test: from 2026-11-27 to 2027-02-19 UTC (12 weeks, because the rule fires less than once a day per symbol), the pooled mean net
 must be above 0 bp with daily t ≥ 2, and both symbols must be positive. Fills are simulated on recorded ticks in
 batches of about 20 s. Data in `data/trek.db`, log in `logs/trek_paper.log`, kill switch `data/KILL_TREK`.
 

@@ -10,7 +10,7 @@ Rule, fixed before the test (identical to research/dsi_analogs/wf.py, family pos
 Fills are simulated on recorded Deriv ticks in batches every ~20 s (the trade is complete before it is written).
 No orders are sent. Events before START are marked warm-up and excluded from the verdict.
 
-Verdict (pre-registered): run 2026-11-27 to 2026-12-25 UTC. PASS if the pooled mean net bp > 0 with daily t >= 2
+Verdict (pre-registered): run 2026-11-27 to 2027-02-19 UTC (12 weeks; the rule fires < 1 time per day per symbol). PASS if the pooled mean net bp > 0 with daily t >= 2
 and both Trek Up and Trek Down have a positive mean. Otherwise the lead is dropped.
 Data: data/trek.db. Log: logs/trek_paper.log. Kill switch: data/KILL_TREK (stops processing).
 """
@@ -25,7 +25,7 @@ os.makedirs(DATA, exist_ok=True); os.makedirs(LOGS, exist_ok=True)
 SYMBOLS = {'TREK_U': 'Trek Up Index', 'TREK_D': 'Trek Down Index'}
 K, T, PRE, HOLD, LAT, STALE_MS = 8.0, 120, 300, 30, 1, 5000
 START = int(dt.datetime(2026, 11, 27, tzinfo=dt.timezone.utc).timestamp())
-END = int(dt.datetime(2026, 12, 25, tzinfo=dt.timezone.utc).timestamp())
+END = int(dt.datetime(2027, 2, 19, tzinfo=dt.timezone.utc).timestamp())
 CHUNK = 7200            # max seconds of events processed per symbol per cycle (catch-up after downtime)
 SIGMA_EVERY = 3600
 BRIDGE = ('127.0.0.1', 18812)

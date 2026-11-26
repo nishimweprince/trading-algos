@@ -19,8 +19,9 @@ Nothing tradable was found.
   chance produces at this many tests. The V75 control and 528 hour-of-day rules produced 0 passes.
 - **IC Markets synthetics** (`icp.py`, 12 symbols): variance ratios are about 1, so they behave like
   memoryless random walks.
-- **One lead:** the Trek Up/Down spike-flip fade (`post120_flip|fade|30`, +0.4 to +0.6 bp, positive in every
-  week, t 3.4 and 2.0). It is being tested on new data by `../../trek_paper.py`; see the "Trek spike-flip
+- **One lead:** the Trek Up/Down spike-flip fade (`post120_flip|fade|30`, +0.4 to +0.6 bp, t 3.4 and 2.0). It is
+  thin: 105 and 82 trades in 119 days, and only 2 and 1 weeks had the 10 trades needed to count toward weekly
+  consistency. It is being tested on new data by `../../trek_paper.py`; see the "Trek spike-flip
   test" tab of the paper dashboard.
 
 ## Lesson: run a martingale control through every event pipeline

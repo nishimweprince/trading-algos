@@ -141,7 +141,7 @@ nav a[aria-current="page"] {{ color:var(--text); background:var(--surface); }}
 TREK_DB = os.path.join(BASE, 'data', 'trek.db')
 TREK_NAMES = {'TREK_U': 'Trek Up', 'TREK_D': 'Trek Down'}
 TREK_START = dt.datetime(2026, 11, 27, tzinfo=dt.timezone.utc)
-TREK_END = dt.datetime(2026, 12, 25, tzinfo=dt.timezone.utc)
+TREK_END = dt.datetime(2027, 2, 19, tzinfo=dt.timezone.utc)
 TREK_LEAD = ('On both Trek Up and Trek Down, a spike sometimes appears to flip the drift. Fading that apparent flip for 30 seconds '
              'made +0.4 to +0.6 bp, and it was positive in every week (t 3.4 and 2.0). It\'s the only result that is consistent on both '
              'Trek mirrors, but it\'s still a chance-level t. It needs a test on data after today, not more mining of this sample.')
@@ -204,6 +204,9 @@ def trek_page():
            for t in reversed(tr[-60:])]
     dly = [(d[0], TREK_NAMES.get(d[1], d[1]), d[2], d[3], d[4], d[5], d[6]) for d in daily[:28]]
     body = (f'<section class="lead"><h2>The one lead worth a follow-up</h2><p>{html.escape(TREK_LEAD)}</p>'
+            f'<p class="muted">Correction to the numbers above: the rule fired only 105 times on Trek Up and 82 on Trek Down in 119 days '
+            f'(under one trade per day per symbol). "Positive in every week" counted only weeks with at least 10 trades, which was 2 weeks '
+            f'(Trek Up) and 1 week (Trek Down). The test therefore runs 12 weeks, enough for about 130 trades.</p>'
             f'<p class="muted">Rule, fixed before the test: a spike is a 1-second move larger than 8 robust sigma. 120 s after a spike, '
             f'if the jump-free drift since the spike has the opposite sign to the 300 s before it, trade against the new drift. '
             f'Entry 1 s later at the ask or bid, exit 30 s after entry at the bid or ask, one position per symbol. Fills are simulated on '
