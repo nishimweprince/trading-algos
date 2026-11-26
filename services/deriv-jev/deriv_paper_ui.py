@@ -109,7 +109,8 @@ def page():
 
 def shell(active, sub, body):
     tabs = ''.join(f'<a href="{href}"' + (' aria-current="page"' if key == active else '') + f'>{label}</a>'
-                   for key, href, label in (('dsi', '/', 'DSI strategies'), ('trek', '/trek', 'Trek spike-flip test')))
+                   for key, href, label in (('dsi', '/', 'DSI strategies'), ('trek', '/trek', 'Trek spike-flip test'),
+                                             ('flip1000', '/flip1000', 'Flip 1000 run-follow'), ('trekvs', '/trek-vshock', 'Trek Up vol shock')))
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark"><meta http-equiv="refresh" content="{POLL}"><title>Deriv Paper Trading</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&amp;display=swap">
@@ -221,11 +222,84 @@ def trek_page():
     return shell('trek', health + ' · no orders are sent to Deriv', body)
 
 
+LEADS_DB = os.path.join(BASE, 'data', 'leads.db')
+LEAD_TABS = {
+    'flip1000': dict(
+        title='Flip 1000 run-follow',
+        rules=[('flip1000_run', 'Primary: hold 30 min')],
+        lead=('Crash Boom Flip 1000: after four consecutive same-direction one-second moves, trade in that direction and hold '
+              '30 minutes. In the t \u2265 2 walk-forward it was picked in 5 of 13 test weeks and made +0.65 bp per trade out of '
+              'sample over 1,479 trades, positive in 4 of 5 weeks. It fits the strong drift persistence measured on this index '
+              '(variance ratio 4.6 at 60 minutes with spikes removed). But the per-symbol out-of-sample t was only 0.99, and the '
+              'pooled walk-forward across all symbols lost money, so this is consistent with chance.'),
+        rule=('Event: the 4th consecutive 1-second mid move in the same direction (Deriv quotes on a 1-second grid). Trade in that '
+              'direction 1 s later at the ask or bid, exit 1,800 s later at the bid or ask, one position at a time, swap charged.')),
+    'trekvs': dict(
+        title='Trek Up volatility shock',
+        rules=[('trekup_vs600', 'Primary: hold 10 min'), ('trekup_vs1800', 'Secondary: hold 30 min (reported only)')],
+        lead=('Trek Up: when one-minute volatility jumps to more than three times its level over the previous 30 minutes, follow '
+              'the last minute\'s move. In the t \u2265 2 walk-forward it was picked in 4 of 13 test weeks: +0.86 bp per trade '
+              'over 506 trades with a 10-minute hold, and +2.4 bp over 428 trades with a 30-minute hold, positive in all 4 weeks. '
+              'Four positive weeks out of many symbols and rules is the kind of streak chance produces, so treat it as a lead only.'),
+        rule=('Event: 60-second realised variance of jump-free 1-second returns (moves above 8 robust sigma removed, sigma from the '
+              'last 24 h) first exceeds 3\u00d7 its level over the preceding 1,800 s. Trade in the direction of the last 60 s '
+              'jump-free move 1 s later at the ask or bid; exit after the hold at the bid or ask; one position per rule.')),
+}
+
+
+def lead_page(tab):
+    L = LEAD_TABS[tab]; keys = [k for k, _ in L['rules']]
+    try:
+        c = sqlite3.connect(f'file:{LEADS_DB}?mode=ro', uri=True, timeout=3)
+        st = dict(c.execute('select k, v from state').fetchall())
+        q = ','.join('?' * len(keys))
+        tr = c.execute(f'select lead, entry_s, exit_s, side, entry, exit, entry_spread, exit_spread, net_bps, pnl_minlot, warmup from trades where lead in ({q}) order by id', keys).fetchall()
+        daily = c.execute(f'select day, lead, events, taken, busy, invalid from daily where lead in ({q}) order by day desc, lead', keys).fetchall()
+        c.close()
+    except Exception:
+        return shell(tab, L['title'] + ' paper test', '<p class="muted">This paper test has not started yet.</p>')
+    now = time.time()
+    lag = [now - float(st[f'last_run:{k}']) for k in keys if f'last_run:{k}' in st]
+    health = (f'Processing ticks · last batch {max(lag):.0f} s ago' if lag and max(lag) < 120 else 'Not processing: check deriv-leads-paper')
+    sd, ed = TREK_START.date(), (TREK_END - dt.timedelta(days=1)).date()
+    label = dict(L['rules']); cards = ''; stats = {}
+    for k in keys:
+        rows = [(t[2], t[8], t[9]) for t in tr if t[0] == k and not t[10]]
+        s = stats[k] = trek_stats(rows, sd, ed)
+        items = ([('Trades', f"{s['n']}"), ('Mean net', f"{s['mean']:+.3f} bp"), ('Daily t', f"{s['t']:+.2f}"), ('Win rate', f"{100 * s['hit']:.0f}%"),
+                  ('Weeks positive', f"{s['wpos']}/{s['weeks']}"), ('P&L at min lot', f"${s['usd']:+,.2f}")] if s else [('Trades', '0')])
+        cards += (f'<section class="summary"><h2>{html.escape(label[k])}</h2><p class="muted">Counted from {TREK_START:%b %d}</p><dl>'
+                  + ''.join(f'<div><dt>{a}</dt><dd>{b}</dd></div>' for a, b in items) + '</dl></section>')
+    nowd = dt.datetime.now(dt.timezone.utc); P = stats[keys[0]]
+    if nowd < TREK_START:
+        verdict = f'Not started. Counting begins {TREK_START:%b %d %Y} 00:00 UTC; trades before then are warm-up.'
+    else:
+        ok = bool(P) and P['mean'] > 0 and P['t'] >= 2
+        verdict = f"{'Final' if nowd >= TREK_END else 'In progress, provisional'}: the primary rule {'meets' if ok else 'does not meet'} the pass rule so far."
+    warm = [t for t in tr if t[10]]
+    warm_line = (f'Warm-up before the start (not counted): {len(warm)} trades, mean net {sum(t[8] for t in warm) / len(warm):+.3f} bp.' if warm else 'No warm-up trades yet.')
+    rec = [(dt.datetime.fromtimestamp(t[1], dt.timezone.utc).strftime('%b %d %H:%M:%S'), label[t[0]].split(':')[0], 'Buy' if t[3] > 0 else 'Sell',
+            f'{t[4]:.2f}', f'{t[5]:.2f}', f'{t[6]:.2f} / {t[7]:.2f}', f'{t[8]:+.3f}', f'${t[9]:+.3f}', 'warm-up' if t[10] else '')
+           for t in reversed(tr[-60:])]
+    dly = [(d[0], label[d[1]].split(':')[0], d[2], d[3], d[4], d[5]) for d in daily[:28]]
+    body = (f'<section class="lead"><h2>{html.escape(L["title"])}</h2><p>{html.escape(L["lead"])}</p>'
+            f'<p class="muted">Rule, fixed before the test: {html.escape(L["rule"])} Fills are simulated on recorded Deriv ticks; '
+            f'no orders are sent.</p><p class="muted">Pass rule: from {TREK_START:%b %d} to {TREK_END:%b %d %Y} (UTC), the primary rule\'s '
+            f'mean net &gt; 0 with daily t &ge; 2. Otherwise the lead is dropped.</p>'
+            f'<p><strong>{html.escape(verdict)}</strong> <span class="muted">{html.escape(warm_line)}</span></p></section>'
+            f'<div class="summaries">{cards}</div>'
+            f'<section><h2>Daily activity</h2>' + table(['Day (UTC)', 'Rule', 'Events', 'Trades', 'Skipped: open trade', 'Skipped: stale quote'], dly, 'No activity yet.') + '</section>'
+            f'<section><h2>Paper trades</h2><p class="muted">Latest 60 of {len(tr)}. Net includes the quoted spread and swap; P&L is at the '
+            f'minimum lot.</p>' + table(['Entry (UTC)', 'Rule', 'Side', 'Entry', 'Exit', 'Spread', 'Net bp', 'P&L', ''], rec, 'No trades yet.') + '</section>')
+    return shell(tab, health + ' · no orders are sent to Deriv', body)
+
+
 class H(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path not in ('/', '/trek'):
+        routes = {'/': page, '/trek': trek_page, '/flip1000': lambda: lead_page('flip1000'), '/trek-vshock': lambda: lead_page('trekvs')}
+        if self.path not in routes:
             self.send_error(404); return
-        b = (trek_page() if self.path == '/trek' else page()).encode()
+        b = routes[self.path]().encode()
         self.send_response(200); self.send_header('Content-Type', 'text/html; charset=utf-8'); self.send_header('Cache-Control', 'no-store')
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.send_header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; frame-ancestors 'none'")

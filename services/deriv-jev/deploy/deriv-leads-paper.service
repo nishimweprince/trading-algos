@@ -1,0 +1,12 @@
+[Unit]
+Description=Deriv walk-forward leads (Flip 1000 run-follow, Trek Up vol shock): prospective paper tests on recorded Deriv MT5 ticks (no orders sent)
+After=mt5.service
+Wants=mt5.service
+[Service]
+WorkingDirectory=/opt/trading-algos/services/deriv-jev
+ExecStart=/opt/trading-algos/services/deriv-jev/.venv/bin/python -u leads_paper.py
+Restart=always
+RestartSec=15
+NoNewPrivileges=true
+[Install]
+WantedBy=multi-user.target

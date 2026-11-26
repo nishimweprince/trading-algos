@@ -18,7 +18,13 @@ Nothing tradable was found.
   and testing the next 7. No rule recurred, before or after costs. The best t was 3.4, which is about what
   chance produces at this many tests. The V75 control and 528 hour-of-day rules produced 0 passes.
 - **IC Markets synthetics** (`icp.py`, 12 symbols): variance ratios are about 1, so they behave like
-  memoryless random walks.
+  memoryless random walks. The tick walk-forward (`ic_prep.py` then `wf.py` with `WF_DIR=/opt/dsi-analogs/wf_ic`;
+  85 days, 2,246 rules, shuffled controls `CTRL_BOOM` and `CTRL_STOCH`) selected nothing in any test week. IC spreads
+  are 1.3–2.5 bp, against a best before-cost effect of about 1.5 bp.
+- **Lower bar, t ≥ 2** (`lowbar.py`; walk-forward with `WF_TMIN=2 WF_OUT=out_t2`): over the full sample, 0 IC rules
+  and 1 Deriv rule pass (Trek Down `run6|follow|30`, +0.011 bp). The t ≥ 2 walk-forward loses out of sample, pooled.
+  Its two most consistent picks are paper-tested by `../../leads_paper.py`: Flip 1000 `run4|follow|1800`
+  (+0.65 bp, 4/5 weeks) and Trek Up `vshock3|follow` (600 s: +0.86 bp; 1800 s: +2.4 bp; 4/4 weeks).
 - **One lead:** the Trek Up/Down spike-flip fade (`post120_flip|fade|30`, +0.4 to +0.6 bp, t 3.4 and 2.0). It is
   thin: 105 and 82 trades in 119 days, and only 2 and 1 weeks had the 10 trades needed to count toward weekly
   consistency. It is being tested on new data by `../../trek_paper.py`; see the "Trek spike-flip
@@ -44,6 +50,11 @@ pipeline and must show about 0 on the simulated ones.
 | 6 | `depth.py`, `pull.py` | Tick history depth per family; 120 d tick pull (`pull.py 120`) |
 | 7 | `wf.py`, `wfan.py`, `near.py` | Tick walk-forward per symbol (`wf.py CODE ...`), its summary, and the near-misses |
 | 8 | `diag.py` | Controls: real vs shuffled vs Gaussian, split by side, entry-delay sweep |
+| 9 | `ic_prep.py` | IC Markets daily tick exports into the `wf.py` format, plus shuffled controls |
+| 10 | `lowbar.py` | Full-sample rules at a lower bar (`WF_TMIN`, default 2), with the controls as the false-positive baseline |
+
+`wf.py`, `wfan.py`, `near.py` and `lowbar.py` read `WF_DIR` (data folder), `WF_OUT` (results subfolder, default
+`out`) and `WF_TMIN` (walk-forward selection threshold, default 3).
 
 `bt.py`, `tsim.py` and `persist.py` use the numba venv at `/opt/dsi-analogs/.venv`. `survey.py`, `ticks.py`,
 `depth.py` and `pull.py` need the bridge, so run them with `services/deriv-jev/.venv`.

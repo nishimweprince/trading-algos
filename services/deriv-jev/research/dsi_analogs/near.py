@@ -1,5 +1,5 @@
-import json, glob
-for f in sorted(glob.glob('/opt/dsi-analogs/wf/out/*.json')):
+import json, glob, os
+for f in sorted(glob.glob(os.environ.get('WF_DIR', '/opt/dsi-analogs/wf') + '/out/*.json')):
     x = json.load(open(f)); st = {k: v for k, v in x['stats'].items() if not k.startswith('hour')}
     top = sorted(st.items(), key=lambda kv: -abs(kv[1]['t_gross']))[:2]
     tn = max(st.items(), key=lambda kv: kv[1]['t_net'])

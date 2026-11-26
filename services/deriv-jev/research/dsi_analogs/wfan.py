@@ -1,8 +1,12 @@
 import json, glob, os, collections
 import numpy as np
-R = {os.path.basename(f)[:-5]: json.load(open(f)) for f in sorted(glob.glob('/opt/dsi-analogs/wf/out/*.json'))}
+D = os.environ.get('WF_DIR', '/opt/dsi-analogs/wf')
+R = {os.path.basename(f)[:-5]: json.load(open(f)) for f in sorted(glob.glob(f"{D}/{os.environ.get('WF_OUT', 'out')}/*.json"))}
 ORDER = ['CBF150', 'CBF300', 'CBF500', 'CBF1000', 'VSW_L', 'VSW_M', 'VSW_H', 'TREK_U', 'TREK_D', 'RB100', 'RB200',
          'VB750', 'VC750', 'DEX900U', 'DEX900D', 'SKEW5U', 'SKEW5D', 'EXP1', 'SNAP50', 'LADU', 'LADD', 'V75']
+if not set(ORDER) & set(R):
+    ORDER = sorted(R, key=lambda c: (c.startswith('CTRL'), c))
+CTRL = {c for c in R if c == 'V75' or c.startswith('CTRL')}
 fam = lambda k: ''.join(ch for ch in k.split('|')[0] if not ch.isdigit()).rstrip('_') if not k.startswith('carry') else k.split('|')[0]
 
 print('== Walk-forward (train 28 d -> test 7 d, tick fills, 1 s latency) ==')
@@ -17,7 +21,7 @@ def passes(st, t_key, cons_key, t_min, cons_min, sign=1):
     return st['weeks'] >= 10 and sign * st[t_key] >= t_min and st[cons_key] >= cons_min
 
 print('\n== False-positive calibration ==')
-for lab, sel in (('V75 control (all rules)', lambda c, k: c == 'V75'), ('hour-of-day rules, all symbols', lambda c, k: k.startswith('hour'))):
+for lab, sel in (('controls ' + ','.join(sorted(CTRL)) + ' (all rules)', lambda c, k: c in CTRL), ('hour-of-day rules, all symbols', lambda c, k: k.startswith('hour'))):
     tot = sum(1 for c in R for k in R[c]['stats'] if sel(c, k))
     for tm in (3, 4):
         npos = sum(1 for c in R for k, st in R[c]['stats'].items() if sel(c, k) and passes(st, 't_net', 'cons_net', tm, .75))
@@ -27,7 +31,7 @@ ntot = sum(len(R[c]['stats']) for c in R)
 print(f'  total rules tested: {ntot}')
 
 print('\n== TRADABLE recurring patterns: net t>=4, same sign in >=80% of weeks (full 17 weeks, not walk-forward) ==')
-T = [(c, k, st) for c in ORDER if c in R for k, st in R[c]['stats'].items()
+T = [(c, k, st) for c in ORDER if c in R and c not in CTRL for k, st in R[c]['stats'].items()
      if not k.startswith('hour') and passes(st, 't_net', 'cons_net', 4, .8)]
 for c, k, st in sorted(T, key=lambda z: -z[2]['t_net'])[:40]:
     print(f"  {c:8} {k:28} n{st['n']:7} net {st['net']:+8.3f}bp gross {st['gross']:+8.3f}bp t {st['t_net']:5.1f} weeks+ {st['cons_net']:.2f}")

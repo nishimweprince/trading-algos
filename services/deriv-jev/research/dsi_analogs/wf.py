@@ -24,7 +24,8 @@ import json, os, sys, time
 import numpy as np
 from numba import njit
 
-D = '/opt/dsi-analogs/wf'; os.makedirs(f'{D}/out', exist_ok=True)
+D = os.environ.get('WF_DIR', '/opt/dsi-analogs/wf'); OUT = os.environ.get('WF_OUT', 'out'); os.makedirs(f'{D}/{OUT}', exist_ok=True)
+TMIN = float(os.environ.get('WF_TMIN', '3'))     # walk-forward selection: train daily t >= TMIN
 H = (30, 120, 600, 1800); LAT = 1; TRAIN, TEST, START = 28, 7, 28
 
 
@@ -228,7 +229,7 @@ def run(code):
             if n < 40:
                 continue
             mt = NS[i, tr].sum() / n; tt = daily_t(NS[i, tr])
-            if mt > 0 and tt >= 3:
+            if mt > 0 and tt >= TMIN:
                 cand.append((tt, i))
         cand = sorted(cand, reverse=True)[:5]
         wk = dict(start_day=st, picks=[])
@@ -249,7 +250,7 @@ def run(code):
                                oos_total_bps=round(float(test_days.sum()), 1),
                                weeks_pos=sum(1 for k in range(len(wf)) if test_days[k * TEST:(k + 1) * TEST].sum() > 0)),
                secs=round(time.time() - t0, 1))
-    json.dump(res, open(f'{D}/out/{code}.json', 'w'))
+    json.dump(res, open(f'{D}/{OUT}/{code}.json', 'w'))
     s = res['wf_summary']
     print(f"{code:8} days {ndays} spread {res['spread_bps_mean']:.2f}bp spikes {res['n_spikes8']} rules {len(names)} | "
           f"WF weeks {s['weeks']} picked {s['weeks_with_picks']} oos n {oos_n} net/trade {s['oos_net_per_trade']} t {s['oos_daily_t']} "

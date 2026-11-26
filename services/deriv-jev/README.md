@@ -91,6 +91,12 @@ The rule and the pass criteria were fixed before the test: from 2026-11-27 to 20
 must be above 0 bp with daily t ≥ 2, and both symbols must be positive. Fills are simulated on recorded ticks in
 batches of about 20 s. Data in `data/trek.db`, log in `logs/trek_paper.log`, kill switch `data/KILL_TREK`.
 
+`leads_paper.py` (unit `deploy/deriv-leads-paper.service`) paper-tests the two t ≥ 2 walk-forward leads over the same
+window, with rules fixed in advance: Crash Boom Flip 1000 run-follow (`run4`, 30 min hold) and Trek Up volatility shock
+(`vshock3`, 10 min primary and 30 min secondary). A lead passes if its primary rule's mean net is above 0 bp with
+daily t ≥ 2. Tabs `/flip1000` and `/trek-vshock`; data in `data/leads.db`, log in `logs/leads_paper.log`, kill switch
+`data/KILL_LEADS`.
+
 ## IC Markets synthetic history
 
 `icmarkets_history.py` runs inside a dedicated MT5 research terminal on
