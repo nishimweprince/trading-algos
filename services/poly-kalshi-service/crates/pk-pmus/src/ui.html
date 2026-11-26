@@ -60,9 +60,10 @@ th { color:var(--muted); font-size:11px; font-weight:600; }
   </div>
   <section><h2>Cumulative P&amp;L</h2><p class="muted" id="chart-note"></p><div class="chart" id="chart"></div></section>
   <section><h2>Recent decisions</h2><p class="muted" id="recent-note"></p><div id="recent"></div></section>
-  <section><h2>Sizing rules (counterfactual)</h2><p class="muted">What each rule would have bought against the same book: depth at the limit, at most 2% of a $1,000 bankroll per trade and 5% per window across coins. Paper still buys a flat 10. Kelly uses Kalshi's mid; shrunk Kelly uses c + 0.5·(q − c). t is clustered by window.</p><div id="sizing"></div></section>
+  <section><h2>Sizing rules (counterfactual)</h2><p class="muted">What each rule would have bought against the same book: depth at the limit, at most 2% of a $1,000 bankroll per trade and 5% per window across coins. Paper still buys a flat 10. Kelly uses Kalshi's mid; shrunk Kelly uses c + 0.5·(q − c); calibrated Kelly uses c + β·(q − c) with β fitted on settled shadows (below); near-side Kelly uses Kalshi's bid for Up and 1 − its ask for Down, the gap halved every 10 s of book age. All Kelly rules are quarter Kelly except tenth. t is clustered by window.</p><div id="sizing"></div></section>
   <section><h2>Arrival delay</h2><p class="muted">For every decision the book is also fetched 25, 50, 100 and 150 ms later, the same order walked against it. Only the 150 ms fill is a paper position; the rest are counterfactual. Slippage is the average paid minus the ask at the decision. t is clustered by window.</p><div id="delays"></div></section>
   <section><h2>Minimum edge: 3¢ against 5¢</h2><p class="muted">The first gap of at least 3¢ in each coin-window, per share at the ask plus fee (no fill model). The 3–5¢ row is what raising the minimum to 5¢ dropped.</p><div id="min-edge"></div></section>
+  <section><h2>Does the gap pay?</h2><p class="muted" id="gap-cal-note">Settled shadows (the first gap of at least 3¢ per coin-window): the gap predicted to Kalshi's mid and to its near side, against the realized gap (won − cost). β is realized ÷ predicted: 1 means Kalshi is right, 0 means the gap is noise. Calibrated Kelly trades on β, shrunk toward 0.5.</p><div id="gap-cal"></div></section>
   <section><h2>By coin</h2><div id="by-asset"></div></section>
   <section><h2>By seconds before the close</h2><div id="by-left"></div></section>
   <section><h2>Calibration</h2><p class="muted">How often the side won against Kalshi's mid at the decision.</p><div id="calibration"></div></section>
@@ -244,7 +245,7 @@ function render(s) {
     { h: "Result", v: (r) => r.status === "settled" ? (r.won ? "Won" : "Lost") : r.status === "open" ? "Open" : r.status === "missed" ? "—" : "Waiting" },
     { h: "Net (USD)", v: (r) => r.pnl != null ? usd(r.pnl).replace(" USD", "") : "—" },
   ], recent, "No decisions yet. Entries fire from 60 s after the open to 60 s before the close when Polymarket US is 5–15¢ cheaper than Kalshi's mid after the fee."));
-  const RULE_NAMES = { flat: "Flat 10", tiers: "Tiers 10/20/30", kelly_q: "Quarter Kelly", kelly_t: "Tenth Kelly", kelly_s: "Shrunk quarter Kelly" };
+  const RULE_NAMES = { flat: "Flat 10", tiers: "Tiers 10/20/30", kelly_q: "Quarter Kelly", kelly_t: "Tenth Kelly", kelly_s: "Shrunk quarter Kelly", kelly_c: "Near-side Kelly", kelly_cal: "Calibrated Kelly" };
   $("sizing").replaceChildren(table([
     { h: "Rule", v: (r) => RULE_NAMES[r.label] || r.label }, { h: "Positions", v: (r) => String(r.n) },
     { h: "Shares", v: (r) => fx(r.shares, 0) }, { h: "Risked", v: (r) => `${fx(r.risked, 2)} USD` },
@@ -261,6 +262,16 @@ function render(s) {
     { h: "Gaps", v: (r) => r.label }, { h: "Entries", v: (r) => String(r.n) },
     { h: "Net per share", v: (r) => cents(r.net_c) }, { h: "t", v: (r) => fx(r.t, 2) },
   ], s.min_edge || [], "No shadow entries settled yet."));
+  const gc = s.gap_cal || {};
+  const cal = (s.live && s.live.cal) || {};
+  $("gap-cal-note").textContent = `Settled shadows of epochs ${(gc.epochs || []).join(", ")} (the first gap of at least 3¢ per coin-window): the gap predicted to Kalshi's mid and to its near side, against the realized gap (won − cost). β is realized ÷ predicted: 1 means Kalshi is right, 0 means the gap is noise. Calibrated Kelly now uses β = ${fx(cal.beta, 2)} from ${cal.n ?? 0} shadows, shrunk toward ${fx(cal.prior, 2)}.`;
+  $("gap-cal").replaceChildren(table([
+    { h: "Group", v: (r) => r.label }, { h: "Shadows", v: (r) => String(r.n) },
+    { h: "Predicted (mid)", v: (r) => cents(r.pred_c) }, { h: "Predicted (near side)", v: (r) => cents(r.cons_c) },
+    { h: "Realized", v: (r) => cents(r.real_c) }, { h: "s.e.", v: (r) => cents(r.se_c) },
+    { h: "β (mid)", v: (r) => r.beta_se != null ? `${fx(r.beta, 2)} ± ${fx(r.beta_se, 2)}` : fx(r.beta, 2) },
+    { h: "β (near side)", v: (r) => fx(r.beta_cons, 2) },
+  ], [gc.all, ...(gc.by_gap || []), ...(gc.by_left || [])].filter(Boolean), "No settled shadows yet."));
   $("by-asset").replaceChildren(table(ROWS("Coin"), s.by_asset || [], "No settled positions yet."));
   $("by-left").replaceChildren(table(ROWS("Seconds left"), s.by_left || [], "No settled positions yet."));
   $("calibration").replaceChildren(table([

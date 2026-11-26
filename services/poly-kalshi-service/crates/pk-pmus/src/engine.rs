@@ -92,7 +92,44 @@ pub struct Alt {
 }
 
 /// Counterfactual sizing rules, journaled beside the flat paper size.
-pub const RULES: [&str; 5] = ["flat", "tiers", "kelly_q", "kelly_t", "kelly_s"];
+pub const RULES: [&str; 7] = ["flat", "tiers", "kelly_q", "kelly_t", "kelly_s", "kelly_c", "kelly_cal"];
+
+/// A typical gap (6¢): the calibration prior's pseudo-shadows sit here.
+const CAL_PRIOR_X: f64 = 0.06;
+
+/// The fit of q_cal = c + β·(q − c) on settled shadows, through the origin:
+/// x = q − c (the gap to Kalshi's mid after fee), r = won − c (the realized gap).
+#[derive(Clone, Copy, Debug, Default, Serialize)]
+pub struct Cal {
+    pub n: u64,
+    pub sxx: f64,
+    pub sxr: f64,
+}
+
+impl Cal {
+    pub fn add(&mut self, x: f64, r: f64) {
+        if x.is_finite() && r.is_finite() {
+            self.n += 1;
+            self.sxx += x * x;
+            self.sxr += x * r;
+        }
+    }
+
+    /// β shrunk toward `prior` by `prior_n` pseudo-shadows at a 6¢ gap, in [0, 1].
+    pub fn beta(&self, prior: f64, prior_n: f64) -> f64 {
+        let lam = prior_n * CAL_PRIOR_X * CAL_PRIOR_X;
+        let d = self.sxx + lam;
+        if d <= 0.0 { prior } else { ((self.sxr + lam * prior) / d).clamp(0.0, 1.0) }
+    }
+}
+
+/// Kalshi's near side for a buy at all-in cost `c`: Up is worth at least the
+/// Yes bid, Down at least 1 − the Yes ask. The gap to it halves every
+/// `half_ms` of book age.
+pub fn cons_q(up: bool, k: &Quote, c: f64, half_ms: f64) -> f64 {
+    let near = if up { k.bid } else { 1.0 - k.ask };
+    c + (near - c) * 0.5f64.powf(k.age_ms.max(0) as f64 / half_ms)
+}
 
 /// Edge tiers (after fee): under 8¢ → 10 shares, 8–11¢ → 20, 11¢ and up → 30.
 pub fn tier_shares(edge: f64) -> f64 {
@@ -236,6 +273,8 @@ struct Order {
     edge: f64,
     /// The fee coefficient the decision used; fills are charged at it.
     theta: f64,
+    /// Kalshi's near side, age-discounted (`cons_q`).
+    q_cons: f64,
 }
 
 /// A side's gap: (up, (Kalshi side mid, Polymarket US ask, fee, edge)).
@@ -247,6 +286,8 @@ struct Shadow {
     px: f64,
     fee: f64,
     edge: f64,
+    /// The gap to Kalshi's near side (`cons_q` − c).
+    x_cons: f64,
 }
 
 #[derive(Default)]
@@ -293,6 +334,8 @@ pub struct Engine {
     window_alt: HashMap<i64, BTreeMap<&'static str, f64>>,
     /// The day a record-only loss breach was last journaled.
     breach_noted: Option<String>,
+    /// Settled shadows of `cal_epochs` (seeded from the journal at start).
+    pub cal: Cal,
 }
 
 fn iso(t_ns: i64) -> String {
@@ -349,7 +392,13 @@ impl Engine {
             dirty: false,
             window_alt: HashMap::new(),
             breach_noted: None,
+            cal: Cal::default(),
         }
+    }
+
+    /// β for calibrated Kelly: the settled shadows so far, shrunk toward `kelly_shrink`.
+    pub fn beta(&self) -> f64 {
+        self.cal.beta(self.cfg.kelly_shrink, self.cfg.cal_prior_n)
     }
 
     /// Polymarket US taker fee per contract at price `p`.
@@ -663,6 +712,7 @@ impl Engine {
         let cap = fair - fee - self.cfg.min_net_edge;
         let limit = floor_to((px + self.cfg.limit_offset).min(cap), tick).max(px);
         let shares = self.cfg.shares.max(w.min_qty);
+        let q_cons_v = cons_q(up, &k, px + fee, self.cfg.cons_age_half_ms);
         if self.open_cost() + limit * shares > self.cfg.max_open_cost_usd + 1e-9 {
             return gate(self, "max_open_cost");
         }
@@ -687,12 +737,25 @@ impl Engine {
                 "pm_venue_ts": pm.venue_ns.map(iso), "trigger": trigger,
                 "fee_coef": w.fee_coef, "fee_theta": theta,
                 "ask": r4(px), "fee": r6(fee), "edge": r6(edge), "limit": r4(limit), "shares": shares,
+                "q_cons": r4(q_cons_v), "kalshi_book_age_ms": k.age_ms,
                 "epoch": self.cfg.epoch, "mode": "paper",
             }),
         );
         let at_ns = t_ns + self.cfg.paper_latency_ms * 1_000_000;
-        let order =
-            Order { asset: i, open, up, limit, shares, decision_ns: t_ns, fair, px, fee, edge, theta };
+        let order = Order {
+            asset: i,
+            open,
+            up,
+            limit,
+            shares,
+            decision_ns: t_ns,
+            fair,
+            px,
+            fee,
+            edge,
+            theta,
+            q_cons: q_cons_v,
+        };
         if !self.cfg.paper_delays_ms.is_empty() {
             self.probe_orders.insert(id, order.clone());
         }
@@ -714,14 +777,16 @@ impl Engine {
         else {
             return;
         };
-        ws.shadow = Some(Shadow { up, px, fee, edge });
+        let x_cons = cons_q(up, k, px + fee, self.cfg.cons_age_half_ms) - (px + fee);
+        ws.shadow = Some(Shadow { up, px, fee, edge, x_cons });
         let asset = self.cfg.assets[i].clone();
         let left = (open + WINDOW_S) as f64 - t_ns as f64 / NS as f64;
         self.record(
             t_ns,
             "pu_shadow",
             json!({"asset": asset, "open": open, "side": if up { "up" } else { "down" }, "left": r4(left),
-                   "p_side": r4(fair), "kalshi_spread": r4(k.ask - k.bid), "ask": r4(px), "fee": r6(fee), "edge": r6(edge),
+                   "p_side": r4(fair), "kalshi_spread": r4(k.ask - k.bid), "kalshi_book_age_ms": k.age_ms,
+                   "ask": r4(px), "fee": r6(fee), "edge": r6(edge), "x_cons": r6(x_cons),
                    "real": edge >= self.cfg.min_edge - 1e-12, "epoch": self.cfg.epoch}),
         );
     }
@@ -732,6 +797,7 @@ impl Engine {
         let b = self.cfg.bankroll_usd;
         let depth: f64 = levels.iter().map(|l| l.1).sum();
         let q_adj = c + self.cfg.kelly_shrink * (o.fair - c);
+        let q_cal = c + self.beta() * (o.fair - c);
         let used = self.window_alt.entry(o.open).or_default();
         let mut out = BTreeMap::new();
         for rule in RULES {
@@ -740,7 +806,9 @@ impl Engine {
                 "tiers" => tier_shares(o.edge),
                 "kelly_q" => 0.25 * kelly_f(o.fair, c) * b / c,
                 "kelly_t" => 0.10 * kelly_f(o.fair, c) * b / c,
-                _ => 0.25 * kelly_f(q_adj, c) * b / c,
+                "kelly_s" => 0.25 * kelly_f(q_adj, c) * b / c,
+                "kelly_c" => 0.25 * kelly_f(o.q_cons, c) * b / c,
+                _ => 0.25 * kelly_f(q_cal, c) * b / c,
             };
             let want = if rule == "flat" {
                 got
@@ -771,6 +839,8 @@ impl Engine {
             "avg": if got > 0.0 { r4(usd / got) } else { Value::Null },
             "depth_at_limit": r4(depth),
             "levels": levels.iter().take(12).map(|(p, q)| json!([r4(*p), r4(*q)])).collect::<Vec<_>>(),
+            "cal": {"beta": r4(self.beta()), "n": self.cal.n, "q_side": r4(o.fair), "q_cons": r4(o.q_cons),
+                    "q_cal": r4(o.px + o.fee + self.beta() * (o.fair - o.px - o.fee))},
             "sizes": alt.iter().map(|(k, a)| (k.clone(), json!({"target": r4(a.target), "shares": r4(a.shares), "usd": r4(a.usd), "fee": r6(a.fee)})))
                 .collect::<serde_json::Map<String, Value>>(),
         });
@@ -917,11 +987,14 @@ impl Engine {
         if let Some(sh) = shadow {
             let won = (outcome == "yes") == sh.up;
             let per_share = f64::from(u8::from(won)) - sh.px - sh.fee;
+            if self.cfg.cal_epochs.contains(&self.cfg.epoch) {
+                self.cal.add(sh.edge, per_share);
+            }
             self.record(
                 t_ns,
                 "pu_shadow_settle",
                 json!({"asset": asset, "open": open, "side": if sh.up { "up" } else { "down" }, "edge": r6(sh.edge),
-                       "real": sh.edge >= self.cfg.min_edge - 1e-12, "won": won, "per_share": r6(per_share),
+                       "x_cons": r6(sh.x_cons), "real": sh.edge >= self.cfg.min_edge - 1e-12, "won": won, "per_share": r6(per_share),
                        "epoch": self.cfg.epoch}),
             );
         }
@@ -1032,6 +1105,8 @@ impl Engine {
             "open_cost": r4(self.open_cost()),
             "halted": self.halted(t_ns), "killed": self.killed,
             "windows": self.windows.len(),
+            "cal": {"beta": r4(self.beta()), "n": self.cal.n, "prior": self.cfg.kelly_shrink,
+                    "prior_n": self.cfg.cal_prior_n, "epochs": self.cfg.cal_epochs},
             "epoch": self.cfg.epoch,
             "kalshi_age_ms": if self.k_last_frame_ns > 0 { Value::from((t_ns - self.k_last_frame_ns) / 1_000_000) } else { Value::Null },
             "kalshi_books": self.kbooks.values().filter(|b| b.snapshot).count(),
@@ -1194,6 +1269,13 @@ mod tests {
         );
         // Shrunk Kelly asks for less than quarter Kelly.
         assert!(sz["kelly_s"]["target"].as_f64().unwrap() < sz["kelly_q"]["target"].as_f64().unwrap());
+        // No settled shadows yet: β is its prior (0.5), so calibrated Kelly is shrunk Kelly.
+        assert!((sz["kelly_cal"]["target"].as_f64().unwrap() - sz["kelly_s"]["target"].as_f64().unwrap()).abs() < 1e-9);
+        assert_eq!(f["cal"]["beta"].as_f64().unwrap(), 0.5);
+        // Conservative Kelly prices the Up side at Kalshi's Yes bid (0.62, fresh book), not the mid.
+        let c = f["cal"]["q_cons"].as_f64().unwrap();
+        assert!((c - 0.62).abs() < 1e-4, "{c}");
+        assert!(sz["kelly_c"]["target"].as_f64().unwrap() < sz["kelly_q"]["target"].as_f64().unwrap());
         // Settle: each rule's P&L is journaled; booked to the entry day.
         e.on_resolved("BTC", OPEN, "yes", Some("yes"), (OPEN + 930) * NS);
         let s = e.take_records().into_iter().find(|r| r["type"] == "pu_settle").unwrap();
@@ -1214,6 +1296,32 @@ mod tests {
         let ss = e.take_records().into_iter().find(|r| r["type"] == "pu_shadow_settle").unwrap();
         assert_eq!(ss["won"], false);
         assert!(ss["per_share"].as_f64().unwrap() < -0.55);
+        // Epoch 5 is a calibration epoch: the settled shadow feeds β.
+        assert_eq!(e.cal.n, 1);
+        assert!(e.beta() < 0.5);
+    }
+
+    #[test]
+    fn calibration_shrinks_to_its_prior_and_follows_the_data() {
+        let mut c = Cal::default();
+        assert_eq!(c.beta(0.5, 20.0), 0.5);
+        for _ in 0..200 {
+            c.add(0.06, 0.0); // gaps that never paid
+        }
+        assert!(c.beta(0.5, 20.0) < 0.05);
+        let mut c = Cal::default();
+        for _ in 0..200 {
+            c.add(0.06, 0.06); // gaps that paid in full
+        }
+        assert!(c.beta(0.5, 20.0) > 0.95);
+        // Losing gaps clamp at 0; overpaying ones at 1.
+        let mut c = Cal::default();
+        c.add(0.06, -0.5);
+        assert_eq!(c.beta(0.5, 0.0), 0.0);
+        // Near side: Up at the Yes bid, Down at 1 − the Yes ask; the gap halves per half-life of book age.
+        let k = Quote { bid: 0.60, ask: 0.62, age_ms: 10_000 };
+        assert!((cons_q(true, &k, 0.50, 10_000.0) - 0.55).abs() < 1e-12);
+        assert!((cons_q(false, &k, 0.30, 10_000.0) - 0.34).abs() < 1e-12);
     }
 
     #[test]

@@ -557,13 +557,24 @@ async fn run(cfg: Config) -> anyhow::Result<()> {
         .pool_max_idle_per_host(8)
         .tcp_nodelay(true)
         .build()?;
+    let summary = Summary::load(&cfg.state_dir.join("journal"), &cfg.epoch, &cfg.cal_epochs);
+    let mut engine = Engine::new(cfg.clone(), persisted);
+    for (x, r) in summary.cal_seed() {
+        engine.cal.add(x, r);
+    }
+    tracing::info!(
+        n = engine.cal.n,
+        beta = engine.beta(),
+        epochs = ?cfg.cal_epochs,
+        "calibrated Kelly seeded from settled shadows"
+    );
     let app = Arc::new(App {
-        engine: Mutex::new(Engine::new(cfg.clone(), persisted)),
+        engine: Mutex::new(engine),
         journal: Mutex::new(JsonlDaily::new(cfg.state_dir.join("journal"))),
         http,
         gateway: cfg.gateway_url.trim_end_matches('/').to_owned(),
         discovery: Discovery::new("https://gamma-api.polymarket.com", &cfg.kalshi_rest_url),
-        summary: Mutex::new(Summary::load(&cfg.state_dir.join("journal"), &cfg.epoch)),
+        summary: Mutex::new(summary),
         started_ns: now_ns(),
         state_path,
         kalshi: Mutex::new(None),
