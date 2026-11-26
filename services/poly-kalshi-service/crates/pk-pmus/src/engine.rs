@@ -18,7 +18,13 @@
 //! | `pu_sec` | each second: both quotes and the gaps |
 //! | `pu_decision`, `pu_fill`, `pu_no_fill` | an entry and what its order got |
 //! | `pu_close`, `pu_resolution`, `pu_settle` | the window's last gate, both outcomes, P&L |
+//! | `pu_shadow`, `pu_shadow_settle` | the first gap ≥ `shadow_min_edge` per coin-window (the min-edge-3¢ rule), top-of-book cost, never filled |
 //! | `pu_halt`, `pu_ack`, `pu_kill`, `pu_status` | risk and housekeeping |
+//!
+//! Sizing is measured, not traded: each fill also journals what the sizing
+//! rules (`RULES`) would have bought against the same book, capped by depth
+//! at the limit, a per-trade and a per-window cost cap; `pu_settle` carries
+//! each rule's P&L. P&L is booked to the day the position was entered.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -65,6 +71,52 @@ pub struct Position {
     pub outcome: Option<String>,
     pub pnl: Option<f64>,
     pub epoch: String,
+    /// What each sizing rule would have bought against the same book.
+    #[serde(default)]
+    pub alt: BTreeMap<String, Alt>,
+}
+
+/// A sizing rule's counterfactual fill.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+pub struct Alt {
+    pub target: f64,
+    pub shares: f64,
+    pub usd: f64,
+    pub fee: f64,
+}
+
+/// Counterfactual sizing rules, journaled beside the flat paper size.
+pub const RULES: [&str; 5] = ["flat", "tiers", "kelly_q", "kelly_t", "kelly_s"];
+
+/// Edge tiers (after fee): under 8¢ → 10 shares, 8–11¢ → 20, 11¢ and up → 30.
+pub fn tier_shares(edge: f64) -> f64 {
+    if edge < 0.08 {
+        10.0
+    } else if edge < 0.11 {
+        20.0
+    } else {
+        30.0
+    }
+}
+
+/// Kelly fraction for a $1 binary bought at all-in cost `c` with win probability `q`.
+pub fn kelly_f(q: f64, c: f64) -> f64 {
+    if !(0.0..1.0).contains(&c) { 0.0 } else { ((q - c) / (1.0 - c)).max(0.0) }
+}
+
+/// Walks sorted (price, qty) levels for `want` shares: (shares, usd, fee).
+fn walk(levels: &[(f64, f64)], want: f64, fee_of: impl Fn(f64) -> f64) -> (f64, f64, f64) {
+    let (mut got, mut usd, mut fee) = (0.0, 0.0, 0.0);
+    for &(p, q) in levels {
+        let take = q.min(want - got);
+        if take <= 1e-9 {
+            break;
+        }
+        got += take;
+        usd += take * p;
+        fee += fee_of(p) * take;
+    }
+    (got, usd, fee)
 }
 
 impl Position {
@@ -138,6 +190,22 @@ struct Order {
     limit: f64,
     shares: f64,
     decision_ns: i64,
+    /// At the decision: Kalshi's side mid, the Polymarket US ask, its fee, the edge.
+    fair: f64,
+    px: f64,
+    fee: f64,
+    edge: f64,
+}
+
+/// A side's gap: (up, (Kalshi side mid, Polymarket US ask, fee, edge)).
+type Side = (bool, (f64, f64, f64, f64));
+
+#[derive(Clone, Copy, Debug)]
+struct Shadow {
+    up: bool,
+    px: f64,
+    fee: f64,
+    edge: f64,
 }
 
 #[derive(Default)]
@@ -147,6 +215,7 @@ struct WinState {
     best_edge: Option<f64>,
     closed: bool,
     resolved: bool,
+    shadow: Option<Shadow>,
 }
 
 #[derive(Default, Serialize)]
@@ -177,6 +246,10 @@ pub struct Engine {
     counters: Counters,
     records: Vec<Value>,
     pub dirty: bool,
+    /// Cost each sizing rule has used per window open, across coins.
+    window_alt: HashMap<i64, BTreeMap<&'static str, f64>>,
+    /// The day a record-only loss breach was last journaled.
+    breach_noted: Option<String>,
 }
 
 fn iso(t_ns: i64) -> String {
@@ -218,6 +291,8 @@ impl Engine {
             counters: Counters::default(),
             records: Vec::new(),
             dirty: false,
+            window_alt: HashMap::new(),
+            breach_noted: None,
         }
     }
 
@@ -300,8 +375,10 @@ impl Engine {
         let b = self.kbooks.entry(ticker.to_owned()).or_default();
         match f.kind.as_deref() {
             Some("orderbook_snapshot") => {
-                b.yes = m.levels(true).into_iter().filter(|l| l.1 > 0.0).map(|(p, q)| (px_key(p), q)).collect();
-                b.no = m.levels(false).into_iter().filter(|l| l.1 > 0.0).map(|(p, q)| (px_key(p), q)).collect();
+                b.yes =
+                    m.levels(true).into_iter().filter(|l| l.1 > 0.0).map(|(p, q)| (px_key(p), q)).collect();
+                b.no =
+                    m.levels(false).into_iter().filter(|l| l.1 > 0.0).map(|(p, q)| (px_key(p), q)).collect();
                 b.snapshot = true;
                 b.last_ns = t_ns;
             }
@@ -450,7 +527,7 @@ impl Engine {
         if age_ms > self.cfg.pm_max_age_ms {
             return gate(self, "stale_pm_quote");
         }
-        let sides: Vec<(bool, (f64, f64, f64, f64))> = self
+        let sides: Vec<Side> = self
             .gaps(&k, bid, ask)
             .into_iter()
             .zip([true, false])
@@ -465,6 +542,7 @@ impl Engine {
             let ws = self.wstate.entry((i, open)).or_default();
             ws.best_edge = Some(ws.best_edge.map_or(top, |e: f64| e.max(top)));
         }
+        self.shadow(i, open, &sides, &k, t_ns);
         let pick = sides
             .iter()
             .filter(|x| x.1.3 >= self.cfg.min_edge - 1e-12 && x.1.3 <= self.cfg.max_edge + 1e-12)
@@ -505,8 +583,65 @@ impl Engine {
             }),
         );
         let at_ns = t_ns + self.cfg.paper_latency_ms * 1_000_000;
-        self.pending.insert(id, Order { asset: i, open, up, limit, shares, decision_ns: t_ns });
+        self.pending
+            .insert(id, Order { asset: i, open, up, limit, shares, decision_ns: t_ns, fair, px, fee, edge });
         Some(FetchBook { id, slug: w.slug, at_ns })
+    }
+
+    /// The min-edge-3¢ rule's entry: the first gap of `shadow_min_edge`..=`max_edge`
+    /// in a coin-window before any real entry, costed at the ask plus fee.
+    fn shadow(&mut self, i: usize, open: i64, sides: &[Side], k: &Quote, t_ns: i64) {
+        let ws = self.wstate.entry((i, open)).or_default();
+        if ws.shadow.is_some() || ws.entries > 0 {
+            return;
+        }
+        let Some(&(up, (fair, px, fee, edge))) = sides
+            .iter()
+            .filter(|x| x.1.3 >= self.cfg.shadow_min_edge - 1e-12 && x.1.3 <= self.cfg.max_edge + 1e-12)
+            .max_by(|a, b| a.1.3.total_cmp(&b.1.3))
+        else {
+            return;
+        };
+        ws.shadow = Some(Shadow { up, px, fee, edge });
+        let asset = self.cfg.assets[i].clone();
+        let left = (open + WINDOW_S) as f64 - t_ns as f64 / NS as f64;
+        self.record(
+            t_ns,
+            "pu_shadow",
+            json!({"asset": asset, "open": open, "side": if up { "up" } else { "down" }, "left": r4(left),
+                   "p_side": r4(fair), "kalshi_spread": r4(k.ask - k.bid), "ask": r4(px), "fee": r6(fee), "edge": r6(edge),
+                   "real": edge >= self.cfg.min_edge - 1e-12, "epoch": self.cfg.epoch}),
+        );
+    }
+
+    /// Each sizing rule's fill against the levels at or under the limit (sorted by price).
+    fn size_rules(&mut self, o: &Order, levels: &[(f64, f64)], got: f64) -> BTreeMap<String, Alt> {
+        let c = o.px + o.fee;
+        let b = self.cfg.bankroll_usd;
+        let depth: f64 = levels.iter().map(|l| l.1).sum();
+        let q_adj = c + self.cfg.kelly_shrink * (o.fair - c);
+        let used = self.window_alt.entry(o.open).or_default();
+        let mut out = BTreeMap::new();
+        for rule in RULES {
+            let target = match rule {
+                "flat" => o.shares,
+                "tiers" => tier_shares(o.edge),
+                "kelly_q" => 0.25 * kelly_f(o.fair, c) * b / c,
+                "kelly_t" => 0.10 * kelly_f(o.fair, c) * b / c,
+                _ => 0.25 * kelly_f(q_adj, c) * b / c,
+            };
+            let want = if rule == "flat" {
+                got
+            } else {
+                let room = (self.cfg.window_risk_frac * b - used.get(rule).copied().unwrap_or(0.0)).max(0.0);
+                target.min(self.cfg.trade_risk_frac * b / c).min(room / c).min(depth).max(0.0)
+            };
+            let fee_theta = self.cfg.fee_theta;
+            let (shares, usd, fee) = walk(levels, want, |p| fee_theta * p * (1.0 - p));
+            *used.entry(rule).or_default() += usd + fee;
+            out.insert(rule.to_owned(), Alt { target, shares, usd, fee });
+        }
+        out
     }
 
     /// The book fetched for a paper fill: Yes bids and offers as (price, qty).
@@ -524,16 +659,10 @@ impl Engine {
             v
         };
         levels.retain(|(p, q)| *p <= o.limit + 1e-9 && *q > 0.0);
-        let (mut got, mut usd, mut fee) = (0.0, 0.0, 0.0);
-        for (p, q) in levels {
-            let take = q.min(o.shares - got);
-            if take <= 1e-9 {
-                break;
-            }
-            got += take;
-            usd += take * p;
-            fee += self.fee(p) * take;
-        }
+        let fee_theta = self.cfg.fee_theta;
+        let (got, usd, fee) = walk(&levels, o.shares, |p| fee_theta * p * (1.0 - p));
+        let depth: f64 = levels.iter().map(|l| l.1).sum();
+        let alt = if got > 1e-9 { self.size_rules(&o, &levels, got) } else { BTreeMap::new() };
         let best = if o.up {
             offers.iter().map(|x| x.0).fold(f64::INFINITY, f64::min)
         } else {
@@ -545,6 +674,10 @@ impl Engine {
             "held_ms": (t_ns - o.decision_ns) / 1_000_000,
             "shares": r4(got), "usd": r4(usd), "fee": r6(fee),
             "avg": if got > 0.0 { r4(usd / got) } else { Value::Null },
+            "depth_at_limit": r4(depth),
+            "levels": levels.iter().take(12).map(|(p, q)| json!([r4(*p), r4(*q)])).collect::<Vec<_>>(),
+            "sizes": alt.iter().map(|(k, a)| (k.clone(), json!({"target": r4(a.target), "shares": r4(a.shares), "usd": r4(a.usd), "fee": r6(a.fee)})))
+                .collect::<serde_json::Map<String, Value>>(),
         });
         if got > 1e-9 {
             self.counters.fills += 1;
@@ -562,6 +695,7 @@ impl Engine {
                 outcome: None,
                 pnl: None,
                 epoch: self.cfg.epoch.clone(),
+                alt,
             });
             self.dirty = true;
         } else {
@@ -575,7 +709,11 @@ impl Engine {
         if let Some(o) = self.pending.remove(&id) {
             self.counters.no_fills += 1;
             let asset = self.cfg.assets[o.asset].clone();
-            self.record(t_ns, "pu_no_fill", json!({"id": id, "asset": asset, "open": o.open, "error": error}));
+            self.record(
+                t_ns,
+                "pu_no_fill",
+                json!({"id": id, "asset": asset, "open": o.open, "error": error}),
+            );
         }
     }
 
@@ -600,7 +738,9 @@ impl Engine {
         self.windows
             .iter()
             .filter(|(key, w)| {
-                !self.wstate.get(key).is_some_and(|s| s.resolved) && now_s >= w.close() + 20 && now_s < w.close() + RESOLVE_FOR_S
+                !self.wstate.get(key).is_some_and(|s| s.resolved)
+                    && now_s >= w.close() + 20
+                    && now_s < w.close() + RESOLVE_FOR_S
             })
             .map(|(_, w)| w.clone())
             .collect()
@@ -614,6 +754,7 @@ impl Engine {
             return;
         }
         ws.resolved = true;
+        let shadow = ws.shadow;
         match kalshi {
             Some(k) if k == outcome => self.counters.agree += 1,
             Some(_) => self.counters.disagree += 1,
@@ -624,17 +765,37 @@ impl Engine {
             "pu_resolution",
             json!({"asset": asset, "open": open, "poly": outcome, "kalshi": kalshi, "agree": kalshi.map(|k| k == outcome)}),
         );
-        let day = day_of(open + WINDOW_S);
         let mut settled = Vec::new();
-        for p in self.p.positions.iter_mut().filter(|p| p.asset == asset && p.open == open && p.outcome.is_none()) {
+        for p in
+            self.p.positions.iter_mut().filter(|p| p.asset == asset && p.open == open && p.outcome.is_none())
+        {
             p.outcome = Some(outcome.to_owned());
             let payout = if p.won() == Some(true) { p.shares } else { 0.0 };
             p.pnl = Some(payout - p.usd - p.fee);
             settled.push(p.clone());
         }
+        if let Some(sh) = shadow {
+            let won = (outcome == "yes") == sh.up;
+            let per_share = f64::from(u8::from(won)) - sh.px - sh.fee;
+            self.record(
+                t_ns,
+                "pu_shadow_settle",
+                json!({"asset": asset, "open": open, "side": if sh.up { "up" } else { "down" }, "edge": r6(sh.edge),
+                       "real": sh.edge >= self.cfg.min_edge - 1e-12, "won": won, "per_share": r6(per_share),
+                       "epoch": self.cfg.epoch}),
+            );
+        }
         for p in settled {
             let pnl = p.pnl.unwrap_or(0.0);
+            // Booked to the day the position was entered, not the day its window closed.
+            let day = day_of(p.entry_ns / NS);
             *self.p.realized.entry(day.clone()).or_default() += pnl;
+            let payout = |a: &Alt| if p.won() == Some(true) { a.shares } else { 0.0 };
+            let alt: serde_json::Map<String, Value> = p
+                .alt
+                .iter()
+                .map(|(k, a)| (k.clone(), json!({"shares": r4(a.shares), "cost": r4(a.usd + a.fee), "pnl": r4(payout(a) - a.usd - a.fee)})))
+                .collect();
             self.counters.settled += 1;
             self.dirty = true;
             self.record(
@@ -643,7 +804,7 @@ impl Engine {
                 json!({"id": p.id, "asset": p.asset, "open": p.open, "side": if p.up { "up" } else { "down" },
                        "outcome": outcome, "won": p.won(), "shares": r4(p.shares), "usd": r4(p.usd), "fee": r6(p.fee),
                        "pnl": r4(pnl), "per_share": r4(pnl / p.shares.max(1e-9)), "live": false, "epoch": p.epoch,
-                       "day_pnl": r4(self.p.realized.get(&day).copied().unwrap_or(0.0))}),
+                       "entry_day": day, "day_pnl": r4(self.p.realized.get(&day).copied().unwrap_or(0.0)), "alt": alt}),
             );
         }
         let today = day_of(t_ns / NS);
@@ -652,15 +813,33 @@ impl Engine {
             && self.p.halted_day.as_deref() != Some(&today)
             && self.p.acked_day.as_deref() != Some(&today)
         {
-            self.p.halted_day = Some(today.clone());
-            self.dirty = true;
-            self.record(t_ns, "pu_halt", json!({"day": today, "pnl": r4(pnl_today), "limit": self.cfg.daily_loss_usd}));
+            if self.cfg.enforce_halt {
+                self.p.halted_day = Some(today.clone());
+                self.dirty = true;
+                self.record(
+                    t_ns,
+                    "pu_halt",
+                    json!({"day": today, "pnl": r4(pnl_today), "limit": self.cfg.daily_loss_usd}),
+                );
+            } else if self.breach_noted.as_deref() != Some(&today) {
+                // Paper: journal the breach, keep collecting the sample.
+                self.breach_noted = Some(today.clone());
+                self.record(
+                    t_ns,
+                    "pu_halt",
+                    json!({"day": today, "pnl": r4(pnl_today), "limit": self.cfg.daily_loss_usd, "record_only": true}),
+                );
+            }
         }
     }
 
     pub fn prune(&mut self, now_s: i64) {
-        let old: Vec<(usize, i64)> =
-            self.windows.iter().filter(|(_, w)| w.close() + RESOLVE_FOR_S + 600 < now_s).map(|(k, _)| *k).collect();
+        let old: Vec<(usize, i64)> = self
+            .windows
+            .iter()
+            .filter(|(_, w)| w.close() + RESOLVE_FOR_S + 600 < now_s)
+            .map(|(k, _)| *k)
+            .collect();
         for key in old {
             if let Some(w) = self.windows.remove(&key)
                 && let Some(t) = &w.kalshi_ticker
@@ -670,6 +849,7 @@ impl Engine {
             }
             self.wstate.remove(&key);
             self.pm.remove(&key);
+            self.window_alt.remove(&key.1);
         }
         let before = self.p.positions.len();
         self.p.positions.retain(|p| p.outcome.is_none());
@@ -712,7 +892,13 @@ mod tests {
     const OPEN: i64 = 1_800_000_000 - 1_800_000_000 % WINDOW_S;
 
     fn engine() -> Engine {
-        let mut e = Engine::new(Config::from_vars(vars(&[("PK_PU_ASSETS", "BTC")])).unwrap(), Persisted::default());
+        engine_with(&[("PK_PU_MIN_EDGE", "0.03"), ("PK_PU_SHADOW_MIN_EDGE", "0.02")])
+    }
+
+    fn engine_with(kv: &[(&str, &str)]) -> Engine {
+        let mut v = vec![("PK_PU_ASSETS", "BTC")];
+        v.extend_from_slice(kv);
+        let mut e = Engine::new(Config::from_vars(vars(&v)).unwrap(), Persisted::default());
         e.set_window(
             WindowInfo {
                 asset: "BTC".into(),
@@ -821,5 +1007,72 @@ mod tests {
         e.on_resolved("BTC", OPEN, "yes", Some("no"), (OPEN + 930) * NS);
         let r = e.take_records().into_iter().find(|r| r["type"] == "pu_resolution").unwrap();
         assert_eq!(r["agree"], false);
+    }
+
+    #[test]
+    fn sizing_rules_are_capped_by_depth_risk_and_window() {
+        let mut e = engine();
+        let t = (OPEN + 300) * NS;
+        kalshi(&mut e, 0.62, 0.64, t); // fair 0.63
+        e.on_pm_quote(0, OPEN, Some(0.50), Some(0.52), t); // edge ≈ 0.63 − 0.52 − 0.0173 ≈ 0.093
+        let acts = e.tick(t);
+        let d = &decisions(&mut e)[0];
+        assert!((d["edge"].as_f64().unwrap() - 0.0927).abs() < 1e-3, "{d}");
+        // 25 at the ask, 15 one tick up (the limit), more above the limit.
+        e.on_book(acts[0].id, &[(0.50, 10.0)], &[(0.52, 25.0), (0.53, 15.0), (0.60, 500.0)], t + 150_000_000);
+        let f = e.take_records().into_iter().find(|r| r["type"] == "pu_fill").unwrap();
+        assert_eq!(f["depth_at_limit"].as_f64().unwrap(), 40.0);
+        let sz = &f["sizes"];
+        assert_eq!(sz["flat"]["shares"].as_f64().unwrap(), 10.0);
+        assert_eq!(sz["tiers"]["shares"].as_f64().unwrap(), 20.0); // 8–11¢ tier
+        // Quarter Kelly wants ~ 0.25 · 0.193 · 1000 / 0.537 ≈ 90 shares; 2% risk caps it at 20 / 0.537 ≈ 37.2.
+        assert!(sz["kelly_q"]["target"].as_f64().unwrap() > 80.0);
+        assert!(
+            (sz["kelly_q"]["shares"].as_f64().unwrap() - 20.0 / (0.52 + 0.0695 * 0.52 * 0.48)).abs() < 0.1
+        );
+        // Shrunk Kelly asks for less than quarter Kelly.
+        assert!(sz["kelly_s"]["target"].as_f64().unwrap() < sz["kelly_q"]["target"].as_f64().unwrap());
+        // Settle: each rule's P&L is journaled; booked to the entry day.
+        e.on_resolved("BTC", OPEN, "yes", Some("yes"), (OPEN + 930) * NS);
+        let s = e.take_records().into_iter().find(|r| r["type"] == "pu_settle").unwrap();
+        assert!(s["alt"]["tiers"]["pnl"].as_f64().unwrap() > 9.0);
+        assert_eq!(s["entry_day"], day_of(OPEN + 300));
+    }
+
+    #[test]
+    fn shadow_logs_the_first_three_cent_gap_and_settles_it() {
+        let mut e = engine_with(&[]); // defaults: min 5¢, shadow from 3¢
+        let t = (OPEN + 300) * NS;
+        kalshi(&mut e, 0.59, 0.61, t);
+        e.on_pm_quote(0, OPEN, Some(0.54), Some(0.55), t); // edge ≈ 3.3¢: shadow only
+        assert!(e.tick(t).is_empty());
+        let sh = e.take_records().into_iter().find(|r| r["type"] == "pu_shadow").unwrap();
+        assert_eq!(sh["real"], false);
+        e.on_resolved("BTC", OPEN, "no", None, (OPEN + 930) * NS);
+        let ss = e.take_records().into_iter().find(|r| r["type"] == "pu_shadow_settle").unwrap();
+        assert_eq!(ss["won"], false);
+        assert!(ss["per_share"].as_f64().unwrap() < -0.55);
+    }
+
+    #[test]
+    fn paper_loss_breach_is_record_only_unless_enforced() {
+        for (enforce, halted) in [("0", false), ("1", true)] {
+            let mut e = engine_with(&[
+                ("PK_PU_MIN_EDGE", "0.03"),
+                ("PK_PU_SHADOW_MIN_EDGE", "0.02"),
+                ("PK_PU_DAILY_LOSS_USD", "1"),
+                ("PK_PU_ENFORCE_HALT", enforce),
+            ]);
+            let t = (OPEN + 300) * NS;
+            kalshi(&mut e, 0.59, 0.61, t);
+            e.on_pm_quote(0, OPEN, Some(0.54), Some(0.55), t);
+            let acts = e.tick(t);
+            e.on_book(acts[0].id, &[(0.54, 50.0)], &[(0.55, 50.0)], t + 150_000_000);
+            let after = (OPEN + 930) * NS;
+            e.on_resolved("BTC", OPEN, "no", None, after);
+            let h = e.take_records().into_iter().find(|r| r["type"] == "pu_halt").unwrap();
+            assert_eq!(h["record_only"].as_bool().unwrap_or(false), !halted);
+            assert_eq!(e.halted(after), halted);
+        }
     }
 }

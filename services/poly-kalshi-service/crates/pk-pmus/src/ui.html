@@ -60,6 +60,8 @@ th { color:var(--muted); font-size:11px; font-weight:600; }
   </div>
   <section><h2>Cumulative P&amp;L</h2><p class="muted" id="chart-note"></p><div class="chart" id="chart"></div></section>
   <section><h2>Recent decisions</h2><p class="muted" id="recent-note"></p><div id="recent"></div></section>
+  <section><h2>Sizing rules (counterfactual)</h2><p class="muted">What each rule would have bought against the same book: depth at the limit, at most 2% of a $1,000 bankroll per trade and 5% per window across coins. Paper still buys a flat 10. Kelly uses Kalshi's mid; shrunk Kelly uses c + 0.5·(q − c). t is clustered by window.</p><div id="sizing"></div></section>
+  <section><h2>Minimum edge: 3¢ against 5¢</h2><p class="muted">The first gap of at least 3¢ in each coin-window, per share at the ask plus fee (no fill model). The 3–5¢ row is what raising the minimum to 5¢ dropped.</p><div id="min-edge"></div></section>
   <section><h2>By coin</h2><div id="by-asset"></div></section>
   <section><h2>By seconds before the close</h2><div id="by-left"></div></section>
   <section><h2>Calibration</h2><p class="muted">How often the side won against Kalshi's mid at the decision.</p><div id="calibration"></div></section>
@@ -239,7 +241,18 @@ function render(s) {
     { h: "Filled", v: (r) => r.filled != null ? `${fx(r.filled, 0)} @ ${fx(r.avg, 3)}` : r.status === "missed" ? `Missed (ask ${fx(r.ask_now, 3)})` : "—" },
     { h: "Result", v: (r) => r.status === "settled" ? (r.won ? "Won" : "Lost") : r.status === "open" ? "Open" : r.status === "missed" ? "—" : "Waiting" },
     { h: "Net (USD)", v: (r) => r.pnl != null ? usd(r.pnl).replace(" USD", "") : "—" },
-  ], recent, "No decisions yet. Entries fire from 60 s after the open to 60 s before the close when Polymarket US is 3–15¢ cheaper than Kalshi's mid after the fee."));
+  ], recent, "No decisions yet. Entries fire from 60 s after the open to 60 s before the close when Polymarket US is 5–15¢ cheaper than Kalshi's mid after the fee."));
+  const RULE_NAMES = { flat: "Flat 10", tiers: "Tiers 10/20/30", kelly_q: "Quarter Kelly", kelly_t: "Tenth Kelly", kelly_s: "Shrunk quarter Kelly" };
+  $("sizing").replaceChildren(table([
+    { h: "Rule", v: (r) => RULE_NAMES[r.label] || r.label }, { h: "Positions", v: (r) => String(r.n) },
+    { h: "Shares", v: (r) => fx(r.shares, 0) }, { h: "Risked", v: (r) => `${fx(r.risked, 2)} USD` },
+    { h: "P&L", v: (r) => usd(r.pnl) }, { h: "Return on risk", v: (r) => r.ret_pct != null ? `${fx(r.ret_pct, 1)}%` : "—" },
+    { h: "Worst drawdown", v: (r) => `${fx(r.max_dd, 2)} USD` }, { h: "t", v: (r) => fx(r.t, 2) },
+  ], s.sizing || [], "No settled positions with sizing yet."));
+  $("min-edge").replaceChildren(table([
+    { h: "Gaps", v: (r) => r.label }, { h: "Entries", v: (r) => String(r.n) },
+    { h: "Net per share", v: (r) => cents(r.net_c) }, { h: "t", v: (r) => fx(r.t, 2) },
+  ], s.min_edge || [], "No shadow entries settled yet."));
   $("by-asset").replaceChildren(table(ROWS("Coin"), s.by_asset || [], "No settled positions yet."));
   $("by-left").replaceChildren(table(ROWS("Seconds left"), s.by_left || [], "No settled positions yet."));
   $("calibration").replaceChildren(table([

@@ -38,6 +38,7 @@ pub struct Summary {
     agree: u64,
     closes: VecDeque<Value>,
     halts: Vec<Value>,
+    shadows: Vec<Value>,
     windows: u64,
     first_ns: Option<i64>,
 }
@@ -97,8 +98,11 @@ impl Summary {
     pub fn load(dir: &Path, epoch: &str) -> Self {
         let mut s = Summary { epoch: epoch.to_owned(), ..Summary::default() };
         let Ok(rd) = std::fs::read_dir(dir) else { return s };
-        let mut files: Vec<_> =
-            rd.filter_map(Result::ok).map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "jsonl")).collect();
+        let mut files: Vec<_> = rd
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "jsonl"))
+            .collect();
         files.sort();
         for p in files {
             let Ok(text) = std::fs::read_to_string(&p) else { continue };
@@ -138,6 +142,7 @@ impl Summary {
                 self.no_fills.insert(id, r.clone());
             }
             "pu_settle" if mine => self.settles.push(r.clone()),
+            "pu_shadow_settle" if mine => self.shadows.push(r.clone()),
             "pu_settle" => self.baseline.push(r.clone()),
             "pu_resolution" => {
                 if let Some(a) = r.get("agree").and_then(Value::as_bool) {
@@ -188,11 +193,21 @@ impl Summary {
         let decisions = self.decisions.len();
         let fill_rate = (decisions > 0).then(|| self.fills.len() as f64 / decisions as f64);
         let filled_sh: f64 = self.fills.values().map(|x| f(x, "shares")).filter(|x| x.is_finite()).sum();
-        let instant_sh: f64 = self.decisions.values().map(|x| f(x, "instant_shares")).filter(|x| x.is_finite()).sum();
+        let instant_sh: f64 =
+            self.decisions.values().map(|x| f(x, "instant_shares")).filter(|x| x.is_finite()).sum();
         let today = now_s - now_s.rem_euclid(86_400);
         let decisions_today = self.decisions.values().filter(|d| i(d, "t_ns") / NS >= today).count();
-        let pnl_today: f64 =
-            self.settles.iter().filter(|s| i(s, "t_ns") / NS >= today).map(|s| f(s, "pnl")).filter(|x| x.is_finite()).sum();
+        // Booked by entry time, like the engine's daily loss.
+        let pnl_today: f64 = self
+            .settles
+            .iter()
+            .filter(|s| {
+                self.decisions.get(&s["id"].as_u64().unwrap_or(0)).map_or(i(s, "t_ns"), |d| i(d, "t_ns")) / NS
+                    >= today
+            })
+            .map(|s| f(s, "pnl"))
+            .filter(|x| x.is_finite())
+            .sum();
 
         // Cumulative P&L after each settle, thinned to at most SERIES_POINTS.
         let mut ordered: Vec<&Value> = self.settles.iter().collect();
@@ -232,15 +247,16 @@ impl Summary {
             v["label"] = label.into();
             v
         };
-        let by_left: Vec<Value> = [(0.0, 120.0), (120.0, 300.0), (300.0, 480.0), (480.0, 660.0), (660.0, 901.0)]
-            .iter()
-            .map(|&(lo, hi)| {
-                band(format!("{lo:.0}–{hi:.0} s"), &|s| {
-                    dec_of(s).is_some_and(|d| (lo..hi).contains(&f(d, "left")))
+        let by_left: Vec<Value> =
+            [(0.0, 120.0), (120.0, 300.0), (300.0, 480.0), (480.0, 660.0), (660.0, 901.0)]
+                .iter()
+                .map(|&(lo, hi)| {
+                    band(format!("{lo:.0}–{hi:.0} s"), &|s| {
+                        dec_of(s).is_some_and(|d| (lo..hi).contains(&f(d, "left")))
+                    })
                 })
-            })
-            .filter(|v| v["n"].as_u64().unwrap_or(0) > 0)
-            .collect();
+                .filter(|v| v["n"].as_u64().unwrap_or(0) > 0)
+                .collect();
         let calibration: Vec<Value> = [(0.5, 0.8), (0.8, 0.9), (0.9, 0.95), (0.95, 0.99), (0.99, 1.01)]
             .iter()
             .filter_map(|&(lo, hi)| {
@@ -261,7 +277,8 @@ impl Summary {
                     .filter_map(|(s, _)| self.fills.get(&s["id"].as_u64().unwrap_or(0)).map(|x| f(x, "avg")))
                     .filter(|x| x.is_finite())
                     .collect();
-                let paid = if paid.is_empty() { f64::NAN } else { paid.iter().sum::<f64>() / paid.len() as f64 };
+                let paid =
+                    if paid.is_empty() { f64::NAN } else { paid.iter().sum::<f64>() / paid.len() as f64 };
                 Some(json!({"label": format!("{lo:.2}–{:.2}", hi.min(1.0)), "n": rows.len(),
                             "model": round(model, 3), "won": round(won / k, 3), "paid": round(paid, 3)}))
             })
@@ -300,10 +317,14 @@ impl Summary {
             })
             .collect();
 
-        let mut base_epochs: Vec<&str> = self.baseline.iter().map(|s| s["epoch"].as_str().unwrap_or("1")).collect();
+        let sizing = self.sizing();
+        let min_edge = self.min_edge_compare();
+        let mut base_epochs: Vec<&str> =
+            self.baseline.iter().map(|s| s["epoch"].as_str().unwrap_or("1")).collect();
         base_epochs.sort_unstable();
         base_epochs.dedup();
-        let t_ok = all["t"].as_f64().is_some_and(|t| t >= GATE_T) && all["net_c"].as_f64().is_some_and(|m| m > 0.0);
+        let t_ok =
+            all["t"].as_f64().is_some_and(|t| t >= GATE_T) && all["net_c"].as_f64().is_some_and(|m| m > 0.0);
         json!({
             "now_ms": now_ns / 1_000_000,
             "live": live,
@@ -338,7 +359,75 @@ impl Summary {
             "gates_24h": gates.iter().map(|(g, c)| json!({"gate": g, "n": c})).collect::<Vec<_>>(),
             "recent": recent,
             "halts": self.halts,
+            "sizing": sizing,
+            "min_edge": min_edge,
         })
+    }
+
+    /// Each counterfactual sizing rule over the settled positions (settle order):
+    /// P&L, cost risked, return on cost, worst drawdown, window-clustered t.
+    fn sizing(&self) -> Vec<Value> {
+        let mut ordered: Vec<&Value> =
+            self.settles.iter().filter(|s| s.get("alt").is_some_and(Value::is_object)).collect();
+        ordered.sort_by_key(|s| i(s, "t_ns"));
+        crate::engine::RULES
+            .iter()
+            .map(|rule| {
+                let (mut cum, mut peak, mut dd, mut risked) = (0.0f64, 0.0f64, 0.0f64, 0.0);
+                let mut rows = Vec::new();
+                for s in &ordered {
+                    let a = &s["alt"][*rule];
+                    let (sh, pnl, cost) = (f(a, "shares"), f(a, "pnl"), f(a, "cost"));
+                    if !(sh.is_finite() && pnl.is_finite() && cost.is_finite()) {
+                        continue;
+                    }
+                    cum += pnl;
+                    peak = peak.max(cum);
+                    dd = dd.max(peak - cum);
+                    risked += cost;
+                    if sh > 1e-9 {
+                        rows.push(Row {
+                            key: (s["asset"].as_str().unwrap_or_default().to_owned(), i(s, "open")),
+                            shares: sh,
+                            pnl,
+                        });
+                    }
+                }
+                // Positions in one window move together across coins: cluster by window open.
+                for r in &mut rows {
+                    r.key.0.clear();
+                }
+                let mut v = clustered(&rows);
+                v["label"] = (*rule).into();
+                v["risked"] = round(risked, 2);
+                v["ret_pct"] = if risked > 0.0 { round(100.0 * cum / risked, 2) } else { Value::Null };
+                v["max_dd"] = round(dd, 2);
+                v["shares"] = round(rows.iter().map(|r| r.shares).sum(), 1);
+                v
+            })
+            .collect()
+    }
+
+    /// The min-edge-3¢ rule (every shadow) against its 3–5¢ part and the ≥ 5¢ part,
+    /// per share at top of book, clustered by window.
+    fn min_edge_compare(&self) -> Vec<Value> {
+        let group = |label: &str, keep: &dyn Fn(&Value) -> bool| {
+            let rows: Vec<Row> = self
+                .shadows
+                .iter()
+                .filter(|s| keep(s))
+                .map(|s| Row { key: (String::new(), i(s, "open")), shares: 1.0, pnl: f(s, "per_share") })
+                .filter(|r| r.pnl.is_finite())
+                .collect();
+            let mut v = clustered(&rows);
+            v["label"] = label.into();
+            v
+        };
+        vec![
+            group("All gaps ≥ 3¢ (old rule)", &|_| true),
+            group("3–5¢ only (dropped)", &|s| s["real"].as_bool() == Some(false)),
+            group("≥ 5¢ (kept)", &|s| s["real"].as_bool() == Some(true)),
+        ]
     }
 }
 
@@ -356,9 +445,13 @@ mod tests {
         for k in 0..30u64 {
             let open = 1_800_000_000 + 900 * k as i64;
             let t = (open + 930) * NS;
-            s.ingest(&json!({"type": "pu_decision", "id": k + 1, "asset": "BTC", "left": 25.0, "p_side": 0.85,
-                             "instant_shares": 10.0, "t_ns": t - 30 * NS}));
-            s.ingest(&json!({"type": "pu_fill", "id": k + 1, "shares": 10.0, "avg": 0.85, "t_ns": t - 30 * NS}));
+            s.ingest(
+                &json!({"type": "pu_decision", "id": k + 1, "asset": "BTC", "left": 25.0, "p_side": 0.85,
+                             "instant_shares": 10.0, "t_ns": t - 30 * NS}),
+            );
+            s.ingest(
+                &json!({"type": "pu_fill", "id": k + 1, "shares": 10.0, "avg": 0.85, "t_ns": t - 30 * NS}),
+            );
             let won = k % 10 != 0;
             s.ingest(&settle(k + 1, "BTC", open, if won { 1.4 } else { -8.6 }, won, t));
             s.ingest(&json!({"type": "pu_resolution", "agree": true, "t_ns": t}));
@@ -376,6 +469,26 @@ mod tests {
         assert_eq!(v["series"].as_array().unwrap().len(), 30);
         assert_eq!(v["recent"].as_array().unwrap().len(), 30);
         assert_eq!(v["gate"]["settled"]["ok"], false);
+    }
+
+    #[test]
+    fn sizing_and_min_edge_tables() {
+        let mut s = Summary { epoch: "1".into(), ..Summary::default() };
+        let mut a = settle(1, "BTC", 0, 5.0, true, NS);
+        a["alt"] = json!({"flat": {"shares": 10.0, "cost": 5.0, "pnl": 5.0}, "tiers": {"shares": 20.0, "cost": 10.0, "pnl": 10.0}});
+        let mut b = settle(2, "ETH", 900, -5.0, false, 2 * NS);
+        b["alt"] = json!({"flat": {"shares": 10.0, "cost": 5.0, "pnl": -5.0}, "tiers": {"shares": 10.0, "cost": 5.0, "pnl": -5.0}});
+        s.ingest(&a);
+        s.ingest(&b);
+        s.ingest(&json!({"type": "pu_shadow_settle", "open": 0, "real": false, "per_share": -0.4}));
+        s.ingest(&json!({"type": "pu_shadow_settle", "open": 900, "real": true, "per_share": 0.5}));
+        let v = s.snapshot(json!({}), 3 * NS);
+        let tiers = v["sizing"].as_array().unwrap().iter().find(|r| r["label"] == "tiers").unwrap().clone();
+        assert_eq!(tiers["pnl"], 5.0);
+        assert_eq!(tiers["risked"], 15.0);
+        assert_eq!(tiers["max_dd"], 5.0);
+        assert_eq!(v["min_edge"][1]["n"], 1);
+        assert_eq!(v["min_edge"][0]["pnl"], 0.1);
     }
 
     #[test]
