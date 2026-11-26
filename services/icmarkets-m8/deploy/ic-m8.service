@@ -1,0 +1,13 @@
+[Unit]
+Description=IC Markets Money8gg runner (Boom1000 M5 TP2R + Jump50 M1) on the IC_LOGIN account; mode in .env: IC_MODE
+After=mt5-ic.service network-online.target
+Wants=mt5-ic.service
+
+[Service]
+WorkingDirectory=/opt/trading-algos/services/icmarkets-m8
+ExecStart=/opt/trading-algos/services/deriv-jev/.venv/bin/python -u ic_m8.py
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

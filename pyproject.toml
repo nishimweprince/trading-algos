@@ -58,6 +58,8 @@ exclude = [
   "services/solcarry",
   # deriv-jev is a standalone shadow service with its own venv (services/deriv-jev/.venv).
   "services/deriv-jev",
+  # icmarkets-m8 runs on the deriv-jev venv on the MT5 VPS.
+  "services/icmarkets-m8",
 ]
 
 [tool.ruff]

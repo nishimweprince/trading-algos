@@ -1,0 +1,11 @@
+[Unit]
+Description=Deriv paper trader: 14 DSI strategies simulated on live Deriv MT5 bid/ask (no orders sent)
+After=mt5.service
+Wants=mt5.service
+[Service]
+WorkingDirectory=/opt/trading-algos/services/deriv-jev
+ExecStart=/opt/trading-algos/services/deriv-jev/.venv/bin/python -u deriv_paper.py
+Restart=always
+RestartSec=15
+[Install]
+WantedBy=multi-user.target

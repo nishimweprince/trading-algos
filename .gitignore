@@ -38,3 +38,5 @@ services/**/data/
 
 # IDEs
 .vscode/
+.env.mt5
+*.bak

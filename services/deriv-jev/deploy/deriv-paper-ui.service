@@ -1,0 +1,12 @@
+[Unit]
+Description=Deriv paper trading dashboard (127.0.0.1:8092)
+After=deriv-paper.service
+[Service]
+WorkingDirectory=/opt/trading-algos/services/deriv-jev
+Environment=PAPER_UI_PORT=8092
+ExecStart=/opt/trading-algos/services/deriv-jev/.venv/bin/python -u deriv_paper_ui.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+[Install]
+WantedBy=multi-user.target

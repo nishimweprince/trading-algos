@@ -1,0 +1,14 @@
+[Unit]
+Description=Read-only IC Markets live trading dashboard (127.0.0.1:8093)
+After=mt5-ic.service
+
+[Service]
+WorkingDirectory=/opt/trading-algos/services/icmarkets-m8
+Environment=IC_UI_PORT=8093
+ExecStart=/opt/trading-algos/services/deriv-jev/.venv/bin/python -u ic_live_ui.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
