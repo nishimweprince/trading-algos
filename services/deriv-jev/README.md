@@ -97,6 +97,10 @@ window, with rules fixed in advance: Crash Boom Flip 1000 run-follow (`run4`, 30
 daily t ≥ 2. Tabs `/flip1000` and `/trek-vshock`; data in `data/leads.db`, log in `logs/leads_paper.log`, kill switch
 `data/KILL_LEADS`.
 
+The `/breakeven` tab is a read-only view of the live IC Markets runner (`services/icmarkets-m8`): every break-even
+action from its log and orders table, the lag from the first tick at 4 ATR in favour to the stop change (once a minute
+before 2026-11-26 11:02 UTC, tick-level since), and each trade's result from the broker's deals.
+
 ## IC Markets synthetic history
 
 `icmarkets_history.py` runs inside a dedicated MT5 research terminal on
