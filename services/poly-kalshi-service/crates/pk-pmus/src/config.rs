@@ -27,11 +27,15 @@ pub struct Config {
     pub pm_max_age_ms: i64,
     pub max_entries_per_window: usize,
     pub shares: f64,
-    /// Polymarket US taker fee: `theta · C · p(1 − p)`.
+    /// Polymarket US taker fee `theta · C · p(1 − p)` when a market has no
+    /// `feeCoefficient` (each market's own coefficient wins).
     pub fee_theta: f64,
     pub epoch: String,
     // --- paper ---
     pub paper_latency_ms: i64,
+    /// Delay study: the book is also fetched this long after each decision and
+    /// journaled as `pu_fill_probe` (never a position). Empty turns it off.
+    pub paper_delays_ms: Vec<i64>,
     pub poll_ms: u64,
     // --- risk ---
     pub max_open_cost_usd: f64,
@@ -150,9 +154,22 @@ impl Config {
             pm_max_age_ms: e.int("PK_PU_PM_MAX_AGE_MS", 1_500)?,
             max_entries_per_window: e.int("PK_PU_MAX_ENTRIES_PER_WINDOW", 1)? as usize,
             shares: e.num("PK_PU_SHARES", 10.0)?,
-            fee_theta: e.num("PK_PU_FEE_THETA", 0.0695)?,
-            epoch: e.or("PK_PU_EPOCH", "2"),
+            fee_theta: e.num("PK_PU_FEE_THETA", 0.11)?,
+            epoch: e.or("PK_PU_EPOCH", "4"),
             paper_latency_ms: e.int("PK_PU_PAPER_LATENCY_MS", 150)?,
+            paper_delays_ms: {
+                let raw = e.or("PK_PU_PAPER_DELAYS_MS", "25,50,100,150");
+                let mut v = Vec::new();
+                for x in raw.split(',').map(str::trim).filter(|x| !x.is_empty() && *x != "off") {
+                    v.push(
+                        x.parse::<i64>()
+                            .map_err(|_| anyhow::anyhow!("PK_PU_PAPER_DELAYS_MS={raw}: {x} is not ms"))?,
+                    );
+                }
+                v.sort_unstable();
+                v.dedup();
+                v
+            },
             poll_ms: e.int("PK_PU_POLL_MS", 250)? as u64,
             max_open_cost_usd: e.num("PK_PU_MAX_OPEN_COST_USD", 50.0)?,
             daily_loss_usd: e.num("PK_PU_DAILY_LOSS_USD", 15.0)?,
@@ -185,6 +202,10 @@ impl Config {
             "need 0 < MIN_PX < MAX_PX < 1"
         );
         anyhow::ensure!(c.shares > 0.0, "PK_PU_SHARES must be positive");
+        anyhow::ensure!(
+            c.paper_delays_ms.iter().all(|d| (0..=5_000).contains(d)) && c.paper_delays_ms.len() <= 8,
+            "PK_PU_PAPER_DELAYS_MS: at most 8 delays, each 0–5000 ms"
+        );
         anyhow::ensure!(
             0.0 < c.shadow_min_edge && c.shadow_min_edge <= c.min_edge,
             "need 0 < SHADOW_MIN_EDGE <= MIN_EDGE"
@@ -236,8 +257,13 @@ pub mod tests {
     fn defaults_and_guards() {
         let c = Config::from_vars(vars(&[])).unwrap();
         assert_eq!(c.assets, ["BTC", "ETH", "SOL", "XRP"]);
-        assert_eq!((c.min_edge, c.max_edge, c.fee_theta), (0.05, 0.15, 0.0695));
+        assert_eq!((c.min_edge, c.max_edge, c.fee_theta), (0.05, 0.15, 0.11));
         assert!(!c.enforce_halt);
+        assert_eq!(c.paper_delays_ms, [25, 50, 100, 150]);
+        assert!(
+            Config::from_vars(vars(&[("PK_PU_PAPER_DELAYS_MS", "off")])).unwrap().paper_delays_ms.is_empty()
+        );
+        assert!(Config::from_vars(vars(&[("PK_PU_PAPER_DELAYS_MS", "25,x")])).is_err());
         assert!(Config::from_vars(vars(&[("PK_PU_KELLY_SHRINK", "1.5")])).is_err());
         assert!(Config::from_vars(vars(&[("PK_PU_MODE", "live")])).is_err());
         assert!(Config::from_vars(vars(&[("PK_PU_ASSETS", "BTC,DOGE")])).is_err());

@@ -61,6 +61,7 @@ th { color:var(--muted); font-size:11px; font-weight:600; }
   <section><h2>Cumulative P&amp;L</h2><p class="muted" id="chart-note"></p><div class="chart" id="chart"></div></section>
   <section><h2>Recent decisions</h2><p class="muted" id="recent-note"></p><div id="recent"></div></section>
   <section><h2>Sizing rules (counterfactual)</h2><p class="muted">What each rule would have bought against the same book: depth at the limit, at most 2% of a $1,000 bankroll per trade and 5% per window across coins. Paper still buys a flat 10. Kelly uses Kalshi's mid; shrunk Kelly uses c + 0.5·(q − c). t is clustered by window.</p><div id="sizing"></div></section>
+  <section><h2>Arrival delay</h2><p class="muted">For every decision the book is also fetched 25, 50, 100 and 150 ms later, the same order walked against it. Only the 150 ms fill is a paper position; the rest are counterfactual. Slippage is the average paid minus the ask at the decision. t is clustered by window.</p><div id="delays"></div></section>
   <section><h2>Minimum edge: 3¢ against 5¢</h2><p class="muted">The first gap of at least 3¢ in each coin-window, per share at the ask plus fee (no fill model). The 3–5¢ row is what raising the minimum to 5¢ dropped.</p><div id="min-edge"></div></section>
   <section><h2>By coin</h2><div id="by-asset"></div></section>
   <section><h2>By seconds before the close</h2><div id="by-left"></div></section>
@@ -222,6 +223,7 @@ function render(s) {
   pairs("feeds", [
     ["Kalshi", num(live.kalshi_age_ms) ? (live.kalshi_age_ms / 1000).toFixed(1) + " s · " + (live.kalshi_books ?? 0) + " books" : "—"],
     ["Polymarket US quote", num(live.pm_age_ms) ? (live.pm_age_ms / 1000).toFixed(2) + " s" : "—"],
+    ["Book polls", (() => { const p = live.poll || {}; return `${p.ok ?? 0} ok · ${p.not_open ?? 0} not open · ${live.poll_errors ?? 0} errors · ${p.cache_hits ?? 0} cached`; })()],
     ["Kalshi frames", String(c.kalshi_frames ?? 0)],
     ["Quote polls", String(c.pm_polls ?? 0)],
     ["Same result", `${c.agree ?? 0} of ${(c.agree ?? 0) + (c.disagree ?? 0)}`],
@@ -249,6 +251,12 @@ function render(s) {
     { h: "P&L", v: (r) => usd(r.pnl) }, { h: "Return on risk", v: (r) => r.ret_pct != null ? `${fx(r.ret_pct, 1)}%` : "—" },
     { h: "Worst drawdown", v: (r) => `${fx(r.max_dd, 2)} USD` }, { h: "t", v: (r) => fx(r.t, 2) },
   ], s.sizing || [], "No settled positions with sizing yet."));
+  $("delays").replaceChildren(table([
+    { h: "Delay", v: (r) => r.label }, { h: "Coin", v: (r) => r.asset }, { h: "Decisions", v: (r) => String(r.probes) },
+    { h: "Any fill", v: (r) => pct(r.fill_rate) }, { h: "Shares filled", v: (r) => pct(r.share_fill) },
+    { h: "Slippage", v: (r) => cents(r.slip_c) }, { h: "Settled", v: (r) => String(r.n) },
+    { h: "Net per share", v: (r) => cents(r.net_c) }, { h: "t", v: (r) => fx(r.t, 2) },
+  ], s.delays || [], "No probed decisions yet."));
   $("min-edge").replaceChildren(table([
     { h: "Gaps", v: (r) => r.label }, { h: "Entries", v: (r) => String(r.n) },
     { h: "Net per share", v: (r) => cents(r.net_c) }, { h: "t", v: (r) => fx(r.t, 2) },
