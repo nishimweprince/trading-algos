@@ -19,6 +19,8 @@
 //! | `pu_decision`, `pu_fill`, `pu_no_fill` | an entry and what its order got |
 //! | `pu_close`, `pu_resolution`, `pu_settle` | the window's last gate, both outcomes, P&L |
 //! | `pu_shadow`, `pu_shadow_settle` | the first gap ≥ `shadow_min_edge` per coin-window (the min-edge-3¢ rule), top-of-book cost, never filled |
+//! | `pu_fill_probe`, `pu_probe_settle` | delay study: the order walked against the book 25–150 ms after the decision (never a position) |
+//! | `pu_book_err` | a window's first book error past its open |
 //! | `pu_halt`, `pu_ack`, `pu_kill`, `pu_status` | risk and housekeeping |
 //!
 //! Sizing is measured, not traded: each fill also journals what the sizing
@@ -48,6 +50,9 @@ pub struct WindowInfo {
     pub tick: f64,
     pub min_qty: f64,
     pub index: String,
+    /// The market's `feeCoefficient` (journaled; the gate uses `fee_theta`).
+    #[serde(default)]
+    pub fee_coef: Option<f64>,
 }
 
 impl WindowInfo {
@@ -132,14 +137,46 @@ pub struct Persisted {
     pub halted_day: Option<String>,
     pub acked_day: Option<String>,
     pub next_id: u64,
+    /// Fills each probe delay got (counterfactual, settled beside the positions).
+    #[serde(default)]
+    pub probes: Vec<Probe>,
 }
 
-/// Ask the runtime to fetch a Polymarket US book at `at_ns` for a paper fill.
+/// What a paper order would have filled had it arrived `delay_ms` after the decision.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Probe {
+    pub id: u64,
+    pub asset: String,
+    pub open: i64,
+    pub up: bool,
+    pub delay_ms: i64,
+    pub shares: f64,
+    pub usd: f64,
+    pub fee: f64,
+    pub epoch: String,
+    #[serde(default)]
+    pub settled: bool,
+}
+
+/// Ask the runtime to fetch a Polymarket US book at `at_ns` for a paper fill
+/// (and at `decision_ns` + each probe delay for the delay study).
 #[derive(Clone, Debug, PartialEq)]
 pub struct FetchBook {
     pub id: u64,
     pub slug: String,
     pub at_ns: i64,
+    pub decision_ns: i64,
+}
+
+/// The Polymarket US quote at a decision: bid, ask, receipt age, venue age.
+#[derive(Clone, Copy, Debug)]
+pub struct PmView {
+    pub bid: Option<f64>,
+    pub ask: Option<f64>,
+    pub age_ms: i64,
+    /// Now − the book's `transactTime` (its last change, so a quiet book ages).
+    pub venue_age_ms: Option<i64>,
+    pub venue_ns: Option<i64>,
 }
 
 #[derive(Default)]
@@ -180,6 +217,7 @@ struct PmQuote {
     bid: Option<f64>,
     ask: Option<f64>,
     t_ns: i64,
+    venue_ns: Option<i64>,
 }
 
 #[derive(Clone, Debug)]
@@ -240,6 +278,8 @@ pub struct Engine {
     k_last_frame_ns: i64,
     pm: HashMap<(usize, i64), PmQuote>,
     pending: HashMap<u64, Order>,
+    /// Orders kept for the probe fetches, until their window is pruned.
+    probe_orders: HashMap<u64, Order>,
     pub p: Persisted,
     killed: bool,
     last_grid: Vec<i64>,
@@ -268,6 +308,18 @@ fn r6(x: f64) -> Value {
     if x.is_finite() { ((x * 1e6).round() / 1e6).into() } else { Value::Null }
 }
 
+/// The levels a buy of one side walks, cheapest first, at or under `limit`,
+/// and that side's best price. A Yes buy lifts offers; a No buy sells into
+/// Yes bids, at 1 − bid.
+fn side_levels(up: bool, limit: f64, bids: &[(f64, f64)], offers: &[(f64, f64)]) -> (Vec<(f64, f64)>, f64) {
+    let mut v: Vec<(f64, f64)> =
+        if up { offers.to_vec() } else { bids.iter().map(|(p, q)| (1.0 - p, *q)).collect() };
+    v.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let best = v.iter().filter(|l| l.1 > 0.0).map(|l| l.0).fold(f64::INFINITY, f64::min);
+    v.retain(|(p, q)| *p <= limit + 1e-9 && *q > 0.0);
+    (v, best)
+}
+
 fn floor_to(x: f64, step: f64) -> f64 {
     let v = ((x / step) + 1e-9).floor() * step;
     (v * 1e4).round() / 1e4
@@ -285,6 +337,7 @@ impl Engine {
             k_last_frame_ns: 0,
             pm: HashMap::new(),
             pending: HashMap::new(),
+            probe_orders: HashMap::new(),
             p: persisted,
             killed: false,
             last_grid: vec![0; n],
@@ -308,6 +361,11 @@ impl Engine {
             m.insert("t_ns".into(), t_ns.into());
         }
         self.records.push(body);
+    }
+
+    /// Journals a runtime record (book errors, failed probes).
+    pub fn journal(&mut self, kind: &str, body: Value, t_ns: i64) {
+        self.record(t_ns, kind, body);
     }
 
     pub fn take_records(&mut self) -> Vec<Value> {
@@ -334,7 +392,7 @@ impl Engine {
             t_ns,
             "pu_window",
             json!({"asset": w.asset, "open": w.open, "slug": w.slug, "kalshi": w.kalshi_ticker, "tick": w.tick,
-                   "min_qty": w.min_qty, "index": w.index, "epoch": self.cfg.epoch}),
+                   "min_qty": w.min_qty, "index": w.index, "fee_coef": w.fee_coef, "epoch": self.cfg.epoch}),
         );
         self.windows.insert((i, w.open), w);
     }
@@ -357,21 +415,31 @@ impl Engine {
             .collect()
     }
 
-    pub fn on_pm_quote(&mut self, asset: usize, open: i64, bid: Option<f64>, ask: Option<f64>, t_ns: i64) {
-        self.pm.insert((asset, open), PmQuote { bid, ask, t_ns });
+    /// A fresh Polymarket US book's top. `t_ns` is when it was received (the
+    /// runtime backdates a CDN-cached response by its `Age`); `venue_ns` is
+    /// the book's `transactTime`.
+    pub fn on_pm_quote(
+        &mut self,
+        asset: usize,
+        open: i64,
+        bid: Option<f64>,
+        ask: Option<f64>,
+        venue_ns: Option<i64>,
+        t_ns: i64,
+    ) {
+        self.pm.insert((asset, open), PmQuote { bid, ask, t_ns, venue_ns });
         self.counters.pm_polls += 1;
     }
 
-    /// A Kalshi `orderbook_snapshot` / `orderbook_delta` frame.
-    pub fn on_kalshi(&mut self, text: &str, t_ns: i64) {
-        let Ok(f) = serde_json::from_str::<pk_engine::parse::KalshiFrame<'_>>(text) else { return };
+    /// A Kalshi `orderbook_snapshot` / `orderbook_delta` frame. Returns the
+    /// window whose book it changed.
+    pub fn on_kalshi(&mut self, text: &str, t_ns: i64) -> Option<(usize, i64)> {
+        let Ok(f) = serde_json::from_str::<pk_engine::parse::KalshiFrame<'_>>(text) else { return None };
         self.k_last_frame_ns = t_ns;
         self.counters.kalshi_frames += 1;
-        let Some(m) = f.msg.as_ref() else { return };
-        let Some(ticker) = m.market_ticker.as_ref().map(|t| t.as_str()) else { return };
-        if !self.kowner.contains_key(ticker) {
-            return;
-        }
+        let m = f.msg.as_ref()?;
+        let ticker = m.market_ticker.as_ref().map(|t| t.as_str())?;
+        let owner = *self.kowner.get(ticker)?;
         let b = self.kbooks.entry(ticker.to_owned()).or_default();
         match f.kind.as_deref() {
             Some("orderbook_snapshot") => {
@@ -383,7 +451,7 @@ impl Engine {
                 b.last_ns = t_ns;
             }
             Some("orderbook_delta") if b.snapshot => {
-                let Some((price, delta)) = m.delta() else { return };
+                let (price, delta) = m.delta()?;
                 let side = if m.side.as_deref() == Some("no") { &mut b.no } else { &mut b.yes };
                 let k = px_key(price);
                 let q = side.get(&k).copied().unwrap_or(0.0) + delta;
@@ -394,8 +462,9 @@ impl Engine {
                 }
                 b.last_ns = t_ns;
             }
-            _ => {}
+            _ => return None,
         }
+        Some(owner)
     }
 
     pub fn invalidate_kalshi(&mut self) {
@@ -411,9 +480,15 @@ impl Engine {
         self.kbooks.get(w.kalshi_ticker.as_ref()?)?.quote(t_ns)
     }
 
-    fn pm_quote(&self, i: usize, open: i64, t_ns: i64) -> Option<(Option<f64>, Option<f64>, i64)> {
+    fn pm_quote(&self, i: usize, open: i64, t_ns: i64) -> Option<PmView> {
         let q = self.pm.get(&(i, open))?;
-        Some((q.bid, q.ask, (t_ns - q.t_ns) / 1_000_000))
+        Some(PmView {
+            bid: q.bid,
+            ask: q.ask,
+            age_ms: (t_ns - q.t_ns) / 1_000_000,
+            venue_age_ms: q.venue_ns.map(|v| (t_ns - v) / 1_000_000),
+            venue_ns: q.venue_ns,
+        })
     }
 
     pub fn set_kill(&mut self, on: bool, t_ns: i64) {
@@ -459,16 +534,33 @@ impl Engine {
                 self.last_grid[i] = now_s;
                 self.grid(i, open_now, t_ns);
             }
-            let since_open = now_s - open_now;
-            let left = open_now + WINDOW_S - now_s;
-            if since_open >= self.cfg.entry_after_open_s
-                && left > self.cfg.stop_before_close_s
-                && let Some(a) = self.evaluate(i, open_now, t_ns)
-            {
+            if let Some(a) = self.evaluate_now(i, open_now, t_ns, "tick") {
                 out.push(a);
             }
         }
         out
+    }
+
+    /// Evaluates one window now, if it is the live one and inside its entry
+    /// period. Called on the clock and whenever either venue's quote changes,
+    /// so an entry does not wait for the next clock step.
+    pub fn evaluate_now(
+        &mut self,
+        i: usize,
+        open: i64,
+        t_ns: i64,
+        trigger: &'static str,
+    ) -> Option<FetchBook> {
+        let now_s = t_ns / NS;
+        if open != now_s - now_s.rem_euclid(WINDOW_S) || !self.windows.contains_key(&(i, open)) {
+            return None;
+        }
+        let since_open = now_s - open;
+        let left = open + WINDOW_S - now_s;
+        if since_open < self.cfg.entry_after_open_s || left <= self.cfg.stop_before_close_s {
+            return None;
+        }
+        self.evaluate(i, open, t_ns, trigger)
     }
 
     /// The gap on each side: (Kalshi side mid, Polymarket US ask, fee, edge).
@@ -488,7 +580,7 @@ impl Engine {
         let kq = self.kalshi_quote(i, open, t_ns);
         let pq = self.pm_quote(i, open, t_ns);
         let gaps = match (kq, pq) {
-            (Some(k), Some((b, a, _))) => self.gaps(&k, b, a),
+            (Some(k), Some(p)) => self.gaps(&k, p.bid, p.ask),
             _ => [None, None],
         };
         let left = open + WINDOW_S - t_ns / NS;
@@ -498,14 +590,14 @@ impl Engine {
             json!({
                 "asset": asset, "open": open, "left": left,
                 "kalshi": kq.map(|q| json!({"bid": r4(q.bid), "ask": r4(q.ask), "age_ms": q.age_ms})),
-                "pm": pq.map(|(b, a, age)| json!({"bid": b, "ask": a, "age_ms": age})),
+                "pm": pq.map(|p| json!({"bid": p.bid, "ask": p.ask, "age_ms": p.age_ms, "venue_age_ms": p.venue_age_ms})),
                 "edge_yes": gaps[0].map(|g| r6(g.3)), "edge_no": gaps[1].map(|g| r6(g.3)),
                 "epoch": self.cfg.epoch,
             }),
         );
     }
 
-    fn evaluate(&mut self, i: usize, open: i64, t_ns: i64) -> Option<FetchBook> {
+    fn evaluate(&mut self, i: usize, open: i64, t_ns: i64, trigger: &'static str) -> Option<FetchBook> {
         let gate = |e: &mut Self, why: &'static str| {
             e.wstate.entry((i, open)).or_default().gate = Some(why);
             None
@@ -523,7 +615,8 @@ impl Engine {
         if k.ask - k.bid > self.cfg.kalshi_max_spread + 1e-9 {
             return gate(self, "kalshi_spread");
         }
-        let Some((bid, ask, age_ms)) = self.pm_quote(i, open, t_ns) else { return gate(self, "no_pm_quote") };
+        let Some(pm) = self.pm_quote(i, open, t_ns) else { return gate(self, "no_pm_quote") };
+        let (bid, ask, age_ms) = (pm.bid, pm.ask, pm.age_ms);
         if age_ms > self.cfg.pm_max_age_ms {
             return gate(self, "stale_pm_quote");
         }
@@ -570,6 +663,8 @@ impl Engine {
         self.counters.decisions += 1;
         self.dirty = true;
         let left = (open + WINDOW_S) as f64 - t_ns as f64 / NS as f64;
+        // The same gap at the market's own fee coefficient, for re-scoring.
+        let edge_mkt = w.fee_coef.map(|c| fair - px - c * px * (1.0 - px));
         self.record(
             t_ns,
             "pu_decision",
@@ -577,15 +672,20 @@ impl Engine {
                 "id": id, "asset": w.asset, "open": open, "slug": w.slug, "side": if up { "up" } else { "down" },
                 "left": r4(left), "p_side": r4(fair), "kalshi_side": r4(fair),
                 "kalshi_bid": r4(k.bid), "kalshi_ask": r4(k.ask), "kalshi_age_ms": k.age_ms,
-                "pm_bid": bid, "pm_ask": ask, "pm_age_ms": age_ms,
+                "pm_bid": bid, "pm_ask": ask, "pm_age_ms": age_ms, "pm_venue_age_ms": pm.venue_age_ms,
+                "pm_venue_ts": pm.venue_ns.map(iso), "trigger": trigger,
+                "fee_coef": w.fee_coef, "edge_at_market_fee": edge_mkt.map(r6),
                 "ask": r4(px), "fee": r6(fee), "edge": r6(edge), "limit": r4(limit), "shares": shares,
                 "epoch": self.cfg.epoch, "mode": "paper",
             }),
         );
         let at_ns = t_ns + self.cfg.paper_latency_ms * 1_000_000;
-        self.pending
-            .insert(id, Order { asset: i, open, up, limit, shares, decision_ns: t_ns, fair, px, fee, edge });
-        Some(FetchBook { id, slug: w.slug, at_ns })
+        let order = Order { asset: i, open, up, limit, shares, decision_ns: t_ns, fair, px, fee, edge };
+        if !self.cfg.paper_delays_ms.is_empty() {
+            self.probe_orders.insert(id, order.clone());
+        }
+        self.pending.insert(id, order);
+        Some(FetchBook { id, slug: w.slug, at_ns, decision_ns: t_ns })
     }
 
     /// The min-edge-3¢ rule's entry: the first gap of `shadow_min_edge`..=`max_edge`
@@ -648,26 +748,11 @@ impl Engine {
     pub fn on_book(&mut self, id: u64, bids: &[(f64, f64)], offers: &[(f64, f64)], t_ns: i64) {
         let Some(o) = self.pending.remove(&id) else { return };
         let Some(w) = self.windows.get(&(o.asset, o.open)).cloned() else { return };
-        // A Yes buy walks the offers up; a No buy sells into Yes bids, at 1 − bid.
-        let mut levels: Vec<(f64, f64)> = if o.up {
-            let mut v: Vec<(f64, f64)> = offers.to_vec();
-            v.sort_by(|a, b| a.0.total_cmp(&b.0));
-            v
-        } else {
-            let mut v: Vec<(f64, f64)> = bids.iter().map(|(p, q)| (1.0 - p, *q)).collect();
-            v.sort_by(|a, b| a.0.total_cmp(&b.0));
-            v
-        };
-        levels.retain(|(p, q)| *p <= o.limit + 1e-9 && *q > 0.0);
+        let (levels, best) = side_levels(o.up, o.limit, bids, offers);
         let fee_theta = self.cfg.fee_theta;
         let (got, usd, fee) = walk(&levels, o.shares, |p| fee_theta * p * (1.0 - p));
         let depth: f64 = levels.iter().map(|l| l.1).sum();
         let alt = if got > 1e-9 { self.size_rules(&o, &levels, got) } else { BTreeMap::new() };
-        let best = if o.up {
-            offers.iter().map(|x| x.0).fold(f64::INFINITY, f64::min)
-        } else {
-            bids.iter().map(|x| 1.0 - x.0).fold(f64::INFINITY, f64::min)
-        };
         let body = json!({
             "id": id, "asset": w.asset, "open": o.open, "side": if o.up { "up" } else { "down" }, "mode": "paper",
             "limit": r4(o.limit), "ask_now": if best.is_finite() { r4(best) } else { Value::Null },
@@ -702,6 +787,52 @@ impl Engine {
             self.counters.no_fills += 1;
             self.record(t_ns, "pu_no_fill", body);
         }
+    }
+
+    /// The book fetched `delay_ms` after decision `id`: what an order arriving
+    /// then would have filled. Never a position; settled as `pu_probe_settle`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn on_probe(
+        &mut self,
+        id: u64,
+        delay_ms: i64,
+        bids: &[(f64, f64)],
+        offers: &[(f64, f64)],
+        venue_ns: Option<i64>,
+        cache_age_s: Option<i64>,
+        t_ns: i64,
+    ) {
+        let Some(o) = self.probe_orders.get(&id).cloned() else { return };
+        let asset = self.cfg.assets[o.asset].clone();
+        let (levels, best) = side_levels(o.up, o.limit, bids, offers);
+        let fee_theta = self.cfg.fee_theta;
+        let (got, usd, fee) = walk(&levels, o.shares, |p| fee_theta * p * (1.0 - p));
+        let avg = if got > 1e-9 { usd / got } else { f64::NAN };
+        self.record(
+            t_ns,
+            "pu_fill_probe",
+            json!({"id": id, "asset": asset, "open": o.open, "side": if o.up { "up" } else { "down" },
+                   "delay_ms": delay_ms, "held_ms": (t_ns - o.decision_ns) / 1_000_000,
+                   "venue_ts": venue_ns.map(iso), "venue_age_ms": venue_ns.map(|v| (t_ns - v) / 1_000_000),
+                   "cache_age_s": cache_age_s,
+                   "limit": r4(o.limit), "decision_ask": r4(o.px), "ask_now": if best.is_finite() { r4(best) } else { Value::Null },
+                   "want": r4(o.shares), "shares": r4(got), "usd": r4(usd), "fee": r6(fee), "avg": r4(avg),
+                   "slip": r4(avg - o.px), "depth_at_limit": r4(levels.iter().map(|l| l.1).sum()),
+                   "epoch": self.cfg.epoch}),
+        );
+        self.p.probes.push(Probe {
+            id,
+            asset,
+            open: o.open,
+            up: o.up,
+            delay_ms,
+            shares: got,
+            usd,
+            fee,
+            epoch: self.cfg.epoch.clone(),
+            settled: false,
+        });
+        self.dirty = true;
     }
 
     /// The book could not be fetched: the paper order did not fill.
@@ -785,6 +916,20 @@ impl Engine {
                        "epoch": self.cfg.epoch}),
             );
         }
+        let mut probe_recs = Vec::new();
+        for pr in self.p.probes.iter_mut().filter(|p| p.asset == asset && p.open == open && !p.settled) {
+            pr.settled = true;
+            let won = (outcome == "yes") == pr.up;
+            let pnl = if won { pr.shares } else { 0.0 } - pr.usd - pr.fee;
+            probe_recs.push(json!({"id": pr.id, "asset": asset, "open": open, "delay_ms": pr.delay_ms, "won": won,
+                                   "shares": r4(pr.shares), "cost": r4(pr.usd + pr.fee), "pnl": r4(pnl), "epoch": pr.epoch}));
+        }
+        if !probe_recs.is_empty() {
+            self.dirty = true;
+        }
+        for r in probe_recs {
+            self.record(t_ns, "pu_probe_settle", r);
+        }
         for p in settled {
             let pnl = p.pnl.unwrap_or(0.0);
             // Booked to the day the position was entered, not the day its window closed.
@@ -851,6 +996,13 @@ impl Engine {
             self.pm.remove(&key);
             self.window_alt.remove(&key.1);
         }
+        let live: BTreeSet<i64> = self.windows.keys().map(|k| k.1).collect();
+        self.probe_orders.retain(|_, o| live.contains(&o.open));
+        let n = self.p.probes.len();
+        self.p.probes.retain(|p| !p.settled && p.open + WINDOW_S + RESOLVE_FOR_S + 600 >= now_s);
+        if self.p.probes.len() != n {
+            self.dirty = true;
+        }
         let before = self.p.positions.len();
         self.p.positions.retain(|p| p.outcome.is_none());
         if self.p.positions.len() != before {
@@ -908,6 +1060,7 @@ mod tests {
                 tick: 0.01,
                 min_qty: 0.01,
                 index: "BRTI".into(),
+                fee_coef: Some(0.11),
             },
             OPEN * NS,
         );
@@ -930,7 +1083,7 @@ mod tests {
         let mut e = engine();
         let t = (OPEN + 300) * NS;
         kalshi(&mut e, 0.59, 0.61, t);
-        e.on_pm_quote(0, OPEN, Some(0.54), Some(0.55), t);
+        e.on_pm_quote(0, OPEN, Some(0.54), Some(0.55), None, t);
         let acts = e.tick(t);
         assert_eq!(acts.len(), 1);
         let d = &decisions(&mut e)[0];
@@ -950,7 +1103,7 @@ mod tests {
         let mut e = engine();
         let t = (OPEN + 300) * NS;
         kalshi(&mut e, 0.39, 0.41, t); // No worth 0.60
-        e.on_pm_quote(0, OPEN, Some(0.45), Some(0.47), t); // No costs 0.55
+        e.on_pm_quote(0, OPEN, Some(0.45), Some(0.47), None, t); // No costs 0.55
         let acts = e.tick(t);
         let d = &decisions(&mut e)[0];
         assert_eq!(d["side"], "down");
@@ -971,27 +1124,27 @@ mod tests {
         // No gap.
         let mut e = engine();
         kalshi(&mut e, 0.54, 0.56, t);
-        e.on_pm_quote(0, OPEN, Some(0.54), Some(0.56), t);
+        e.on_pm_quote(0, OPEN, Some(0.54), Some(0.56), None, t);
         assert!(e.tick(t).is_empty());
         // Too early in the window.
         let mut e = engine();
         kalshi(&mut e, 0.59, 0.61, OPEN * NS + 30 * NS);
-        e.on_pm_quote(0, OPEN, Some(0.54), Some(0.55), OPEN * NS + 30 * NS);
+        e.on_pm_quote(0, OPEN, Some(0.54), Some(0.55), None, OPEN * NS + 30 * NS);
         assert!(e.tick(OPEN * NS + 30 * NS).is_empty());
         // A gap over the cap is taken for a stale book.
         let mut e = engine();
         kalshi(&mut e, 0.79, 0.81, t);
-        e.on_pm_quote(0, OPEN, Some(0.54), Some(0.55), t);
+        e.on_pm_quote(0, OPEN, Some(0.54), Some(0.55), None, t);
         assert!(e.tick(t).is_empty());
         // A stale Polymarket US quote.
         let mut e = engine();
         kalshi(&mut e, 0.59, 0.61, t);
-        e.on_pm_quote(0, OPEN, Some(0.54), Some(0.55), t - 2 * NS);
+        e.on_pm_quote(0, OPEN, Some(0.54), Some(0.55), None, t - 2 * NS);
         assert!(e.tick(t).is_empty());
         // A wide Kalshi book.
         let mut e = engine();
         kalshi(&mut e, 0.55, 0.65, t);
-        e.on_pm_quote(0, OPEN, Some(0.50), Some(0.51), t);
+        e.on_pm_quote(0, OPEN, Some(0.50), Some(0.51), None, t);
         assert!(e.tick(t).is_empty());
     }
 
@@ -1000,9 +1153,9 @@ mod tests {
         let mut e = engine();
         let t = (OPEN + 300) * NS;
         kalshi(&mut e, 0.59, 0.61, t);
-        e.on_pm_quote(0, OPEN, Some(0.54), Some(0.55), t);
+        e.on_pm_quote(0, OPEN, Some(0.54), Some(0.55), None, t);
         assert_eq!(e.tick(t).len(), 1);
-        e.on_pm_quote(0, OPEN, Some(0.54), Some(0.55), t + NS);
+        e.on_pm_quote(0, OPEN, Some(0.54), Some(0.55), None, t + NS);
         assert!(e.tick(t + NS).is_empty());
         e.on_resolved("BTC", OPEN, "yes", Some("no"), (OPEN + 930) * NS);
         let r = e.take_records().into_iter().find(|r| r["type"] == "pu_resolution").unwrap();
@@ -1014,7 +1167,7 @@ mod tests {
         let mut e = engine();
         let t = (OPEN + 300) * NS;
         kalshi(&mut e, 0.62, 0.64, t); // fair 0.63
-        e.on_pm_quote(0, OPEN, Some(0.50), Some(0.52), t); // edge ≈ 0.63 − 0.52 − 0.0173 ≈ 0.093
+        e.on_pm_quote(0, OPEN, Some(0.50), Some(0.52), None, t); // edge ≈ 0.63 − 0.52 − 0.0173 ≈ 0.093
         let acts = e.tick(t);
         let d = &decisions(&mut e)[0];
         assert!((d["edge"].as_f64().unwrap() - 0.0927).abs() < 1e-3, "{d}");
@@ -1044,7 +1197,7 @@ mod tests {
         let mut e = engine_with(&[]); // defaults: min 5¢, shadow from 3¢
         let t = (OPEN + 300) * NS;
         kalshi(&mut e, 0.59, 0.61, t);
-        e.on_pm_quote(0, OPEN, Some(0.54), Some(0.55), t); // edge ≈ 3.3¢: shadow only
+        e.on_pm_quote(0, OPEN, Some(0.54), Some(0.55), None, t); // edge ≈ 3.3¢: shadow only
         assert!(e.tick(t).is_empty());
         let sh = e.take_records().into_iter().find(|r| r["type"] == "pu_shadow").unwrap();
         assert_eq!(sh["real"], false);
@@ -1065,7 +1218,7 @@ mod tests {
             ]);
             let t = (OPEN + 300) * NS;
             kalshi(&mut e, 0.59, 0.61, t);
-            e.on_pm_quote(0, OPEN, Some(0.54), Some(0.55), t);
+            e.on_pm_quote(0, OPEN, Some(0.54), Some(0.55), None, t);
             let acts = e.tick(t);
             e.on_book(acts[0].id, &[(0.54, 50.0)], &[(0.55, 50.0)], t + 150_000_000);
             let after = (OPEN + 930) * NS;
@@ -1074,5 +1227,69 @@ mod tests {
             assert_eq!(h["record_only"].as_bool().unwrap_or(false), !halted);
             assert_eq!(e.halted(after), halted);
         }
+    }
+
+    #[test]
+    fn a_fresh_quote_evaluates_without_waiting_for_the_clock() {
+        let mut e = engine();
+        let t = (OPEN + 300) * NS;
+        kalshi(&mut e, 0.59, 0.61, t);
+        e.on_pm_quote(0, OPEN, Some(0.54), Some(0.55), Some(t - 40_000_000), t);
+        let a = e.evaluate_now(0, OPEN, t, "pm_quote").expect("fires on the quote");
+        assert_eq!(a.decision_ns, t);
+        let d = &decisions(&mut e)[0];
+        assert_eq!(d["trigger"], "pm_quote");
+        assert_eq!(d["pm_venue_age_ms"], 40);
+        // 0.60 − 0.55 − 0.11 · 0.55 · 0.45
+        assert!((d["edge_at_market_fee"].as_f64().unwrap() - 0.022775).abs() < 1e-6, "{d}");
+        // Before the entry period, and for a window that is not live, nothing.
+        let mut e = engine();
+        kalshi(&mut e, 0.59, 0.61, OPEN * NS + 10 * NS);
+        e.on_pm_quote(0, OPEN, Some(0.54), Some(0.55), None, OPEN * NS + 10 * NS);
+        assert!(e.evaluate_now(0, OPEN, OPEN * NS + 10 * NS, "pm_quote").is_none());
+        assert!(e.evaluate_now(0, OPEN - WINDOW_S, t, "pm_quote").is_none());
+    }
+
+    #[test]
+    fn a_kalshi_delta_names_its_window() {
+        let mut e = engine();
+        let t = (OPEN + 300) * NS;
+        let f = json!({"type": "orderbook_snapshot", "sid": 1, "seq": 1,
+                       "msg": {"market_ticker": "KX", "yes_dollars_fp": [["0.5900", "100.00"]], "no_dollars_fp": [["0.3900", "100.00"]]}});
+        assert_eq!(e.on_kalshi(&f.to_string(), t), Some((0, OPEN)));
+        let other = json!({"type": "orderbook_snapshot", "sid": 1, "seq": 1, "msg": {"market_ticker": "KY"}});
+        assert_eq!(e.on_kalshi(&other.to_string(), t), None);
+    }
+
+    #[test]
+    fn probes_are_journaled_and_settled_apart_from_the_position() {
+        let mut e = engine();
+        let t = (OPEN + 300) * NS;
+        kalshi(&mut e, 0.59, 0.61, t);
+        e.on_pm_quote(0, OPEN, Some(0.54), Some(0.55), None, t);
+        let a = e.tick(t).remove(0);
+        e.take_records();
+        // 25 ms: the ask still there; 150 ms: it moved past the limit.
+        e.on_probe(a.id, 25, &[(0.54, 50.0)], &[(0.55, 50.0)], Some(t), None, t + 25_000_000);
+        e.on_probe(a.id, 150, &[(0.54, 50.0)], &[(0.58, 50.0)], Some(t), None, t + 150_000_000);
+        e.on_book(a.id, &[(0.54, 50.0)], &[(0.58, 50.0)], t + 150_000_000);
+        let recs = e.take_records();
+        let probes: Vec<&Value> = recs.iter().filter(|r| r["type"] == "pu_fill_probe").collect();
+        assert_eq!(probes.len(), 2);
+        assert_eq!(probes[0]["shares"].as_f64().unwrap(), 10.0);
+        assert_eq!(probes[0]["slip"].as_f64().unwrap(), 0.0);
+        assert_eq!(probes[1]["shares"].as_f64().unwrap(), 0.0);
+        assert!(recs.iter().any(|r| r["type"] == "pu_no_fill"));
+        assert!(e.p.positions.is_empty());
+        e.on_resolved("BTC", OPEN, "yes", None, (OPEN + 930) * NS);
+        let ps: Vec<Value> =
+            e.take_records().into_iter().filter(|r| r["type"] == "pu_probe_settle").collect();
+        assert_eq!(ps.len(), 2);
+        let fast = ps.iter().find(|r| r["delay_ms"] == 25).unwrap();
+        let want = 10.0 - 5.5 - 10.0 * 0.0695 * 0.55 * 0.45;
+        assert!((fast["pnl"].as_f64().unwrap() - want).abs() < 1e-3);
+        // Settled once.
+        e.on_resolved("BTC", OPEN, "yes", None, (OPEN + 931) * NS);
+        assert!(e.take_records().iter().all(|r| r["type"] != "pu_probe_settle"));
     }
 }

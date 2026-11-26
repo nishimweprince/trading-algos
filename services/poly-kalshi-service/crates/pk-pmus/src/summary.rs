@@ -39,6 +39,9 @@ pub struct Summary {
     closes: VecDeque<Value>,
     halts: Vec<Value>,
     shadows: Vec<Value>,
+    /// Delay study: `pu_fill_probe` of this epoch's decisions, and their settles.
+    probes: Vec<Value>,
+    probe_settles: Vec<Value>,
     windows: u64,
     first_ns: Option<i64>,
 }
@@ -143,6 +146,10 @@ impl Summary {
             }
             "pu_settle" if mine => self.settles.push(r.clone()),
             "pu_shadow_settle" if mine => self.shadows.push(r.clone()),
+            "pu_fill_probe" if self.decisions.contains_key(&id) && r.get("error").is_none() => {
+                self.probes.push(r.clone());
+            }
+            "pu_probe_settle" if mine => self.probe_settles.push(r.clone()),
             "pu_settle" => self.baseline.push(r.clone()),
             "pu_resolution" => {
                 if let Some(a) = r.get("agree").and_then(Value::as_bool) {
@@ -318,6 +325,7 @@ impl Summary {
             .collect();
 
         let sizing = self.sizing();
+        let delays = self.delays();
         let min_edge = self.min_edge_compare();
         let mut base_epochs: Vec<&str> =
             self.baseline.iter().map(|s| s["epoch"].as_str().unwrap_or("1")).collect();
@@ -361,6 +369,7 @@ impl Summary {
             "halts": self.halts,
             "sizing": sizing,
             "min_edge": min_edge,
+            "delays": delays,
         })
     }
 
@@ -406,6 +415,49 @@ impl Summary {
                 v
             })
             .collect()
+    }
+
+    /// The delay study: per probe delay, overall and per coin, how much of the
+    /// order filled, the slippage against the decision's ask, and settled net
+    /// ¢/share clustered by window.
+    fn delays(&self) -> Vec<Value> {
+        let mut ds: Vec<i64> = self.probes.iter().map(|p| i(p, "delay_ms")).collect();
+        ds.sort_unstable();
+        ds.dedup();
+        let mut assets: Vec<String> =
+            self.probes.iter().filter_map(|p| p["asset"].as_str().map(str::to_owned)).collect();
+        assets.sort();
+        assets.dedup();
+        let mut out = Vec::new();
+        for d in ds {
+            for a in std::iter::once(None).chain(assets.iter().map(Some)) {
+                let keep =
+                    |v: &Value| i(v, "delay_ms") == d && a.is_none_or(|a| v["asset"].as_str() == Some(a));
+                let ps: Vec<&Value> = self.probes.iter().filter(|p| keep(p)).collect();
+                if ps.is_empty() {
+                    continue;
+                }
+                let filled: Vec<&&Value> = ps.iter().filter(|p| f(p, "shares") > 1e-9).collect();
+                let want: f64 = ps.iter().map(|p| f(p, "want")).filter(|x| x.is_finite()).sum();
+                let got: f64 = filled.iter().map(|p| f(p, "shares")).sum();
+                let slip: Vec<f64> = filled.iter().map(|p| f(p, "slip")).filter(|x| x.is_finite()).collect();
+                let rows = Self::rows_of(&self.probe_settles, |s| keep(s));
+                let mut v = clustered(&rows);
+                v["label"] = format!("{d} ms").into();
+                v["delay_ms"] = d.into();
+                v["asset"] = a.map_or("All".to_owned(), Clone::clone).into();
+                v["probes"] = ps.len().into();
+                v["fill_rate"] = round(filled.len() as f64 / ps.len() as f64, 3);
+                v["share_fill"] = if want > 0.0 { round(got / want, 3) } else { Value::Null };
+                v["slip_c"] = if slip.is_empty() {
+                    Value::Null
+                } else {
+                    round(100.0 * slip.iter().sum::<f64>() / slip.len() as f64, 2)
+                };
+                out.push(v);
+            }
+        }
+        out
     }
 
     /// The min-edge-3¢ rule (every shadow) against its 3–5¢ part and the ≥ 5¢ part,
@@ -515,5 +567,27 @@ mod tests {
         assert!(us_hours(tue + 15 * 3600));
         assert!(!us_hours(tue + 3 * 3600));
         assert!(!us_hours(tue - 2 * 86_400 + 15 * 3600)); // Sunday
+    }
+
+    #[test]
+    fn delay_study_by_delay_and_coin() {
+        let mut s = Summary { epoch: "3".into(), ..Summary::default() };
+        s.ingest(&json!({"type": "pu_decision", "id": 1, "epoch": "3", "t_ns": NS}));
+        for (d, sh, slip) in [(25, 10.0, 0.0), (150, 4.0, 0.01)] {
+            s.ingest(&json!({"type": "pu_fill_probe", "id": 1, "asset": "BTC", "open": 0, "delay_ms": d,
+                             "want": 10.0, "shares": sh, "slip": slip, "epoch": "3"}));
+            s.ingest(&json!({"type": "pu_probe_settle", "id": 1, "asset": "BTC", "open": 0, "delay_ms": d,
+                             "shares": sh, "pnl": sh * 0.4, "epoch": "3"}));
+        }
+        // A failed fetch and another epoch's decision are left out.
+        s.ingest(&json!({"type": "pu_fill_probe", "id": 1, "delay_ms": 50, "error": "timeout"}));
+        s.ingest(&json!({"type": "pu_fill_probe", "id": 9, "asset": "BTC", "delay_ms": 25, "shares": 1.0}));
+        let v = s.snapshot(json!({}), 2 * NS);
+        let rows = v["delays"].as_array().unwrap();
+        assert_eq!(rows.len(), 4); // 25 and 150 ms, All and BTC
+        let slow = rows.iter().find(|r| r["delay_ms"] == 150 && r["asset"] == "All").unwrap();
+        assert_eq!(slow["share_fill"], 0.4);
+        assert_eq!(slow["slip_c"], 1.0);
+        assert_eq!(slow["net_c"], 40.0);
     }
 }
