@@ -26,11 +26,37 @@ was never tested. This is that test, forward and on live data.
 
 Epoch 1 (the first 16 h) used edges ≥ 4¢ with no cap, asks to 0.97, no
 Kalshi, ≥ 55 opening ticks: 57 settled, +2.42¢/share, t 0.42. Why each rule
-changed is in PREREG.md. The page and `eg_review.py --epoch 2` read one
+changed is in PREREG.md. The page and `eg_review.py --epoch N` read one
 epoch at a time.
 
 The fee is each market's own (Gamma `feeSchedule`): BTC 0.05, the others 0.01
 as of 2026-11-24.
+
+## Epoch 3: feed hygiene (2026-11-26)
+
+The 11-26 review found no edge: on 12,640 paired seconds, Polymarket's own Up mid had a
+lower Brier score than the model, the spot-adjusted model and Kalshi in every
+seconds-left band. Epoch 2 lost −20.6¢/share (t −4.2). Epoch 3 changes no rule; it makes
+the data trustworthy:
+
+- **Paper halts are record-only.** In paper a daily-loss breach is journaled
+  (`eg_halt.record_only`) and entries continue; it gated 455 of 672 closes in a day.
+  Live always enforces it (`PK_EG_ENFORCE_HALT`, default yes in live, no in paper).
+- **No decisions on frozen books.** Gates `poly_silent` (no Polymarket frame for
+  `PK_EG_MAX_POLY_SILENCE_MS`, 2 s; the socket's own silence check takes 30 s) and
+  `stale_book` (the side's book unchanged for `PK_EG_MAX_BOOK_AGE_MS`, 10 s). A reconnect
+  still waits for a new snapshot. `eg_decision` carries `book_age_ms`, `poly_silence_ms`
+  and `trigger`.
+- **Readers never wait on the engine.** Polymarket, Kalshi and spot frames are queued by
+  their socket readers and applied in batches by one task (Polymarket closed us 33 times
+  a day with 1013 "slow consumer").
+- **Evaluated on arrival.** A book change (`trigger` "book") or a Chainlink tick
+  ("chainlink") evaluates its asset at once; the 100 ms clock ("tick") remains.
+- **Outages journaled.** `eg_feed` records each Polymarket, Kalshi, spot and Chainlink
+  reconnect or error, so affected windows can be left out of scoring.
+- **Contabo host.** The unit ran at `Nice=10` with `CPUQuota=100%` beside Wine/MT5; a
+  drop-in (`/etc/systemd/system/pk-endgame.service.d/priority.conf`) sets `Nice=0` and
+  removes the quota.
 
 ## Feeds
 
