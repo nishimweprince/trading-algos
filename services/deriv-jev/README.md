@@ -68,6 +68,9 @@ Trades the 5 Jev-gated strategies on Deriv MT5: an ungated `engine.Track` per st
 bars (7-day replay, then live), Jev history-v1 state, median of 3 answers, per-strategy threshold.
 Approved signals: market order, stop = max(2 ATR, broker minimum + spread + 20%), no target, trailing
 stop at best - 1.5R after +1R, time exit after 481 minutes, size = `JEV_RISK_PCT` (5%) of equity.
+The trailing stop is applied tick by tick in live mode: between minute steps the runner reads every tick since
+the last check (`JEV_TRAIL_POLL`, default 1 s), moves the stop to the latest level, and closes at market if a tick
+crossed a level the broker stop had not reached yet.
 Magic 708001-708005. `JEV_MT5_MODE=shadow|live` in `.env.mt5`; Jev key from `.env` (`JEV_API_KEY`).
 Kill switch `data/KILL_JEV`; data in `data/jev_mt5.db`; log `logs/jev_mt5.log`; unit `deploy/mt5-jev.service`.
 

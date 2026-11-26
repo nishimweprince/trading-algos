@@ -6,7 +6,9 @@ median of JEV_ASKS answers, per-strategy threshold from config.json). An approve
 
 - Market order, stop = max(stop_atr x ATR, broker minimum + spread + buffer); no take-profit.
 - Trailing stop as backtested: once price is 1R in favour, SL trails at best - trail_R x R
-  (never closer than the broker minimum), updated every minute.
+  (never closer than the broker minimum). Live, it is applied tick by tick: between the minute steps every tick since
+  the last check is read (polled every JEV_TRAIL_POLL seconds, default 1); if a tick crossed a trailing level the broker
+  stop had not reached yet, the position is closed at market. The minute step keeps a bar-based trail as a backstop.
 - Time exit after max_hold + 1 minutes.
 - Size = RISK_PCT of equity / stop distance (compounding). One position per strategy (magic 708001-708005).
 
@@ -49,6 +51,7 @@ MODE = ENV.get('JEV_MT5_MODE', ENV.get('MT5_MODE', 'shadow')).lower()
 RISK_PCT = float(ENV.get('JEV_RISK_PCT', ENV.get('RISK_PCT', '5')))
 MAX_RISK_PCT = float(ENV.get('MAX_RISK_PCT', '7.5'))
 STOP_BUFFER = float(ENV.get('STOP_BUFFER_PCT', '20')) / 100.0
+TRAIL_POLL = float(ENV.get('JEV_TRAIL_POLL', '1.0'))      # seconds between tick-level trailing checks (live)
 BRIDGE = (ENV.get('BRIDGE_HOST', '127.0.0.1'), int(ENV.get('BRIDGE_PORT', '18812')))
 MT5_TERMINAL = ENV.get('MT5_TERMINAL', r'C:\Program Files\MetaTrader 5 Terminal\terminal64.exe')
 HIST_MIN = 7 * 1440
@@ -94,6 +97,7 @@ class Runner:
         sp = {c: CFG['symbols'][c]['spread'] for c in CFG['symbols']}
         self.tracks = {s['tag']: Track(s, sp[s['code']], CFG['swap_per_min']) for s in STRATS}
         self.last_t = {}          # code -> last processed M1 minute
+        self.trail = {}           # live ticket -> {'best': exit-side extreme so far, 'ms': last tick checked}
         self.ready = False
 
     # ---- bridge ----
@@ -249,6 +253,83 @@ class Runner:
                 self.db.ins('events', ts=time.time(), tag=s['tag'], ticket=pos.ticket, kind='trail', detail=f'{pos.sl}->{new} rc={r.retcode if r else None}')
                 log.info('%s trail %s sl %.2f -> %.2f (%s)', s['tag'], pos.ticket, pos.sl, new, r.retcode if r else mt5.last_error())
 
+    def ticks_since(self, sym, ms):
+        """Bid/ask ticks strictly after ms (epoch milliseconds), oldest first."""
+        self.conn.execute('import MetaTrader5 as _m5')
+        self.conn.execute(f'_tk = _m5.copy_ticks_from({sym!r}, {int(ms // 1000)}, 200000, _m5.COPY_TICKS_INFO)\n'
+                          '_x = None if _tk is None or len(_tk) == 0 else (_tk["time_msc"].tobytes(), _tk["bid"].tobytes(), _tk["ask"].tobytes())')
+        x = self.conn.eval('_x')
+        if x is None:
+            return np.zeros(0, np.int64), np.zeros(0), np.zeros(0)
+        T = np.frombuffer(bytes(x[0]), np.int64); B = np.frombuffer(bytes(x[1]), np.float64); A = np.frombuffer(bytes(x[2]), np.float64)
+        m = T > ms
+        return T[m], B[m], A[m]
+
+    def close_now(self, s, pos, why):
+        mt5 = self.mt5; side = 1 if pos.type == mt5.POSITION_TYPE_BUY else -1; tick = mt5.symbol_info_tick(pos.symbol)
+        info = mt5.symbol_info(pos.symbol)
+        req = dict(action=mt5.TRADE_ACTION_DEAL, symbol=pos.symbol, volume=float(pos.volume), position=int(pos.ticket),
+                   type=mt5.ORDER_TYPE_SELL if side > 0 else mt5.ORDER_TYPE_BUY, price=float(tick.bid if side > 0 else tick.ask),
+                   deviation=200, magic=int(pos.magic), comment=why[:31], type_time=mt5.ORDER_TIME_GTC,
+                   type_filling=mt5.ORDER_FILLING_FOK if info.filling_mode & 1 else mt5.ORDER_FILLING_IOC)
+        r = self.rcall('order_send', req)
+        self.db.ins('events', ts=time.time(), tag=s['tag'], ticket=pos.ticket, kind='trail_close', detail=f'{why} rc={r.retcode if r else None}')
+        log.info('%s %s %s -> %s', s['tag'], why, pos.ticket, r.retcode if r else mt5.last_error())
+        return r is not None and r.retcode == mt5.TRADE_RETCODE_DONE
+
+    def trail_watch(self):
+        """Live only: the backtest's trailing stop, tick by tick. Before each tick, the trail level is
+        best_so_far - trail_R x R (active once best is 1R in favour); a tick at or through a level the broker stop has
+        not reached closes the position at market. Otherwise the broker stop is moved to the latest level."""
+        if MODE != 'live':
+            return
+        mt5 = self.mt5; live = set()
+        for s in STRATS:
+            if not s.get('trail_R'):
+                continue
+            for pos in self.positions(s):
+                live.add(pos.ticket)
+                R = self.db.R_of(pos.ticket) or abs(pos.price_open - pos.sl)
+                if R <= 0:
+                    continue
+                side = 1 if pos.type == mt5.POSITION_TYPE_BUY else -1
+                st = self.trail.setdefault(pos.ticket, dict(best=pos.price_open, ms=int(pos.time_msc)))
+                T, bid, ask = self.ticks_since(pos.symbol, st['ms'])
+                if not len(T):
+                    continue
+                px = bid if side > 0 else ask
+                f = side * px                                             # favourable-signed exit price
+                prev_best = np.maximum.accumulate(np.r_[side * st['best'], f[:-1]])   # best before each tick
+                active = prev_best - side * pos.price_open >= R
+                level = prev_best - s['trail_R'] * R                     # favourable-signed trail level before each tick
+                broker = side * pos.sl if pos.sl else -np.inf
+                hit = np.flatnonzero(active & (level > broker) & (f <= level))
+                if len(hit):
+                    i = hit[0]
+                    why = f'trail tick-level stop at {side * level[i]:.2f} crossed {(int(T[-1]) - int(T[i])) / 1000:.1f}s ago'
+                    if self.close_now(s, pos, why):
+                        self.trail.pop(pos.ticket, None)
+                    continue                                              # on failure keep state; retry next poll
+                best = side * max(side * st['best'], f.max())
+                st.update(best=best, ms=int(T[-1]))
+                if side * (best - pos.price_open) < R:
+                    continue
+                info = mt5.symbol_info(pos.symbol); tick = mt5.symbol_info_tick(pos.symbol)
+                gap = info.trade_stops_level * info.point * (1 + STOP_BUFFER)
+                new = best - side * s['trail_R'] * R
+                new = min(new, tick.bid - gap) if side > 0 else max(new, tick.ask + gap)
+                better = new > pos.sl + info.point if side > 0 else (pos.sl == 0 or new < pos.sl - info.point)
+                if not better:
+                    continue
+                new = round(new, info.digits)
+                r = self.rcall('order_send', dict(action=mt5.TRADE_ACTION_SLTP, symbol=pos.symbol, position=int(pos.ticket), sl=float(new),
+                                                  tp=0.0, magic=int(pos.magic)))
+                self.db.ins('events', ts=time.time(), tag=s['tag'], ticket=pos.ticket, kind='trail_tick',
+                            detail=f'{pos.sl}->{new} rc={r.retcode if r else None}')
+                log.info('%s trail (tick) %s sl %.2f -> %.2f (%s)', s['tag'], pos.ticket, pos.sl, new, r.retcode if r else mt5.last_error())
+        for k in [k for k in self.trail if k not in live]:
+            self.trail.pop(k)
+
     def step(self):
         now = int(time.time() // 60)
         for code in sorted({s['code'] for s in STRATS}):
@@ -273,6 +354,9 @@ class Runner:
                 if self.mt5 is None:
                     self.connect()
                 self.step()
+                wake = time.time() + (63 - time.time() % 60)
+                while time.time() < wake - TRAIL_POLL:               # meanwhile: tick-level trailing stop (live)
+                    self.trail_watch(); time.sleep(TRAIL_POLL)
             except Exception:
                 log.error('loop error: %s', traceback.format_exc())
                 try:
@@ -280,8 +364,8 @@ class Runner:
                 except Exception:
                     pass
                 self.conn = self.mt5 = None
-                time.sleep(10)
-            time.sleep(63 - time.time() % 60)
+                time.sleep(10); continue
+            time.sleep(max(0.0, wake - time.time()))
 
 
 if __name__ == '__main__':
