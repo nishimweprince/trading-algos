@@ -80,6 +80,17 @@ on the trading host and enable it with `systemctl enable --now mt5-live-ui`.
 For a tunnel on the same host, use `http://127.0.0.1:8092` as the origin and protect
 the hostname with Cloudflare Access because the dashboard exposes trading activity.
 
+## Paper dashboard and Trek spike-flip test
+
+`deriv_paper.py` simulates the 14 DSI strategies on live Deriv MT5 bid/ask (no orders). `deriv_paper_ui.py`
+serves it at `http://127.0.0.1:8092/`, with a second tab at `/trek`.
+
+`trek_paper.py` (unit `deploy/deriv-trek-paper.service`) is a prospective paper test of the one lead from
+`research/dsi_analogs`: on Trek Up and Trek Down, fade an apparent drift flip 120 s after a spike, and hold for 30 s.
+The rule and the pass criteria were fixed before the test: from 2026-11-27 to 2026-12-25 UTC, the pooled mean net
+must be above 0 bp with daily t ≥ 2, and both symbols must be positive. Fills are simulated on recorded ticks in
+batches of about 20 s. Data in `data/trek.db`, log in `logs/trek_paper.log`, kill switch `data/KILL_TREK`.
+
 ## IC Markets synthetic history
 
 `icmarkets_history.py` runs inside a dedicated MT5 research terminal on
