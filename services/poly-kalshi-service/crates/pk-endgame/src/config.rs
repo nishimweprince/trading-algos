@@ -70,6 +70,13 @@ pub struct Config {
     // --- risk ---
     pub max_open_cost_usd: f64,
     pub daily_loss_usd: f64,
+    /// A daily-loss breach stops entries. Always in live; in paper it is
+    /// journaled only (`PK_EG_ENFORCE_HALT=yes` to stop), so the sample continues.
+    pub enforce_halt: bool,
+    /// No decisions when the Polymarket socket has been silent this long…
+    pub max_poly_silence_ms: i64,
+    /// …or when the side's book has not changed for this long.
+    pub max_book_age_ms: i64,
     // --- recording ---
     /// Per-second grid lines from this many seconds before the close.
     pub grid_from_s: i64,
@@ -182,7 +189,7 @@ impl Config {
             max_tick_age_ms: e.int("PK_EG_MAX_TICK_AGE_MS", 3_000)?,
             max_entries_per_window: e.int("PK_EG_MAX_ENTRIES_PER_WINDOW", 1)? as usize,
             shares: e.num("PK_EG_SHARES", 10.0)?,
-            epoch: e.or("PK_EG_EPOCH", "2"),
+            epoch: e.or("PK_EG_EPOCH", "3"),
             kalshi_filter: match e.or("PK_EG_KALSHI_FILTER", "yes").to_lowercase().as_str() {
                 "yes" | "true" | "1" | "on" => true,
                 "no" | "false" | "0" | "off" => false,
@@ -201,6 +208,14 @@ impl Config {
             paper_latency_ms: e.int("PK_EG_PAPER_LATENCY_MS", 250)?,
             max_open_cost_usd: e.num("PK_EG_MAX_OPEN_COST_USD", 50.0)?,
             daily_loss_usd: e.num("PK_EG_DAILY_LOSS_USD", 15.0)?,
+            enforce_halt: match e.get("PK_EG_ENFORCE_HALT").map(|v| v.to_lowercase()) {
+                None => mode == Mode::Live,
+                Some(v) if matches!(v.as_str(), "yes" | "true" | "1" | "on") => true,
+                Some(v) if matches!(v.as_str(), "no" | "false" | "0" | "off") => false,
+                Some(v) => anyhow::bail!("PK_EG_ENFORCE_HALT={v} is not yes or no"),
+            },
+            max_poly_silence_ms: e.int("PK_EG_MAX_POLY_SILENCE_MS", 2_000)?,
+            max_book_age_ms: e.int("PK_EG_MAX_BOOK_AGE_MS", 10_000)?,
             grid_from_s: e.int("PK_EG_GRID_FROM_S", 90)?,
             state_dir,
             kill_file,
@@ -241,6 +256,11 @@ impl Config {
         anyhow::ensure!(0.0 < c.min_px && c.min_px < c.max_px && c.max_px < 1.0, "need 0 < MIN_PX < MAX_PX < 1");
         anyhow::ensure!(c.shares >= 5.0, "PK_EG_SHARES must be at least 5 (the venue minimum)");
         anyhow::ensure!(c.max_open_cost_usd > 0.0 && c.daily_loss_usd > 0.0, "risk limits must be positive");
+        anyhow::ensure!(c.mode == Mode::Paper || c.enforce_halt, "live always enforces the daily loss halt");
+        anyhow::ensure!(
+            c.max_poly_silence_ms > 0 && c.max_book_age_ms > 0,
+            "PK_EG_MAX_POLY_SILENCE_MS and PK_EG_MAX_BOOK_AGE_MS must be positive"
+        );
         anyhow::ensure!(c.sigma_min_n >= 30, "PK_EG_SIGMA_MIN_N must be at least 30");
         if let Some(t) = &c.ui_token {
             anyhow::ensure!(t.len() >= 16, "PK_EG_UI_TOKEN must be at least 16 characters");

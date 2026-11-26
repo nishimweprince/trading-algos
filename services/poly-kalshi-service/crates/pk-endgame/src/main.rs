@@ -23,6 +23,7 @@ mod rtds;
 mod summary;
 mod web;
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -54,6 +55,15 @@ struct Args {
 enum Cmd {
     Run,
     Check,
+}
+
+/// A socket frame, queued by the feed's reader and applied by one task, so
+/// the readers never wait on the engine lock (Polymarket closes slow
+/// consumers with 1013).
+enum Frame {
+    Poly(char, String, i64),
+    Kalshi(char, String, i64),
+    Spot(&'static str, String, i64),
 }
 
 struct App {
@@ -171,6 +181,45 @@ impl App {
         out["refit"] =
             std::fs::read_to_string(refit).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(Value::Null);
         out
+    }
+
+    /// Applies queued frames in batches under one lock, then evaluates each
+    /// asset whose book changed (`trigger` "book").
+    async fn apply_frames(self: Arc<Self>, mut rx: tokio::sync::mpsc::UnboundedReceiver<Frame>) {
+        let mut buf = Vec::with_capacity(512);
+        while rx.recv_many(&mut buf, 512).await > 0 {
+            let actions = {
+                let mut e = self.engine.lock();
+                let mut touched: BTreeSet<usize> = BTreeSet::new();
+                for f in buf.drain(..) {
+                    match f {
+                        Frame::Poly('p', text, t) => touched.extend(e.on_poly(&text, t).into_iter().map(|w| w.0)),
+                        Frame::Poly('c', text, t) if text.contains("\"venue\":\"p\"") => {
+                            if text.contains("\"reconnect\"") {
+                                e.invalidate_books();
+                            }
+                            e.on_feed_event("poly", "reconnect", &text, t);
+                        }
+                        Frame::Kalshi('k', text, t) => e.on_kalshi(&text, t),
+                        Frame::Kalshi('c', text, t) if text.contains("\"venue\":\"k\"") => {
+                            e.invalidate_kalshi();
+                            e.on_feed_event("kalshi", if text.contains("resync") { "resync" } else { "reconnect" }, &text, t);
+                        }
+                        Frame::Spot(venue, text, t) => {
+                            if text.contains("pk_reconnect") {
+                                e.on_feed_event(venue, "reconnect", &text, t);
+                            } else {
+                                e.on_spot_frame(venue, &text, t);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let t = now_ns();
+                touched.into_iter().filter_map(|i| e.evaluate_now(i, t, "book")).collect::<Vec<_>>()
+            };
+            self.dispatch(actions);
+        }
     }
 
     fn dispatch(self: &Arc<Self>, actions: Vec<Action>) {
@@ -343,19 +392,16 @@ async fn run(cfg: Config) -> anyhow::Result<()> {
         });
     }
 
+    // Socket frames go through one queue to one applier task.
+    let (ftx, frx) = tokio::sync::mpsc::unbounded_channel::<Frame>();
+    tokio::spawn(app.clone().apply_frames(frx));
     // Polymarket books.
-    let a = app.clone();
+    let tx = ftx.clone();
     let poly = spawn_feed(
         cfg.poly_ws_url.clone(),
         FeedKind::Poly { shard: None, silence: Some(Duration::from_secs(30)) },
         Arc::new(move |venue, text| {
-            let t = now_ns();
-            let mut e = a.engine.lock();
-            match venue {
-                'p' => e.on_poly(&text, t),
-                'c' if text.contains("\"reconnect\"") && text.contains("\"venue\":\"p\"") => e.invalidate_books(),
-                _ => {}
-            }
+            let _ = tx.send(Frame::Poly(venue, text, now_ns()));
         }),
     );
     *app.poly.lock() = Some(poly.clone());
@@ -364,9 +410,15 @@ async fn run(cfg: Config) -> anyhow::Result<()> {
     let rtds = rtds::spawn(
         cfg.rtds_url.clone(),
         Arc::new(move |asset, sec, px, t| {
-            let mut e = a.engine.lock();
-            if let Some(i) = e.asset_index(asset) {
-                e.on_tick(i, sec, px, t);
+            let action = {
+                let mut e = a.engine.lock();
+                e.asset_index(asset).and_then(|i| {
+                    e.on_tick(i, sec, px, t);
+                    e.evaluate_now(i, t, "chainlink")
+                })
+            };
+            if let Some(act) = action {
+                a.dispatch(vec![act]);
             }
         }),
     );
@@ -381,14 +433,12 @@ async fn run(cfg: Config) -> anyhow::Result<()> {
             ("bn", cfg.binance_ws_url.clone(), FeedKind::Binance { futures: false },
              cfg.assets.iter().map(|a| format!("{}usdt@bookTicker", a.to_lowercase())).collect()),
         ] {
-            let a = app.clone();
+            let tx = ftx.clone();
             let h = spawn_feed(
                 url,
                 kind,
                 Arc::new(move |_venue, text| {
-                    if !text.contains("pk_reconnect") {
-                        a.engine.lock().on_spot_frame(venue, &text, now_ns());
-                    }
+                    let _ = tx.send(Frame::Spot(venue, text, now_ns()));
                 }),
             );
             h.set_wanted(ids);
@@ -402,18 +452,12 @@ async fn run(cfg: Config) -> anyhow::Result<()> {
         let pem = std::fs::read_to_string(path)
             .map_err(|e| anyhow::anyhow!("KALSHI_PRIVATE_KEY_PATH {}: {e}", path.display()))?;
         let signer = Arc::new(KalshiSigner::from_pem(id, &pem)?);
-        let a = app.clone();
+        let tx = ftx.clone();
         let feed = spawn_feed(
             cfg.kalshi_ws_url.clone(),
             FeedKind::Kalshi { signer },
             Arc::new(move |venue, text| {
-                let t = now_ns();
-                let mut e = a.engine.lock();
-                match venue {
-                    'k' => e.on_kalshi(&text, t),
-                    'c' if text.contains("\"venue\":\"k\"") => e.invalidate_kalshi(),
-                    _ => {}
-                }
+                let _ = tx.send(Frame::Kalshi(venue, text, now_ns()));
             }),
         );
         *app.kalshi.lock() = Some(feed);
@@ -460,6 +504,7 @@ async fn run(cfg: Config) -> anyhow::Result<()> {
     let mut step = tokio::time::interval(Duration::from_millis(100));
     step.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut last_status = 0i64;
+    let (mut rtds_connects, mut rtds_errors) = (0u64, 0u64);
     let shutdown = tokio::signal::ctrl_c();
     tokio::pin!(shutdown);
     loop {
@@ -478,6 +523,20 @@ async fn run(cfg: Config) -> anyhow::Result<()> {
             e.tick(t)
         };
         app.dispatch(actions);
+        {
+            use std::sync::atomic::Ordering::Relaxed;
+            let (c, er) = (rtds.connects.load(Relaxed), rtds.errors.load(Relaxed));
+            if er > rtds_errors || (c > rtds_connects && rtds_connects > 0) {
+                let mut e = app.engine.lock();
+                if er > rtds_errors {
+                    e.on_feed_event("chainlink", "error", &format!("errors {er}"), t);
+                }
+                if c > rtds_connects && rtds_connects > 0 {
+                    e.on_feed_event("chainlink", "reconnect", &format!("connects {c}"), t);
+                }
+            }
+            (rtds_connects, rtds_errors) = (c, er);
+        }
         if t - last_status >= 60 * NS {
             last_status = t;
             let mut e = app.engine.lock();

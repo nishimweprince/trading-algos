@@ -23,7 +23,8 @@
 //! | `eg_close` | a window's averages, our outcome and the last gate |
 //! | `eg_resolution` | Polymarket's outcome against ours |
 //! | `eg_settle` | a position's P&L |
-//! | `eg_halt`, `eg_ack`, `eg_kill`, `eg_redeem`, `eg_status` | risk and housekeeping |
+//! | `eg_halt`, `eg_ack`, `eg_kill`, `eg_redeem`, `eg_status` | risk and housekeeping (`eg_halt.record_only` in paper) |
+//! | `eg_feed` | a feed dropped, went silent or reconnected |
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -222,6 +223,7 @@ struct Counters {
     agree: u64,
     disagree: u64,
     book_resets: u64,
+    feed_events: u64,
     kalshi_frames: u64,
     kalshi_resets: u64,
     spot_frames: u64,
@@ -246,6 +248,10 @@ pub struct Engine {
     owner: HashMap<String, (usize, i64, bool)>,
     kbooks: HashMap<String, KBook>,
     kowner: HashMap<String, (usize, i64)>,
+    /// Arrival of the newest Polymarket market-channel frame of any kind.
+    poly_last_frame_ns: i64,
+    /// The day a record-only (paper) loss breach was last journaled.
+    breach_noted: Option<String>,
     /// The newest frame on the Kalshi socket (any market): the feed is alive.
     k_last_frame_ns: i64,
     /// `spot[asset][venue]`, venues as [`SPOT_VENUES`].
@@ -316,6 +322,8 @@ impl Engine {
             owner: HashMap::new(),
             kbooks: HashMap::new(),
             kowner: HashMap::new(),
+            poly_last_frame_ns: 0,
+            breach_noted: None,
             k_last_frame_ns: 0,
             spot: (0..n).map(|_| [Spot::default(), Spot::default()]).collect(),
             pending: Vec::new(),
@@ -536,17 +544,18 @@ impl Engine {
         }
     }
 
-    /// A Polymarket market-channel frame.
-    pub fn on_poly(&mut self, text: &str, t_ns: i64) {
-        let Ok(msgs) = pk_engine::parse::poly_msgs(text) else { return };
+    /// A Polymarket market-channel frame. Returns the windows whose books it changed.
+    pub fn on_poly(&mut self, text: &str, t_ns: i64) -> BTreeSet<(usize, i64)> {
+        let mut touched = BTreeSet::new();
+        let Ok(msgs) = pk_engine::parse::poly_msgs(text) else { return touched };
         self.counters.poly_frames += 1;
+        self.poly_last_frame_ns = t_ns;
         for msg in msgs.iter().flatten() {
             match msg.kind() {
                 Some("book") => {
                     let Some(id) = msg.asset_id.as_ref().map(|i| i.as_str()) else { continue };
-                    if !self.owner.contains_key(id) {
-                        continue;
-                    }
+                    let Some(&(i, open, _)) = self.owner.get(id) else { continue };
+                    touched.insert((i, open));
                     let lv = |v: &Option<Vec<pk_engine::parse::Level>>| {
                         v.as_deref().unwrap_or_default().iter().map(|l| (px_key(l.price.0), l.size.0)).collect::<Vec<_>>()
                     };
@@ -560,6 +569,9 @@ impl Engine {
                         if b.snapshot_ns.is_none() {
                             continue;
                         }
+                        if let Some(&(i, open, _)) = self.owner.get(id) {
+                            touched.insert((i, open));
+                        }
                         let side = if ch.side.as_deref() == Some("BUY") { BookSide::Bid } else { BookSide::Ask };
                         b.set_level(side, px_key(ch.price.0), ch.size.0, t_ns);
                     }
@@ -567,6 +579,15 @@ impl Engine {
                 _ => {}
             }
         }
+        touched
+    }
+
+    /// A feed dropped, went silent or reconnected: journaled so the windows it
+    /// touched can be left out of scoring.
+    pub fn on_feed_event(&mut self, venue: &str, event: &str, detail: &str, t_ns: i64) {
+        self.counters.feed_events += 1;
+        let detail: String = detail.chars().take(200).collect();
+        self.record(t_ns, "eg_feed", json!({"venue": venue, "event": event, "detail": detail}));
     }
 
     /// The Polymarket socket reconnected: every book waits for a new snapshot.
@@ -584,8 +605,10 @@ impl Engine {
         }
     }
 
+    /// Entries stopped by today's loss halt. Never in record-only (paper)
+    /// mode, even with a halt persisted from an enforcing run.
     pub fn halted(&self, t_ns: i64) -> bool {
-        self.p.halted_day.as_deref() == Some(day_of(t_ns / NS).as_str())
+        self.cfg.enforce_halt && self.p.halted_day.as_deref() == Some(day_of(t_ns / NS).as_str())
     }
 
     /// The ACK file: clear today's halt; it will not latch again today.
@@ -631,10 +654,7 @@ impl Engine {
                 self.last_grid[i] = now_s;
                 self.grid(i, open_now, left, t_ns);
             }
-            if left <= self.cfg.entry_from_s as f64
-                && left >= self.cfg.entry_until_s as f64
-                && let Some(a) = self.evaluate(i, open_now, left, t_ns)
-            {
+            if let Some(a) = self.evaluate_now(i, t_ns, "tick") {
                 actions.push(a);
             }
         }
@@ -647,6 +667,23 @@ impl Engine {
             self.paper_fill(o, t_ns);
         }
         actions
+    }
+
+    /// Evaluates asset `i`'s live window now, if it is inside the entry period.
+    /// Called on the clock and whenever its book or its Chainlink price changes,
+    /// so an entry does not wait for the next clock step. Paper orders fill on
+    /// the clock (`tick`).
+    pub fn evaluate_now(&mut self, i: usize, t_ns: i64, trigger: &'static str) -> Option<Action> {
+        let now_s = t_ns / NS;
+        let open = now_s - now_s.rem_euclid(WINDOW_S);
+        if !self.windows.contains_key(&(i, open)) {
+            return None;
+        }
+        let left = (open + WINDOW_S) as f64 - t_ns as f64 / NS as f64;
+        if left > self.cfg.entry_from_s as f64 || left < self.cfg.entry_until_s as f64 {
+            return None;
+        }
+        self.evaluate(i, open, left, t_ns, trigger)
     }
 
     /// The fair value now: (fair, K, σ, the sd multiplier in force).
@@ -702,7 +739,7 @@ impl Engine {
         );
     }
 
-    fn evaluate(&mut self, i: usize, open: i64, left: f64, t_ns: i64) -> Option<Action> {
+    fn evaluate(&mut self, i: usize, open: i64, left: f64, t_ns: i64, trigger: &'static str) -> Option<Action> {
         let gate = |e: &mut Self, why: &'static str| {
             e.wstate.entry((i, open)).or_default().gate = Some(why);
             None
@@ -717,6 +754,12 @@ impl Engine {
             Ok(x) => x,
             Err(why) => return gate(self, why),
         };
+        // A silent socket leaves the books frozen at their last state (its own
+        // silence check takes 30 s to reconnect): no decisions on them.
+        let poly_silence_ms = (t_ns - self.poly_last_frame_ns) / 1_000_000;
+        if poly_silence_ms > self.cfg.max_poly_silence_ms {
+            return gate(self, "poly_silent");
+        }
         let w = self.windows.get(&(i, open))?.clone();
         let ws = self.wstate.entry((i, open)).or_default();
         if ws.entries >= self.cfg.max_entries_per_window {
@@ -727,12 +770,17 @@ impl Engine {
         // Each side with an ask in the price range; a side needs only an ask to buy.
         let mut sides: Vec<(bool, f64, f64, f64, f64)> = Vec::new(); // (up, p, ask, fee, edge)
         let mut any_book = false;
+        let mut stale = false;
         for up in [true, false] {
             let Some(b) = self.books.get(w.token(up)) else { continue };
             if b.snapshot_ns.is_none() {
                 continue;
             }
             any_book = true;
+            if b.last_update_ns.is_none_or(|u| t_ns - u > self.cfg.max_book_age_ms * 1_000_000) {
+                stale = true;
+                continue;
+            }
             let Some(ask) = b.best_ask() else { continue };
             if sides_done[usize::from(!up)] || !(self.cfg.min_px..=self.cfg.max_px).contains(&ask) {
                 continue;
@@ -745,7 +793,7 @@ impl Engine {
             return gate(self, "no_book");
         }
         if sides.is_empty() {
-            return gate(self, "price_range");
+            return gate(self, if stale { "stale_book" } else { "price_range" });
         }
         {
             let top = sides.iter().map(|x| x.4).fold(f64::NEG_INFINITY, f64::max);
@@ -790,6 +838,7 @@ impl Engine {
         let spot_p = self.model_spot(i, open, t_ns);
         let (last_sec, s) = self.series[i].last()?;
         let tick_age_ms = (t_ns - self.series[i].last_arrival_ns) / 1_000_000;
+        let book_age_ms = book.last_update_ns.map(|u| (t_ns - u) / 1_000_000);
         self.p.next_id += 1;
         let id = self.p.next_id;
         {
@@ -813,6 +862,7 @@ impl Engine {
                 "epoch": self.cfg.epoch,
                 "spot_p_up": spot_p.map(|x| r6(x.0)), "spot_src": spot_p.map(|x| x.1), "spot_move_bp": spot_p.map(|x| r4(x.2)),
                 "s": s, "s_sec": last_sec, "tick_age_ms": tick_age_ms,
+                "book_age_ms": book_age_ms, "poly_silence_ms": poly_silence_ms, "trigger": trigger,
                 "ask": ask, "ask_size": ask_size, "bid": bid, "other_ask": other_ask,
                 "fee": r6(fee), "edge": r6(edge), "limit": r4(limit), "shares": shares,
                 "instant_shares": r4(instant.0), "instant_usd": r4(instant.1), "instant_fee": r6(instant.2),
@@ -1001,9 +1051,19 @@ impl Engine {
             && self.p.halted_day.as_deref() != Some(&today)
             && self.p.acked_day.as_deref() != Some(&today)
         {
-            self.p.halted_day = Some(today.clone());
-            self.dirty = true;
-            self.record(t_ns, "eg_halt", json!({"day": today, "pnl": r4(pnl_today), "limit": self.cfg.daily_loss_usd}));
+            if self.cfg.enforce_halt {
+                self.p.halted_day = Some(today.clone());
+                self.dirty = true;
+                self.record(t_ns, "eg_halt", json!({"day": today, "pnl": r4(pnl_today), "limit": self.cfg.daily_loss_usd}));
+            } else if self.breach_noted.as_deref() != Some(&today) {
+                // Paper: a halt costs the sample, not money. Journal the breach, keep going.
+                self.breach_noted = Some(today.clone());
+                self.record(
+                    t_ns,
+                    "eg_halt",
+                    json!({"day": today, "pnl": r4(pnl_today), "limit": self.cfg.daily_loss_usd, "record_only": true}),
+                );
+            }
         }
         actions.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
         actions.dedup();
@@ -1094,6 +1154,8 @@ impl Engine {
             "halted": self.halted(t_ns), "killed": self.killed,
             "windows": self.windows.len(),
             "books": self.books.values().filter(|b| b.snapshot_ns.is_some()).count(),
+            "poly_silence_ms": if self.poly_last_frame_ns > 0 { Value::from((t_ns - self.poly_last_frame_ns) / 1_000_000) } else { Value::Null },
+            "enforce_halt": self.cfg.enforce_halt,
             "chainlink_age_ms": ages,
             "epoch": self.cfg.epoch,
             "kalshi_filter": self.cfg.kalshi_filter,
@@ -1300,7 +1362,8 @@ mod tests {
 
     #[test]
     fn halt_latches_and_ack_clears() {
-        let mut e = engine();
+        let mut e = Engine::new(cfg_with(&[("PK_EG_ENFORCE_HALT", "yes")]), Persisted::default());
+        e.set_window(window(), OPEN * NS);
         let close = OPEN + WINDOW_S;
         e.p.positions.push(Position {
             id: 1, asset: "BTC".into(), open: OPEN, up: true, token: "UP".into(), condition_id: "0xC".into(),
@@ -1374,7 +1437,8 @@ mod tests {
         e.tick(now * NS);
         let d = fired(&mut e).expect("fires in the band");
         assert_eq!(d["side"], "up");
-        assert_eq!(d["epoch"], "2");
+        assert_eq!(d["epoch"], "3");
+        assert_eq!(d["trigger"], "tick");
     }
 
     #[test]
@@ -1470,5 +1534,59 @@ mod tests {
         assert_eq!(tick_for(0.5), 0.01);
         assert_eq!(tick_for(0.97), 0.001);
         assert_eq!(tick_for(0.03), 0.001);
+    }
+
+    #[test]
+    fn paper_loss_breach_is_record_only() {
+        let mut e = engine();
+        assert!(!e.cfg.enforce_halt);
+        let close = OPEN + WINDOW_S;
+        e.p.positions.push(Position {
+            id: 1, asset: "BTC".into(), open: OPEN, up: true, token: "UP".into(), condition_id: "0xC".into(),
+            shares: 30.0, usd: 24.0, fee: 0.2, entry_ns: 0, live: false, outcome: None, pnl: None,
+            redeemed: false, redeem_tries: 0, epoch: "3".into(),
+        });
+        let t = (close + 30) * NS;
+        e.on_resolved("BTC", OPEN, "no", t);
+        assert!(!e.halted(t));
+        let h = e.take_records().into_iter().find(|r| r["type"] == "eg_halt").unwrap();
+        assert_eq!(h["record_only"], true);
+        // A halt persisted by an enforcing run does not stop a record-only one.
+        e.p.halted_day = Some(day_of(t / NS));
+        assert!(!e.halted(t));
+    }
+
+    #[test]
+    fn a_silent_socket_or_a_frozen_book_blocks() {
+        // The socket: nothing for 3 s.
+        let mut e = epoch2(&[]);
+        let now = setup(&mut e, (0.89, 0.90), (0.09, 0.10));
+        e.tick(now * NS + 3_000_000_000);
+        assert!(fired(&mut e).is_none());
+        assert_eq!(last_gate(&mut e, now), "poly_silent");
+        // The socket alive (another token), but these books unchanged for 11 s.
+        let mut e = epoch2(&[]);
+        let now = setup(&mut e, (0.89, 0.90), (0.09, 0.10));
+        for k in 1..=11 {
+            e.on_tick(0, now + k, 100.3, (now + k) * NS);
+        }
+        e.on_poly(&book_frame("OTHER", 0.5, 0.6, 1.0), now * NS + 11_000_000_000);
+        e.tick(now * NS + 11_000_000_000);
+        assert!(fired(&mut e).is_none());
+        assert_eq!(last_gate(&mut e, now), "stale_book");
+    }
+
+    #[test]
+    fn a_book_change_evaluates_at_once() {
+        let mut e = epoch2(&[]);
+        let now = setup(&mut e, (0.89, 0.90), (0.09, 0.10));
+        let touched = e.on_poly(&book_frame("UP", 0.89, 0.90, 100.0), now * NS);
+        assert_eq!(touched.into_iter().collect::<Vec<_>>(), vec![(0, OPEN)]);
+        assert!(e.evaluate_now(0, now * NS, "book").is_none()); // paper: filled on the clock
+        let d = fired(&mut e).expect("fires on the book change");
+        assert_eq!(d["trigger"], "book");
+        assert!(d["book_age_ms"].as_i64().unwrap() < 10);
+        // Outside the entry period, nothing.
+        assert!(e.evaluate_now(0, (OPEN + 100) * NS, "book").is_none());
     }
 }

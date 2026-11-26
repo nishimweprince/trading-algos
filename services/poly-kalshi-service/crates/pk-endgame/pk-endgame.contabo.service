@@ -12,9 +12,9 @@ Restart=always
 RestartSec=5
 KillSignal=SIGINT
 TimeoutStopSec=20
-# A guest on a busy box: below the MT5 runners, capped at one core.
-Nice=10
-CPUQuota=100%
+# Normal priority, no CPU cap: at Nice=10 with CPUQuota=100% beside the MT5
+# runners its socket readers fell behind (Polymarket 1013 "slow consumer").
+Nice=0
 MemoryMax=512M
 # Locked down: it writes only its own state.
 NoNewPrivileges=yes
