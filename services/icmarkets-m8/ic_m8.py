@@ -1,7 +1,8 @@
 """IC Markets execution service: Money8gg Drift Signals rebuild on IC synthetics (the 4 combinations with t > 2).
 
 Strategies (default Money8gg settings: momentum lookback 55, 1.5 ATR(14) move, 3-bar hold, 30-bar cooldown,
-direction must alternate; stop 5 ATR, stop to entry after a 4 ATR move in favour; an opposite signal closes
+direction must alternate; stop 5 ATR, stop to entry after a 4 ATR move in favour (live: checked on every tick, polled every
+IC_BE_POLL seconds, default 1; if price is already back through entry the position is closed); an opposite signal closes
 and reverses):
   IC-B1000-M5-RS    Boom1000 M5, reverse + stop        magic 709001
   IC-B1000-M5-TP1   Boom1000 M5, take profit at 1R     magic 709002
@@ -42,6 +43,7 @@ SERVER = ENV.get('IC_SERVER', 'ICMarketsSC-MT5-3')
 BRIDGE = ('127.0.0.1', int(ENV.get('IC_PORT', '18814')))
 TERMINAL = ENV.get('IC_TERMINAL', r'C:\IC Markets Exec\terminal64.exe')
 HIST = int(ENV.get('IC_HIST_MIN', '20000'))
+BE_POLL = float(ENV.get('IC_BE_POLL', '1.0'))       # seconds between tick-level break-even checks (live)
 P = dict(lookback=55, min_move=1.5, hold=3, cooldown=30, stop_atr=5.0, be_atr=4.0, atr_n=14)
 STRATS = [
     dict(tag='IC-B1000-M5-RS', symbol='Boom1000', tf=5, mode=0, magic=709001),
@@ -129,6 +131,7 @@ class DB:
 class Runner:
     def __init__(self):
         self.db = DB(); self.conn = None; self.mt5 = None; self.off = {}
+        self.be_seen = {}                            # live ticket -> last tick time_msc checked for break-even
 
     def connect(self):
         self.conn = rpyc.classic.connect(*BRIDGE); self.conn._config['sync_request_timeout'] = 120
@@ -321,6 +324,48 @@ class Runner:
             if len(T):
                 self.db.c.execute('update vpos2 set last_ms=? where tag=?', (int(T[-1]), s['tag']))
 
+    def be_watch(self):
+        """Live only: move the stop to entry on the first tick whose exit-side price is be_atr x ATR in favour.
+        Every tick since the last check is read, so a touch between polls is not missed. If price has already come
+        back through entry, a stop at entry is no longer valid, so the position is closed at market (the result a
+        tick-level break-even stop would have given)."""
+        if MODE != 'live':
+            return
+        mt5 = self.mt5
+        for s in [x for x in STRATS if x['enabled']]:
+            for pos in self.positions(s):
+                side = 1 if pos.type == mt5.POSITION_TYPE_BUY else -1
+                if (side > 0 and pos.sl >= pos.price_open) or (side < 0 and 0 < pos.sl <= pos.price_open):
+                    self.be_seen.pop(pos.ticket, None); continue          # already at break-even
+                lo = self.db.last_order(s['tag'], pos.ticket); atr_k = lo[1] if lo and lo[1] else None
+                if atr_k is None:
+                    continue
+                since = self.be_seen.get(pos.ticket, int(pos.time_msc))
+                T, bid, ask = self.ticks_since(s['symbol'], since)
+                if not len(T):
+                    continue
+                px = bid if side > 0 else ask
+                hit = np.flatnonzero(side * (px - pos.price_open) >= P['be_atr'] * atr_k)
+                if not len(hit):
+                    self.be_seen[pos.ticket] = int(T[-1]); continue      # only advance when nothing triggered
+                info = mt5.symbol_info(s['symbol']); tick = mt5.symbol_info_tick(s['symbol'])
+                now_px = tick.bid if side > 0 else tick.ask; new = round(pos.price_open, info.digits)
+                when = int(T[hit[0]])
+                if side * (now_px - new) > info.point * max(info.trade_stops_level, 1):
+                    r = self.rcall('order_send', dict(action=mt5.TRADE_ACTION_SLTP, symbol=s['symbol'], position=int(pos.ticket),
+                                                      sl=float(new), tp=float(pos.tp), magic=int(s['magic'])))
+                    rc = r.retcode if r else None
+                    log.info('%s breakeven (tick %d, %.1fs ago) %s sl %.3f -> %.3f: %s %s', s['tag'], when,
+                             (int(T[-1]) - when) / 1000, pos.ticket, pos.sl, new, rc, r.comment if r else mt5.last_error())
+                    if rc == mt5.TRADE_RETCODE_DONE:
+                        self.be_seen.pop(pos.ticket, None); continue
+                    tick = mt5.symbol_info_tick(s['symbol']); now_px = tick.bid if side > 0 else tick.ask
+                    if side * (now_px - new) > 0:
+                        self.be_seen[pos.ticket] = when - 1; continue    # modification failed, price still in profit: retry next poll
+                self.deal(s, -side, 'close', position=pos.ticket, volume=pos.volume,
+                          note=f'breakeven: {P["be_atr"]:g} ATR reached at tick {when}, price back through entry before the stop could move')
+                self.be_seen.pop(pos.ticket, None)
+
     # ---- loop ----
     def server_offset(self, sym):
         """IC labels bars and ticks in its server time (UTC+2/+3): offset in seconds, from the latest tick, to the nearest hour."""
@@ -374,9 +419,12 @@ class Runner:
                 if self.conn is None:
                     self.connect()
                 self.step()
+                wake = time.time() + max(1.0, 61 - time.time() % 60)   # next step ~1 s after the minute closes
+                while time.time() < wake - BE_POLL:                     # meanwhile: tick-level break-even (live)
+                    self.be_watch(); time.sleep(BE_POLL)
             except Exception as e:
-                log.exception('loop error: %s', e); self.conn = None; time.sleep(20)
-            time.sleep(max(1.0, 61 - time.time() % 60))     # once a minute, ~1 s after the minute closes
+                log.exception('loop error: %s', e); self.conn = None; time.sleep(20); continue
+            time.sleep(max(0.0, wake - time.time()))
 
 
 def status():
