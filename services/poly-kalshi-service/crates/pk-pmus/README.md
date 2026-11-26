@@ -11,7 +11,7 @@ Kalshi's mid is used as the fair value for Polymarket US.
 
 - Coins: BTC, ETH, SOL, XRP (`cpc-btc`, `cpceth-eth`, `cpcsol-sol`, `cpcxrp-xrp` 15m series).
 - From 60 s after the open to 60 s before the close, buy the Polymarket US side that is
-  5–15¢ cheaper than Kalshi's mid after the taker fee (Θ·p·(1−p), Θ = 0.0695).
+  5–15¢ cheaper than Kalshi's mid after the taker fee (Θ·p·(1−p), Θ = the market's `feeCoefficient`, 0.11).
 - Kalshi book fresh (≤ 3 s) with a spread ≤ 3¢; Polymarket US quote ≤ 1.5 s old.
 - One entry per coin per window, 10 shares, limit = ask + 1¢ capped at fair − fee − 1¢.
 - Paper fill 150 ms after the decision against the Polymarket US book fetched then.
@@ -53,11 +53,15 @@ From epoch 3:
   fill (150 ms) is a position. The page's *Arrival delay* table compares fill rate,
   shares filled, slippage and net ¢/share by delay and coin. Change size or hosting only
   after this has data.
-- **Fee check.** Market JSON carries `feeCoefficient` (0.11 on the 15m crypto markets),
-  while the gate uses Θ = 0.0695. Public reports also describe volume tiers, with
-  0.095 under $10k a month. `pu_window.fee_coef` and `pu_decision.edge_at_market_fee`
-  are journaled so the epoch can be re-scored at the market's coefficient. Settle which
-  rate applies before going live.
+
+## Epoch 4: the market's fee (2026-11-26)
+
+The taker fee is each market's own `feeCoefficient` (0.11 on the 15m crypto markets),
+not the 0.0695 used before. It applies to the gap, the limit cap, fills, probes and the
+sizing rules. `PK_PU_FEE_THETA` (default 0.11) is used only for a market that does not
+report one. `pu_window.fee_coef` and `pu_decision.fee_theta` record the rate used. At
+0.11 the fee is about 2.7¢ at p = 0.5, against 1.7¢ before, so fewer gaps clear 5¢.
+Epoch 3 (about 1.5 h at Θ = 0.0695) is superseded.
 
 ## Measured, never traded (epoch 2)
 

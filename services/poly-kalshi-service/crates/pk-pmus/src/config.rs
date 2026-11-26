@@ -27,7 +27,8 @@ pub struct Config {
     pub pm_max_age_ms: i64,
     pub max_entries_per_window: usize,
     pub shares: f64,
-    /// Polymarket US taker fee: `theta · C · p(1 − p)`.
+    /// Polymarket US taker fee `theta · C · p(1 − p)` when a market has no
+    /// `feeCoefficient` (each market's own coefficient wins).
     pub fee_theta: f64,
     pub epoch: String,
     // --- paper ---
@@ -153,8 +154,8 @@ impl Config {
             pm_max_age_ms: e.int("PK_PU_PM_MAX_AGE_MS", 1_500)?,
             max_entries_per_window: e.int("PK_PU_MAX_ENTRIES_PER_WINDOW", 1)? as usize,
             shares: e.num("PK_PU_SHARES", 10.0)?,
-            fee_theta: e.num("PK_PU_FEE_THETA", 0.0695)?,
-            epoch: e.or("PK_PU_EPOCH", "3"),
+            fee_theta: e.num("PK_PU_FEE_THETA", 0.11)?,
+            epoch: e.or("PK_PU_EPOCH", "4"),
             paper_latency_ms: e.int("PK_PU_PAPER_LATENCY_MS", 150)?,
             paper_delays_ms: {
                 let raw = e.or("PK_PU_PAPER_DELAYS_MS", "25,50,100,150");
@@ -256,7 +257,7 @@ pub mod tests {
     fn defaults_and_guards() {
         let c = Config::from_vars(vars(&[])).unwrap();
         assert_eq!(c.assets, ["BTC", "ETH", "SOL", "XRP"]);
-        assert_eq!((c.min_edge, c.max_edge, c.fee_theta), (0.05, 0.15, 0.0695));
+        assert_eq!((c.min_edge, c.max_edge, c.fee_theta), (0.05, 0.15, 0.11));
         assert!(!c.enforce_halt);
         assert_eq!(c.paper_delays_ms, [25, 50, 100, 150]);
         assert!(

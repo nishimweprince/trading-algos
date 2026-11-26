@@ -50,7 +50,8 @@ pub struct WindowInfo {
     pub tick: f64,
     pub min_qty: f64,
     pub index: String,
-    /// The market's `feeCoefficient` (journaled; the gate uses `fee_theta`).
+    /// The market's `feeCoefficient`: the taker fee Θ for this window
+    /// (`fee_theta` from the config only when the market does not say).
     #[serde(default)]
     pub fee_coef: Option<f64>,
 }
@@ -233,6 +234,8 @@ struct Order {
     px: f64,
     fee: f64,
     edge: f64,
+    /// The fee coefficient the decision used; fills are charged at it.
+    theta: f64,
 }
 
 /// A side's gap: (up, (Kalshi side mid, Polymarket US ask, fee, edge)).
@@ -350,8 +353,17 @@ impl Engine {
     }
 
     /// Polymarket US taker fee per contract at price `p`.
-    pub fn fee(&self, p: f64) -> f64 {
-        self.cfg.fee_theta * p * (1.0 - p)
+    pub fn fee(theta: f64, p: f64) -> f64 {
+        theta * p * (1.0 - p)
+    }
+
+    /// The taker fee coefficient for a window: the market's own, else the config's.
+    fn theta(&self, i: usize, open: i64) -> f64 {
+        self.windows
+            .get(&(i, open))
+            .and_then(|w| w.fee_coef)
+            .filter(|c| c.is_finite() && *c >= 0.0)
+            .unwrap_or(self.cfg.fee_theta)
     }
 
     fn record(&mut self, t_ns: i64, kind: &str, mut body: Value) {
@@ -564,12 +576,13 @@ impl Engine {
     }
 
     /// The gap on each side: (Kalshi side mid, Polymarket US ask, fee, edge).
-    fn gaps(&self, k: &Quote, bid: Option<f64>, ask: Option<f64>) -> [Option<(f64, f64, f64, f64)>; 2] {
+    fn gaps(theta: f64, k: &Quote, bid: Option<f64>, ask: Option<f64>) -> [Option<(f64, f64, f64, f64)>; 2] {
         let mid = k.mid();
-        let yes = ask.map(|a| (mid, a, self.fee(a), mid - a - self.fee(a)));
+        let fee = |p| Self::fee(theta, p);
+        let yes = ask.map(|a| (mid, a, fee(a), mid - a - fee(a)));
         let no = bid.map(|b| {
             let a = 1.0 - b;
-            (1.0 - mid, a, self.fee(a), (1.0 - mid) - a - self.fee(a))
+            (1.0 - mid, a, fee(a), (1.0 - mid) - a - fee(a))
         });
         [yes, no]
     }
@@ -580,7 +593,7 @@ impl Engine {
         let kq = self.kalshi_quote(i, open, t_ns);
         let pq = self.pm_quote(i, open, t_ns);
         let gaps = match (kq, pq) {
-            (Some(k), Some(p)) => self.gaps(&k, p.bid, p.ask),
+            (Some(k), Some(p)) => Self::gaps(self.theta(i, open), &k, p.bid, p.ask),
             _ => [None, None],
         };
         let left = open + WINDOW_S - t_ns / NS;
@@ -620,8 +633,8 @@ impl Engine {
         if age_ms > self.cfg.pm_max_age_ms {
             return gate(self, "stale_pm_quote");
         }
-        let sides: Vec<Side> = self
-            .gaps(&k, bid, ask)
+        let theta = self.theta(i, open);
+        let sides: Vec<Side> = Self::gaps(theta, &k, bid, ask)
             .into_iter()
             .zip([true, false])
             .filter_map(|(g, up)| g.map(|g| (up, g)))
@@ -663,8 +676,6 @@ impl Engine {
         self.counters.decisions += 1;
         self.dirty = true;
         let left = (open + WINDOW_S) as f64 - t_ns as f64 / NS as f64;
-        // The same gap at the market's own fee coefficient, for re-scoring.
-        let edge_mkt = w.fee_coef.map(|c| fair - px - c * px * (1.0 - px));
         self.record(
             t_ns,
             "pu_decision",
@@ -674,13 +685,14 @@ impl Engine {
                 "kalshi_bid": r4(k.bid), "kalshi_ask": r4(k.ask), "kalshi_age_ms": k.age_ms,
                 "pm_bid": bid, "pm_ask": ask, "pm_age_ms": age_ms, "pm_venue_age_ms": pm.venue_age_ms,
                 "pm_venue_ts": pm.venue_ns.map(iso), "trigger": trigger,
-                "fee_coef": w.fee_coef, "edge_at_market_fee": edge_mkt.map(r6),
+                "fee_coef": w.fee_coef, "fee_theta": theta,
                 "ask": r4(px), "fee": r6(fee), "edge": r6(edge), "limit": r4(limit), "shares": shares,
                 "epoch": self.cfg.epoch, "mode": "paper",
             }),
         );
         let at_ns = t_ns + self.cfg.paper_latency_ms * 1_000_000;
-        let order = Order { asset: i, open, up, limit, shares, decision_ns: t_ns, fair, px, fee, edge };
+        let order =
+            Order { asset: i, open, up, limit, shares, decision_ns: t_ns, fair, px, fee, edge, theta };
         if !self.cfg.paper_delays_ms.is_empty() {
             self.probe_orders.insert(id, order.clone());
         }
@@ -736,8 +748,7 @@ impl Engine {
                 let room = (self.cfg.window_risk_frac * b - used.get(rule).copied().unwrap_or(0.0)).max(0.0);
                 target.min(self.cfg.trade_risk_frac * b / c).min(room / c).min(depth).max(0.0)
             };
-            let fee_theta = self.cfg.fee_theta;
-            let (shares, usd, fee) = walk(levels, want, |p| fee_theta * p * (1.0 - p));
+            let (shares, usd, fee) = walk(levels, want, |p| Self::fee(o.theta, p));
             *used.entry(rule).or_default() += usd + fee;
             out.insert(rule.to_owned(), Alt { target, shares, usd, fee });
         }
@@ -749,8 +760,7 @@ impl Engine {
         let Some(o) = self.pending.remove(&id) else { return };
         let Some(w) = self.windows.get(&(o.asset, o.open)).cloned() else { return };
         let (levels, best) = side_levels(o.up, o.limit, bids, offers);
-        let fee_theta = self.cfg.fee_theta;
-        let (got, usd, fee) = walk(&levels, o.shares, |p| fee_theta * p * (1.0 - p));
+        let (got, usd, fee) = walk(&levels, o.shares, |p| Self::fee(o.theta, p));
         let depth: f64 = levels.iter().map(|l| l.1).sum();
         let alt = if got > 1e-9 { self.size_rules(&o, &levels, got) } else { BTreeMap::new() };
         let body = json!({
@@ -805,8 +815,7 @@ impl Engine {
         let Some(o) = self.probe_orders.get(&id).cloned() else { return };
         let asset = self.cfg.assets[o.asset].clone();
         let (levels, best) = side_levels(o.up, o.limit, bids, offers);
-        let fee_theta = self.cfg.fee_theta;
-        let (got, usd, fee) = walk(&levels, o.shares, |p| fee_theta * p * (1.0 - p));
+        let (got, usd, fee) = walk(&levels, o.shares, |p| Self::fee(o.theta, p));
         let avg = if got > 1e-9 { usd / got } else { f64::NAN };
         self.record(
             t_ns,
@@ -1048,7 +1057,7 @@ mod tests {
     }
 
     fn engine_with(kv: &[(&str, &str)]) -> Engine {
-        let mut v = vec![("PK_PU_ASSETS", "BTC")];
+        let mut v = vec![("PK_PU_ASSETS", "BTC"), ("PK_PU_FEE_THETA", "0.0695")];
         v.extend_from_slice(kv);
         let mut e = Engine::new(Config::from_vars(vars(&v)).unwrap(), Persisted::default());
         e.set_window(
@@ -1060,7 +1069,7 @@ mod tests {
                 tick: 0.01,
                 min_qty: 0.01,
                 index: "BRTI".into(),
-                fee_coef: Some(0.11),
+                fee_coef: None,
             },
             OPEN * NS,
         );
@@ -1240,8 +1249,7 @@ mod tests {
         let d = &decisions(&mut e)[0];
         assert_eq!(d["trigger"], "pm_quote");
         assert_eq!(d["pm_venue_age_ms"], 40);
-        // 0.60 − 0.55 − 0.11 · 0.55 · 0.45
-        assert!((d["edge_at_market_fee"].as_f64().unwrap() - 0.022775).abs() < 1e-6, "{d}");
+        assert_eq!(d["fee_theta"], 0.0695);
         // Before the entry period, and for a window that is not live, nothing.
         let mut e = engine();
         kalshi(&mut e, 0.59, 0.61, OPEN * NS + 10 * NS);
@@ -1291,5 +1299,28 @@ mod tests {
         // Settled once.
         e.on_resolved("BTC", OPEN, "yes", None, (OPEN + 931) * NS);
         assert!(e.take_records().iter().all(|r| r["type"] != "pu_probe_settle"));
+    }
+
+    #[test]
+    fn the_markets_fee_coefficient_is_the_fee() {
+        let mut e = engine();
+        e.windows.get_mut(&(0, OPEN)).unwrap().fee_coef = Some(0.11);
+        let t = (OPEN + 300) * NS;
+        kalshi(&mut e, 0.61, 0.63, t); // fair 0.62
+        e.on_pm_quote(0, OPEN, Some(0.54), Some(0.55), None, t);
+        let a = e.tick(t).remove(0);
+        let d = &decisions(&mut e)[0];
+        assert_eq!(d["fee_theta"], 0.11);
+        // 0.62 − 0.55 − 0.11 · 0.55 · 0.45
+        assert!((d["edge"].as_f64().unwrap() - 0.042775).abs() < 1e-6, "{d}");
+        e.on_book(a.id, &[(0.54, 50.0)], &[(0.55, 50.0)], t + 150_000_000);
+        let f = e.take_records().into_iter().find(|r| r["type"] == "pu_fill").unwrap();
+        assert!((f["fee"].as_f64().unwrap() - 10.0 * 0.11 * 0.55 * 0.45).abs() < 1e-6, "{f}");
+        // At 0.11 a 4.3¢ gap is under a 5¢ minimum: no entry.
+        let mut e = engine_with(&[]);
+        e.windows.get_mut(&(0, OPEN)).unwrap().fee_coef = Some(0.11);
+        kalshi(&mut e, 0.61, 0.63, t);
+        e.on_pm_quote(0, OPEN, Some(0.54), Some(0.55), None, t);
+        assert!(e.tick(t).is_empty());
     }
 }
