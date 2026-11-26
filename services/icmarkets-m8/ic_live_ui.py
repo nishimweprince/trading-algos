@@ -15,6 +15,8 @@ from types import SimpleNamespace
 
 import rpyc
 
+import be_monitor
+
 BASE = Path(__file__).resolve().parent
 STRATEGIES = {709001: 'Boom1000 M5 · reverse + stop', 709002: 'Boom1000 M5 · TP 1R',
               709003: 'Boom1000 M5 · TP 2R', 709004: 'Jump50 M1 · reverse + stop'}
@@ -174,6 +176,12 @@ def page(state):
     sections += (f'<section><h2>Runner signals</h2><p class="muted">Latest 20 signals the runner acted on (shadow and live).</p>{sig}</section>'
                  f'<section><h2>Live orders sent</h2>{orders}'
                  + (f'<p class="muted" style="margin-top:10px">Recent skipped trades:</p><ul class="muted">{skips}</ul>' if skips else '') + '</section>')
+    return wrap(health, sections, 'live')
+
+
+def wrap(health, sections, active):
+    tabs = ''.join(f'<a href="{href}"' + (' aria-current="page"' if key == active else '') + f'>{label}</a>'
+                   for key, href, label in (('live', '/', 'Live overview'), ('be', '/breakeven', 'Break-even')))
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -216,10 +224,14 @@ th {{ color:var(--muted); font-size:11px; font-weight:600; }}
   td[data-label="Strategy"] {{ grid-column:1/-1; font-weight:600; }}
 }}
 @media (max-width:420px) {{ .summaries {{ grid-template-columns:1fr; }} }}
+nav {{ display:flex; gap:4px; margin-top:16px; border-bottom:1px solid var(--surface); flex-wrap:wrap; }}
+nav a {{ color:var(--muted); text-decoration:none; padding:7px 12px; border-radius:6px 6px 0 0; font-weight:600; }}
+nav a[aria-current="page"] {{ color:var(--text); background:var(--surface); }}
+.lead {{ background:var(--surface); padding:14px 16px; border-radius:8px; max-width:78ch; }} .lead p + p {{ margin-top:8px; }}
 </style>
 </head>
 <body>
-<header><h1>IC Markets Live</h1><p class="muted">{html.escape(health)}</p></header>
+<header><h1>IC Markets Live</h1><p class="muted">{html.escape(health)}</p><nav aria-label="Views">{tabs}</nav></header>
 <main>{sections}</main>
 </body>
 </html>"""
@@ -230,6 +242,9 @@ class Handler(BaseHTTPRequestHandler):
         state = latest
         if self.path == '/':
             body = page(state).encode(); ctype = 'text/html; charset=utf-8'
+        elif self.path == '/breakeven':
+            h, sections = be_monitor.render(table)
+            body = wrap(h, sections, 'be').encode(); ctype = 'text/html; charset=utf-8'
         elif self.path == '/api/state':
             body = json.dumps(state, default=str).encode(); ctype = 'application/json'
         else:
@@ -251,4 +266,5 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
     with ThreadingHTTPServer(('127.0.0.1', int(os.environ.get('IC_UI_PORT', '8093'))), Handler) as server:
         threading.Thread(target=monitor, daemon=True).start()
+        be_monitor.start()
         server.serve_forever()
