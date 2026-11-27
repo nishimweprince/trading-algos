@@ -85,6 +85,11 @@ the hostname with Cloudflare Access because the dashboard exposes trading activi
 
 ## Paper dashboard and Trek spike-flip test
 
+Extra paper accounts are defined in `paper_variants.json` (read only by the paper trader and its dashboard, via
+`paper_cfg.py`). Each clones the 5 former-Jev strategies with overrides, under its own $100 account and tag prefix:
+`T3` trail 3R / 24 h limit, `NS` natural stops only (skip signals whose stop would be widened to the broker minimum),
+`SP` skip entries whose spread is below the prior-hour median. Backtests are in `research/jev_variants`.
+
 `deriv_paper.py` simulates the 14 DSI strategies on live Deriv MT5 bid/ask (no orders). `deriv_paper_ui.py`
 serves it at `http://127.0.0.1:8092/`, with a second tab at `/trek`.
 

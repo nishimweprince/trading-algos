@@ -1,0 +1,17 @@
+{
+ "note": "Extra paper accounts read only by deriv_paper.py and deriv_paper_ui.py. Each clones the 5 former-Jev strategies from config.json under its own $100 account. Parameters fixed from research/jev_variants (2026-11-27, 120 days of Deriv ticks, in-sample Aug 1 - Sep 28, out-of-sample Sep 29 - Nov 26).",
+ "variants": [
+  {"group": "jev_t3", "prefix": "T3", "base_group": "jev",
+   "label": "Trail 3R, 24 h limit (item 2)",
+   "overrides": {"trail_R": 3.0, "max_hold": 1440},
+   "backtest": "Best in-sample of 16 trail x time-limit variants: +0.095R in-sample, +0.057R out-of-sample (t 0.5), vs about 0R for the current rules."},
+  {"group": "jev_natural", "prefix": "NS", "base_group": "jev",
+   "label": "Natural stops only (item 3)",
+   "overrides": {"stop_mode": "skip"},
+   "backtest": "Skips signals whose 2 ATR stop is below the broker minimum (about 89% of signals): +0.022R in-sample, -0.074R out-of-sample, about 1 trade a day."},
+  {"group": "jev_spread", "prefix": "SP", "base_group": "jev",
+   "label": "Skip narrow spreads (item 4)",
+   "overrides": {"spread_min_rel": 1.0},
+   "backtest": "Skips entries whose spread is below the median 1-minute spread of the prior hour: -0.014R in-sample, -0.012R out-of-sample; narrow-spread entries were not worse in the quintile check."}
+ ]
+}

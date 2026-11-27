@@ -41,8 +41,8 @@ RISK = float(ENV.get('PAPER_RISK_PCT', '5'))
 MAXRISK = float(ENV.get('PAPER_MAX_RISK_PCT', '7.5'))
 BUF = float(ENV.get('STOP_BUFFER_PCT', '20')) / 100.0
 SYMBOLS = {'DSI10': 'Drift Switch Index 10', 'DSI20': 'Drift Switch Index 20', 'DSI30': 'Drift Switch Index 30'}
-CFG = json.load(open(os.path.join(BASE, 'config.json')))
-STRATS = [s for s in CFG['strategies'] if s.get('group') in ('wr70', 'jev')]
+import paper_cfg
+STRATS, GLABELS, _ = paper_cfg.load()                    # wr70 + jev from config.json, plus paper_variants.json accounts
 GROUPS = sorted({s['group'] for s in STRATS})
 HIST = 6000                                              # M1 bars: >= 300 completed M15 bars + ATR warm-up
 
@@ -62,8 +62,9 @@ class DB:
         self.c.execute('create table if not exists state(k text primary key, v text)')
         if self.get('started') is None:
             self.put('started', time.time())
-            for g in GROUPS:
-                self.put(f'equity:{g}', EQ0)
+        for g in GROUPS:                                     # accounts added later start at EQ0 when first seen
+            if self.get(f'equity:{g}') is None:
+                self.put(f'equity:{g}', EQ0); self.put(f'started:{g}', time.time())
 
     def get(self, k, d=None):
         r = self.c.execute('select v from state where k=?', (k,)).fetchone(); return r[0] if r else d
@@ -79,11 +80,18 @@ class Paper:
     def connect(self):
         self.conn = rpyc.classic.connect(*BRIDGE); self.conn._config['sync_request_timeout'] = 60
         self.conn.execute('import MetaTrader5 as _m5'); self.mt5 = self.conn.modules.MetaTrader5
+        # attach to the Deriv terminal ourselves (needed after a terminal restart; harmless if already attached)
+        self.conn.namespace['_term'] = ENV.get('MT5_TERMINAL', r'C:\Program Files\MetaTrader 5 Terminal\terminal64.exe')
+        self.conn.execute('_ok = _m5.terminal_info() is not None or _m5.initialize(path=_term, timeout=60000)')
+        if not self.conn.eval('_ok'):
+            raise RuntimeError(f"MT5 initialize failed: {self.conn.eval('str(_m5.last_error())')}")
         for n in SYMBOLS.values():
             self.mt5.symbol_select(n, True)
         self.info = {}
         for c, n in SYMBOLS.items():
             i = self.mt5.symbol_info(n)
+            if i is None:
+                raise RuntimeError(f'{n}: no symbol info yet (terminal still loading?)')
             self.info[c] = dict(min_d=i.trade_stops_level * i.point, val=i.trade_tick_value / i.trade_tick_size,
                                 step=i.volume_step, vmin=i.volume_min, vmax=i.volume_max, digits=i.digits)
         log.info('connected (read-only quotes); groups %s, $%.0f each, %g%% risk', GROUPS, EQ0, RISK)
@@ -104,6 +112,20 @@ class Paper:
         k = r['time_msc'] > ms
         return r['time_msc'][k].astype(np.int64), r['bid'][k].astype(float), r['ask'][k].astype(float)
 
+    def spread_ref(self, code):
+        """Median of the 1-minute mean spreads over the 60 minutes before the current minute (cached per minute)."""
+        now_min = int(time.time() // 60); key = (code, now_min)
+        if getattr(self, '_sref', (None, None))[0] == key:
+            return self._sref[1]
+        T, B, A = self.ticks(code, (now_min - 60) * 60000 - 1)
+        m = T < now_min * 60000; T, B, A = T[m], B[m], A[m]
+        ref = None
+        if len(T):
+            mins = T // 60000; u, inv = np.unique(mins, return_inverse=True)
+            ref = float(np.median(np.bincount(inv, A - B) / np.bincount(inv)))
+        self._sref = (key, ref)
+        return ref
+
     def equity(self, g):
         return float(self.db.get(f'equity:{g}', EQ0))
 
@@ -114,6 +136,16 @@ class Paper:
             self.db.c.execute('insert into skips(ts, tag, side, note) values(?,?,?,?)', (time.time(), s['tag'], side, 'no fresh quote')); return
         spread = tk.ask - tk.bid
         sl_d = max(stop_d, I['min_d'] * (1 + BUF) + spread); note = []
+        if s.get('stop_mode') == 'skip' and sl_d > stop_d + 1e-9:          # natural stops only
+            self.db.c.execute('insert into skips(ts, tag, side, note) values(?,?,?,?)',
+                              (time.time(), s['tag'], side, f'natural stop {stop_d:.2f} below broker minimum {sl_d:.2f}')); return
+        q = float(s.get('spread_min_rel', 0) or 0)
+        if q > 0:                                                            # skip narrow spreads
+            ref = self.spread_ref(code)
+            if ref and spread / ref < q:
+                self.db.c.execute('insert into skips(ts, tag, side, note) values(?,?,?,?)',
+                                  (time.time(), s['tag'], side, f'spread {spread:.2f} < {q:g} x prior-hour median {ref:.2f}')); return
+            note.append(f'spread {spread / ref:.2f}x median' if ref else 'no spread reference')
         if sl_d > stop_d + 1e-9:
             note.append(f'stop widened {stop_d:.2f}->{sl_d:.2f}')
         tpR = float(s.get('target_R', 0) or 0)

@@ -6,16 +6,24 @@ import rpyc
 BASE = os.path.dirname(os.path.abspath(__file__))
 DB = os.path.join(BASE, 'data', 'paper.db')
 SYMBOLS = {'DSI10': 'Drift Switch Index 10', 'DSI20': 'Drift Switch Index 20', 'DSI30': 'Drift Switch Index 30'}
-CFG = json.load(open(os.path.join(BASE, 'config.json')))
-TAGS = {s['tag']: s for s in CFG['strategies'] if s.get('group') in ('wr70', 'jev')}
-GLABEL = {'wr70': 'WR70 group (9 strategies)', 'jev': 'Former Jev group (5 strategies, no Jev filter)'}
+import paper_cfg
+_S, GLABEL, GNOTE = paper_cfg.load()
+TAGS = {s['tag']: s for s in _S}
+GORDER = ['jev'] + [g for g in GLABEL if g not in ('jev', 'wr70')] + ['wr70']
 POLL = 10
 latest = {'error': 'Starting', 'ticks': {}}
 
 
 def short(tag):
     s = TAGS.get(tag, {}); t = f"{s.get('code', '')} M{s.get('tf', '')} {s.get('rule', '')}"
-    return t + (f" · {s['stop_atr']:g} ATR stop · {s['target_R']:g}R target" if s.get('target_R') else f" · {s.get('stop_atr', 0):g} ATR stop · trail")
+    if s.get('target_R'):
+        return t + f" · {s['stop_atr']:g} ATR stop · {s['target_R']:g}R target"
+    t += f" · {s.get('stop_atr', 0):g} ATR stop · trail {s.get('trail_R', 0):g}R · {s.get('max_hold', 0) / 60:g} h limit"
+    if s.get('stop_mode') == 'skip':
+        t += ' · natural stops only'
+    if s.get('spread_min_rel'):
+        t += f" · skip spread < {s['spread_min_rel']:g}x median"
+    return t
 
 
 def snapshot():
@@ -65,7 +73,7 @@ def page():
     started = dt.datetime.fromtimestamp(float(st.get('started', time.time())), dt.timezone.utc).strftime('%b %d %H:%M UTC')
     health = latest['error'] or 'Live Deriv quotes'
     cards = ''
-    for g in ('jev', 'wr70'):
+    for g in GORDER:
         eq = float(st.get(f'equity:{g}', 100)); T = [t for t in trades if t[1] == g]
         opnl = 0.0
         for p in pos:
@@ -76,8 +84,10 @@ def page():
         items = [('Equity', f'${eq + opnl:,.2f}'), ('Return', f'{100 * (eq + opnl - 100) / 100:+.1f}%'), ('Closed trades', f'{len(T)}'),
                  ('Win rate', f'{100 * wins / len(T):.0f}%' if T else '—'), ('Avg R', f'{sum(t[7] for t in T) / len(T):+.3f}' if T else '—'),
                  ('Open P&L', f'${opnl:+,.2f}')]
-        cards += (f'<section class="summary"><h2>{html.escape(GLABEL[g])}</h2><p class="muted">Paper account · started at $100 · '
-                  f'avg spread paid at entry {spr:.2f}</p><dl>' + ''.join(f'<div><dt>{k}</dt><dd>{v}</dd></div>' for k, v in items) + '</dl></section>')
+        since = dt.datetime.fromtimestamp(float(st[f'started:{g}']), dt.timezone.utc).strftime(' since %b %d %H:%M UTC') if f'started:{g}' in st else ''
+        cards += (f'<section class="summary"><h2>{html.escape(GLABEL[g])}</h2><p class="muted">Paper account · started at $100{since} · '
+                  f'avg spread paid at entry {spr:.2f}</p>'
+                  + (f'<p class="muted">Backtest: {html.escape(GNOTE[g])}</p>' if GNOTE.get(g) else '') + '<dl>' + ''.join(f'<div><dt>{k}</dt><dd>{v}</dd></div>' for k, v in items) + '</dl></section>')
     per = []
     for tag in TAGS:
         T = [t for t in trades if t[0] == tag]
