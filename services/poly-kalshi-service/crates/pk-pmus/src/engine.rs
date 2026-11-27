@@ -92,7 +92,20 @@ pub struct Alt {
 }
 
 /// Counterfactual sizing rules, journaled beside the flat paper size.
-pub const RULES: [&str; 7] = ["flat", "tiers", "kelly_q", "kelly_t", "kelly_s", "kelly_c", "kelly_cal"];
+pub const RULES: [&str; 9] =
+    ["flat", "tiers", "kelly_q", "kelly_t", "kelly_s", "kelly_c", "kelly_cal", "usd_flat", "usd_tiers"];
+
+/// Dollar tiers on the return per dollar (edge / cost): under 10% → 1× the
+/// stake, 10–20% → 2×, 20% and up → 3×.
+pub fn usd_tier_mult(rpd: f64) -> f64 {
+    if rpd < 0.10 {
+        1.0
+    } else if rpd < 0.20 {
+        2.0
+    } else {
+        3.0
+    }
+}
 
 /// A typical gap (6¢): the calibration prior's pseudo-shadows sit here.
 const CAL_PRIOR_X: f64 = 0.06;
@@ -298,6 +311,8 @@ struct WinState {
     closed: bool,
     resolved: bool,
     shadow: Option<Shadow>,
+    /// The per-dollar gate's shadow entry (first gap with edge / cost ≥ `rpd_min`).
+    rpd: Option<Shadow>,
 }
 
 #[derive(Default, Serialize)]
@@ -671,6 +686,8 @@ impl Engine {
             return gate(self, "halted");
         }
         if self.wstate.get(&(i, open)).is_some_and(|s| s.entries >= self.cfg.max_entries_per_window) {
+            // The per-dollar gate keeps looking after the 5¢ rule's entry, so the two are compared on whole windows.
+            self.rpd_late(i, open, t_ns);
             return gate(self, "entries_done");
         }
         let Some(k) = self.kalshi_quote(i, open, t_ns) else { return gate(self, "no_kalshi") };
@@ -698,6 +715,7 @@ impl Engine {
             ws.best_edge = Some(ws.best_edge.map_or(top, |e: f64| e.max(top)));
         }
         self.shadow(i, open, &sides, &k, t_ns);
+        self.rpd_shadow(i, open, &sides, &k, t_ns);
         let pick = sides
             .iter()
             .filter(|x| x.1.3 >= self.cfg.min_edge - 1e-12 && x.1.3 <= self.cfg.max_edge + 1e-12)
@@ -738,6 +756,7 @@ impl Engine {
                 "fee_coef": w.fee_coef, "fee_theta": theta,
                 "ask": r4(px), "fee": r6(fee), "edge": r6(edge), "limit": r4(limit), "shares": shares,
                 "q_cons": r4(q_cons_v), "kalshi_book_age_ms": k.age_ms,
+                "cost": r4(px + fee), "rpd": r4(edge / (px + fee)),
                 "epoch": self.cfg.epoch, "mode": "paper",
             }),
         );
@@ -761,6 +780,62 @@ impl Engine {
         }
         self.pending.insert(id, order);
         Some(FetchBook { id, slug: w.slug, at_ns, decision_ns: t_ns })
+    }
+
+    /// After the window's entry: the per-dollar gate's shadow on the current quotes.
+    fn rpd_late(&mut self, i: usize, open: i64, t_ns: i64) {
+        if self.wstate.get(&(i, open)).is_some_and(|s| s.rpd.is_some()) {
+            return;
+        }
+        let Some(k) = self.kalshi_quote(i, open, t_ns) else { return };
+        if k.ask - k.bid > self.cfg.kalshi_max_spread + 1e-9 {
+            return;
+        }
+        let Some(pm) = self.pm_quote(i, open, t_ns) else { return };
+        if pm.age_ms > self.cfg.pm_max_age_ms {
+            return;
+        }
+        let sides: Vec<Side> = Self::gaps(self.theta(i, open), &k, pm.bid, pm.ask)
+            .into_iter()
+            .zip([true, false])
+            .filter_map(|(g, up)| g.map(|g| (up, g)))
+            .filter(|(_, g)| (self.cfg.min_px..=self.cfg.max_px).contains(&g.1))
+            .collect();
+        self.rpd_shadow(i, open, &sides, &k, t_ns);
+    }
+
+    /// The per-dollar gate (shadow only): the first gap in a coin-window whose
+    /// return per dollar (edge / cost) is at least `rpd_min`, with an edge of at
+    /// least `min_net_edge` and at most `max_edge`, costed at the ask plus fee.
+    fn rpd_shadow(&mut self, i: usize, open: i64, sides: &[Side], k: &Quote, t_ns: i64) {
+        let ws = self.wstate.entry((i, open)).or_default();
+        if ws.rpd.is_some() {
+            return;
+        }
+        let rpd = |g: &(f64, f64, f64, f64)| g.3 / (g.1 + g.2);
+        let Some(&(up, (fair, px, fee, edge))) = sides
+            .iter()
+            .filter(|x| {
+                x.1.3 >= self.cfg.min_net_edge - 1e-12
+                    && x.1.3 <= self.cfg.max_edge + 1e-12
+                    && rpd(&x.1) >= self.cfg.rpd_min - 1e-12
+            })
+            .max_by(|a, b| rpd(&a.1).total_cmp(&rpd(&b.1)))
+        else {
+            return;
+        };
+        let x_cons = cons_q(up, k, px + fee, self.cfg.cons_age_half_ms) - (px + fee);
+        ws.rpd = Some(Shadow { up, px, fee, edge, x_cons });
+        let asset = self.cfg.assets[i].clone();
+        let left = (open + WINDOW_S) as f64 - t_ns as f64 / NS as f64;
+        self.record(
+            t_ns,
+            "pu_rpd",
+            json!({"asset": asset, "open": open, "side": if up { "up" } else { "down" }, "left": r4(left),
+                   "p_side": r4(fair), "ask": r4(px), "fee": r6(fee), "cost": r4(px + fee), "edge": r6(edge),
+                   "rpd": r4(edge / (px + fee)), "passes_5c": edge >= self.cfg.min_edge - 1e-12,
+                   "epoch": self.cfg.epoch}),
+        );
     }
 
     /// The min-edge-3¢ rule's entry: the first gap of `shadow_min_edge`..=`max_edge`
@@ -808,6 +883,8 @@ impl Engine {
                 "kelly_t" => 0.10 * kelly_f(o.fair, c) * b / c,
                 "kelly_s" => 0.25 * kelly_f(q_adj, c) * b / c,
                 "kelly_c" => 0.25 * kelly_f(o.q_cons, c) * b / c,
+                "usd_flat" => self.cfg.stake_usd / c,
+                "usd_tiers" => self.cfg.stake_usd * usd_tier_mult(o.edge / c) / c,
                 _ => 0.25 * kelly_f(q_cal, c) * b / c,
             };
             let want = if rule == "flat" {
@@ -965,6 +1042,7 @@ impl Engine {
         }
         ws.resolved = true;
         let shadow = ws.shadow;
+        let rpd = ws.rpd;
         match kalshi {
             Some(k) if k == outcome => self.counters.agree += 1,
             Some(_) => self.counters.disagree += 1,
@@ -994,7 +1072,20 @@ impl Engine {
                 t_ns,
                 "pu_shadow_settle",
                 json!({"asset": asset, "open": open, "side": if sh.up { "up" } else { "down" }, "edge": r6(sh.edge),
-                       "x_cons": r6(sh.x_cons), "real": sh.edge >= self.cfg.min_edge - 1e-12, "won": won, "per_share": r6(per_share),
+                       "x_cons": r6(sh.x_cons), "cost": r4(sh.px + sh.fee), "real": sh.edge >= self.cfg.min_edge - 1e-12, "won": won, "per_share": r6(per_share),
+                       "epoch": self.cfg.epoch}),
+            );
+        }
+        if let Some(sh) = rpd {
+            let won = (outcome == "yes") == sh.up;
+            let cost = sh.px + sh.fee;
+            let per_share = f64::from(u8::from(won)) - cost;
+            self.record(
+                t_ns,
+                "pu_rpd_settle",
+                json!({"asset": asset, "open": open, "side": if sh.up { "up" } else { "down" }, "edge": r6(sh.edge),
+                       "cost": r4(cost), "rpd": r4(sh.edge / cost), "passes_5c": sh.edge >= self.cfg.min_edge - 1e-12,
+                       "won": won, "per_share": r6(per_share), "per_usd": r6(per_share / cost),
                        "epoch": self.cfg.epoch}),
             );
         }
@@ -1276,6 +1367,10 @@ mod tests {
         let c = f["cal"]["q_cons"].as_f64().unwrap();
         assert!((c - 0.62).abs() < 1e-4, "{c}");
         assert!(sz["kelly_c"]["target"].as_f64().unwrap() < sz["kelly_q"]["target"].as_f64().unwrap());
+        // Dollar rules: $5 / c, and 2× at 17% per dollar (10–20% tier).
+        let c = 0.52 + 0.0695 * 0.52 * 0.48;
+        assert!((sz["usd_flat"]["target"].as_f64().unwrap() - 5.0 / c).abs() < 1e-3);
+        assert!((sz["usd_tiers"]["target"].as_f64().unwrap() - 10.0 / c).abs() < 1e-3);
         // Settle: each rule's P&L is journaled; booked to the entry day.
         e.on_resolved("BTC", OPEN, "yes", Some("yes"), (OPEN + 930) * NS);
         let s = e.take_records().into_iter().find(|r| r["type"] == "pu_settle").unwrap();
@@ -1299,6 +1394,44 @@ mod tests {
         // Epoch 5 is a calibration epoch: the settled shadow feeds β.
         assert_eq!(e.cal.n, 1);
         assert!(e.beta() < 0.5);
+    }
+
+    #[test]
+    fn the_per_dollar_gate_takes_cheap_small_gaps_as_a_shadow() {
+        let mut e = engine_with(&[]); // 5¢ to trade, 10% per dollar to shadow
+        let t = (OPEN + 300) * NS;
+        kalshi(&mut e, 0.12, 0.14, t); // Up fair 0.13
+        e.on_pm_quote(0, OPEN, Some(0.09), Some(0.10), None, t); // c ≈ 0.1063, edge ≈ 2.4¢ → 22% per dollar
+        assert!(e.tick(t).is_empty());
+        let recs = e.take_records();
+        let r = recs.iter().find(|r| r["type"] == "pu_rpd").unwrap();
+        assert_eq!((r["side"].as_str(), r["passes_5c"].as_bool()), (Some("up"), Some(false)));
+        assert!((r["rpd"].as_f64().unwrap() - 0.223).abs() < 1e-3, "{r}");
+        assert!(!recs.iter().any(|r| r["type"] == "pu_shadow" || r["type"] == "pu_decision"));
+        e.on_resolved("BTC", OPEN, "yes", None, (OPEN + 930) * NS);
+        let s = e.take_records().into_iter().find(|r| r["type"] == "pu_rpd_settle").unwrap();
+        assert_eq!(s["won"], true);
+        assert!((s["per_usd"].as_f64().unwrap() - (1.0 - 0.106255) / 0.106255).abs() < 1e-3);
+    }
+
+    #[test]
+    fn the_per_dollar_gate_keeps_looking_after_the_entry() {
+        let mut e = engine_with(&[]);
+        let t = (OPEN + 300) * NS;
+        kalshi(&mut e, 0.59, 0.61, t);
+        e.on_pm_quote(0, OPEN, Some(0.52), Some(0.53), None, t); // edge ≈ 5.3¢ but 9.6% per dollar
+        assert_eq!(e.tick(t).len(), 1);
+        let recs = e.take_records();
+        let d = recs.iter().find(|r| r["type"] == "pu_decision").unwrap();
+        assert!((d["rpd"].as_f64().unwrap() - 0.0963).abs() < 1e-3, "{d}");
+        assert!(!recs.iter().any(|r| r["type"] == "pu_rpd"));
+        // Kalshi moves up: the window is done for the 5¢ rule; the per-dollar gate still fires.
+        kalshi(&mut e, 0.62, 0.64, t + NS);
+        e.on_pm_quote(0, OPEN, Some(0.52), Some(0.53), None, t + NS);
+        assert!(e.tick(t + NS).is_empty());
+        let r = e.take_records().into_iter().find(|r| r["type"] == "pu_rpd").unwrap();
+        assert_eq!(r["passes_5c"], true);
+        assert!(r["rpd"].as_f64().unwrap() > 0.15);
     }
 
     #[test]

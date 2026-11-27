@@ -63,6 +63,25 @@ report one. `pu_window.fee_coef` and `pu_decision.fee_theta` record the rate use
 0.11 the fee is about 2.7¢ at p = 0.5, against 1.7¢ before, so fewer gaps clear 5¢.
 Epoch 3 (about 1.5 h at Θ = 0.0695) is superseded.
 
+## Epoch 6: per dollar, not per share (2026-11-26)
+
+A cent of edge is worth c dollars of stake: a 5¢ gap is 50% of a $0.10 share and 5.6% of
+a $0.90 one, which risks $0.90 to make $0.10. Epochs 1–5 gated, tiered and scored in ¢ per
+share. Epoch 6 adds, without changing what is traded (5¢ gate, flat 10):
+
+- **Per-dollar gate, as a shadow (`pu_rpd`, `pu_rpd_settle`).** The first gap per
+  coin-window with edge ÷ cost ≥ `PK_PU_RPD_MIN` (10%), edge between `min_net_edge` (1¢) and
+  `max_edge` (15¢), costed at ask + fee for one share. It keeps looking after the 5¢ rule's
+  entry, so both gates are compared on whole windows. `passes_5c` marks gaps the 5¢ rule
+  would also take. `pu_shadow_settle` now carries `cost`; `pu_decision` carries `cost` and
+  `rpd`.
+- **Dollar sizing rules.** `usd_flat`: `PK_PU_STAKE_USD` ($5) ÷ c shares. `usd_tiers`: 1×,
+  2×, 3× the stake at < 10%, 10–20%, ≥ 20% return per dollar. Same caps as the other rules.
+- **Per-dollar scoring.** Results show return per dollar (P&L ÷ cost); new tables "Return
+  per dollar by price" (settled positions by cost per share) and "Gate: 5¢ against per
+  dollar"; "Does the gap pay?" adds price bands and predicted/realized per dollar.
+- `PK_PU_CAL_EPOCHS` defaults to 4,5,6.
+
 ## Epoch 5: does the gap pay? (2026-11-26)
 
 Every Kelly rule trusted Kalshi's mid as the win probability, the same number that fires

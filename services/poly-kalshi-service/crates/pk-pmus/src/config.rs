@@ -60,6 +60,10 @@ pub struct Config {
     pub cal_prior_n: f64,
     /// Conservative Kelly: the edge to Kalshi's near side halves every this many ms of book age.
     pub cons_age_half_ms: f64,
+    /// Dollar sizing: the stake of `usd_flat`, and the base stake of `usd_tiers`.
+    pub stake_usd: f64,
+    /// The per-dollar gate (shadow only): fire when (q − c) / c ≥ this.
+    pub rpd_min: f64,
     // --- paths, page, endpoints ---
     pub state_dir: PathBuf,
     pub kill_file: PathBuf,
@@ -161,7 +165,7 @@ impl Config {
             max_entries_per_window: e.int("PK_PU_MAX_ENTRIES_PER_WINDOW", 1)? as usize,
             shares: e.num("PK_PU_SHARES", 10.0)?,
             fee_theta: e.num("PK_PU_FEE_THETA", 0.11)?,
-            epoch: e.or("PK_PU_EPOCH", "5"),
+            epoch: e.or("PK_PU_EPOCH", "6"),
             paper_latency_ms: e.int("PK_PU_PAPER_LATENCY_MS", 150)?,
             paper_delays_ms: {
                 let raw = e.or("PK_PU_PAPER_DELAYS_MS", "25,50,100,150");
@@ -186,13 +190,15 @@ impl Config {
             trade_risk_frac: e.num("PK_PU_TRADE_RISK_FRAC", 0.02)?,
             window_risk_frac: e.num("PK_PU_WINDOW_RISK_FRAC", 0.05)?,
             cal_epochs: e
-                .or("PK_PU_CAL_EPOCHS", "4,5")
+                .or("PK_PU_CAL_EPOCHS", "4,5,6")
                 .split(',')
                 .map(|x| x.trim().to_owned())
                 .filter(|x| !x.is_empty())
                 .collect(),
             cal_prior_n: e.num("PK_PU_CAL_PRIOR_N", 20.0)?,
             cons_age_half_ms: e.num("PK_PU_CONS_AGE_HALF_MS", 10_000.0)?,
+            stake_usd: e.num("PK_PU_STAKE_USD", 5.0)?,
+            rpd_min: e.num("PK_PU_RPD_MIN", 0.10)?,
             state_dir,
             kill_file,
             ui_addr: match e.or("PK_PU_UI_ADDR", "127.0.0.1:8095").as_str() {
@@ -213,6 +219,8 @@ impl Config {
         anyhow::ensure!(0.0 < c.min_edge && c.min_edge < c.max_edge, "need 0 < MIN_EDGE < MAX_EDGE");
         anyhow::ensure!(c.cal_prior_n >= 0.0, "PK_PU_CAL_PRIOR_N must be ≥ 0");
         anyhow::ensure!(c.cons_age_half_ms > 0.0, "PK_PU_CONS_AGE_HALF_MS must be positive");
+        anyhow::ensure!(c.stake_usd > 0.0, "PK_PU_STAKE_USD must be positive");
+        anyhow::ensure!(c.rpd_min > 0.0, "PK_PU_RPD_MIN must be positive");
         anyhow::ensure!(
             0.0 < c.min_px && c.min_px < c.max_px && c.max_px < 1.0,
             "need 0 < MIN_PX < MAX_PX < 1"
@@ -275,7 +283,7 @@ pub mod tests {
         assert_eq!(c.assets, ["BTC", "ETH", "SOL", "XRP"]);
         assert_eq!((c.min_edge, c.max_edge, c.fee_theta), (0.05, 0.15, 0.11));
         assert!(!c.enforce_halt);
-        assert_eq!((c.epoch.as_str(), c.cal_epochs.as_slice()), ("5", &["4".to_owned(), "5".to_owned()][..]));
+        assert_eq!((c.epoch.as_str(), c.cal_epochs.as_slice()), ("6", &["4".to_owned(), "5".to_owned(), "6".to_owned()][..]));
         assert_eq!(c.paper_delays_ms, [25, 50, 100, 150]);
         assert!(
             Config::from_vars(vars(&[("PK_PU_PAPER_DELAYS_MS", "off")])).unwrap().paper_delays_ms.is_empty()
