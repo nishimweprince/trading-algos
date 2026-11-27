@@ -64,6 +64,9 @@ pub struct Config {
     pub stake_usd: f64,
     /// The per-dollar gate (shadow only): fire when (q − c) / c ≥ this.
     pub rpd_min: f64,
+    /// Quick-exit study: after each fill, the bid walked for the position this
+    /// many ms later (never sold; settled beside holding).
+    pub exit_delays_ms: Vec<i64>,
     // --- paths, page, endpoints ---
     pub state_dir: PathBuf,
     pub kill_file: PathBuf,
@@ -165,7 +168,7 @@ impl Config {
             max_entries_per_window: e.int("PK_PU_MAX_ENTRIES_PER_WINDOW", 1)? as usize,
             shares: e.num("PK_PU_SHARES", 10.0)?,
             fee_theta: e.num("PK_PU_FEE_THETA", 0.11)?,
-            epoch: e.or("PK_PU_EPOCH", "6"),
+            epoch: e.or("PK_PU_EPOCH", "7"),
             paper_latency_ms: e.int("PK_PU_PAPER_LATENCY_MS", 150)?,
             paper_delays_ms: {
                 let raw = e.or("PK_PU_PAPER_DELAYS_MS", "25,50,100,150");
@@ -190,7 +193,7 @@ impl Config {
             trade_risk_frac: e.num("PK_PU_TRADE_RISK_FRAC", 0.02)?,
             window_risk_frac: e.num("PK_PU_WINDOW_RISK_FRAC", 0.05)?,
             cal_epochs: e
-                .or("PK_PU_CAL_EPOCHS", "4,5,6")
+                .or("PK_PU_CAL_EPOCHS", "4,5,6,7")
                 .split(',')
                 .map(|x| x.trim().to_owned())
                 .filter(|x| !x.is_empty())
@@ -198,6 +201,20 @@ impl Config {
             cal_prior_n: e.num("PK_PU_CAL_PRIOR_N", 20.0)?,
             cons_age_half_ms: e.num("PK_PU_CONS_AGE_HALF_MS", 10_000.0)?,
             stake_usd: e.num("PK_PU_STAKE_USD", 5.0)?,
+            exit_delays_ms: {
+                let raw = e.or("PK_PU_EXIT_DELAYS_MS", "1000,2000,5000,10000");
+                let mut v = Vec::new();
+                for x in raw.split(',').map(str::trim).filter(|x| !x.is_empty() && *x != "off") {
+                    let d = x
+                        .parse::<i64>()
+                        .map_err(|_| anyhow::anyhow!("PK_PU_EXIT_DELAYS_MS={raw}: {x} is not ms"))?;
+                    anyhow::ensure!(d > 0, "PK_PU_EXIT_DELAYS_MS={raw}: delays must be positive");
+                    v.push(d);
+                }
+                v.sort_unstable();
+                v.dedup();
+                v
+            },
             rpd_min: e.num("PK_PU_RPD_MIN", 0.10)?,
             state_dir,
             kill_file,
@@ -283,7 +300,9 @@ pub mod tests {
         assert_eq!(c.assets, ["BTC", "ETH", "SOL", "XRP"]);
         assert_eq!((c.min_edge, c.max_edge, c.fee_theta), (0.05, 0.15, 0.11));
         assert!(!c.enforce_halt);
-        assert_eq!((c.epoch.as_str(), c.cal_epochs.as_slice()), ("6", &["4".to_owned(), "5".to_owned(), "6".to_owned()][..]));
+        assert_eq!(c.exit_delays_ms, [1_000, 2_000, 5_000, 10_000]);
+        assert!(Config::from_vars(vars(&[("PK_PU_EXIT_DELAYS_MS", "off")])).unwrap().exit_delays_ms.is_empty());
+        assert_eq!((c.epoch.as_str(), c.cal_epochs.as_slice()), ("7", &["4".to_owned(), "5".to_owned(), "6".to_owned(), "7".to_owned()][..]));
         assert_eq!(c.paper_delays_ms, [25, 50, 100, 150]);
         assert!(
             Config::from_vars(vars(&[("PK_PU_PAPER_DELAYS_MS", "off")])).unwrap().paper_delays_ms.is_empty()

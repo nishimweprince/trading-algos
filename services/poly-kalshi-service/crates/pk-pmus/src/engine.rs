@@ -191,6 +191,29 @@ pub struct Persisted {
     /// Fills each probe delay got (counterfactual, settled beside the positions).
     #[serde(default)]
     pub probes: Vec<Probe>,
+    /// Quick-exit probes of open positions.
+    #[serde(default)]
+    pub exits: Vec<ExitProbe>,
+}
+
+/// The quick-exit study: what selling the position into the bid `delay_ms`
+/// after the fill would have got (never sold; settled beside holding).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ExitProbe {
+    pub id: u64,
+    pub asset: String,
+    pub open: i64,
+    pub up: bool,
+    pub delay_ms: i64,
+    /// The position's shares and its all-in entry cost.
+    pub shares: f64,
+    pub entry_cost: f64,
+    pub sold: f64,
+    pub proceeds: f64,
+    pub fee: f64,
+    pub epoch: String,
+    #[serde(default)]
+    pub settled: bool,
 }
 
 /// What a paper order would have filled had it arrived `delay_ms` after the decision.
@@ -367,6 +390,16 @@ fn r4(x: f64) -> Value {
 
 fn r6(x: f64) -> Value {
     if x.is_finite() { ((x * 1e6).round() / 1e6).into() } else { Value::Null }
+}
+
+/// The levels a sale of one side walks, best (highest) first: Yes sells into
+/// Yes bids; No sells at 1 − the Yes offer.
+fn exit_levels(up: bool, bids: &[(f64, f64)], offers: &[(f64, f64)]) -> Vec<(f64, f64)> {
+    let mut v: Vec<(f64, f64)> =
+        if up { bids.to_vec() } else { offers.iter().map(|(p, q)| (1.0 - p, *q)).collect() };
+    v.retain(|(p, q)| *q > 0.0 && *p > 0.0);
+    v.sort_by(|a, b| b.0.total_cmp(&a.0));
+    v
 }
 
 /// The levels a buy of one side walks, cheapest first, at or under `limit`,
@@ -991,6 +1024,52 @@ impl Engine {
         self.dirty = true;
     }
 
+    /// Did paper order `id` fill (an open position)?
+    pub fn filled(&self, id: u64) -> bool {
+        self.p.positions.iter().any(|p| p.id == id && p.outcome.is_none())
+    }
+
+    /// The quick-exit study: sell position `id` into the book `delay_ms` after
+    /// its fill (counterfactual; the position is held to settlement).
+    pub fn on_exit(&mut self, id: u64, delay_ms: i64, bids: &[(f64, f64)], offers: &[(f64, f64)], t_ns: i64) {
+        let Some(p) = self.p.positions.iter().find(|p| p.id == id && p.outcome.is_none()).cloned() else { return };
+        let theta = self.windows.get(&(self.asset_index(&p.asset).unwrap_or(0), p.open)).map_or(self.cfg.fee_theta, |w| {
+            w.fee_coef.unwrap_or(self.cfg.fee_theta)
+        });
+        let levels = exit_levels(p.up, bids, offers);
+        let (sold, proceeds, fee) = walk(&levels, p.shares, |x| Self::fee(theta, x));
+        let entry_cost = p.usd + p.fee;
+        let best = levels.first().map_or(f64::NAN, |l| l.0);
+        let pnl_sold = proceeds - fee - entry_cost * sold / p.shares.max(1e-9);
+        self.record(
+            t_ns,
+            "pu_exit_probe",
+            json!({"id": id, "asset": p.asset, "open": p.open, "side": if p.up { "up" } else { "down" },
+                   "delay_ms": delay_ms, "held_ms": (t_ns - p.entry_ns) / 1_000_000,
+                   "shares": r4(p.shares), "entry_avg": r4(p.usd / p.shares.max(1e-9)), "entry_cost": r4(entry_cost),
+                   "best_bid": r4(best), "depth": r4(levels.iter().map(|l| l.1).sum()),
+                   "sold": r4(sold), "proceeds": r4(proceeds), "fee": r6(fee),
+                   "avg": if sold > 1e-9 { r4(proceeds / sold) } else { Value::Null },
+                   "pnl_sold": r4(pnl_sold), "per_share_sold": if sold > 1e-9 { r4(pnl_sold / sold) } else { Value::Null },
+                   "epoch": self.cfg.epoch}),
+        );
+        self.p.exits.push(ExitProbe {
+            id,
+            asset: p.asset.clone(),
+            open: p.open,
+            up: p.up,
+            delay_ms,
+            shares: p.shares,
+            entry_cost,
+            sold,
+            proceeds,
+            fee,
+            epoch: self.cfg.epoch.clone(),
+            settled: false,
+        });
+        self.dirty = true;
+    }
+
     /// The book could not be fetched: the paper order did not fill.
     pub fn on_book_error(&mut self, id: u64, error: &str, t_ns: i64) {
         if let Some(o) = self.pending.remove(&id) {
@@ -1094,14 +1173,28 @@ impl Engine {
             pr.settled = true;
             let won = (outcome == "yes") == pr.up;
             let pnl = if won { pr.shares } else { 0.0 } - pr.usd - pr.fee;
-            probe_recs.push(json!({"id": pr.id, "asset": asset, "open": open, "delay_ms": pr.delay_ms, "won": won,
-                                   "shares": r4(pr.shares), "cost": r4(pr.usd + pr.fee), "pnl": r4(pnl), "epoch": pr.epoch}));
+            probe_recs.push(("pu_probe_settle", json!({"id": pr.id, "asset": asset, "open": open, "delay_ms": pr.delay_ms, "won": won,
+                                   "shares": r4(pr.shares), "cost": r4(pr.usd + pr.fee), "pnl": r4(pnl), "epoch": pr.epoch})));
+        }
+        for ex in self.p.exits.iter_mut().filter(|x| x.asset == asset && x.open == open && !x.settled) {
+            ex.settled = true;
+            let won = (outcome == "yes") == ex.up;
+            let payout = if won { 1.0 } else { 0.0 };
+            // Sold shares exit at the bid; any remainder is held to settlement.
+            let pnl = ex.proceeds - ex.fee + (ex.shares - ex.sold) * payout - ex.entry_cost;
+            let hold = ex.shares * payout - ex.entry_cost;
+            probe_recs.push((
+                "pu_exit_settle",
+                json!({"id": ex.id, "asset": asset, "open": open, "delay_ms": ex.delay_ms, "won": won,
+                       "shares": r4(ex.shares), "sold": r4(ex.sold), "full": ex.sold >= ex.shares - 1e-9,
+                       "pnl": r4(pnl), "hold_pnl": r4(hold), "diff": r4(pnl - hold), "epoch": ex.epoch}),
+            ));
         }
         if !probe_recs.is_empty() {
             self.dirty = true;
         }
-        for r in probe_recs {
-            self.record(t_ns, "pu_probe_settle", r);
+        for (kind, r) in probe_recs {
+            self.record(t_ns, kind, r);
         }
         for p in settled {
             let pnl = p.pnl.unwrap_or(0.0);
@@ -1173,6 +1266,7 @@ impl Engine {
         self.probe_orders.retain(|_, o| live.contains(&o.open));
         let n = self.p.probes.len();
         self.p.probes.retain(|p| !p.settled && p.open + WINDOW_S + RESOLVE_FOR_S + 600 >= now_s);
+        self.p.exits.retain(|x| !x.settled && x.open + WINDOW_S + RESOLVE_FOR_S + 600 >= now_s);
         if self.p.probes.len() != n {
             self.dirty = true;
         }
@@ -1432,6 +1526,43 @@ mod tests {
         let r = e.take_records().into_iter().find(|r| r["type"] == "pu_rpd").unwrap();
         assert_eq!(r["passes_5c"], true);
         assert!(r["rpd"].as_f64().unwrap() > 0.15);
+    }
+
+    #[test]
+    fn exit_probes_walk_the_bid_and_settle_beside_holding() {
+        let mut e = engine();
+        let t = (OPEN + 300) * NS;
+        kalshi(&mut e, 0.59, 0.61, t);
+        e.on_pm_quote(0, OPEN, Some(0.54), Some(0.55), None, t);
+        let acts = e.tick(t);
+        e.on_book(acts[0].id, &[(0.54, 50.0)], &[(0.55, 50.0)], t + 150_000_000);
+        assert!(e.filled(acts[0].id));
+        e.take_records();
+        let fee = |p: f64| 0.0695 * p * (1.0 - p);
+        let cost = 10.0 * (0.55 + fee(0.55));
+        // +2 s: the Yes bid has caught up to 0.58, 6 there and 10 at 0.57.
+        e.on_exit(acts[0].id, 2000, &[(0.58, 6.0), (0.57, 10.0)], &[(0.60, 50.0)], t + 2_150_000_000);
+        // +10 s: no bid at all.
+        e.on_exit(acts[0].id, 10_000, &[], &[(0.60, 50.0)], t + 10_150_000_000);
+        let ex: Vec<Value> = e.take_records().into_iter().filter(|r| r["type"] == "pu_exit_probe").collect();
+        assert_eq!(ex[0]["sold"].as_f64().unwrap(), 10.0);
+        assert_eq!(ex[0]["best_bid"].as_f64().unwrap(), 0.58);
+        let proceeds = 6.0 * 0.58 + 4.0 * 0.57;
+        let exit_fee = 6.0 * fee(0.58) + 4.0 * fee(0.57);
+        assert!((ex[0]["pnl_sold"].as_f64().unwrap() - (proceeds - exit_fee - cost)).abs() < 1e-3, "{}", ex[0]);
+        assert_eq!(ex[1]["sold"].as_f64().unwrap(), 0.0);
+        // It lost: the 2 s exit kept its sale, the 10 s one held to a loss.
+        e.on_resolved("BTC", OPEN, "no", None, (OPEN + 930) * NS);
+        let st: Vec<Value> = e.take_records().into_iter().filter(|r| r["type"] == "pu_exit_settle").collect();
+        assert_eq!(st.len(), 2);
+        let two = st.iter().find(|r| r["delay_ms"] == 2000).unwrap();
+        assert!((two["pnl"].as_f64().unwrap() - (proceeds - exit_fee - cost)).abs() < 1e-3);
+        assert!((two["hold_pnl"].as_f64().unwrap() + cost).abs() < 1e-3);
+        assert_eq!(two["full"], true);
+        let ten = st.iter().find(|r| r["delay_ms"] == 10_000).unwrap();
+        assert_eq!(ten["diff"].as_f64().unwrap(), 0.0);
+        // A down position sells No at 1 − the Yes offer.
+        assert_eq!(exit_levels(false, &[(0.4, 5.0)], &[(0.45, 3.0), (0.47, 2.0)]), vec![(0.55, 3.0), (0.53, 2.0)]);
     }
 
     #[test]

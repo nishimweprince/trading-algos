@@ -63,6 +63,33 @@ report one. `pu_window.fee_coef` and `pu_decision.fee_theta` record the rate use
 0.11 the fee is about 2.7¢ at p = 0.5, against 1.7¢ before, so fewer gaps clear 5¢.
 Epoch 3 (about 1.5 h at Θ = 0.0695) is superseded.
 
+## Epoch 7: quick exit against holding (2026-11-27)
+
+The epoch 6 review (25 h, 321 decisions, 130 fills) found that holding to settlement earns
+nothing (−0.66¢/share, t −0.16), but 320 of 325 decisions are triggered by a Kalshi update
+and Polymarket US then moves about 8.6¢ toward Kalshi within 2 s, while Kalshi stays where
+it was. Selling back at the bid 2 s after the fill (fee on both legs) would have netted
++1.8¢/share, t 4.2, on the actual fills. That figure is in-sample, from top-of-book
+once-a-second snapshots. Epoch 7 measures the exit properly, without trading it:
+
+- **`pu_exit_probe`.** For every fill, the book is fetched `PK_PU_EXIT_DELAYS_MS`
+  (1, 2, 5 and 10 s) after the fill, and the whole position is walked into the bid level by
+  level. Up sells into Yes bids; Down sells No at 1 − the Yes offer. The record holds the
+  shares sold, the proceeds, the exit fee, and the P&L on the sold shares.
+- **`pu_exit_settle`.** At settlement, each probe's P&L is the exit proceeds minus fees,
+  plus any unsold remainder held to settlement, minus the entry cost. The record pairs this
+  with `hold_pnl` for the same position and with `diff` (exit − hold).
+- **Page.** A "Quick exit against holding" table, by delay: fills, fully-sold rate, shares
+  sold, exit and hold net per share, and exit − hold with a paired, window-clustered t.
+
+**Pre-registered (fixed before any epoch 7 data):**
+- **Primary:** the 2 s exit nets more than 0 per share, window-clustered t ≥ 2.0, over 300
+  settled epoch 7 fills. The page shows collecting / pass / fail.
+- **Before 300:** no change to the trading rule.
+- **Secondary, reported but not gating:** the 1, 5 and 10 s exits, and exit − hold.
+- **If it passes:** the next step is a sell order after the fill, which needs a Polymarket
+  US account, and a latency measurement of real order entry.
+
 ## Epoch 6: per dollar, not per share (2026-11-26)
 
 A cent of edge is worth c dollars of stake: a 5¢ gap is 50% of a $0.10 share and 5.6% of
