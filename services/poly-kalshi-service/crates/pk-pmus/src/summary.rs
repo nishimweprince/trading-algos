@@ -14,6 +14,19 @@ use serde_json::{Value, json};
 
 use crate::engine::NS;
 
+/// Cost-per-share bands for the per-dollar tables.
+const PRICE_BANDS: [(f64, f64); 4] = [(0.0, 0.30), (0.30, 0.50), (0.50, 0.70), (0.70, 1.01)];
+
+fn price_label(lo: f64, hi: f64) -> String {
+    format!("cost {:.2}–{:.2}", lo, hi.min(1.0))
+}
+
+/// The quick-exit pre-registration (README, epoch 7): the 2 s exit, settled
+/// fills needed, and the t it must reach.
+pub const EXIT_PRIMARY_MS: i64 = 2_000;
+pub const EXIT_NEED: usize = 300;
+pub const EXIT_T: f64 = 2.0;
+
 /// The bar before going live (README).
 pub const GATE_SETTLED: usize = 150;
 pub const GATE_DAYS: f64 = 3.0;
@@ -47,8 +60,13 @@ pub struct Summary {
     /// Gap calibration: settled shadows of `cal_epochs`, with their entry's
     /// seconds left and near-side gap.
     cal_epochs: Vec<String>,
-    cal_meta: HashMap<(String, i64), (f64, f64)>,
+    cal_meta: HashMap<(String, i64), (f64, f64, f64)>,
     cal: Vec<CalRow>,
+    /// The per-dollar gate's settled shadows (this epoch).
+    rpd: Vec<Value>,
+    /// Quick-exit study: probes and their settles (this epoch).
+    exits: Vec<Value>,
+    exit_settles: Vec<Value>,
 }
 
 /// One settled shadow: predicted gap to Kalshi's mid (x), to its near side
@@ -56,6 +74,8 @@ pub struct Summary {
 #[derive(Clone)]
 struct CalRow {
     open: i64,
+    /// Cost per share (ask + fee).
+    c: f64,
     x: f64,
     x_cons: f64,
     left: f64,
@@ -169,12 +189,13 @@ impl Summary {
                         .get("x_cons")
                         .and_then(Value::as_f64)
                         .unwrap_or_else(|| f(r, "edge") - f(r, "kalshi_spread") / 2.0);
-                    self.cal_meta.insert(key, (f(r, "left"), xc));
+                    self.cal_meta.insert(key, (f(r, "left"), xc, f(r, "ask") + f(r, "fee")));
                 }
                 "pu_shadow_settle" => {
-                    let (left, xc) = self.cal_meta.remove(&key).unwrap_or((f64::NAN, f64::NAN));
+                    let (left, xc, c) = self.cal_meta.remove(&key).unwrap_or((f64::NAN, f64::NAN, f64::NAN));
                     self.cal.push(CalRow {
                         open: key.1,
+                        c: r.get("cost").and_then(Value::as_f64).unwrap_or(c),
                         x: f(r, "edge"),
                         x_cons: r.get("x_cons").and_then(Value::as_f64).unwrap_or(xc),
                         left,
@@ -204,6 +225,9 @@ impl Summary {
             }
             "pu_settle" if mine => self.settles.push(r.clone()),
             "pu_shadow_settle" if mine => self.shadows.push(r.clone()),
+            "pu_rpd_settle" if mine => self.rpd.push(r.clone()),
+            "pu_exit_probe" if mine && r.get("error").is_none() => self.exits.push(r.clone()),
+            "pu_exit_settle" if mine => self.exit_settles.push(r.clone()),
             "pu_fill_probe" if self.decisions.contains_key(&id) && r.get("error").is_none() => {
                 self.probes.push(r.clone());
             }
@@ -385,6 +409,10 @@ impl Summary {
         let sizing = self.sizing();
         let delays = self.delays();
         let gap_cal = self.gap_cal();
+        let by_price = self.by_price();
+        let gate_cmp = self.gate_compare();
+        let all_usd = clustered(&Self::rows_usd(&self.settles, |_| true));
+        let exit_study = self.exit_study();
         let min_edge = self.min_edge_compare();
         let mut base_epochs: Vec<&str> =
             self.baseline.iter().map(|s| s["epoch"].as_str().unwrap_or("1")).collect();
@@ -430,6 +458,10 @@ impl Summary {
             "min_edge": min_edge,
             "delays": delays,
             "gap_cal": gap_cal,
+            "by_price": by_price,
+            "gate_cmp": gate_cmp,
+            "all_usd": all_usd,
+            "exits": exit_study,
         })
     }
 
@@ -454,7 +486,13 @@ impl Summary {
             let cl = clustered(&rows);
             let (b, b_se, _) = fit(&rs, |c| c.x);
             let (bc, _, _) = fit(&rs, |c| c.x_cons);
-            json!({"label": label, "n": k as u64, "windows": cl["windows"], "pred_c": round(100.0 * mean(&|c| c.x), 2),
+            let cs: Vec<&&CalRow> = rs.iter().filter(|c| c.c.is_finite()).collect();
+            let csum: f64 = cs.iter().map(|c| c.c).sum();
+            let per_usd = |g: &dyn Fn(&CalRow) -> f64| {
+                if csum > 0.0 { round(100.0 * cs.iter().map(|c| g(c)).sum::<f64>() / csum, 1) } else { Value::Null }
+            };
+            json!({"pred_pd": per_usd(&|c| c.x), "real_pd": per_usd(&|c| c.r), "cost": round(mean(&|c| c.c), 3),
+                   "label": label, "n": k as u64, "windows": cl["windows"], "pred_c": round(100.0 * mean(&|c| c.x), 2),
                    "cons_c": round(100.0 * mean(&|c| c.x_cons), 2), "real_c": cl["net_c"], "se_c": cl["se_c"],
                    "t": cl["t"], "beta": round(b, 2), "beta_se": round(b_se, 2), "beta_cons": round(bc, 2)})
         };
@@ -473,8 +511,124 @@ impl Summary {
                 by_left.push(row(format!("{lo:.0}–{:.0} s left", hi.min(900.0)), rs));
             }
         }
+        let mut by_price = Vec::new();
+        for (lo, hi) in PRICE_BANDS {
+            let rs: Vec<&CalRow> = all.iter().copied().filter(|c| (lo..hi).contains(&c.c)).collect();
+            if !rs.is_empty() {
+                by_price.push(row(price_label(lo, hi), rs));
+            }
+        }
         json!({"epochs": self.cal_epochs, "all": if all.is_empty() { Value::Null } else { row("All".into(), all) },
-               "by_gap": by_gap, "by_left": by_left})
+               "by_gap": by_gap, "by_left": by_left, "by_price": by_price})
+    }
+
+    /// The quick-exit study: per exit delay, how much of the position the bid
+    /// took, net per share settled (exit, with any unsold remainder held), the
+    /// same positions held, and the paired difference, clustered by window.
+    fn exit_study(&self) -> Value {
+        let mut ds: Vec<i64> = self.exits.iter().map(|p| i(p, "delay_ms")).collect();
+        ds.sort_unstable();
+        ds.dedup();
+        let rows_of = |d: i64, k: &str| -> Vec<Row> {
+            self.exit_settles
+                .iter()
+                .filter(|s| i(s, "delay_ms") == d)
+                .map(|s| Row { key: (String::new(), i(s, "open")), shares: f(s, "shares"), pnl: f(s, k) })
+                .filter(|r| r.shares.is_finite() && r.shares > 0.0 && r.pnl.is_finite())
+                .collect()
+        };
+        let mut primary = Value::Null;
+        let rows: Vec<Value> = ds
+            .iter()
+            .map(|&d| {
+                let ps: Vec<&Value> = self.exits.iter().filter(|p| i(p, "delay_ms") == d).collect();
+                let full = ps.iter().filter(|p| f(p, "sold") >= f(p, "shares") - 1e-9).count();
+                let sold: f64 = ps.iter().map(|p| f(p, "sold")).filter(|x| x.is_finite()).sum();
+                let want: f64 = ps.iter().map(|p| f(p, "shares")).filter(|x| x.is_finite()).sum();
+                let ex = clustered(&rows_of(d, "pnl"));
+                let hold = clustered(&rows_of(d, "hold_pnl"));
+                let diff = clustered(&rows_of(d, "diff"));
+                let v = json!({"label": format!("{:.0} s", d as f64 / 1000.0), "delay_ms": d, "probes": ps.len(),
+                       "full_rate": if ps.is_empty() { Value::Null } else { round(full as f64 / ps.len() as f64, 3) },
+                       "sold_frac": if want > 0.0 { round(sold / want, 3) } else { Value::Null },
+                       "n": ex["n"], "windows": ex["windows"], "exit_c": ex["net_c"], "exit_se": ex["se_c"], "exit_t": ex["t"],
+                       "hold_c": hold["net_c"], "diff_c": diff["net_c"], "diff_se": diff["se_c"], "diff_t": diff["t"]});
+                if d == EXIT_PRIMARY_MS {
+                    let n = ex["n"].as_u64().unwrap_or(0) as usize;
+                    let t = ex["t"].as_f64();
+                    let m = ex["net_c"].as_f64();
+                    primary = json!({"delay_ms": d, "need": EXIT_NEED, "have": n, "need_t": EXIT_T, "t": ex["t"],
+                        "verdict": if n < EXIT_NEED { "collecting" }
+                                   else if t.is_some_and(|t| t >= EXIT_T) && m.is_some_and(|m| m > 0.0) { "pass" }
+                                   else { "fail" }});
+                }
+                v
+            })
+            .collect();
+        json!({"rows": rows, "primary": primary})
+    }
+
+    /// Settled positions weighted by dollars: `clustered` with shares = cost,
+    /// so its "net_c" is return per dollar in percent.
+    fn rows_usd<'a>(settles: &[Value], keep: impl Fn(&Value) -> bool + 'a) -> Vec<Row> {
+        settles
+            .iter()
+            .filter(|s| keep(s))
+            .map(|s| Row {
+                key: (s["asset"].as_str().unwrap_or_default().to_owned(), i(s, "open")),
+                shares: f(s, "usd") + f(s, "fee"),
+                pnl: f(s, "pnl"),
+            })
+            .filter(|r| r.shares.is_finite() && r.pnl.is_finite())
+            .collect()
+    }
+
+    /// Per share and per dollar for one group of settled positions.
+    fn per_usd(rows_sh: &[Row], rows_usd: &[Row], label: String) -> Value {
+        let mut v = clustered(rows_sh);
+        let u = clustered(rows_usd);
+        v["label"] = label.into();
+        v["cost"] = round(rows_usd.iter().map(|r| r.shares).sum(), 2);
+        v["per_usd_pct"] = u["net_c"].clone();
+        v["per_usd_se"] = u["se_c"].clone();
+        v["t_usd"] = u["t"].clone();
+        v
+    }
+
+    /// Settled positions by cost per share: per share and per dollar.
+    fn by_price(&self) -> Vec<Value> {
+        let cost_sh = |s: &Value| (f(s, "usd") + f(s, "fee")) / f(s, "shares");
+        PRICE_BANDS
+            .iter()
+            .map(|&(lo, hi)| {
+                let keep = |s: &Value| (lo..hi).contains(&cost_sh(s));
+                Self::per_usd(&self.rows(keep), &Self::rows_usd(&self.settles, keep), price_label(lo, hi))
+            })
+            .filter(|v| v["n"].as_u64().unwrap_or(0) > 0)
+            .collect()
+    }
+
+    /// The traded 5¢ gate against the per-dollar gate, both as shadows costed at
+    /// the ask plus fee for one share, per share and per dollar, clustered by window.
+    fn gate_compare(&self) -> Vec<Value> {
+        let group = |label: &str, src: &[Value], keep: &dyn Fn(&Value) -> bool| {
+            let pick: Vec<&Value> =
+                src.iter().filter(|s| keep(s) && f(s, "cost").is_finite() && f(s, "per_share").is_finite()).collect();
+            let key = |s: &Value| (String::new(), i(s, "open"));
+            let sh: Vec<Row> = pick.iter().map(|s| Row { key: key(s), shares: 1.0, pnl: f(s, "per_share") }).collect();
+            let usd: Vec<Row> =
+                pick.iter().map(|s| Row { key: key(s), shares: f(s, "cost"), pnl: f(s, "per_share") }).collect();
+            let mut v = Self::per_usd(&sh, &usd, label.to_owned());
+            v["avg_cost"] =
+                if pick.is_empty() { Value::Null } else { round(f(&v, "cost") / pick.len() as f64, 3) };
+            v
+        };
+        vec![
+            group("5¢ gate (traded rule)", &self.shadows, &|s| s["real"].as_bool() == Some(true)),
+            group("Per-dollar gate", &self.rpd, &|_| true),
+            group("Per-dollar, also ≥ 5¢", &self.rpd, &|s| s["passes_5c"].as_bool() == Some(true)),
+            group("Per-dollar only (< 5¢)", &self.rpd, &|s| s["passes_5c"].as_bool() == Some(false)),
+        ]
     }
 
     /// Each counterfactual sizing rule over the settled positions (settle order):
@@ -672,6 +826,61 @@ mod tests {
         assert_eq!(g["by_left"][0]["label"], "0–300 s left");
         // β = Σxr / Σx² = (0.03 − 0.02) / (0.0036 + 0.0016)
         assert!((g["all"]["beta"].as_f64().unwrap() - 1.92).abs() < 0.01);
+    }
+
+    #[test]
+    fn per_dollar_tables() {
+        let mut s = Summary { epoch: "6".into(), ..Summary::default() };
+        // A cheap winner and an expensive loser: same shares, very different dollars.
+        let mut a = settle(1, "BTC", 0, 8.5, true, NS);
+        a["epoch"] = "6".into();
+        a["shares"] = 10.0.into();
+        a["usd"] = 1.4.into();
+        a["fee"] = 0.1.into();
+        let mut b = settle(2, "ETH", 900, -8.6, false, 2 * NS);
+        b["epoch"] = "6".into();
+        b["shares"] = 10.0.into();
+        b["usd"] = 8.5.into();
+        b["fee"] = 0.1.into();
+        s.ingest(&a);
+        s.ingest(&b);
+        s.ingest(&json!({"type": "pu_rpd_settle", "epoch": "6", "open": 0, "cost": 0.2, "per_share": 0.8, "passes_5c": false}));
+        s.ingest(&json!({"type": "pu_rpd_settle", "epoch": "6", "open": 900, "cost": 0.8, "per_share": -0.8, "passes_5c": true}));
+        s.ingest(&json!({"type": "pu_shadow_settle", "epoch": "6", "open": 0, "cost": 0.5, "per_share": 0.5, "real": true}));
+        let v = s.snapshot(json!({}), 3 * NS);
+        // −0.1 USD on 10.1 USD of cost.
+        assert_eq!(v["all_usd"]["net_c"], -0.99);
+        let p = v["by_price"].as_array().unwrap();
+        assert_eq!(p.len(), 2);
+        assert_eq!(p[0]["label"], "cost 0.00–0.30");
+        assert_eq!(p[0]["per_usd_pct"], 566.67); // 8.5 / 1.5
+        let g = v["gate_cmp"].as_array().unwrap();
+        assert_eq!(g[0]["per_usd_pct"], 100.0);
+        assert_eq!(g[1]["n"], 2);
+        assert_eq!(g[1]["per_usd_pct"], 0.0); // (0.8 − 0.8) / 1.0
+        assert_eq!(g[1]["avg_cost"], 0.5);
+        assert_eq!(g[3]["per_usd_pct"], 400.0);
+    }
+
+    #[test]
+    fn exit_study_pairs_exits_with_holding() {
+        let mut s = Summary { epoch: "7".into(), ..Summary::default() };
+        for (id, open, sold, pnl, hold) in [(1, 0, 10.0, 0.3, -4.4), (2, 900, 6.0, 4.5, 4.2)] {
+            s.ingest(&json!({"type": "pu_exit_probe", "epoch": "7", "id": id, "open": open, "delay_ms": 2000,
+                             "shares": 10.0, "sold": sold}));
+            s.ingest(&json!({"type": "pu_exit_settle", "epoch": "7", "id": id, "open": open, "delay_ms": 2000,
+                             "shares": 10.0, "pnl": pnl, "hold_pnl": hold, "diff": pnl - hold}));
+        }
+        s.ingest(&json!({"type": "pu_exit_probe", "epoch": "7", "id": 3, "delay_ms": 2000, "error": "timeout"}));
+        let v = s.snapshot(json!({}), NS);
+        let r = &v["exits"]["rows"][0];
+        assert_eq!((r["label"].as_str(), r["probes"].as_u64()), (Some("2 s"), Some(2)));
+        assert_eq!(r["full_rate"], 0.5);
+        assert_eq!(r["sold_frac"], 0.8);
+        assert_eq!(r["exit_c"], 24.0); // (0.3 + 4.5) / 20 shares
+        assert_eq!(r["hold_c"], -1.0);
+        assert_eq!(r["diff_c"], 25.0);
+        assert_eq!(v["exits"]["primary"]["verdict"], "collecting");
     }
 
     #[test]

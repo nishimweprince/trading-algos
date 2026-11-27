@@ -92,7 +92,20 @@ pub struct Alt {
 }
 
 /// Counterfactual sizing rules, journaled beside the flat paper size.
-pub const RULES: [&str; 7] = ["flat", "tiers", "kelly_q", "kelly_t", "kelly_s", "kelly_c", "kelly_cal"];
+pub const RULES: [&str; 9] =
+    ["flat", "tiers", "kelly_q", "kelly_t", "kelly_s", "kelly_c", "kelly_cal", "usd_flat", "usd_tiers"];
+
+/// Dollar tiers on the return per dollar (edge / cost): under 10% → 1× the
+/// stake, 10–20% → 2×, 20% and up → 3×.
+pub fn usd_tier_mult(rpd: f64) -> f64 {
+    if rpd < 0.10 {
+        1.0
+    } else if rpd < 0.20 {
+        2.0
+    } else {
+        3.0
+    }
+}
 
 /// A typical gap (6¢): the calibration prior's pseudo-shadows sit here.
 const CAL_PRIOR_X: f64 = 0.06;
@@ -178,6 +191,29 @@ pub struct Persisted {
     /// Fills each probe delay got (counterfactual, settled beside the positions).
     #[serde(default)]
     pub probes: Vec<Probe>,
+    /// Quick-exit probes of open positions.
+    #[serde(default)]
+    pub exits: Vec<ExitProbe>,
+}
+
+/// The quick-exit study: what selling the position into the bid `delay_ms`
+/// after the fill would have got (never sold; settled beside holding).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ExitProbe {
+    pub id: u64,
+    pub asset: String,
+    pub open: i64,
+    pub up: bool,
+    pub delay_ms: i64,
+    /// The position's shares and its all-in entry cost.
+    pub shares: f64,
+    pub entry_cost: f64,
+    pub sold: f64,
+    pub proceeds: f64,
+    pub fee: f64,
+    pub epoch: String,
+    #[serde(default)]
+    pub settled: bool,
 }
 
 /// What a paper order would have filled had it arrived `delay_ms` after the decision.
@@ -298,6 +334,8 @@ struct WinState {
     closed: bool,
     resolved: bool,
     shadow: Option<Shadow>,
+    /// The per-dollar gate's shadow entry (first gap with edge / cost ≥ `rpd_min`).
+    rpd: Option<Shadow>,
 }
 
 #[derive(Default, Serialize)]
@@ -352,6 +390,16 @@ fn r4(x: f64) -> Value {
 
 fn r6(x: f64) -> Value {
     if x.is_finite() { ((x * 1e6).round() / 1e6).into() } else { Value::Null }
+}
+
+/// The levels a sale of one side walks, best (highest) first: Yes sells into
+/// Yes bids; No sells at 1 − the Yes offer.
+fn exit_levels(up: bool, bids: &[(f64, f64)], offers: &[(f64, f64)]) -> Vec<(f64, f64)> {
+    let mut v: Vec<(f64, f64)> =
+        if up { bids.to_vec() } else { offers.iter().map(|(p, q)| (1.0 - p, *q)).collect() };
+    v.retain(|(p, q)| *q > 0.0 && *p > 0.0);
+    v.sort_by(|a, b| b.0.total_cmp(&a.0));
+    v
 }
 
 /// The levels a buy of one side walks, cheapest first, at or under `limit`,
@@ -671,6 +719,8 @@ impl Engine {
             return gate(self, "halted");
         }
         if self.wstate.get(&(i, open)).is_some_and(|s| s.entries >= self.cfg.max_entries_per_window) {
+            // The per-dollar gate keeps looking after the 5¢ rule's entry, so the two are compared on whole windows.
+            self.rpd_late(i, open, t_ns);
             return gate(self, "entries_done");
         }
         let Some(k) = self.kalshi_quote(i, open, t_ns) else { return gate(self, "no_kalshi") };
@@ -698,6 +748,7 @@ impl Engine {
             ws.best_edge = Some(ws.best_edge.map_or(top, |e: f64| e.max(top)));
         }
         self.shadow(i, open, &sides, &k, t_ns);
+        self.rpd_shadow(i, open, &sides, &k, t_ns);
         let pick = sides
             .iter()
             .filter(|x| x.1.3 >= self.cfg.min_edge - 1e-12 && x.1.3 <= self.cfg.max_edge + 1e-12)
@@ -738,6 +789,7 @@ impl Engine {
                 "fee_coef": w.fee_coef, "fee_theta": theta,
                 "ask": r4(px), "fee": r6(fee), "edge": r6(edge), "limit": r4(limit), "shares": shares,
                 "q_cons": r4(q_cons_v), "kalshi_book_age_ms": k.age_ms,
+                "cost": r4(px + fee), "rpd": r4(edge / (px + fee)),
                 "epoch": self.cfg.epoch, "mode": "paper",
             }),
         );
@@ -761,6 +813,62 @@ impl Engine {
         }
         self.pending.insert(id, order);
         Some(FetchBook { id, slug: w.slug, at_ns, decision_ns: t_ns })
+    }
+
+    /// After the window's entry: the per-dollar gate's shadow on the current quotes.
+    fn rpd_late(&mut self, i: usize, open: i64, t_ns: i64) {
+        if self.wstate.get(&(i, open)).is_some_and(|s| s.rpd.is_some()) {
+            return;
+        }
+        let Some(k) = self.kalshi_quote(i, open, t_ns) else { return };
+        if k.ask - k.bid > self.cfg.kalshi_max_spread + 1e-9 {
+            return;
+        }
+        let Some(pm) = self.pm_quote(i, open, t_ns) else { return };
+        if pm.age_ms > self.cfg.pm_max_age_ms {
+            return;
+        }
+        let sides: Vec<Side> = Self::gaps(self.theta(i, open), &k, pm.bid, pm.ask)
+            .into_iter()
+            .zip([true, false])
+            .filter_map(|(g, up)| g.map(|g| (up, g)))
+            .filter(|(_, g)| (self.cfg.min_px..=self.cfg.max_px).contains(&g.1))
+            .collect();
+        self.rpd_shadow(i, open, &sides, &k, t_ns);
+    }
+
+    /// The per-dollar gate (shadow only): the first gap in a coin-window whose
+    /// return per dollar (edge / cost) is at least `rpd_min`, with an edge of at
+    /// least `min_net_edge` and at most `max_edge`, costed at the ask plus fee.
+    fn rpd_shadow(&mut self, i: usize, open: i64, sides: &[Side], k: &Quote, t_ns: i64) {
+        let ws = self.wstate.entry((i, open)).or_default();
+        if ws.rpd.is_some() {
+            return;
+        }
+        let rpd = |g: &(f64, f64, f64, f64)| g.3 / (g.1 + g.2);
+        let Some(&(up, (fair, px, fee, edge))) = sides
+            .iter()
+            .filter(|x| {
+                x.1.3 >= self.cfg.min_net_edge - 1e-12
+                    && x.1.3 <= self.cfg.max_edge + 1e-12
+                    && rpd(&x.1) >= self.cfg.rpd_min - 1e-12
+            })
+            .max_by(|a, b| rpd(&a.1).total_cmp(&rpd(&b.1)))
+        else {
+            return;
+        };
+        let x_cons = cons_q(up, k, px + fee, self.cfg.cons_age_half_ms) - (px + fee);
+        ws.rpd = Some(Shadow { up, px, fee, edge, x_cons });
+        let asset = self.cfg.assets[i].clone();
+        let left = (open + WINDOW_S) as f64 - t_ns as f64 / NS as f64;
+        self.record(
+            t_ns,
+            "pu_rpd",
+            json!({"asset": asset, "open": open, "side": if up { "up" } else { "down" }, "left": r4(left),
+                   "p_side": r4(fair), "ask": r4(px), "fee": r6(fee), "cost": r4(px + fee), "edge": r6(edge),
+                   "rpd": r4(edge / (px + fee)), "passes_5c": edge >= self.cfg.min_edge - 1e-12,
+                   "epoch": self.cfg.epoch}),
+        );
     }
 
     /// The min-edge-3¢ rule's entry: the first gap of `shadow_min_edge`..=`max_edge`
@@ -808,6 +916,8 @@ impl Engine {
                 "kelly_t" => 0.10 * kelly_f(o.fair, c) * b / c,
                 "kelly_s" => 0.25 * kelly_f(q_adj, c) * b / c,
                 "kelly_c" => 0.25 * kelly_f(o.q_cons, c) * b / c,
+                "usd_flat" => self.cfg.stake_usd / c,
+                "usd_tiers" => self.cfg.stake_usd * usd_tier_mult(o.edge / c) / c,
                 _ => 0.25 * kelly_f(q_cal, c) * b / c,
             };
             let want = if rule == "flat" {
@@ -914,6 +1024,52 @@ impl Engine {
         self.dirty = true;
     }
 
+    /// Did paper order `id` fill (an open position)?
+    pub fn filled(&self, id: u64) -> bool {
+        self.p.positions.iter().any(|p| p.id == id && p.outcome.is_none())
+    }
+
+    /// The quick-exit study: sell position `id` into the book `delay_ms` after
+    /// its fill (counterfactual; the position is held to settlement).
+    pub fn on_exit(&mut self, id: u64, delay_ms: i64, bids: &[(f64, f64)], offers: &[(f64, f64)], t_ns: i64) {
+        let Some(p) = self.p.positions.iter().find(|p| p.id == id && p.outcome.is_none()).cloned() else { return };
+        let theta = self.windows.get(&(self.asset_index(&p.asset).unwrap_or(0), p.open)).map_or(self.cfg.fee_theta, |w| {
+            w.fee_coef.unwrap_or(self.cfg.fee_theta)
+        });
+        let levels = exit_levels(p.up, bids, offers);
+        let (sold, proceeds, fee) = walk(&levels, p.shares, |x| Self::fee(theta, x));
+        let entry_cost = p.usd + p.fee;
+        let best = levels.first().map_or(f64::NAN, |l| l.0);
+        let pnl_sold = proceeds - fee - entry_cost * sold / p.shares.max(1e-9);
+        self.record(
+            t_ns,
+            "pu_exit_probe",
+            json!({"id": id, "asset": p.asset, "open": p.open, "side": if p.up { "up" } else { "down" },
+                   "delay_ms": delay_ms, "held_ms": (t_ns - p.entry_ns) / 1_000_000,
+                   "shares": r4(p.shares), "entry_avg": r4(p.usd / p.shares.max(1e-9)), "entry_cost": r4(entry_cost),
+                   "best_bid": r4(best), "depth": r4(levels.iter().map(|l| l.1).sum()),
+                   "sold": r4(sold), "proceeds": r4(proceeds), "fee": r6(fee),
+                   "avg": if sold > 1e-9 { r4(proceeds / sold) } else { Value::Null },
+                   "pnl_sold": r4(pnl_sold), "per_share_sold": if sold > 1e-9 { r4(pnl_sold / sold) } else { Value::Null },
+                   "epoch": self.cfg.epoch}),
+        );
+        self.p.exits.push(ExitProbe {
+            id,
+            asset: p.asset.clone(),
+            open: p.open,
+            up: p.up,
+            delay_ms,
+            shares: p.shares,
+            entry_cost,
+            sold,
+            proceeds,
+            fee,
+            epoch: self.cfg.epoch.clone(),
+            settled: false,
+        });
+        self.dirty = true;
+    }
+
     /// The book could not be fetched: the paper order did not fill.
     pub fn on_book_error(&mut self, id: u64, error: &str, t_ns: i64) {
         if let Some(o) = self.pending.remove(&id) {
@@ -965,6 +1121,7 @@ impl Engine {
         }
         ws.resolved = true;
         let shadow = ws.shadow;
+        let rpd = ws.rpd;
         match kalshi {
             Some(k) if k == outcome => self.counters.agree += 1,
             Some(_) => self.counters.disagree += 1,
@@ -994,7 +1151,20 @@ impl Engine {
                 t_ns,
                 "pu_shadow_settle",
                 json!({"asset": asset, "open": open, "side": if sh.up { "up" } else { "down" }, "edge": r6(sh.edge),
-                       "x_cons": r6(sh.x_cons), "real": sh.edge >= self.cfg.min_edge - 1e-12, "won": won, "per_share": r6(per_share),
+                       "x_cons": r6(sh.x_cons), "cost": r4(sh.px + sh.fee), "real": sh.edge >= self.cfg.min_edge - 1e-12, "won": won, "per_share": r6(per_share),
+                       "epoch": self.cfg.epoch}),
+            );
+        }
+        if let Some(sh) = rpd {
+            let won = (outcome == "yes") == sh.up;
+            let cost = sh.px + sh.fee;
+            let per_share = f64::from(u8::from(won)) - cost;
+            self.record(
+                t_ns,
+                "pu_rpd_settle",
+                json!({"asset": asset, "open": open, "side": if sh.up { "up" } else { "down" }, "edge": r6(sh.edge),
+                       "cost": r4(cost), "rpd": r4(sh.edge / cost), "passes_5c": sh.edge >= self.cfg.min_edge - 1e-12,
+                       "won": won, "per_share": r6(per_share), "per_usd": r6(per_share / cost),
                        "epoch": self.cfg.epoch}),
             );
         }
@@ -1003,14 +1173,28 @@ impl Engine {
             pr.settled = true;
             let won = (outcome == "yes") == pr.up;
             let pnl = if won { pr.shares } else { 0.0 } - pr.usd - pr.fee;
-            probe_recs.push(json!({"id": pr.id, "asset": asset, "open": open, "delay_ms": pr.delay_ms, "won": won,
-                                   "shares": r4(pr.shares), "cost": r4(pr.usd + pr.fee), "pnl": r4(pnl), "epoch": pr.epoch}));
+            probe_recs.push(("pu_probe_settle", json!({"id": pr.id, "asset": asset, "open": open, "delay_ms": pr.delay_ms, "won": won,
+                                   "shares": r4(pr.shares), "cost": r4(pr.usd + pr.fee), "pnl": r4(pnl), "epoch": pr.epoch})));
+        }
+        for ex in self.p.exits.iter_mut().filter(|x| x.asset == asset && x.open == open && !x.settled) {
+            ex.settled = true;
+            let won = (outcome == "yes") == ex.up;
+            let payout = if won { 1.0 } else { 0.0 };
+            // Sold shares exit at the bid; any remainder is held to settlement.
+            let pnl = ex.proceeds - ex.fee + (ex.shares - ex.sold) * payout - ex.entry_cost;
+            let hold = ex.shares * payout - ex.entry_cost;
+            probe_recs.push((
+                "pu_exit_settle",
+                json!({"id": ex.id, "asset": asset, "open": open, "delay_ms": ex.delay_ms, "won": won,
+                       "shares": r4(ex.shares), "sold": r4(ex.sold), "full": ex.sold >= ex.shares - 1e-9,
+                       "pnl": r4(pnl), "hold_pnl": r4(hold), "diff": r4(pnl - hold), "epoch": ex.epoch}),
+            ));
         }
         if !probe_recs.is_empty() {
             self.dirty = true;
         }
-        for r in probe_recs {
-            self.record(t_ns, "pu_probe_settle", r);
+        for (kind, r) in probe_recs {
+            self.record(t_ns, kind, r);
         }
         for p in settled {
             let pnl = p.pnl.unwrap_or(0.0);
@@ -1082,6 +1266,7 @@ impl Engine {
         self.probe_orders.retain(|_, o| live.contains(&o.open));
         let n = self.p.probes.len();
         self.p.probes.retain(|p| !p.settled && p.open + WINDOW_S + RESOLVE_FOR_S + 600 >= now_s);
+        self.p.exits.retain(|x| !x.settled && x.open + WINDOW_S + RESOLVE_FOR_S + 600 >= now_s);
         if self.p.probes.len() != n {
             self.dirty = true;
         }
@@ -1276,6 +1461,10 @@ mod tests {
         let c = f["cal"]["q_cons"].as_f64().unwrap();
         assert!((c - 0.62).abs() < 1e-4, "{c}");
         assert!(sz["kelly_c"]["target"].as_f64().unwrap() < sz["kelly_q"]["target"].as_f64().unwrap());
+        // Dollar rules: $5 / c, and 2× at 17% per dollar (10–20% tier).
+        let c = 0.52 + 0.0695 * 0.52 * 0.48;
+        assert!((sz["usd_flat"]["target"].as_f64().unwrap() - 5.0 / c).abs() < 1e-3);
+        assert!((sz["usd_tiers"]["target"].as_f64().unwrap() - 10.0 / c).abs() < 1e-3);
         // Settle: each rule's P&L is journaled; booked to the entry day.
         e.on_resolved("BTC", OPEN, "yes", Some("yes"), (OPEN + 930) * NS);
         let s = e.take_records().into_iter().find(|r| r["type"] == "pu_settle").unwrap();
@@ -1299,6 +1488,81 @@ mod tests {
         // Epoch 5 is a calibration epoch: the settled shadow feeds β.
         assert_eq!(e.cal.n, 1);
         assert!(e.beta() < 0.5);
+    }
+
+    #[test]
+    fn the_per_dollar_gate_takes_cheap_small_gaps_as_a_shadow() {
+        let mut e = engine_with(&[]); // 5¢ to trade, 10% per dollar to shadow
+        let t = (OPEN + 300) * NS;
+        kalshi(&mut e, 0.12, 0.14, t); // Up fair 0.13
+        e.on_pm_quote(0, OPEN, Some(0.09), Some(0.10), None, t); // c ≈ 0.1063, edge ≈ 2.4¢ → 22% per dollar
+        assert!(e.tick(t).is_empty());
+        let recs = e.take_records();
+        let r = recs.iter().find(|r| r["type"] == "pu_rpd").unwrap();
+        assert_eq!((r["side"].as_str(), r["passes_5c"].as_bool()), (Some("up"), Some(false)));
+        assert!((r["rpd"].as_f64().unwrap() - 0.223).abs() < 1e-3, "{r}");
+        assert!(!recs.iter().any(|r| r["type"] == "pu_shadow" || r["type"] == "pu_decision"));
+        e.on_resolved("BTC", OPEN, "yes", None, (OPEN + 930) * NS);
+        let s = e.take_records().into_iter().find(|r| r["type"] == "pu_rpd_settle").unwrap();
+        assert_eq!(s["won"], true);
+        assert!((s["per_usd"].as_f64().unwrap() - (1.0 - 0.106255) / 0.106255).abs() < 1e-3);
+    }
+
+    #[test]
+    fn the_per_dollar_gate_keeps_looking_after_the_entry() {
+        let mut e = engine_with(&[]);
+        let t = (OPEN + 300) * NS;
+        kalshi(&mut e, 0.59, 0.61, t);
+        e.on_pm_quote(0, OPEN, Some(0.52), Some(0.53), None, t); // edge ≈ 5.3¢ but 9.6% per dollar
+        assert_eq!(e.tick(t).len(), 1);
+        let recs = e.take_records();
+        let d = recs.iter().find(|r| r["type"] == "pu_decision").unwrap();
+        assert!((d["rpd"].as_f64().unwrap() - 0.0963).abs() < 1e-3, "{d}");
+        assert!(!recs.iter().any(|r| r["type"] == "pu_rpd"));
+        // Kalshi moves up: the window is done for the 5¢ rule; the per-dollar gate still fires.
+        kalshi(&mut e, 0.62, 0.64, t + NS);
+        e.on_pm_quote(0, OPEN, Some(0.52), Some(0.53), None, t + NS);
+        assert!(e.tick(t + NS).is_empty());
+        let r = e.take_records().into_iter().find(|r| r["type"] == "pu_rpd").unwrap();
+        assert_eq!(r["passes_5c"], true);
+        assert!(r["rpd"].as_f64().unwrap() > 0.15);
+    }
+
+    #[test]
+    fn exit_probes_walk_the_bid_and_settle_beside_holding() {
+        let mut e = engine();
+        let t = (OPEN + 300) * NS;
+        kalshi(&mut e, 0.59, 0.61, t);
+        e.on_pm_quote(0, OPEN, Some(0.54), Some(0.55), None, t);
+        let acts = e.tick(t);
+        e.on_book(acts[0].id, &[(0.54, 50.0)], &[(0.55, 50.0)], t + 150_000_000);
+        assert!(e.filled(acts[0].id));
+        e.take_records();
+        let fee = |p: f64| 0.0695 * p * (1.0 - p);
+        let cost = 10.0 * (0.55 + fee(0.55));
+        // +2 s: the Yes bid has caught up to 0.58, 6 there and 10 at 0.57.
+        e.on_exit(acts[0].id, 2000, &[(0.58, 6.0), (0.57, 10.0)], &[(0.60, 50.0)], t + 2_150_000_000);
+        // +10 s: no bid at all.
+        e.on_exit(acts[0].id, 10_000, &[], &[(0.60, 50.0)], t + 10_150_000_000);
+        let ex: Vec<Value> = e.take_records().into_iter().filter(|r| r["type"] == "pu_exit_probe").collect();
+        assert_eq!(ex[0]["sold"].as_f64().unwrap(), 10.0);
+        assert_eq!(ex[0]["best_bid"].as_f64().unwrap(), 0.58);
+        let proceeds = 6.0 * 0.58 + 4.0 * 0.57;
+        let exit_fee = 6.0 * fee(0.58) + 4.0 * fee(0.57);
+        assert!((ex[0]["pnl_sold"].as_f64().unwrap() - (proceeds - exit_fee - cost)).abs() < 1e-3, "{}", ex[0]);
+        assert_eq!(ex[1]["sold"].as_f64().unwrap(), 0.0);
+        // It lost: the 2 s exit kept its sale, the 10 s one held to a loss.
+        e.on_resolved("BTC", OPEN, "no", None, (OPEN + 930) * NS);
+        let st: Vec<Value> = e.take_records().into_iter().filter(|r| r["type"] == "pu_exit_settle").collect();
+        assert_eq!(st.len(), 2);
+        let two = st.iter().find(|r| r["delay_ms"] == 2000).unwrap();
+        assert!((two["pnl"].as_f64().unwrap() - (proceeds - exit_fee - cost)).abs() < 1e-3);
+        assert!((two["hold_pnl"].as_f64().unwrap() + cost).abs() < 1e-3);
+        assert_eq!(two["full"], true);
+        let ten = st.iter().find(|r| r["delay_ms"] == 10_000).unwrap();
+        assert_eq!(ten["diff"].as_f64().unwrap(), 0.0);
+        // A down position sells No at 1 − the Yes offer.
+        assert_eq!(exit_levels(false, &[(0.4, 5.0)], &[(0.45, 3.0), (0.47, 2.0)]), vec![(0.55, 3.0), (0.53, 2.0)]);
     }
 
     #[test]

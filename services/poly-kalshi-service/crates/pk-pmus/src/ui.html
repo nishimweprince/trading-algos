@@ -60,7 +60,10 @@ th { color:var(--muted); font-size:11px; font-weight:600; }
   </div>
   <section><h2>Cumulative P&amp;L</h2><p class="muted" id="chart-note"></p><div class="chart" id="chart"></div></section>
   <section><h2>Recent decisions</h2><p class="muted" id="recent-note"></p><div id="recent"></div></section>
-  <section><h2>Sizing rules (counterfactual)</h2><p class="muted">What each rule would have bought against the same book: depth at the limit, at most 2% of a $1,000 bankroll per trade and 5% per window across coins. Paper still buys a flat 10. Kelly uses Kalshi's mid; shrunk Kelly uses c + 0.5·(q − c); calibrated Kelly uses c + β·(q − c) with β fitted on settled shadows (below); near-side Kelly uses Kalshi's bid for Up and 1 − its ask for Down, the gap halved every 10 s of book age. All Kelly rules are quarter Kelly except tenth. t is clustered by window.</p><div id="sizing"></div></section>
+  <section><h2>Quick exit against holding</h2><p class="muted" id="exits-note">After each fill the book is fetched 1, 2, 5 and 10 s later and the position walked into the bid (fee on both legs; any unsold remainder is held). Nothing is sold: every position is still held to settlement, so each row is paired with holding the same positions. t is clustered by window.</p><div id="exits"></div></section>
+  <section><h2>Sizing rules (counterfactual)</h2><p class="muted">What each rule would have bought against the same book: depth at the limit, at most 2% of a $1,000 bankroll per trade and 5% per window across coins. Paper still buys a flat 10. Kelly uses Kalshi's mid; shrunk Kelly uses c + 0.5·(q − c); calibrated Kelly uses c + β·(q − c) with β fitted on settled shadows (below); near-side Kelly uses Kalshi's bid for Up and 1 − its ask for Down, the gap halved every 10 s of book age. All Kelly rules are quarter Kelly except tenth. Dollar rules buy a fixed stake in dollars (shares = stake ÷ cost): $5, or $5/$10/$15 at under 10%, 10–20% and 20%+ return per dollar. t is clustered by window.</p><div id="sizing"></div></section>
+  <section><h2>Return per dollar by price</h2><p class="muted">Settled positions by cost per share (ask + fee). A 5¢ edge is 50% of a $0.10 share but 5.6% of a $0.90 one; per share and per dollar can rank prices differently. t is clustered by window.</p><div id="by-price"></div></section>
+  <section><h2>Gate: 5¢ against per dollar</h2><p class="muted" id="gate-cmp-note">Both gates as one-share shadows at the ask plus fee: the traded rule (edge ≥ 5¢) and the per-dollar rule (edge ÷ cost ≥ 10%, edge 1–15¢). The per-dollar gate keeps looking after the 5¢ entry, so both see whole windows. Return per dollar is P&amp;L ÷ cost, clustered by window.</p><div id="gate-cmp"></div></section>
   <section><h2>Arrival delay</h2><p class="muted">For every decision the book is also fetched 25, 50, 100 and 150 ms later, the same order walked against it. Only the 150 ms fill is a paper position; the rest are counterfactual. Slippage is the average paid minus the ask at the decision. t is clustered by window.</p><div id="delays"></div></section>
   <section><h2>Minimum edge: 3¢ against 5¢</h2><p class="muted">The first gap of at least 3¢ in each coin-window, per share at the ask plus fee (no fill model). The 3–5¢ row is what raising the minimum to 5¢ dropped.</p><div id="min-edge"></div></section>
   <section><h2>Does the gap pay?</h2><p class="muted" id="gap-cal-note">Settled shadows (the first gap of at least 3¢ per coin-window): the gap predicted to Kalshi's mid and to its near side, against the realized gap (won − cost). β is realized ÷ predicted: 1 means Kalshi is right, 0 means the gap is noise. Calibrated Kelly trades on β, shrunk toward 0.5.</p><div id="gap-cal"></div></section>
@@ -200,6 +203,7 @@ function render(s) {
   pairs("results", [
     ["Net P&L after fees", usd(all.pnl)],
     ["Net per share", cents(all.net_c)],
+    ["Return per dollar", (s.all_usd || {}).net_c != null ? `${fx(s.all_usd.net_c, 2)}%` : "—"],
     ["t (window-clustered)", fx(all.t, 2)],
   ]);
   $("today-note").textContent = `${k.decisions || 0} decisions in total · fill rate ${pct(k.fill_rate)}`;
@@ -245,7 +249,7 @@ function render(s) {
     { h: "Result", v: (r) => r.status === "settled" ? (r.won ? "Won" : "Lost") : r.status === "open" ? "Open" : r.status === "missed" ? "—" : "Waiting" },
     { h: "Net (USD)", v: (r) => r.pnl != null ? usd(r.pnl).replace(" USD", "") : "—" },
   ], recent, "No decisions yet. Entries fire from 60 s after the open to 60 s before the close when Polymarket US is 5–15¢ cheaper than Kalshi's mid after the fee."));
-  const RULE_NAMES = { flat: "Flat 10", tiers: "Tiers 10/20/30", kelly_q: "Quarter Kelly", kelly_t: "Tenth Kelly", kelly_s: "Shrunk quarter Kelly", kelly_c: "Near-side Kelly", kelly_cal: "Calibrated Kelly" };
+  const RULE_NAMES = { flat: "Flat 10", tiers: "Tiers 10/20/30", kelly_q: "Quarter Kelly", kelly_t: "Tenth Kelly", kelly_s: "Shrunk quarter Kelly", kelly_c: "Near-side Kelly", kelly_cal: "Calibrated Kelly", usd_flat: "$5 stake", usd_tiers: "Dollar tiers 5/10/15" };
   $("sizing").replaceChildren(table([
     { h: "Rule", v: (r) => RULE_NAMES[r.label] || r.label }, { h: "Positions", v: (r) => String(r.n) },
     { h: "Shares", v: (r) => fx(r.shares, 0) }, { h: "Risked", v: (r) => `${fx(r.risked, 2)} USD` },
@@ -262,6 +266,15 @@ function render(s) {
     { h: "Gaps", v: (r) => r.label }, { h: "Entries", v: (r) => String(r.n) },
     { h: "Net per share", v: (r) => cents(r.net_c) }, { h: "t", v: (r) => fx(r.t, 2) },
   ], s.min_edge || [], "No shadow entries settled yet."));
+  const ex = s.exits || {}, pr = ex.primary || {};
+  $("exits-note").textContent = `After each fill the book is fetched 1, 2, 5 and 10 s later and the position walked into the bid (fee on both legs; any unsold remainder is held). Nothing is sold: every position is still held to settlement, so each row is paired with holding the same positions. Pre-registered: the ${fx((pr.delay_ms || 2000) / 1000, 0)} s exit nets more than 0 with t ≥ ${pr.need_t ?? 2} over ${pr.need ?? 300} settled fills — ${pr.have ?? 0} so far, ${pr.verdict || "collecting"}.`;
+  $("exits").replaceChildren(table([
+    { h: "Exit after", v: (r) => r.label }, { h: "Fills", v: (r) => String(r.probes) },
+    { h: "Fully sold", v: (r) => pct(r.full_rate) }, { h: "Shares sold", v: (r) => pct(r.sold_frac) },
+    { h: "Settled", v: (r) => String(r.n ?? 0) }, { h: "Exit net per share", v: (r) => cents(r.exit_c) },
+    { h: "t", v: (r) => fx(r.exit_t, 2) }, { h: "Hold net per share", v: (r) => cents(r.hold_c) },
+    { h: "Exit − hold", v: (r) => cents(r.diff_c) }, { h: "t (paired)", v: (r) => fx(r.diff_t, 2) },
+  ], ex.rows || [], "No exit probes yet."));
   const gc = s.gap_cal || {};
   const cal = (s.live && s.live.cal) || {};
   $("gap-cal-note").textContent = `Settled shadows of epochs ${(gc.epochs || []).join(", ")} (the first gap of at least 3¢ per coin-window): the gap predicted to Kalshi's mid and to its near side, against the realized gap (won − cost). β is realized ÷ predicted: 1 means Kalshi is right, 0 means the gap is noise. Calibrated Kelly now uses β = ${fx(cal.beta, 2)} from ${cal.n ?? 0} shadows, shrunk toward ${fx(cal.prior, 2)}.`;
@@ -271,7 +284,19 @@ function render(s) {
     { h: "Realized", v: (r) => cents(r.real_c) }, { h: "s.e.", v: (r) => cents(r.se_c) },
     { h: "β (mid)", v: (r) => r.beta_se != null ? `${fx(r.beta, 2)} ± ${fx(r.beta_se, 2)}` : fx(r.beta, 2) },
     { h: "β (near side)", v: (r) => fx(r.beta_cons, 2) },
-  ], [gc.all, ...(gc.by_gap || []), ...(gc.by_left || [])].filter(Boolean), "No settled shadows yet."));
+    { h: "Avg cost", v: (r) => fx(r.cost, 2) },
+    { h: "Predicted per $", v: (r) => r.pred_pd != null ? `${fx(r.pred_pd, 1)}%` : "—" },
+    { h: "Realized per $", v: (r) => r.real_pd != null ? `${fx(r.real_pd, 1)}%` : "—" },
+  ], [gc.all, ...(gc.by_gap || []), ...(gc.by_left || []), ...(gc.by_price || [])].filter(Boolean), "No settled shadows yet."));
+  const PD = (lead) => [
+    { h: lead, v: (r) => r.label }, { h: "Settled", v: (r) => String(r.n) }, { h: "Windows", v: (r) => String(r.windows ?? 0) },
+    { h: "Cost", v: (r) => `${fx(r.cost, 2)} USD` }, { h: "Net per share", v: (r) => cents(r.net_c) },
+    { h: "Return per $", v: (r) => r.per_usd_pct != null ? `${fx(r.per_usd_pct, 1)}%` : "—" },
+    { h: "s.e.", v: (r) => r.per_usd_se != null ? `${fx(r.per_usd_se, 1)}%` : "—" }, { h: "t", v: (r) => fx(r.t_usd, 2) },
+  ];
+  $("by-price").replaceChildren(table(PD("Cost per share"), s.by_price || [], "No settled positions yet."));
+  $("gate-cmp").replaceChildren(table([...PD("Gate"), { h: "Avg cost", v: (r) => fx(r.avg_cost, 2) }],
+    (s.gate_cmp || []).filter((r) => r.n > 0), "No settled shadows of either gate yet."));
   $("by-asset").replaceChildren(table(ROWS("Coin"), s.by_asset || [], "No settled positions yet."));
   $("by-left").replaceChildren(table(ROWS("Seconds left"), s.by_left || [], "No settled positions yet."));
   $("calibration").replaceChildren(table([

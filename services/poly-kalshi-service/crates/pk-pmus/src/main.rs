@@ -63,6 +63,7 @@ struct App {
     poll_ms: u64,
     paper_latency_ms: i64,
     paper_delays_ms: Vec<i64>,
+    exit_delays_ms: Vec<i64>,
 }
 
 /// Book requests by outcome. `not_open` is a market before it trades (404 or
@@ -458,6 +459,7 @@ impl App {
                 let wait = (at - now_ns()).max(0);
                 tokio::time::sleep(Duration::from_nanos(wait as u64)).await;
                 let r = app.book(&slug).await;
+                let mut exits_from = None;
                 {
                     let mut e = app.engine.lock();
                     let t = now_ns();
@@ -465,6 +467,9 @@ impl App {
                         Ok(b) => {
                             if primary {
                                 e.on_book(id, &b.bids, &b.offers, t);
+                                if e.filled(id) {
+                                    exits_from = Some(t);
+                                }
                             }
                             if let Some(d) = probe {
                                 e.on_probe(id, d, &b.bids, &b.offers, b.venue_ns, b.cache_age_s, t);
@@ -482,6 +487,39 @@ impl App {
                                 );
                             }
                         }
+                    }
+                }
+                if let Err(err) = &r {
+                    app.count_err(err);
+                }
+                app.flush();
+                if let Some(t_fill) = exits_from {
+                    app.exit_probes(id, slug, t_fill);
+                }
+            });
+        }
+    }
+
+    /// The quick-exit study: the book `exit_delays_ms` after a fill, the
+    /// position walked into its bid (never sold).
+    fn exit_probes(self: &Arc<Self>, id: u64, slug: String, t_fill: i64) {
+        for &d in &self.exit_delays_ms {
+            let app = self.clone();
+            let slug = slug.clone();
+            tokio::spawn(async move {
+                let wait = (t_fill + d * 1_000_000 - now_ns()).max(0);
+                tokio::time::sleep(Duration::from_nanos(wait as u64)).await;
+                let r = app.book(&slug).await;
+                {
+                    let mut e = app.engine.lock();
+                    let t = now_ns();
+                    match &r {
+                        Ok(b) => e.on_exit(id, d, &b.bids, &b.offers, t),
+                        Err(err) => e.journal(
+                            "pu_exit_probe",
+                            serde_json::json!({"id": id, "delay_ms": d, "error": err.to_string()}),
+                            t,
+                        ),
                     }
                 }
                 if let Err(err) = &r {
@@ -583,6 +621,7 @@ async fn run(cfg: Config) -> anyhow::Result<()> {
         poll_ms: cfg.poll_ms,
         paper_latency_ms: cfg.paper_latency_ms,
         paper_delays_ms: cfg.paper_delays_ms.clone(),
+        exit_delays_ms: cfg.exit_delays_ms.clone(),
     });
     if let Some(addr) = cfg.ui_addr {
         let a = app.clone();
