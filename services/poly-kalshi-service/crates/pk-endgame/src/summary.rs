@@ -38,8 +38,18 @@ pub struct Summary {
     agree: u64,
     closes: VecDeque<Value>,
     halts: Vec<Value>,
+    /// Shadow rules: rule → (decisions, fills, misses, settles).
+    shadows: BTreeMap<String, ShadowTally>,
     windows: u64,
     first_ns: Option<i64>,
+}
+
+#[derive(Default)]
+struct ShadowTally {
+    decisions: u64,
+    fills: u64,
+    no_fills: u64,
+    settles: Vec<Value>,
 }
 
 fn f(v: &Value, k: &str) -> f64 {
@@ -152,6 +162,16 @@ impl Summary {
                 }
             }
             "eg_halt" => self.halts.push(r.clone()),
+            "eg_shadow_decision" | "eg_shadow_fill" | "eg_shadow_no_fill" | "eg_shadow_settle" if mine => {
+                let rule = r.get("rule").and_then(Value::as_str).unwrap_or("?").to_owned();
+                let t = self.shadows.entry(rule).or_default();
+                match kind {
+                    "eg_shadow_decision" => t.decisions += 1,
+                    "eg_shadow_fill" => t.fills += 1,
+                    "eg_shadow_no_fill" => t.no_fills += 1,
+                    _ => t.settles.push(r.clone()),
+                }
+            }
             _ => {}
         }
     }
@@ -170,6 +190,30 @@ impl Summary {
                 pnl: f(s, "pnl"),
             })
             .collect()
+    }
+
+    /// The traded rule beside each shadow rule (PREREG epoch 3): decisions,
+    /// fill rate, and settled net ¢/share clustered by window.
+    fn shadow_table(&self) -> Vec<Value> {
+        let mut out = Vec::new();
+        let mut traded = clustered(&self.rows(|_| true));
+        traded["label"] = "traded".into();
+        traded["decisions"] = self.decisions.len().into();
+        traded["fill_rate"] = if self.decisions.is_empty() {
+            Value::Null
+        } else {
+            round(self.fills.len() as f64 / self.decisions.len() as f64, 3)
+        };
+        out.push(traded);
+        for (rule, t) in &self.shadows {
+            let mut v = clustered(&Self::rows_of(&t.settles, |_| true));
+            v["label"] = rule.clone().into();
+            v["decisions"] = t.decisions.into();
+            let tried = t.fills + t.no_fills;
+            v["fill_rate"] = if tried > 0 { round(t.fills as f64 / tried as f64, 3) } else { Value::Null };
+            out.push(v);
+        }
+        out
     }
 
     /// The page's data. `live` is the engine's status at this instant.
@@ -338,6 +382,7 @@ impl Summary {
             "gates_24h": gates.iter().map(|(g, c)| json!({"gate": g, "n": c})).collect::<Vec<_>>(),
             "recent": recent,
             "halts": self.halts,
+            "shadows": self.shadow_table(),
         })
     }
 }
@@ -376,6 +421,26 @@ mod tests {
         assert_eq!(v["series"].as_array().unwrap().len(), 30);
         assert_eq!(v["recent"].as_array().unwrap().len(), 30);
         assert_eq!(v["gate"]["settled"]["ok"], false);
+    }
+
+    #[test]
+    fn shadow_rules_are_tallied_per_rule() {
+        let mut s = Summary { epoch: "3".into(), ..Summary::default() };
+        for (kind, rule) in [("eg_shadow_decision", "edge9"), ("eg_shadow_fill", "edge9"), ("eg_shadow_decision", "fav40"),
+                             ("eg_shadow_no_fill", "fav40")] {
+            s.ingest(&json!({"type": kind, "rule": rule, "epoch": "3", "t_ns": NS}));
+        }
+        s.ingest(&json!({"type": "eg_shadow_settle", "rule": "edge9", "epoch": "3", "asset": "BTC", "open": 0,
+                         "shares": 10.0, "pnl": 4.0, "t_ns": 2 * NS}));
+        s.ingest(&json!({"type": "eg_shadow_settle", "rule": "edge9", "epoch": "2", "asset": "BTC", "open": 0,
+                         "shares": 10.0, "pnl": 9.0, "t_ns": 2 * NS})); // another epoch: ignored
+        let v = s.snapshot(json!({}), 3 * NS);
+        let rows = v["shadows"].as_array().unwrap();
+        assert_eq!(rows[0]["label"], "traded");
+        let e9 = rows.iter().find(|r| r["label"] == "edge9").unwrap();
+        assert_eq!((e9["decisions"].as_u64(), e9["fill_rate"].as_f64(), e9["pnl"].as_f64()), (Some(1), Some(1.0), Some(4.0)));
+        let f40 = rows.iter().find(|r| r["label"] == "fav40").unwrap();
+        assert_eq!(f40["fill_rate"], 0.0);
     }
 
     #[test]

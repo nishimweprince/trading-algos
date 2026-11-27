@@ -64,6 +64,36 @@ decision (logging, page) does not start an epoch.
   if a spot-aware model cannot beat Polymarket's mid on log-loss, the
   endgame has no edge to sell.
 
+## Epoch 3 shadow rules (registered 2026-11-27, before deployment)
+
+Epoch 3's traded rule is epoch 2's, unchanged (record-only paper halt, frozen-book
+gates). The 2026-11-27 review (75 settled, +0.5¢/share, t 0.13) suggested four
+single-setting changes. They are added as **shadow rules**: journaled, never
+traded, and they do not start an epoch.
+
+| Shadow | The one change | Why (from the 11-27 review, not a test) |
+|---|---|---|
+| `edge9` | `MIN_EDGE` 0.09 | ≥ 9¢ edges +10.3¢ (n 32), < 6¢ −5.3¢ (n 54) |
+| `fav40` | `MIN_PX` 0.40 | asks ≥ 0.40 +14.5¢ (n 24); the model overrated cheaper sides |
+| `sd11` | `SD_MULT_EARLY` 1.1 | the cheap-side overrating looks like an sd too wide early; refit's best 0–30 s mult was 1.1 |
+| `spread10` | bid–ask spread of the side bought ≤ 0.10 (no bid = too wide) | spreads > 10¢ −9.3¢ (n 16) |
+
+Each shadow fires at most once per coin-window, on the same evaluations,
+freshness gates and Kalshi filter as the traded rule, and fills on paper against
+the book 250 ms later (so fill selection is measured too). Shadows never count
+toward open cost, P&L or the halt.
+
+**Read once, at the epoch-3 H1 read** (≥ 150 settled traded positions over
+≥ 3 days): for each shadow, its own settled net ¢/share after fees with
+window-clustered t, counting only shadow entries made after deployment. A
+shadow is a candidate for the next epoch's traded rule only if its net > 0 with
+t ≥ 2 **and** it beats the traded rule over the same period. Four shadows are
+read, so a lone t ≈ 2 is weak evidence: prefer the one with the largest t and
+re-test it as epoch 4's traded rule before anything goes live.
+
+**Not changed:** HYPE stays in (excluding coins mid-epoch is not allowed);
+the Chainlink reconnect churn is an operations fix, not a rule.
+
 ## The weekly re-fit
 
 `eg_refit.py` fits the sd multiplier per seconds-left band from the latest

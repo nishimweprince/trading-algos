@@ -60,6 +60,7 @@ th { color:var(--muted); font-size:11px; font-weight:600; }
   </div>
   <section><h2>Cumulative P&amp;L</h2><p class="muted" id="chart-note"></p><div class="chart" id="chart"></div></section>
   <section><h2>Recent decisions</h2><p class="muted" id="recent-note"></p><div id="recent"></div></section>
+  <section><h2>Shadow rules</h2><p class="muted">The traded rule with one change each, registered in PREREG (epoch 3) before their results: edge9 needs 9¢ of edge, fav40 needs an ask of at least 0.40, sd11 uses an early sd multiplier of 1.1, spread10 needs a bid–ask spread of at most 10¢. Each fires once per coin-window and fills on paper 250 ms later like the traded rule. Never traded. t is clustered by window.</p><div id="shadows"></div></section>
   <section><h2>By coin</h2><div id="by-asset"></div></section>
   <section><h2>By seconds before the close</h2><div id="by-left"></div></section>
   <section><h2>Calibration</h2><p class="muted">How often the side won against the probability the model gave it at the decision.</p><div id="calibration"></div></section>
@@ -244,6 +245,13 @@ function render(s) {
     { h: "Result", v: (r) => r.status === "settled" ? (r.won ? "Won" : "Lost") : r.status === "open" ? "Open" : r.status === "missed" ? "—" : "Waiting" },
     { h: "Net (USD)", v: (r) => r.pnl != null ? usd(r.pnl).replace(" USD", "") : "—" },
   ], recent, "No decisions yet. Entries fire in the last 60 seconds when the model beats an ask of at most 0.70 by 4–12¢ after the fee, and Kalshi agrees."));
+  const SHADOW_NAMES = { traded: "Traded rule", edge9: "Edge ≥ 9¢", fav40: "Ask ≥ 0.40", sd11: "sd ×1.1 early", spread10: "Spread ≤ 10¢" };
+  $("shadows").replaceChildren(table([
+    { h: "Rule", v: (r) => SHADOW_NAMES[r.label] || r.label }, { h: "Decisions", v: (r) => String(r.decisions ?? "—") },
+    { h: "Fill rate", v: (r) => r.fill_rate != null ? `${fx(100 * r.fill_rate, 0)}%` : "—" },
+    { h: "Settled", v: (r) => String(r.n) }, { h: "Net per share", v: (r) => cents(r.net_c) },
+    { h: "t", v: (r) => fx(r.t, 2) }, { h: "P&L", v: (r) => usd(r.pnl) },
+  ], s.shadows || [], "No shadow entries yet."));
   $("by-asset").replaceChildren(table(ROWS("Coin"), s.by_asset || [], "No settled positions yet."));
   $("by-left").replaceChildren(table(ROWS("Seconds left"), s.by_left || [], "No settled positions yet."));
   $("calibration").replaceChildren(table([

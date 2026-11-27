@@ -25,6 +25,7 @@
 //! | `eg_settle` | a position's P&L |
 //! | `eg_halt`, `eg_ack`, `eg_kill`, `eg_redeem`, `eg_status` | risk and housekeeping (`eg_halt.record_only` in paper) |
 //! | `eg_feed` | a feed dropped, went silent or reconnected |
+//! | `eg_shadow_decision`, `eg_shadow_fill`, `eg_shadow_no_fill`, `eg_shadow_settle` | a shadow rule ([`SHADOWS`]): its own entry, paper fill and P&L, never traded |
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -102,6 +103,43 @@ impl Position {
     }
 }
 
+/// A shadow rule: the traded rule with one setting changed (PREREG, epoch 3).
+/// Each fires at most once per coin-window, on the same evaluations, gates
+/// and Kalshi filter as the traded rule, and fills on paper against the book
+/// `paper_latency_ms` later. Shadows never count toward open cost, P&L or halts.
+#[derive(Clone, Copy, Debug)]
+pub struct ShadowRule {
+    pub name: &'static str,
+    /// `None` keeps the traded rule's value.
+    pub min_edge: Option<f64>,
+    pub min_px: Option<f64>,
+    pub sd_mult_early: Option<f64>,
+    /// Bid–ask spread of the side bought; no bid counts as wider than any cap.
+    pub max_spread: Option<f64>,
+}
+
+pub const SHADOWS: [ShadowRule; 4] = [
+    ShadowRule { name: "edge9", min_edge: Some(0.09), min_px: None, sd_mult_early: None, max_spread: None },
+    ShadowRule { name: "fav40", min_edge: None, min_px: Some(0.40), sd_mult_early: None, max_spread: None },
+    ShadowRule { name: "sd11", min_edge: None, min_px: None, sd_mult_early: Some(1.1), max_spread: None },
+    ShadowRule { name: "spread10", min_edge: None, min_px: None, sd_mult_early: None, max_spread: Some(0.10) },
+];
+
+/// A shadow rule's filled paper position, until Polymarket resolves it.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ShadowPos {
+    pub rule: String,
+    pub sid: u64,
+    pub asset: String,
+    pub open: i64,
+    pub up: bool,
+    pub shares: f64,
+    pub usd: f64,
+    pub fee: f64,
+    pub edge: f64,
+    pub ask: f64,
+}
+
 /// An order between the decision and its fill.
 #[derive(Clone, Debug)]
 struct Order {
@@ -115,6 +153,8 @@ struct Order {
     decision_ns: i64,
     fill_at_ns: i64,
     instant: (f64, f64, f64),
+    /// A shadow rule's order (paper only, never sent): (rule, edge, ask).
+    shadow: Option<(&'static str, f64, f64)>,
 }
 
 /// What the runtime is asked to do.
@@ -210,6 +250,8 @@ struct WinState {
     closed: bool,
     ours: Option<&'static str>,
     resolved: bool,
+    /// Shadow rules that already fired in this window (bit per [`SHADOWS`] index).
+    shadow_fired: u8,
 }
 
 #[derive(Default, Serialize)]
@@ -237,6 +279,11 @@ pub struct Persisted {
     pub halted_day: Option<String>,
     pub acked_day: Option<String>,
     pub next_id: u64,
+    /// Shadow rules' open paper positions.
+    #[serde(default)]
+    pub shadows: Vec<ShadowPos>,
+    #[serde(default)]
+    pub next_shadow_id: u64,
 }
 
 pub struct Engine {
@@ -624,7 +671,8 @@ impl Engine {
 
     fn open_cost(&self) -> f64 {
         let held: f64 = self.p.positions.iter().filter(|p| p.outcome.is_none()).map(|p| p.usd + p.fee).sum();
-        let waiting: f64 = self.pending.iter().chain(self.inflight.values()).map(|o| o.limit * o.shares).sum();
+        let waiting: f64 =
+            self.pending.iter().chain(self.inflight.values()).filter(|o| o.shadow.is_none()).map(|o| o.limit * o.shares).sum();
         held + waiting
     }
 
@@ -664,7 +712,11 @@ impl Engine {
             due
         };
         for o in due {
-            self.paper_fill(o, t_ns);
+            if o.shadow.is_some() {
+                self.shadow_fill(o, t_ns);
+            } else {
+                self.paper_fill(o, t_ns);
+            }
         }
         actions
     }
@@ -688,6 +740,17 @@ impl Engine {
 
     /// The fair value now: (fair, K, σ, the sd multiplier in force).
     fn model(&self, i: usize, open: i64, t_ns: i64) -> Result<(crate::model::Fair, f64, f64, f64), &'static str> {
+        self.model_with(i, open, t_ns, self.cfg.sd_mult_early)
+    }
+
+    /// [`Self::model`] with another early sd multiplier (a shadow rule's).
+    fn model_with(
+        &self,
+        i: usize,
+        open: i64,
+        t_ns: i64,
+        sd_mult_early: f64,
+    ) -> Result<(crate::model::Fair, f64, f64, f64), &'static str> {
         let close = open + WINDOW_S;
         let ws = self.wstate.get(&(i, open)).ok_or("no_open_avg")?;
         let (k, kn) = ws.k.ok_or("no_open_avg")?;
@@ -701,7 +764,7 @@ impl Engine {
         let (last_sec, _) = s.last().ok_or("no_chainlink")?;
         let sigma = s.sigma(last_sec, self.cfg.sigma_window_s, self.cfg.sigma_min_n).ok_or("no_sigma")?;
         let left_s = close as f64 - t_ns as f64 / NS as f64;
-        let mult = if left_s > self.cfg.sd_mult_from_s as f64 { self.cfg.sd_mult_early } else { 1.0 };
+        let mult = if left_s > self.cfg.sd_mult_from_s as f64 { sd_mult_early } else { 1.0 };
         let f = fair(s, k, close, sigma * mult, self.cfg.sd_floor).ok_or("no_fair")?;
         Ok((f, k, sigma, mult))
     }
@@ -760,6 +823,7 @@ impl Engine {
         if poly_silence_ms > self.cfg.max_poly_silence_ms {
             return gate(self, "poly_silent");
         }
+        self.evaluate_shadows(i, open, left, t_ns);
         let w = self.windows.get(&(i, open))?.clone();
         let ws = self.wstate.entry((i, open)).or_default();
         if ws.entries >= self.cfg.max_entries_per_window {
@@ -880,6 +944,7 @@ impl Engine {
             decision_ns: t_ns,
             fill_at_ns: t_ns + self.cfg.paper_latency_ms * 1_000_000,
             instant,
+            shadow: None,
         };
         if live {
             self.inflight.insert(id, order);
@@ -888,6 +953,117 @@ impl Engine {
         } else {
             self.pending.push(order);
             None
+        }
+    }
+
+    /// Every shadow rule not yet fired in this window: the traded rule's
+    /// selection with the rule's one change, then a paper order.
+    fn evaluate_shadows(&mut self, i: usize, open: i64, left: f64, t_ns: i64) {
+        let Some(w) = self.windows.get(&(i, open)).cloned() else { return };
+        let fired = self.wstate.get(&(i, open)).map_or(0, |s| s.shadow_fired);
+        for (n, r) in SHADOWS.iter().enumerate() {
+            if fired & (1 << n) != 0 {
+                continue;
+            }
+            let mult = r.sd_mult_early.unwrap_or(self.cfg.sd_mult_early);
+            let Ok((f, _, _, used_mult)) = self.model_with(i, open, t_ns, mult) else { continue };
+            let min_px = r.min_px.unwrap_or(self.cfg.min_px);
+            let min_edge = r.min_edge.unwrap_or(self.cfg.min_edge);
+            let mut sides: Vec<(bool, f64, f64, f64, f64, Option<f64>)> = Vec::new(); // (up, p, ask, fee, edge, bid)
+            for up in [true, false] {
+                let Some(b) = self.books.get(w.token(up)) else { continue };
+                if b.snapshot_ns.is_none() || b.last_update_ns.is_none_or(|u| t_ns - u > self.cfg.max_book_age_ms * 1_000_000) {
+                    continue;
+                }
+                let Some(ask) = b.best_ask() else { continue };
+                if !(min_px..=self.cfg.max_px).contains(&ask) {
+                    continue;
+                }
+                let bid = b.best_bid();
+                if let Some(cap) = r.max_spread
+                    && bid.is_none_or(|bid| ask - bid > cap + 1e-9)
+                {
+                    continue;
+                }
+                let p = if up { f.p_up } else { 1.0 - f.p_up };
+                let fee = taker_fee(ask, 1.0, w.fee_rate, w.fee_exponent);
+                sides.push((up, p, ask, fee, p - ask - fee, bid));
+            }
+            let Some((up, p, ask, fee, edge, bid)) = sides
+                .into_iter()
+                .filter(|x| x.4 >= min_edge - 1e-12 && x.4 <= self.cfg.max_edge + 1e-12)
+                .max_by(|a, b| a.4.total_cmp(&b.4))
+            else {
+                continue;
+            };
+            let kq = self.kalshi_quote(i, open, t_ns);
+            let k_side = kq.map(|q| if up { q.mid } else { 1.0 - q.mid });
+            if self.cfg.kalshi_filter {
+                let fresh = kq.is_some_and(|q| q.ask - q.bid <= self.cfg.kalshi_max_spread + 1e-9);
+                if !fresh || k_side.is_none_or(|m| m - ask - fee < self.cfg.kalshi_min_margin) {
+                    continue;
+                }
+            }
+            let tick = tick_for(ask);
+            let cap = p - self.cfg.min_net_edge - fee;
+            let limit = floor_to((ask + self.cfg.limit_offset).min(cap), tick).max(ask);
+            let shares = self.cfg.shares;
+            let instant = self.books.get(w.token(up)).map_or((0.0, 0.0, 0.0), |b| walk(b, limit, shares, w.fee_rate, w.fee_exponent));
+            self.wstate.entry((i, open)).or_default().shadow_fired |= 1 << n;
+            self.p.next_shadow_id += 1;
+            let sid = self.p.next_shadow_id;
+            self.dirty = true;
+            self.record(
+                t_ns,
+                "eg_shadow_decision",
+                json!({"rule": r.name, "sid": sid, "asset": w.asset, "open": open, "side": if up { "up" } else { "down" },
+                       "left": r4(left), "p_side": r6(p), "mult": used_mult, "kalshi_side": k_side.map(r4),
+                       "ask": ask, "bid": bid, "fee": r6(fee), "edge": r6(edge), "limit": r4(limit), "shares": shares,
+                       "instant_shares": r4(instant.0), "epoch": self.cfg.epoch}),
+            );
+            self.pending.push(Order {
+                id: sid,
+                asset: i,
+                open,
+                up,
+                token: w.token(up).to_owned(),
+                limit,
+                shares,
+                decision_ns: t_ns,
+                fill_at_ns: t_ns + self.cfg.paper_latency_ms * 1_000_000,
+                instant,
+                shadow: Some((r.name, edge, ask)),
+            });
+        }
+    }
+
+    fn shadow_fill(&mut self, o: Order, t_ns: i64) {
+        let Some((rule, edge, ask)) = o.shadow else { return };
+        let Some(w) = self.windows.get(&(o.asset, o.open)).cloned() else { return };
+        let book = self.books.get(&o.token);
+        let ask_now = book.and_then(Book::best_ask);
+        let (shares, usd, fee) =
+            book.map(|b| walk(b, o.limit, o.shares, w.fee_rate, w.fee_exponent)).unwrap_or((0.0, 0.0, 0.0));
+        let body = json!({"rule": rule, "sid": o.id, "asset": w.asset, "open": o.open, "side": if o.up { "up" } else { "down" },
+                          "limit": r4(o.limit), "ask_now": ask_now, "shares": r4(shares), "usd": r4(usd), "fee": r6(fee),
+                          "avg": if shares > 0.0 { r4(usd / shares) } else { Value::Null }, "epoch": self.cfg.epoch});
+        if shares > 1e-9 {
+            self.record(t_ns, "eg_shadow_fill", body);
+            self.p.shadows.push(ShadowPos {
+                rule: rule.to_owned(),
+                sid: o.id,
+                asset: w.asset.clone(),
+                open: o.open,
+                up: o.up,
+                shares,
+                usd,
+                fee,
+                edge,
+                ask,
+            });
+            self.dirty = true;
+        } else {
+            self.record(t_ns, "eg_shadow_no_fill", body);
         }
     }
 
@@ -1027,6 +1203,22 @@ impl Engine {
             p.pnl = Some(pnl);
             settled.push(p.clone());
         }
+        let (done, keep): (Vec<ShadowPos>, Vec<ShadowPos>) =
+            std::mem::take(&mut self.p.shadows).into_iter().partition(|p| p.asset == asset && p.open == open);
+        self.p.shadows = keep;
+        for p in done {
+            let won = (outcome == "yes") == p.up;
+            let pnl = if won { p.shares } else { 0.0 } - p.usd - p.fee;
+            self.dirty = true;
+            self.record(
+                t_ns,
+                "eg_shadow_settle",
+                json!({"rule": p.rule, "sid": p.sid, "asset": p.asset, "open": p.open, "side": if p.up { "up" } else { "down" },
+                       "outcome": outcome, "won": won, "shares": r4(p.shares), "usd": r4(p.usd), "fee": r6(p.fee),
+                       "pnl": r4(pnl), "per_share": r4(pnl / p.shares.max(1e-9)), "edge": r6(p.edge), "ask": p.ask,
+                       "epoch": self.cfg.epoch}),
+            );
+        }
         let mut actions = Vec::new();
         for p in settled {
             *self.p.realized.entry(day.clone()).or_default() += p.pnl.unwrap_or(0.0);
@@ -1124,6 +1316,11 @@ impl Engine {
         let before = self.p.positions.len();
         self.p.positions.retain(|p| p.outcome.is_none() || (p.live && p.won() == Some(true) && !p.redeemed && p.redeem_tries < 20));
         if self.p.positions.len() != before {
+            self.dirty = true;
+        }
+        let n = self.p.shadows.len();
+        self.p.shadows.retain(|p| p.open + WINDOW_S + RESOLVE_FOR_S + 600 >= now_s);
+        if self.p.shadows.len() != n {
             self.dirty = true;
         }
         let keep_from = day_of(now_s - 40 * 86_400);
@@ -1589,4 +1786,60 @@ mod tests {
         // Outside the entry period, nothing.
         assert!(e.evaluate_now(0, (OPEN + 100) * NS, "book").is_none());
     }
+
+    #[test]
+    fn shadow_rules_fire_fill_and_settle_apart_from_the_traded_rule() {
+        let mut e = engine();
+        let close = OPEN + WINDOW_S;
+        let now = close - 20;
+        feed(&mut e, now, close - 60);
+        // Up: ask 0.93 (edge ≈ 6.6¢ at p ≈ 1), bid 0.70 (spread 23¢).
+        e.on_poly(&book_frame("UP", 0.70, 0.93, 100.0), now * NS);
+        e.on_poly(&book_frame("DN", 0.05, 0.30, 100.0), now * NS);
+        e.tick((OPEN + 5) * NS);
+        e.tick(now * NS);
+        let recs = e.take_records();
+        assert!(recs.iter().any(|r| r["type"] == "eg_decision"), "the traded rule fires");
+        let mut rules: Vec<&str> =
+            recs.iter().filter(|r| r["type"] == "eg_shadow_decision").map(|r| r["rule"].as_str().unwrap()).collect();
+        rules.sort_unstable();
+        // edge9: 6.6¢ < 9¢. spread10: 23¢ spread.
+        assert_eq!(rules, ["fav40", "sd11"]);
+        // Shadow orders do not count toward the open cost.
+        assert!((e.open_cost() - 10.0 * 0.94).abs() < 1e-9, "{}", e.open_cost());
+        e.tick(now * NS + 300_000_000);
+        let recs = e.take_records();
+        assert_eq!(recs.iter().filter(|r| r["type"] == "eg_shadow_fill").count(), 2);
+        assert_eq!(e.p.positions.len(), 1);
+        assert_eq!(e.p.shadows.len(), 2);
+        // Once per window.
+        e.tick(now * NS + 400_000_000);
+        assert!(!e.take_records().iter().any(|r| r["type"] == "eg_shadow_decision"));
+        e.on_resolved("BTC", OPEN, "yes", (close + 30) * NS);
+        let recs = e.take_records();
+        let settles: Vec<&Value> = recs.iter().filter(|r| r["type"] == "eg_shadow_settle").collect();
+        assert_eq!(settles.len(), 2);
+        assert!(settles.iter().all(|r| r["won"] == true && r["pnl"].as_f64().unwrap() > 0.0));
+        assert!(e.p.shadows.is_empty());
+        // Shadow P&L never reaches the realized book.
+        let real: f64 = e.p.realized.values().sum();
+        let s = recs.iter().find(|r| r["type"] == "eg_settle").unwrap();
+        assert!((real - s["pnl"].as_f64().unwrap()).abs() < 1e-3); // the record is rounded to 4 dp
+    }
+
+    #[test]
+    fn edge9_and_spread10_fire_on_a_wide_edge_and_a_tight_book() {
+        let mut e = engine();
+        let now = setup(&mut e, (0.80, 0.82), (0.17, 0.19));
+        e.tick(now * NS);
+        let mut rules: Vec<String> = e
+            .take_records()
+            .into_iter()
+            .filter(|r| r["type"] == "eg_shadow_decision")
+            .map(|r| r["rule"].as_str().unwrap().to_owned())
+            .collect();
+        rules.sort_unstable();
+        assert_eq!(rules, ["edge9", "fav40", "sd11", "spread10"]);
+    }
 }
+

@@ -165,3 +165,13 @@ reports: adopting a new multiplier starts a new epoch.
 
 `eg_sec` is a forward tape of the closing stretch: thresholds can be re-scored
 from it later without a new run.
+
+## Shadow rules (epoch 3, PREREG)
+
+`edge9` (9¢ minimum edge), `fav40` (asks ≥ 0.40), `sd11` (early sd ×1.1) and
+`spread10` (bid–ask ≤ 10¢) are the traded rule with one setting changed. They
+fire once per coin-window, fill on paper 250 ms later, and settle on
+Polymarket (`eg_shadow_decision`, `eg_shadow_fill` / `eg_shadow_no_fill`,
+`eg_shadow_settle`), never traded and never in open cost, P&L or halts. The
+page's "Shadow rules" table sets each beside the traded rule.
+
