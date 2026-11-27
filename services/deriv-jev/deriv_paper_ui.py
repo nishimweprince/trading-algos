@@ -7,9 +7,10 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 DB = os.path.join(BASE, 'data', 'paper.db')
 SYMBOLS = {'DSI10': 'Drift Switch Index 10', 'DSI20': 'Drift Switch Index 20', 'DSI30': 'Drift Switch Index 30'}
 import paper_cfg
-_S, GLABEL, GNOTE = paper_cfg.load()
+_S, GLABEL, GNOTE, RETIRED = paper_cfg.load()
 TAGS = {s['tag']: s for s in _S}
-GORDER = ['jev'] + [g for g in GLABEL if g not in ('jev', 'wr70')] + ['wr70']
+_ALL = ['jev'] + [g for g in GLABEL if g not in ('jev', 'wr70')] + ['wr70']
+GORDER = [g for g in _ALL if g not in RETIRED] + [g for g in _ALL if g in RETIRED]   # retired accounts last
 POLL = 10
 latest = {'error': 'Starting', 'ticks': {}}
 
@@ -85,7 +86,10 @@ def page():
                  ('Win rate', f'{100 * wins / len(T):.0f}%' if T else '—'), ('Avg R', f'{sum(t[7] for t in T) / len(T):+.3f}' if T else '—'),
                  ('Open P&L', f'${opnl:+,.2f}')]
         since = dt.datetime.fromtimestamp(float(st[f'started:{g}']), dt.timezone.utc).strftime(' since %b %d %H:%M UTC') if f'started:{g}' in st else ''
-        cards += (f'<section class="summary"><h2>{html.escape(GLABEL[g])}</h2><p class="muted">Paper account · started at $100{since} · '
+        title = GLABEL[g] + (' · Retired' if g in RETIRED else '')
+        cards += (f'<section class="summary"><h2>{html.escape(title)}</h2>'
+                  + (f'<p class="muted">{html.escape(RETIRED[g])}. No new entries.</p>' if g in RETIRED else '')
+                  + f'<p class="muted">Paper account · started at $100{since} · '
                   f'avg spread paid at entry {spr:.2f}</p>'
                   + (f'<p class="muted">Backtest: {html.escape(GNOTE[g])}</p>' if GNOTE.get(g) else '') + '<dl>' + ''.join(f'<div><dt>{k}</dt><dd>{v}</dd></div>' for k, v in items) + '</dl></section>')
     per = []

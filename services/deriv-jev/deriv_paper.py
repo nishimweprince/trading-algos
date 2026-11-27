@@ -42,8 +42,9 @@ MAXRISK = float(ENV.get('PAPER_MAX_RISK_PCT', '7.5'))
 BUF = float(ENV.get('STOP_BUFFER_PCT', '20')) / 100.0
 SYMBOLS = {'DSI10': 'Drift Switch Index 10', 'DSI20': 'Drift Switch Index 20', 'DSI30': 'Drift Switch Index 30'}
 import paper_cfg
-STRATS, GLABELS, _ = paper_cfg.load()                    # wr70 + jev from config.json, plus paper_variants.json accounts
+STRATS, GLABELS, _, RETIRED = paper_cfg.load()           # wr70 + jev from config.json, plus paper_variants.json accounts
 GROUPS = sorted({s['group'] for s in STRATS})
+ACTIVE = [s for s in STRATS if s['group'] not in RETIRED]     # retired groups: no new entries, open positions still managed
 HIST = 6000                                              # M1 bars: >= 300 completed M15 bars + ATR warm-up
 
 logging.basicConfig(filename=os.path.join(LOGS, 'deriv_paper.log'), level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
@@ -94,7 +95,8 @@ class Paper:
                 raise RuntimeError(f'{n}: no symbol info yet (terminal still loading?)')
             self.info[c] = dict(min_d=i.trade_stops_level * i.point, val=i.trade_tick_value / i.trade_tick_size,
                                 step=i.volume_step, vmin=i.volume_min, vmax=i.volume_max, digits=i.digits)
-        log.info('connected (read-only quotes); groups %s, $%.0f each, %g%% risk', GROUPS, EQ0, RISK)
+        log.info('connected (read-only quotes); active groups %s, retired %s, $%.0f each, %g%% risk',
+                 sorted({s['group'] for s in ACTIVE}), sorted(RETIRED), EQ0, RISK)
 
     def m1(self, code, now_min):
         self.conn.execute(f'_r = _m5.copy_rates_from_pos({SYMBOLS[code]!r}, _m5.TIMEFRAME_M1, 0, {HIST})')
@@ -214,7 +216,7 @@ class Paper:
             if B is None or len(B['t']) < 1000:
                 continue
             cache = {}
-            for s in [x for x in STRATS if x['code'] == code]:
+            for s in [x for x in ACTIVE if x['code'] == code]:
                 tf = s['tf']
                 if tf not in cache:
                     bb = resample(B['t'], B['o'], B['h'], B['l'], B['c'], tf, now); cache[tf] = [bb, None, None]

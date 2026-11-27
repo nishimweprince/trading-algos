@@ -1,5 +1,10 @@
 {
  "note": "Extra paper accounts read only by deriv_paper.py and deriv_paper_ui.py. Each clones the 5 former-Jev strategies from config.json under its own $100 account. Parameters fixed from research/jev_variants (2026-11-27, 120 days of Deriv ticks, in-sample Aug 1 - Sep 28, out-of-sample Sep 29 - Nov 26).",
+ "retired": {
+  "wr70": "2026-11-27: retired; fails after real spreads (paper: 45% wins against about 60% needed, $100 to $8.51)",
+  "jev_natural": "2026-11-27: stopped; the backtest rejected it (-0.074R out of sample, about 1 trade a day)",
+  "jev_spread": "2026-11-27: stopped; the backtest rejected it (-0.012R out of sample)"
+ },
  "variants": [
   {"group": "jev_t3", "prefix": "T3", "base_group": "jev",
    "label": "Trail 3R, 24 h limit (item 2)",

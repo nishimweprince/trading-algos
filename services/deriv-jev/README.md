@@ -89,6 +89,8 @@ Extra paper accounts are defined in `paper_variants.json` (read only by the pape
 `paper_cfg.py`). Each clones the 5 former-Jev strategies with overrides, under its own $100 account and tag prefix:
 `T3` trail 3R / 24 h limit, `NS` natural stops only (skip signals whose stop would be widened to the broker minimum),
 `SP` skip entries whose spread is below the prior-hour median. Backtests are in `research/jev_variants`.
+Groups listed under `retired` in `paper_variants.json` take no new entries but keep their history on the dashboard.
+Retired on 2026-11-27: `wr70`, `jev_natural` (NS) and `jev_spread` (SP). Active: the former Jev group and `jev_t3`.
 
 `deriv_paper.py` simulates the 14 DSI strategies on live Deriv MT5 bid/ask (no orders). `deriv_paper_ui.py`
 serves it at `http://127.0.0.1:8092/`, with a second tab at `/trek`.
