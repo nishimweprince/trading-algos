@@ -38,6 +38,11 @@ LOTS = float(ENV.get('IC_LOTS', '0.1'))                  # used only when IC_RIS
 RISK_PCT = float(ENV.get('IC_RISK_PCT', '5'))           # % of equity risked per trade (stop distance x lots)
 MAX_RISK_PCT = float(ENV.get('IC_MAX_RISK_PCT', '10'))  # if even the minimum lot risks more than this, skip the trade
 SHADOW_EQUITY = float(ENV.get('IC_SHADOW_EQUITY', '150'))
+# Win ladder (research/sizing_part4.py): risk steps up one rung after each win of this strategy and drops back to the first
+# rung after a loss; scratches (break-even exits) leave it unchanged. Empty = off (flat IC_RISK_PCT).
+LADDER = [float(x) for x in ENV.get('IC_LADDER', '').split(',') if x.strip()]
+LADDER_WIN_R = float(ENV.get('IC_LADDER_WIN_R', '0.05'))      # result >= this x risk counts as a win
+LADDER_LOSS_R = float(ENV.get('IC_LADDER_LOSS_R', '-0.3'))    # result <= this x risk counts as a loss
 LOGIN = ENV.get('IC_LOGIN', '')
 SERVER = ENV.get('IC_SERVER', 'ICMarketsSC-MT5-3')
 BRIDGE = ('127.0.0.1', int(ENV.get('IC_PORT', '18814')))
@@ -147,7 +152,8 @@ class Runner:
             self.mt5.symbol_select(s, True)
         ti = self.mt5.terminal_info()
         log.info('connected: %s@%s mode=%s sizing=%s balance=%.2f equity=%.2f free margin=%.2f algo_trading=%s', a.login, a.server, MODE.upper(),
-                 f'{RISK_PCT:g}% risk (min-lot cap {MAX_RISK_PCT:g}%)' if RISK_PCT > 0 else f'{LOTS} lots', a.balance, a.equity, a.margin_free, ti.trade_allowed)
+                 (f"ladder {'/'.join(f'{x:g}' for x in LADDER)}% risk (min-lot cap {MAX_RISK_PCT:g}%)" if LADDER else
+                  f'{RISK_PCT:g}% risk (min-lot cap {MAX_RISK_PCT:g}%)' if RISK_PCT > 0 else f'{LOTS} lots'), a.balance, a.equity, a.margin_free, ti.trade_allowed)
         if MODE == 'live' and not ti.trade_allowed:
             log.error('Algo Trading is OFF in the terminal: live orders will be rejected until it is switched on')
 
@@ -203,11 +209,56 @@ class Runner:
             a = self.mt5.account_info(); return float(a.equity), float(a.margin_free)
         eq = float(self.db.get('shadow_equity', SHADOW_EQUITY)); return eq, eq
 
+    def closed_results(self, s):
+        """This strategy's closed trades, oldest first, as result / risk at entry (R multiples). Live: broker deals grouped
+        by position (closing deals of manual or stop-out exits may carry magic 0, so the opening deal decides the strategy);
+        shadow: the vtrades table."""
+        if MODE != 'live':
+            return [r[0] for r in self.db.c.execute('select R_mult from vtrades where tag=? and R_mult is not null order by id', (s['tag'],))]
+        self.conn.execute('import datetime as _dt')
+        self.conn.execute('_hd = _m5.history_deals_get(_dt.datetime.now() - _dt.timedelta(days=30), _dt.datetime.now() + _dt.timedelta(days=2))')
+        self.conn.execute('_hd = [(x.position_id, x.entry, x.magic, x.volume, x.profit + x.commission + x.swap + x.fee, x.time_msc) '
+                          'for x in (_hd or []) if x.type in (0, 1)]')
+        pos = {}
+        for pid, entry, magic, vol, pnl, tms in rpyc.classic.obtain(self.conn.eval('_hd')):
+            p = pos.setdefault(pid, dict(magic=None, vin=0.0, vout=0.0, pnl=0.0, t=0))
+            if entry == 0:
+                p['magic'] = magic; p['vin'] += vol
+            else:
+                p['vout'] += vol; p['t'] = max(p['t'], tms)
+            p['pnl'] += pnl
+        val = None; out = []
+        for pid, p in sorted(pos.items(), key=lambda kv: kv[1]['t']):
+            if p['magic'] != s['magic'] or p['vin'] <= 0 or p['vout'] + 1e-9 < p['vin']:
+                continue
+            lo = self.db.last_order(s['tag'], pid)
+            if not lo or not lo[0]:
+                continue
+            if val is None:
+                info = self.mt5.symbol_info(s['symbol']); val = info.trade_tick_value / info.trade_tick_size
+            out.append(p['pnl'] / (lo[0] * p['vin'] * val))
+        return out
+
+    def ladder_rung(self, s):
+        k = 0
+        for r in self.closed_results(s):
+            if r >= LADDER_WIN_R:
+                k += 1
+            elif r <= LADDER_LOSS_R:
+                k = 0
+        return min(k, len(LADDER) - 1)
+
     def risk_for(self, s, side):
-        """Risk % for this strategy and direction: IC_RISK_PCT_<TAG>_<LONG|SHORT>, then IC_RISK_PCT_<TAG>, then IC_RISK_PCT."""
+        """Risk % for this strategy and direction: IC_RISK_PCT_<TAG>_<LONG|SHORT>, then IC_RISK_PCT_<TAG>, then the win
+        ladder (IC_LADDER), then IC_RISK_PCT."""
         e = load_env(os.path.join(HERE, '.env')); key = 'IC_RISK_PCT_' + s['tag'].replace('-', '_')
         v = e.get(f"{key}_{'LONG' if side > 0 else 'SHORT'}", e.get(key))
-        return float(v) if v not in (None, '') else RISK_PCT
+        if v not in (None, ''):
+            return float(v)
+        if LADDER:
+            k = self.ladder_rung(s); log.info('%s ladder rung %d/%d -> %g%% risk', s['tag'], k + 1, len(LADDER), LADDER[k])
+            return LADDER[k]
+        return RISK_PCT
 
     def size(self, s, R, side, price):
         """Lots so that a stop-out loses RISK_PCT of equity; minimum lot if that is too small but still within MAX_RISK_PCT;
