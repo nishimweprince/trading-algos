@@ -56,6 +56,8 @@ pub struct Config {
     pub kalshi_min_margin: f64,
     pub kalshi_max_age_ms: i64,
     pub kalshi_max_spread: f64,
+    /// The Kalshi-lead rule (`kg`, the Polymarket US pattern), beside the endgame rule.
+    pub kg: KgConfig,
     pub kalshi_key_id: Option<String>,
     pub kalshi_key_path: Option<PathBuf>,
     pub kalshi_ws_url: String,
@@ -137,6 +139,28 @@ fn expand(p: &str) -> PathBuf {
     }
 }
 
+/// The Kalshi-lead rule: buy the Polymarket side `min_edge`..=`max_edge`
+/// cheaper than Kalshi's mid for the same window after the fee, from
+/// `after_open_s` after the open to `before_close_s` before the close, and sell
+/// it into the bids `exit_ms` after the fill (paper). Holding to settlement
+/// and exits at `probe_ms` are journaled beside it.
+#[derive(Clone, Debug)]
+pub struct KgConfig {
+    pub on: bool,
+    pub min_edge: f64,
+    pub max_edge: f64,
+    pub min_net_edge: f64,
+    pub min_px: f64,
+    pub max_px: f64,
+    pub after_open_s: i64,
+    pub before_close_s: i64,
+    pub kalshi_max_spread: f64,
+    pub shares: f64,
+    pub exit_ms: i64,
+    pub probe_ms: Vec<i64>,
+    pub max_open_cost_usd: f64,
+}
+
 impl Config {
     /// The env file (if any), then the process environment on top.
     pub fn load(env_file: Option<&std::path::Path>) -> anyhow::Result<Self> {
@@ -198,6 +222,30 @@ impl Config {
             kalshi_min_margin: e.num("PK_EG_KALSHI_MIN_MARGIN", 0.0)?,
             kalshi_max_age_ms: e.int("PK_EG_KALSHI_MAX_AGE_MS", 3_000)?,
             kalshi_max_spread: e.num("PK_EG_KALSHI_MAX_SPREAD", 0.05)?,
+            kg: KgConfig {
+                on: !matches!(e.or("PK_EG_KG", "yes").to_lowercase().as_str(), "no" | "false" | "0" | "off"),
+                min_edge: e.num("PK_EG_KG_MIN_EDGE", 0.05)?,
+                max_edge: e.num("PK_EG_KG_MAX_EDGE", 0.15)?,
+                min_net_edge: e.num("PK_EG_KG_MIN_NET_EDGE", 0.01)?,
+                min_px: e.num("PK_EG_KG_MIN_PX", 0.05)?,
+                max_px: e.num("PK_EG_KG_MAX_PX", 0.95)?,
+                after_open_s: e.int("PK_EG_KG_AFTER_OPEN_S", 60)?,
+                before_close_s: e.int("PK_EG_KG_BEFORE_CLOSE_S", 60)?,
+                kalshi_max_spread: e.num("PK_EG_KG_KALSHI_MAX_SPREAD", 0.03)?,
+                shares: e.num("PK_EG_KG_SHARES", 10.0)?,
+                exit_ms: e.int("PK_EG_KG_EXIT_MS", 2_000)?,
+                probe_ms: {
+                    let raw = e.or("PK_EG_KG_PROBE_MS", "1000,5000,10000");
+                    let mut v = Vec::new();
+                    for x in raw.split(',').map(str::trim).filter(|x| !x.is_empty() && *x != "off") {
+                        let d: i64 = x.parse().map_err(|_| anyhow::anyhow!("PK_EG_KG_PROBE_MS={raw}: {x} is not ms"))?;
+                        anyhow::ensure!(d > 0, "PK_EG_KG_PROBE_MS={raw}: delays must be positive");
+                        v.push(d);
+                    }
+                    v
+                },
+                max_open_cost_usd: e.num("PK_EG_KG_MAX_OPEN_COST_USD", 50.0)?,
+            },
             kalshi_key_id: e.get("KALSHI_API_KEY_ID"),
             kalshi_key_path: e.get("KALSHI_PRIVATE_KEY_PATH").map(|p| expand(&p)),
             kalshi_ws_url: e.or("KALSHI_WS_URL", "wss://api.elections.kalshi.com/trade-api/ws/v2"),
@@ -248,6 +296,14 @@ impl Config {
         );
         anyhow::ensure!(c.min_edge > 0.0 && c.min_net_edge >= 0.0, "edges must be positive");
         anyhow::ensure!(c.max_edge > c.min_edge, "PK_EG_MAX_EDGE must be above PK_EG_MIN_EDGE");
+        if c.kg.on {
+            anyhow::ensure!(c.kalshi_key_id.is_some() && c.kalshi_key_path.is_some(), "PK_EG_KG=yes needs a Kalshi key (or set it to no)");
+            anyhow::ensure!(0.0 < c.kg.min_edge && c.kg.min_edge < c.kg.max_edge, "need 0 < PK_EG_KG_MIN_EDGE < PK_EG_KG_MAX_EDGE");
+            anyhow::ensure!(0.0 < c.kg.min_px && c.kg.min_px < c.kg.max_px && c.kg.max_px < 1.0, "need 0 < KG_MIN_PX < KG_MAX_PX < 1");
+            anyhow::ensure!(c.kg.exit_ms > 0 && c.kg.shares >= 5.0, "PK_EG_KG_EXIT_MS > 0 and PK_EG_KG_SHARES ≥ 5");
+            anyhow::ensure!(c.kg.after_open_s >= 0 && c.kg.before_close_s >= 0 && c.kg.after_open_s + c.kg.before_close_s < 900,
+                            "PK_EG_KG_AFTER_OPEN_S + PK_EG_KG_BEFORE_CLOSE_S must leave part of the window");
+        }
         anyhow::ensure!(c.sd_mult_early > 0.0 && c.sd_mult_from_s >= 0, "PK_EG_SD_MULT_* must be positive");
         anyhow::ensure!(
             !c.kalshi_filter || (c.kalshi_key_id.is_some() && c.kalshi_key_path.is_some()),
@@ -290,8 +346,24 @@ impl Config {
 mod tests {
     use super::*;
 
+    /// The Kalshi-lead rule off unless a test sets it (it needs a Kalshi key).
     fn vars(kv: &[(&str, &str)]) -> HashMap<String, String> {
-        kv.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        let mut v: HashMap<String, String> = HashMap::from([("PK_EG_KG".to_string(), "no".to_string())]);
+        v.extend(kv.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+        v
+    }
+
+    #[test]
+    fn kalshi_lead_rule_needs_a_key_and_reads_its_exits() {
+        let key = [("KALSHI_API_KEY_ID", "kid"), ("KALSHI_PRIVATE_KEY_PATH", "/k.pem"), ("PK_EG_KG", "yes")];
+        let c = Config::from_vars(vars(&key)).unwrap();
+        assert!(c.kg.on);
+        assert_eq!((c.kg.min_edge, c.kg.max_edge, c.kg.exit_ms), (0.05, 0.15, 2_000));
+        assert_eq!(c.kg.probe_ms, [1_000, 5_000, 10_000]);
+        assert!(Config::from_vars(vars(&[("PK_EG_KG", "yes"), ("PK_EG_KALSHI_FILTER", "no")])).is_err());
+        let mut bad = key.to_vec();
+        bad.push(("PK_EG_KG_MIN_EDGE", "0.2"));
+        assert!(Config::from_vars(vars(&bad)).is_err());
     }
 
     #[test]

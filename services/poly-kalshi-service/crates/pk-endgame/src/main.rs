@@ -191,6 +191,8 @@ impl App {
             let actions = {
                 let mut e = self.engine.lock();
                 let mut touched: BTreeSet<usize> = BTreeSet::new();
+                // Assets whose Kalshi book changed (the Kalshi-lead rule's trigger).
+                let mut k_touched: BTreeSet<usize> = BTreeSet::new();
                 for f in buf.drain(..) {
                     match f {
                         Frame::Poly('p', text, t) => touched.extend(e.on_poly(&text, t).into_iter().map(|w| w.0)),
@@ -200,7 +202,7 @@ impl App {
                             }
                             e.on_feed_event("poly", "reconnect", &text, t);
                         }
-                        Frame::Kalshi('k', text, t) => e.on_kalshi(&text, t),
+                        Frame::Kalshi('k', text, t) => k_touched.extend(e.on_kalshi(&text, t)),
                         Frame::Kalshi('c', text, t) if text.contains("\"venue\":\"k\"") => {
                             e.invalidate_kalshi();
                             e.on_feed_event("kalshi", if text.contains("resync") { "resync" } else { "reconnect" }, &text, t);
@@ -216,6 +218,12 @@ impl App {
                     }
                 }
                 let t = now_ns();
+                for &i in &k_touched {
+                    e.evaluate_kg(i, t, "kalshi");
+                }
+                for &i in &touched {
+                    e.evaluate_kg(i, t, "book");
+                }
                 touched.into_iter().filter_map(|i| e.evaluate_now(i, t, "book")).collect::<Vec<_>>()
             };
             self.dispatch(actions);

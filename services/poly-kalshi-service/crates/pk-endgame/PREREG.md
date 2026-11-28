@@ -94,6 +94,39 @@ re-test it as epoch 4's traded rule before anything goes live.
 **Not changed:** HYPE stays in (excluding coins mid-epoch is not allowed);
 the Chainlink reconnect churn is an operations fix, not a rule.
 
+## KG-1: the Kalshi-lead rule (registered 2026-11-28, before deployment)
+
+A second rule beside the endgame rule, paper only, its own positions and P&L
+(never in the endgame rule's open cost, P&L, halt or H1 read). It copies the
+pattern found on Polymarket US (pk-pmus epochs 6–7): Kalshi's book moves first
+and the Polymarket US ask follows within ~2 s, so a 2 s exit paid
+(+1.8¢/share, t 4.2, one day) while holding to settlement did not.
+
+| | |
+|---|---|
+| From 60 s after the open to 60 s before the close | `KG_AFTER_OPEN_S` 60, `KG_BEFORE_CLOSE_S` 60 |
+| Kalshi's mid for the side − Polymarket ask − taker fee in 5–15¢ | `KG_MIN_EDGE` 0.05, `KG_MAX_EDGE` 0.15 |
+| Kalshi book ≤ 3 s old, spread ≤ 3¢; asks 0.05–0.95; Polymarket socket and book fresh (2 s / 10 s) | `KG_KALSHI_MAX_SPREAD` 0.03, `KG_MIN_PX`, `KG_MAX_PX` |
+| Evaluated on every Kalshi book change, Polymarket book change and clock step | |
+| Once per coin-window, 10 shares, FAK at ask + 1¢ capped at 1¢ net edge, paper fill 250 ms later | `KG_SHARES`, `KG_MIN_NET_EDGE`, `PAPER_LATENCY_MS` |
+| **Exit:** sell into the bids 2 s after the fill (any unsold remainder held to settlement) | `KG_EXIT_MS` 2000 |
+| Scored beside it, same fills: holding to settlement; exits at 1, 5, 10 s | `KG_PROBE_MS` |
+
+**Primary read (KG-1), once, after ≥ 300 settled Kalshi-lead fills over ≥ 3
+days:** the 2 s exit's net ¢/share after both fees > 0 with window-clustered
+t ≥ 2. Pass → candidate for live on a host that may trade Polymarket (not
+Contabo: France is blocked), at the paper latency measured there. Fail → stop.
+
+**Differences from Polymarket US, stated before the data:** Polymarket
+settles on the Chainlink TWAP, Kalshi on BRTI, so Kalshi is a fair value for a
+near-identical but different contract; holding carries that basis, a 2 s exit
+mostly does not. Polymarket's books arrive by WebSocket (Polymarket US's were
+polled), so the lag to catch may be shorter. The paper latency is 250 ms
+(pk-pmus showed fill rates halve from 25 to 150 ms), so fills here may be
+optimistic or pessimistic; the fill rate is reported.
+
+**Not allowed before the read:** changing any value above or excluding coins.
+
 ## The weekly re-fit
 
 `eg_refit.py` fits the sd multiplier per seconds-left band from the latest

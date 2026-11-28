@@ -25,6 +25,7 @@
 //! | `eg_settle` | a position's P&L |
 //! | `eg_halt`, `eg_ack`, `eg_kill`, `eg_redeem`, `eg_status` | risk and housekeeping (`eg_halt.record_only` in paper) |
 //! | `eg_feed` | a feed dropped, went silent or reconnected |
+//! | `kg_*` | the Kalshi-lead rule (the Polymarket US pattern), see `kgap` |
 //! | `eg_shadow_decision`, `eg_shadow_fill`, `eg_shadow_no_fill`, `eg_shadow_settle` | a shadow rule ([`SHADOWS`]): its own entry, paper fill and P&L, never traded |
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -38,6 +39,9 @@ use serde_json::{Value, json};
 
 use crate::config::{Config, Mode};
 use crate::model::{Series, fair, fair_from};
+
+mod kgap;
+pub use kgap::KgPos;
 
 pub const NS: i64 = 1_000_000_000;
 pub const WINDOW_S: i64 = 900;
@@ -252,6 +256,10 @@ struct WinState {
     resolved: bool,
     /// Shadow rules that already fired in this window (bit per [`SHADOWS`] index).
     shadow_fired: u8,
+    /// The Kalshi-lead rule: entered, its newest gate, its best edge seen.
+    kg_entered: bool,
+    kg_gate: Option<&'static str>,
+    kg_best_edge: Option<f64>,
 }
 
 #[derive(Default, Serialize)]
@@ -284,6 +292,11 @@ pub struct Persisted {
     pub shadows: Vec<ShadowPos>,
     #[serde(default)]
     pub next_shadow_id: u64,
+    /// The Kalshi-lead rule's open paper positions.
+    #[serde(default)]
+    pub kg: Vec<KgPos>,
+    #[serde(default)]
+    pub next_kg_id: u64,
 }
 
 pub struct Engine {
@@ -304,6 +317,7 @@ pub struct Engine {
     /// `spot[asset][venue]`, venues as [`SPOT_VENUES`].
     spot: Vec<[Spot; 2]>,
     pending: Vec<Order>,
+    kg_pending: Vec<kgap::KgOrder>,
     inflight: HashMap<u64, Order>,
     pub p: Persisted,
     killed: bool,
@@ -374,6 +388,7 @@ impl Engine {
             k_last_frame_ns: 0,
             spot: (0..n).map(|_| [Spot::default(), Spot::default()]).collect(),
             pending: Vec::new(),
+            kg_pending: Vec::new(),
             inflight: HashMap::new(),
             p: persisted,
             killed: false,
@@ -465,15 +480,14 @@ impl Engine {
     }
 
     /// A Kalshi `orderbook_snapshot` / `orderbook_delta` frame.
-    pub fn on_kalshi(&mut self, text: &str, t_ns: i64) {
-        let Ok(f) = serde_json::from_str::<pk_engine::parse::KalshiFrame<'_>>(text) else { return };
+    /// A Kalshi frame; returns the asset whose window's book it changed.
+    pub fn on_kalshi(&mut self, text: &str, t_ns: i64) -> Option<usize> {
+        let f = serde_json::from_str::<pk_engine::parse::KalshiFrame<'_>>(text).ok()?;
         self.k_last_frame_ns = t_ns;
         self.counters.kalshi_frames += 1;
-        let Some(m) = f.msg.as_ref() else { return };
-        let Some(ticker) = m.market_ticker.as_ref().map(|t| t.as_str()) else { return };
-        if !self.kowner.contains_key(ticker) {
-            return;
-        }
+        let m = f.msg.as_ref()?;
+        let ticker = m.market_ticker.as_ref().map(|t| t.as_str())?;
+        let (asset, _) = *self.kowner.get(ticker)?;
         let b = self.kbooks.entry(ticker.to_owned()).or_default();
         match f.kind.as_deref() {
             Some("orderbook_snapshot") => {
@@ -483,7 +497,7 @@ impl Engine {
                 b.last_ns = t_ns;
             }
             Some("orderbook_delta") if b.snapshot => {
-                let Some((price, delta)) = m.delta() else { return };
+                let (price, delta) = m.delta()?;
                 let side = if m.side.as_deref() == Some("no") { &mut b.no } else { &mut b.yes };
                 let k = px_key(price);
                 let q = side.get(&k).copied().unwrap_or(0.0) + delta;
@@ -494,8 +508,9 @@ impl Engine {
                 }
                 b.last_ns = t_ns;
             }
-            _ => {}
+            _ => return None,
         }
+        Some(asset)
     }
 
     /// The Kalshi socket reconnected or lost a sequence: books wait for new snapshots.
@@ -705,7 +720,9 @@ impl Engine {
             if let Some(a) = self.evaluate_now(i, t_ns, "tick") {
                 actions.push(a);
             }
+            self.evaluate_kg(i, t_ns, "tick");
         }
+        self.kg_tick(t_ns);
         let due: Vec<Order> = {
             let (due, keep): (Vec<Order>, Vec<Order>) = self.pending.drain(..).partition(|o| o.fill_at_ns <= t_ns);
             self.pending = keep;
@@ -1157,12 +1174,14 @@ impl Engine {
         let ws = self.wstate.entry((i, open)).or_default();
         ws.ours = ours;
         let (gate, best_edge, entries) = (ws.gate, ws.best_edge, ws.entries);
+        let (kg_gate, kg_best_edge) = (ws.kg_gate, ws.kg_best_edge);
         self.record(
             t_ns,
             "eg_close",
             json!({"asset": asset, "open": open, "k": k.map(|x| x.0), "k_n": k.map(|x| x.1),
                    "twap": c.map(|x| x.0), "twap_n": c.map(|x| x.1), "ours": ours,
-                   "last_gate": gate, "best_edge": best_edge.map(r6), "entries": entries, "epoch": self.cfg.epoch}),
+                   "last_gate": gate, "best_edge": best_edge.map(r6), "entries": entries,
+                   "kg_gate": kg_gate, "kg_best_edge": kg_best_edge.map(r6), "epoch": self.cfg.epoch}),
         );
     }
 
@@ -1203,6 +1222,7 @@ impl Engine {
             p.pnl = Some(pnl);
             settled.push(p.clone());
         }
+        self.kg_resolved(asset, open, outcome, t_ns);
         let (done, keep): (Vec<ShadowPos>, Vec<ShadowPos>) =
             std::mem::take(&mut self.p.shadows).into_iter().partition(|p| p.asset == asset && p.open == open);
         self.p.shadows = keep;
@@ -1318,6 +1338,7 @@ impl Engine {
         if self.p.positions.len() != before {
             self.dirty = true;
         }
+        self.kg_prune(now_s);
         let n = self.p.shadows.len();
         self.p.shadows.retain(|p| p.open + WINDOW_S + RESOLVE_FOR_S + 600 >= now_s);
         if self.p.shadows.len() != n {
@@ -1347,6 +1368,7 @@ impl Engine {
             "counters": serde_json::to_value(&self.counters).unwrap_or(Value::Null),
             "day_pnl": r4(self.p.realized.get(&today).copied().unwrap_or(0.0)),
             "open_positions": self.p.positions.iter().filter(|p| p.outcome.is_none()).count(),
+            "kg_open": self.p.kg.len(),
             "open_cost": r4(self.open_cost()),
             "halted": self.halted(t_ns), "killed": self.killed,
             "windows": self.windows.len(),
@@ -1378,7 +1400,8 @@ mod tests {
     fn cfg_with(extra: &[(&str, &str)]) -> Config {
         let mut v = HashMap::new();
         for (k, val) in [("PK_EG_ASSETS", "BTC"), ("PK_EG_SIGMA_MIN_N", "30"), ("PK_EG_KALSHI_FILTER", "no"),
-                         ("PK_EG_MAX_PX", "0.97"), ("PK_EG_MAX_EDGE", "0.9"), ("PK_EG_SD_MULT_EARLY", "1.0")] {
+                         ("PK_EG_MAX_PX", "0.97"), ("PK_EG_MAX_EDGE", "0.9"), ("PK_EG_SD_MULT_EARLY", "1.0"),
+                         ("PK_EG_KG", "no")] {
             v.insert(k.to_string(), val.to_string());
         }
         for (k, val) in extra {
@@ -1581,7 +1604,7 @@ mod tests {
         for (k, val) in [("PK_EG_ASSETS", "BTC"), ("PK_EG_SIGMA_MIN_N", "30"), ("PK_EG_MODE", "live"),
                          ("PK_EG_LIVE_CONFIRM", "yes"), ("POLY_PRIVATE_KEY", "0x1"), ("POLY_FUNDER", "0x2"),
                          ("POLY_RELAYER_API_KEY", "k"), ("PK_EG_KALSHI_FILTER", "no"), ("PK_EG_MAX_PX", "0.97"),
-                         ("PK_EG_MAX_EDGE", "0.9")] {
+                         ("PK_EG_MAX_EDGE", "0.9"), ("PK_EG_KG", "no")] {
             v.insert(k.to_string(), val.to_string());
         }
         let mut e = Engine::new(Config::from_vars(v).unwrap(), Persisted::default());
@@ -1840,6 +1863,112 @@ mod tests {
             .collect();
         rules.sort_unstable();
         assert_eq!(rules, ["edge9", "fav40", "sd11", "spread10"]);
+    }
+
+    fn kg_engine() -> Engine {
+        let cfg = cfg_with(&[("PK_EG_KG", "yes"), ("KALSHI_API_KEY_ID", "kid"), ("KALSHI_PRIVATE_KEY_PATH", "/k.pem")]);
+        let mut e = Engine::new(cfg, Persisted::default());
+        e.set_window(window(), OPEN * NS);
+        e
+    }
+
+    fn kinds(recs: &[Value], kind: &str) -> Vec<Value> {
+        recs.iter().filter(|r| r["type"] == kind).cloned().collect()
+    }
+
+    #[test]
+    fn kalshi_lead_buys_the_lagging_side_and_exits_into_the_bids() {
+        let mut e = kg_engine();
+        let t = (OPEN + 300) * NS;
+        e.on_kalshi(&kalshi_frame(0.59, 0.61), t); // Up worth 0.60 on Kalshi
+        e.on_poly(&book_frame("UP", 0.52, 0.53, 100.0), t);
+        e.on_poly(&book_frame("DN", 0.46, 0.48, 100.0), t);
+        e.evaluate_kg(0, t, "kalshi");
+        let d = kinds(&e.take_records(), "kg_decision");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0]["side"], "up");
+        // 0.60 − 0.53 − 0.05 · 0.53 · 0.47 ≈ 0.0575
+        assert!((d[0]["edge"].as_f64().unwrap() - 0.0575).abs() < 1e-3, "{}", d[0]);
+        assert_eq!(d[0]["limit"].as_f64().unwrap(), 0.54);
+        // Not the endgame rule's position or open cost.
+        assert!(e.p.positions.is_empty());
+        assert_eq!(e.open_cost(), 0.0);
+        let fill_t = t + 250 * 1_000_000;
+        e.tick(fill_t);
+        let f = kinds(&e.take_records(), "kg_fill");
+        assert_eq!(f[0]["shares"].as_f64().unwrap(), 10.0);
+        // Polymarket catches up: the Up bid rises to 0.58.
+        for k in 1..=10 {
+            let tk = fill_t + k * NS;
+            e.on_poly(&book_frame("UP", 0.58, 0.59, 100.0), tk - 1);
+            e.tick(tk);
+        }
+        let ex = kinds(&e.take_records(), "kg_exit");
+        assert_eq!(ex.iter().map(|x| x["delay_ms"].as_i64().unwrap()).collect::<Vec<_>>(), [1000, 2000, 5000, 10000]);
+        let traded: Vec<&Value> = ex.iter().filter(|x| x["traded"] == true).collect();
+        assert_eq!(traded.len(), 1);
+        assert_eq!(traded[0]["delay_ms"], 2000);
+        assert_eq!(traded[0]["sold"].as_f64().unwrap(), 10.0);
+        // Once per coin-window.
+        e.on_kalshi(&kalshi_frame(0.69, 0.71), fill_t + 11 * NS);
+        e.evaluate_kg(0, fill_t + 11 * NS, "kalshi");
+        assert!(kinds(&e.take_records(), "kg_decision").is_empty());
+        // Down wins: the 2 s sale keeps its profit, holding loses the stake.
+        e.on_resolved("BTC", OPEN, "no", (OPEN + WINDOW_S + 30) * NS);
+        let st = kinds(&e.take_records(), "kg_settle");
+        let cost = 10.0 * 0.53 + 10.0 * 0.05 * 0.53 * 0.47;
+        let want = 10.0 * 0.58 - 10.0 * 0.05 * 0.58 * 0.42 - cost;
+        assert!((st[0]["pnl"].as_f64().unwrap() - want).abs() < 1e-3, "{}", st[0]);
+        assert!((st[0]["hold_pnl"].as_f64().unwrap() + cost).abs() < 1e-3);
+        assert!(st[0]["exits"]["10000"]["pnl"].as_f64().is_some());
+        assert!(e.p.kg.is_empty());
+        assert!(e.p.realized.is_empty()); // the endgame rule's P&L is untouched
+    }
+
+    #[test]
+    fn kalshi_lead_gates() {
+        let t = (OPEN + 300) * NS;
+        // A wide Kalshi book.
+        let mut e = kg_engine();
+        e.on_kalshi(&kalshi_frame(0.55, 0.65), t);
+        e.on_poly(&book_frame("UP", 0.49, 0.50, 100.0), t);
+        e.evaluate_kg(0, t, "kalshi");
+        assert!(kinds(&e.take_records(), "kg_decision").is_empty());
+        // Too early in the window (the first 60 s).
+        let mut e = kg_engine();
+        let early = (OPEN + 30) * NS;
+        e.on_kalshi(&kalshi_frame(0.59, 0.61), early);
+        e.on_poly(&book_frame("UP", 0.52, 0.53, 100.0), early);
+        e.evaluate_kg(0, early, "kalshi");
+        assert!(kinds(&e.take_records(), "kg_decision").is_empty());
+        // Too small a gap.
+        let mut e = kg_engine();
+        e.on_kalshi(&kalshi_frame(0.59, 0.61), t);
+        e.on_poly(&book_frame("UP", 0.55, 0.56, 100.0), t);
+        e.evaluate_kg(0, t, "kalshi");
+        assert!(kinds(&e.take_records(), "kg_decision").is_empty());
+        // Off by config.
+        let mut e = engine();
+        e.on_kalshi(&kalshi_frame(0.59, 0.61), t);
+        e.on_poly(&book_frame("UP", 0.52, 0.53, 100.0), t);
+        e.evaluate_kg(0, t, "kalshi");
+        assert!(kinds(&e.take_records(), "kg_decision").is_empty());
+    }
+
+    #[test]
+    fn kalshi_lead_exit_on_a_frozen_book_is_missed_not_sold() {
+        let mut e = kg_engine();
+        let t = (OPEN + 300) * NS;
+        e.on_kalshi(&kalshi_frame(0.59, 0.61), t);
+        e.on_poly(&book_frame("UP", 0.52, 0.53, 100.0), t);
+        e.evaluate_kg(0, t, "kalshi");
+        e.tick(t + 250 * 1_000_000);
+        // No Polymarket frames for 3 s: the socket counts as silent.
+        e.tick(t + 250 * 1_000_000 + 2_100 * 1_000_000);
+        let ex = kinds(&e.take_records(), "kg_exit");
+        let two = ex.iter().find(|x| x["delay_ms"] == 2000).unwrap();
+        assert_eq!(two["missed"], "stale_book");
+        assert_eq!(two["sold"].as_f64().unwrap(), 0.0);
     }
 }
 

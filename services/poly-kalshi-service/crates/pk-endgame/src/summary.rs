@@ -19,6 +19,9 @@ pub const GATE_SETTLED: usize = 150;
 pub const GATE_DAYS: f64 = 3.0;
 pub const GATE_T: f64 = 2.0;
 pub const GATE_AGREE: f64 = 0.99;
+/// The Kalshi-lead rule's read (PREREG "KG-1"): the traded exit over this many settled fills.
+pub const KG_NEED: usize = 300;
+pub const KG_T: f64 = 2.0;
 const KEEP_CLOSES: usize = 7 * 96;
 const RECENT: usize = 40;
 const SERIES_POINTS: usize = 1_500;
@@ -40,6 +43,10 @@ pub struct Summary {
     halts: Vec<Value>,
     /// Shadow rules: rule → (decisions, fills, misses, settles).
     shadows: BTreeMap<String, ShadowTally>,
+    kg_decisions: Vec<Value>,
+    kg_fills: u64,
+    kg_no_fills: u64,
+    kg_settles: Vec<Value>,
     windows: u64,
     first_ns: Option<i64>,
 }
@@ -162,6 +169,10 @@ impl Summary {
                 }
             }
             "eg_halt" => self.halts.push(r.clone()),
+            "kg_decision" if mine => self.kg_decisions.push(r.clone()),
+            "kg_fill" if mine => self.kg_fills += 1,
+            "kg_no_fill" if mine => self.kg_no_fills += 1,
+            "kg_settle" if mine => self.kg_settles.push(r.clone()),
             "eg_shadow_decision" | "eg_shadow_fill" | "eg_shadow_no_fill" | "eg_shadow_settle" if mine => {
                 let rule = r.get("rule").and_then(Value::as_str).unwrap_or("?").to_owned();
                 let t = self.shadows.entry(rule).or_default();
@@ -214,6 +225,74 @@ impl Summary {
             out.push(v);
         }
         out
+    }
+
+    /// The Kalshi-lead rule: counts, then the traded exit, holding and each
+    /// probe delay as net ¢/share over the same settled fills, clustered by window.
+    fn kg_table(&self, now_s: i64) -> Value {
+        let key = |s: &Value| (s["asset"].as_str().unwrap_or_default().to_owned(), i(s, "open"));
+        let rows_by = |pnl: &dyn Fn(&Value) -> f64| -> Vec<Row> {
+            self.kg_settles
+                .iter()
+                .map(|s| Row { key: key(s), shares: f(s, "shares"), pnl: pnl(s) })
+                .filter(|r| r.pnl.is_finite() && r.shares > 0.0)
+                .collect()
+        };
+        let mut rows = Vec::new();
+        let mut traded = clustered(&rows_by(&|s| f(s, "pnl")));
+        traded["label"] = "traded".into();
+        rows.push(traded.clone());
+        let mut hold = clustered(&rows_by(&|s| f(s, "hold_pnl")));
+        hold["label"] = "hold".into();
+        rows.push(hold);
+        let mut delays: Vec<i64> = self
+            .kg_settles
+            .iter()
+            .filter_map(|s| s["exits"].as_object())
+            .flat_map(|m| m.keys().filter_map(|k| k.parse::<i64>().ok()).collect::<Vec<_>>())
+            .collect();
+        delays.sort_unstable();
+        delays.dedup();
+        for d in delays {
+            let k = d.to_string();
+            let mut v = clustered(&rows_by(&|s| s["exits"][&k]["pnl"].as_f64().unwrap_or(f64::NAN)));
+            v["label"] = format!("exit_{d}").into();
+            v["delay_ms"] = d.into();
+            rows.push(v);
+        }
+        let n = self.kg_settles.len();
+        let t = traded["t"].as_f64();
+        let m = traded["net_c"].as_f64();
+        let verdict = if n < KG_NEED {
+            "collecting"
+        } else if t.is_some_and(|t| t >= KG_T) && m.is_some_and(|m| m > 0.0) {
+            "pass"
+        } else {
+            "fail"
+        };
+        let tried = self.kg_fills + self.kg_no_fills;
+        let today = now_s - now_s.rem_euclid(86_400);
+        let mut triggers: BTreeMap<String, u64> = BTreeMap::new();
+        for d in &self.kg_decisions {
+            *triggers.entry(d["trigger"].as_str().unwrap_or("?").to_owned()).or_default() += 1;
+        }
+        let mut gates: BTreeMap<String, u64> = BTreeMap::new();
+        for c in self.closes.iter().filter(|c| i(c, "t_ns") / NS >= now_s - 86_400) {
+            *gates.entry(c["kg_gate"].as_str().unwrap_or("not reached").to_owned()).or_default() += 1;
+        }
+        let mut gates: Vec<(String, u64)> = gates.into_iter().collect();
+        gates.sort_by_key(|g| std::cmp::Reverse(g.1));
+        json!({
+            "decisions": self.kg_decisions.len(),
+            "decisions_today": self.kg_decisions.iter().filter(|d| i(d, "t_ns") / NS >= today).count(),
+            "fills": self.kg_fills,
+            "fill_rate": if tried > 0 { round(self.kg_fills as f64 / tried as f64, 3) } else { Value::Null },
+            "settled": n,
+            "triggers": triggers,
+            "rows": rows,
+            "read": {"need": KG_NEED, "have": n, "need_t": KG_T, "t": traded["t"], "net_c": traded["net_c"], "verdict": verdict},
+            "gates_24h": gates.iter().map(|(g, c)| json!({"gate": g, "n": c})).collect::<Vec<_>>(),
+        })
     }
 
     /// The page's data. `live` is the engine's status at this instant.
@@ -383,6 +462,7 @@ impl Summary {
             "recent": recent,
             "halts": self.halts,
             "shadows": self.shadow_table(),
+            "kg": self.kg_table(now_s),
         })
     }
 }
@@ -441,6 +521,25 @@ mod tests {
         assert_eq!((e9["decisions"].as_u64(), e9["fill_rate"].as_f64(), e9["pnl"].as_f64()), (Some(1), Some(1.0), Some(4.0)));
         let f40 = rows.iter().find(|r| r["label"] == "fav40").unwrap();
         assert_eq!(f40["fill_rate"], 0.0);
+    }
+
+    #[test]
+    fn kalshi_lead_table_scores_traded_hold_and_each_exit() {
+        let mut s = Summary { epoch: "3".into(), ..Summary::default() };
+        s.ingest(&json!({"type": "kg_decision", "epoch": "3", "id": 1, "trigger": "kalshi", "t_ns": NS}));
+        s.ingest(&json!({"type": "kg_fill", "epoch": "3", "id": 1, "t_ns": NS}));
+        s.ingest(&json!({"type": "kg_decision", "epoch": "3", "id": 2, "trigger": "book", "t_ns": NS}));
+        s.ingest(&json!({"type": "kg_no_fill", "epoch": "3", "id": 2, "t_ns": NS}));
+        s.ingest(&json!({"type": "kg_settle", "epoch": "3", "id": 1, "asset": "BTC", "open": 0, "shares": 10.0,
+                         "pnl": 0.5, "hold_pnl": -5.0, "exits": {"1000": {"pnl": 0.2}, "2000": {"pnl": 0.5}}, "t_ns": 2 * NS}));
+        let v = s.snapshot(json!({}), 3 * NS);
+        let kg = &v["kg"];
+        assert_eq!((kg["decisions"].as_u64(), kg["fill_rate"].as_f64(), kg["settled"].as_u64()), (Some(2), Some(0.5), Some(1)));
+        assert_eq!(kg["triggers"]["kalshi"], 1);
+        let rows = kg["rows"].as_array().unwrap();
+        let by = |l: &str| rows.iter().find(|r| r["label"] == l).unwrap()["pnl"].as_f64().unwrap();
+        assert_eq!((by("traded"), by("hold"), by("exit_1000"), by("exit_2000")), (0.5, -5.0, 0.2, 0.5));
+        assert_eq!(kg["read"]["verdict"], "collecting");
     }
 
     #[test]

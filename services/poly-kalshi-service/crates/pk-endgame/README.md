@@ -175,3 +175,15 @@ Polymarket (`eg_shadow_decision`, `eg_shadow_fill` / `eg_shadow_no_fill`,
 `eg_shadow_settle`), never traded and never in open cost, P&L or halts. The
 page's "Shadow rules" table sets each beside the traded rule.
 
+## Kalshi-lead rule (`kg`, PREREG KG-1)
+
+The Polymarket US pattern on Polymarket: from 60 s after the open to 60 s
+before the close, on every Kalshi or Polymarket book change, buy the side 5–15¢
+under Kalshi's mid for the same window after the fee, once per coin-window, 10
+shares on paper; sell it into the bids 2 s after the fill. Holding to
+settlement and exits at 1, 5 and 10 s are scored on the same fills. Its own
+positions and P&L (`kg_decision`, `kg_fill` / `kg_no_fill`, `kg_exit`,
+`kg_settle`; `kg_gate` in `eg_close`), never the endgame rule's, and paper
+even in live mode. `PK_EG_KG=no` turns it off; it needs the Kalshi key.
+The page's "Kalshi lead" section shows it.
+
