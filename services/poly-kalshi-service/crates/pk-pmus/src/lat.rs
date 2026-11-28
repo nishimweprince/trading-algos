@@ -8,7 +8,7 @@
 //! | `gw_edge_origin` | `gw_rtt` − `gw_server`: our host → Cloudflare edge → origin and back |
 //! | `k_lock_wait` | a Kalshi frame waiting for the engine lock |
 //! | `k_process` | applying the frame and evaluating its window, under the lock |
-//! | `timer_lag` | how late a 10 ms timer fires: scheduler and noisy-neighbour jitter |
+//! | `timer_lag` | how late a 10 ms timer fires: scheduler and noisy-neighbour jitter (tokio's 1 ms timer resolution sets a ~1 ms floor) |
 //!
 //! Each series keeps its last `CAP` samples in microseconds; quantiles are
 //! read from that window.

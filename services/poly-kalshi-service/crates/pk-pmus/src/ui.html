@@ -286,7 +286,8 @@ function render(s) {
     return { v: curve[curve.length - 1][1], floor: false };
   };
   const a50 = arrive("p50"), a95 = arrive("p95"), f50 = fillAt(a50), f95 = fillAt(a95), paper = fillAt(150);
-  const jitter = (q("timer_lag_us", "p99") ?? 0) > 2000 || (q("k_process_us", "p99") ?? 0) > 1000;
+  // tokio timers tick in 1 ms steps, so ~1 ms lateness is the floor, not jitter.
+  const jitter = (q("timer_lag_us", "p99") ?? 0) > 3000 || (q("k_process_us", "p99") ?? 0) > 1000;
   pairs("lat-est", [
     ["Estimated live arrival", num(a50) ? `${a50.toFixed(1)} ms typical · ${a95.toFixed(1)} ms p95` : "—"],
     ["Fill rate at that arrival", f50 ? `${f50.floor ? "≥ " : ""}${pct(f50.v)} typical · ${f95.floor ? "≥ " : ""}${pct(f95.v)} p95` : "—"],

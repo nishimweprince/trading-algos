@@ -78,7 +78,7 @@ No Polymarket US API key yet, so there are no orders to time. The bot measures w
 
 The page estimates the live arrival time as processing + `gw_edge_origin`/2 + server time,
 and reads the fill rate at that arrival off the measured arrival-delay curve. It flags a
-dedicated-CPU plan only when `timer_lag` p99 exceeds 2 ms or `k_process` p99 exceeds 1 ms.
+dedicated-CPU plan only when `timer_lag` p99 exceeds 3 ms (tokio timers tick in 1 ms steps, so about 1 ms late is the floor) or `k_process` p99 exceeds 1 ms.
 
 **Origin probe, 2026-11-28.** These are Globalping HTTP probes on cache-busted gateway
 requests; first byte is measured after TLS.
