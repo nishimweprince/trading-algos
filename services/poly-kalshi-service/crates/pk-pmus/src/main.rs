@@ -12,6 +12,7 @@
 
 mod config;
 mod engine;
+mod lat;
 mod summary;
 mod web;
 
@@ -58,6 +59,8 @@ struct App {
     started_ns: i64,
     kalshi: Mutex<Option<FeedHandle>>,
     poll: PollStats,
+    /// Latency telemetry (lat.rs).
+    lat: lat::Lat,
     /// Windows with a polling task.
     polling: Mutex<HashSet<(usize, i64)>>,
     poll_ms: u64,
@@ -253,6 +256,7 @@ impl App {
         live["kalshi_connected"] = self.kalshi.lock().as_ref().map(FeedHandle::connected).into();
         live["poll_errors"] = self.poll.errors().into();
         live["poll"] = self.poll.value();
+        live["latency"] = self.lat.value();
         self.summary.lock().snapshot(live, t)
     }
 
@@ -315,6 +319,7 @@ impl App {
     /// seen frozen for 10 s while the book moved.
     async fn book(&self, slug: &str) -> Result<Book, BookErr> {
         let url = format!("{}/v1/markets/{slug}/book?_={}", self.gateway, now_ns());
+        let t0 = std::time::Instant::now();
         let r = self
             .http
             .get(url)
@@ -333,10 +338,21 @@ impl App {
             .and_then(|v| v.to_str().ok())
             .is_some_and(|v| v.eq_ignore_ascii_case("HIT"));
         let age = r.headers().get("age").and_then(|v| v.to_str().ok()?.trim().parse::<i64>().ok());
+        let server_ms =
+            r.headers().get("x-pm-server-latency").and_then(|v| v.to_str().ok()?.trim().parse::<f64>().ok());
         let v: Value = r
             .json()
             .await
             .map_err(|e| if e.is_timeout() { BookErr::Timeout } else { BookErr::Other(format!("{e}")) })?;
+        if !hit {
+            let rtt = t0.elapsed().as_micros() as i64;
+            self.lat.gw_rtt.add_us(rtt);
+            if let Some(ms) = server_ms {
+                let server = (ms * 1000.0) as i64;
+                self.lat.gw_server.add_us(server);
+                self.lat.gw_edge_origin.add_us(rtt - server);
+            }
+        }
         if hit {
             self.poll.cache_hits.fetch_add(1, Relaxed);
         }
@@ -617,6 +633,7 @@ async fn run(cfg: Config) -> anyhow::Result<()> {
         state_path,
         kalshi: Mutex::new(None),
         poll: PollStats::default(),
+        lat: lat::Lat::default(),
         polling: Mutex::new(HashSet::new()),
         poll_ms: cfg.poll_ms,
         paper_latency_ms: cfg.paper_latency_ms,
@@ -650,7 +667,13 @@ async fn run(cfg: Config) -> anyhow::Result<()> {
             let fetch = {
                 let mut e = a.engine.lock();
                 match venue {
-                    'k' => e.on_kalshi(&text, t).and_then(|(i, open)| e.evaluate_now(i, open, t, "kalshi")),
+                    'k' => {
+                        let t_lock = now_ns();
+                        let f = e.on_kalshi(&text, t).and_then(|(i, open)| e.evaluate_now(i, open, t, "kalshi"));
+                        a.lat.k_lock_wait.add_us((t_lock - t) / 1_000);
+                        a.lat.k_process.add_us((now_ns() - t_lock) / 1_000);
+                        f
+                    }
                     'c' if text.contains("\"venue\":\"k\"") => {
                         e.invalidate_kalshi();
                         None
@@ -664,6 +687,26 @@ async fn run(cfg: Config) -> anyhow::Result<()> {
         }),
     );
     *app.kalshi.lock() = Some(feed);
+
+    // Scheduler jitter: how late a 10 ms timer fires.
+    let a = app.clone();
+    tokio::spawn(async move {
+        loop {
+            let due = tokio::time::Instant::now() + Duration::from_millis(10);
+            tokio::time::sleep_until(due).await;
+            a.lat.timer_lag.add_us(tokio::time::Instant::now().duration_since(due).as_micros() as i64);
+        }
+    });
+    // Latency quantiles into the journal, every minute.
+    let a = app.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            let v = a.lat.value();
+            a.engine.lock().journal("pu_latency", v, now_ns());
+            a.flush();
+        }
+    });
 
     // Discovery, every 15 s.
     let a = app.clone();

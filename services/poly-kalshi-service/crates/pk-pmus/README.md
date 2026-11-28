@@ -63,6 +63,50 @@ report one. `pu_window.fee_coef` and `pu_decision.fee_theta` record the rate use
 0.11 the fee is about 2.7¢ at p = 0.5, against 1.7¢ before, so fewer gaps clear 5¢.
 Epoch 3 (about 1.5 h at Θ = 0.0695) is superseded.
 
+## Latency telemetry (2026-11-28, within epoch 7)
+
+No Polymarket US API key yet, so there are no orders to time. The bot measures what it can
+(`src/lat.rs`; the page's "Latency" section; `pu_latency` journaled every minute):
+- **`gw_rtt`:** a gateway book request on the warm HTTP/2 polling connection, from send to
+  parsed body, for cache misses only.
+- **`gw_server`:** Polymarket US's own `x-pm-server-latency` for that request.
+- **`gw_edge_origin`:** `gw_rtt` minus `gw_server`, the trip from here through the
+  Cloudflare edge to the origin and back.
+- **`k_lock_wait`, `k_process`:** a Kalshi frame waiting for the engine lock, then being
+  applied and evaluated.
+- **`timer_lag`:** how late a 10 ms timer fires. This is the noisy-neighbour signal.
+
+The page estimates the live arrival time as processing + `gw_edge_origin`/2 + server time,
+and reads the fill rate at that arrival off the measured arrival-delay curve. It flags a
+dedicated-CPU plan only when `timer_lag` p99 exceeds 2 ms or `k_process` p99 exceeds 1 ms.
+
+**Origin probe, 2026-11-28.** These are Globalping HTTP probes on cache-busted gateway
+requests; first byte is measured after TLS.
+
+| Probes from | Cloudflare edge | First byte |
+|---|---|---|
+| Ashburn | IAD | 8–18 ms (edge ↔ origin about 2–10 ms) |
+| Columbus | CMH, PIT | 18–30 ms |
+| Chicago | ORD | 21–35 ms |
+| New York | EWR | 30–62 ms |
+| Dallas | DFW | 37–44 ms |
+
+So the Polymarket US origin is in or near Ashburn, and this host is already in the right
+metro. Within Ashburn, by network over 8 samples each:
+
+| Network | Median first byte | Minimum |
+|---|---|---|
+| Amazon | 13 ms | 8 ms |
+| Hetzner | 17.5 ms | 9 ms |
+| OVH | 12.5 ms | 10 ms |
+| Oracle | 14.5 ms | 9 ms |
+
+An AWS us-east-1 host might save 0–4 ms. That's within noise for these samples; re-test
+with a real order ack.
+
+Paper still fills at 150 ms (`PK_PU_PAPER_LATENCY_MS`) so that epoch 7's exit study runs
+under one setting. Set it to the measured order ack p95 once orders exist.
+
 ## Kelly caps raised (2026-11-28, within epoch 7)
 
 The Kelly rules now have their own dollar caps: `PK_PU_KELLY_TRADE_USD` ($50 per trade) and
