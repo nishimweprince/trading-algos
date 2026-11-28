@@ -63,6 +63,15 @@ report one. `pu_window.fee_coef` and `pu_decision.fee_theta` record the rate use
 0.11 the fee is about 2.7¢ at p = 0.5, against 1.7¢ before, so fewer gaps clear 5¢.
 Epoch 3 (about 1.5 h at Θ = 0.0695) is superseded.
 
+## 20 and 30 s exit probes (2026-11-28, within epoch 7)
+
+`PK_PU_EXIT_DELAYS_MS` now defaults to 1, 2, 5, 10, 20 and 30 s. At 191 settled fills the
+exit's net per share was still rising at 10 s (+2.71¢, t 3.73). Epoch 6's once-a-second
+data suggested a peak somewhere between 10 and 30 s. The new delays locate that peak for
+the epoch 8 pre-registration. They are secondary: the 2 s primary test and its 300-fill
+count are unchanged. Entries stop 60 s before the close, so a 30 s exit always lands
+inside the window.
+
 ## Latency telemetry (2026-11-28, within epoch 7)
 
 No Polymarket US API key yet, so there are no orders to time. The bot measures what it can

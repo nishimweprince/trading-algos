@@ -209,7 +209,7 @@ impl Config {
             kelly_trade_usd: e.num("PK_PU_KELLY_TRADE_USD", 50.0)?,
             kelly_window_usd: e.num("PK_PU_KELLY_WINDOW_USD", 100.0)?,
             exit_delays_ms: {
-                let raw = e.or("PK_PU_EXIT_DELAYS_MS", "1000,2000,5000,10000");
+                let raw = e.or("PK_PU_EXIT_DELAYS_MS", "1000,2000,5000,10000,20000,30000");
                 let mut v = Vec::new();
                 for x in raw.split(',').map(str::trim).filter(|x| !x.is_empty() && *x != "off") {
                     let d = x
@@ -311,7 +311,7 @@ pub mod tests {
         assert_eq!(c.assets, ["BTC", "ETH", "SOL", "XRP"]);
         assert_eq!((c.min_edge, c.max_edge, c.fee_theta), (0.05, 0.15, 0.11));
         assert!(!c.enforce_halt);
-        assert_eq!(c.exit_delays_ms, [1_000, 2_000, 5_000, 10_000]);
+        assert_eq!(c.exit_delays_ms, [1_000, 2_000, 5_000, 10_000, 20_000, 30_000]);
         assert_eq!((c.kelly_trade_usd, c.kelly_window_usd), (50.0, 100.0));
         assert!(Config::from_vars(vars(&[("PK_PU_KELLY_TRADE_USD", "150")])).is_err());
         assert!(Config::from_vars(vars(&[("PK_PU_EXIT_DELAYS_MS", "off")])).unwrap().exit_delays_ms.is_empty());
