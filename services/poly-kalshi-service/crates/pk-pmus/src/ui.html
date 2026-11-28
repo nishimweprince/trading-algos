@@ -60,10 +60,11 @@ th { color:var(--muted); font-size:11px; font-weight:600; }
   </div>
   <section><h2>Cumulative P&amp;L</h2><p class="muted" id="chart-note"></p><div class="chart" id="chart"></div></section>
   <section><h2>Recent decisions</h2><p class="muted" id="recent-note"></p><div id="recent"></div></section>
-  <section><h2>Quick exit against holding</h2><p class="muted" id="exits-note">After each fill the book is fetched 1, 2, 5 and 10 s later and the position walked into the bid (fee on both legs; any unsold remainder is held). Nothing is sold: every position is still held to settlement, so each row is paired with holding the same positions. t is clustered by window.</p><div id="exits"></div></section>
+  <section><h2>Quick exit against holding</h2><p class="muted" id="exits-note">After each fill the book is fetched 1, 2, 5, 10, 20 and 30 s later and the position walked into the bid (fee on both legs; any unsold remainder is held). Nothing is sold: every position is still held to settlement, so each row is paired with holding the same positions. t is clustered by window.</p><div id="exits"></div></section>
   <section><h2>Sizing rules (counterfactual)</h2><p class="muted">What each rule would have bought against the same book: depth at the limit, at most 2% of a $1,000 bankroll per trade and 5% per window across coins; Kelly rules instead at most $50 per trade and $100 per window (rows count only positions sized under the current Kelly cap). Paper still buys a flat 10. Kelly uses Kalshi's mid; shrunk Kelly uses c + 0.5·(q − c); calibrated Kelly uses c + β·(q − c) with β fitted on settled shadows (below); near-side Kelly uses Kalshi's bid for Up and 1 − its ask for Down, the gap halved every 10 s of book age. All Kelly rules are quarter Kelly except tenth. Dollar rules buy a fixed stake in dollars (shares = stake ÷ cost): $5, or $5/$10/$15 at under 10%, 10–20% and 20%+ return per dollar. t is clustered by window.</p><div id="sizing"></div></section>
   <section><h2>Return per dollar by price</h2><p class="muted">Settled positions by cost per share (ask + fee). A 5¢ edge is 50% of a $0.10 share but 5.6% of a $0.90 one; per share and per dollar can rank prices differently. t is clustered by window.</p><div id="by-price"></div></section>
   <section><h2>Gate: 5¢ against per dollar</h2><p class="muted" id="gate-cmp-note">Both gates as one-share shadows at the ask plus fee: the traded rule (edge ≥ 5¢) and the per-dollar rule (edge ÷ cost ≥ 10%, edge 1–15¢). The per-dollar gate keeps looking after the 5¢ entry, so both see whole windows. Return per dollar is P&amp;L ÷ cost, clustered by window.</p><div id="gate-cmp"></div></section>
+  <section><h2>Latency</h2><p class="muted" id="lat-note">Measured on this host with no API key: Polymarket US gateway round trips on the warm polling connection, our own time from a Kalshi frame to a decision, and how late a 10 ms timer fires (scheduler and noisy-neighbour jitter). Microseconds unless marked.</p><dl id="lat-est"></dl><div id="lat"></div></section>
   <section><h2>Arrival delay</h2><p class="muted">For every decision the book is also fetched 25, 50, 100 and 150 ms later, the same order walked against it. Only the 150 ms fill is a paper position; the rest are counterfactual. Slippage is the average paid minus the ask at the decision. t is clustered by window.</p><div id="delays"></div></section>
   <section><h2>Minimum edge: 3¢ against 5¢</h2><p class="muted">The first gap of at least 3¢ in each coin-window, per share at the ask plus fee (no fill model). The 3–5¢ row is what raising the minimum to 5¢ dropped.</p><div id="min-edge"></div></section>
   <section><h2>Does the gap pay?</h2><p class="muted" id="gap-cal-note">Settled shadows (the first gap of at least 3¢ per coin-window): the gap predicted to Kalshi's mid and to its near side, against the realized gap (won − cost). β is realized ÷ predicted: 1 means Kalshi is right, 0 means the gap is noise. Calibrated Kelly trades on β, shrunk toward 0.5.</p><div id="gap-cal"></div></section>
@@ -256,6 +257,43 @@ function render(s) {
     { h: "P&L", v: (r) => usd(r.pnl) }, { h: "Return on risk", v: (r) => r.ret_pct != null ? `${fx(r.ret_pct, 1)}%` : "—" },
     { h: "Worst drawdown", v: (r) => `${fx(r.max_dd, 2)} USD` }, { h: "t", v: (r) => fx(r.t, 2) },
   ], s.sizing || [], "No settled positions with sizing yet."));
+  const LT = (live.latency || {});
+  const q = (k, p) => (LT[k] || {})[p];
+  const ms = (us) => num(us) ? (us / 1000).toFixed(us < 10000 ? 2 : 1) + " ms" : "—";
+  const LAT_ROWS = [
+    ["gw_rtt_us", "Gateway round trip (send → book parsed)"], ["gw_server_us", "  of which Polymarket US server time"],
+    ["gw_edge_origin_us", "  of which Cloudflare edge ↔ origin + network"], ["k_lock_wait_us", "Kalshi frame waiting for the engine"],
+    ["k_process_us", "Kalshi frame → decision (apply + evaluate)"], ["timer_lag_us", "10 ms timer lateness (jitter)"],
+  ];
+  $("lat").replaceChildren(table([
+    { h: "Measure", v: (r) => r[1] }, { h: "p50", v: (r) => ms(q(r[0], "p50")) }, { h: "p95", v: (r) => ms(q(r[0], "p95")) },
+    { h: "p99", v: (r) => ms(q(r[0], "p99")) }, { h: "Max", v: (r) => ms(q(r[0], "max")) },
+    { h: "Samples", v: (r) => String((LT[r[0]] || {}).window ?? 0) },
+  ], LAT_ROWS.filter((r) => (LT[r[0]] || {}).window), "No latency samples yet."));
+  // Estimated live arrival: our processing + one way to the origin (half the edge↔origin trip) + server time.
+  const arrive = (p) => {
+    const a = q("k_process_us", p), e = q("gw_edge_origin_us", p), sv = q("gw_server_us", p);
+    return num(a) && num(e) && num(sv) ? (a + e / 2 + sv) / 1000 : null;
+  };
+  const curve = (s.delays || []).filter((r) => r.asset === "All" && num(r.fill_rate)).map((r) => [r.delay_ms, r.fill_rate]).sort((x, y) => x[0] - y[0]);
+  const fillAt = (t) => {
+    if (!num(t) || !curve.length) return null;
+    if (t <= curve[0][0]) return { v: curve[0][1], floor: true };
+    for (let i = 1; i < curve.length; i++) if (t <= curve[i][0]) {
+      const [x0, y0] = curve[i - 1], [x1, y1] = curve[i];
+      return { v: y0 + (y1 - y0) * (t - x0) / (x1 - x0), floor: false };
+    }
+    return { v: curve[curve.length - 1][1], floor: false };
+  };
+  const a50 = arrive("p50"), a95 = arrive("p95"), f50 = fillAt(a50), f95 = fillAt(a95), paper = fillAt(150);
+  // tokio timers tick in 1 ms steps, so ~1 ms lateness is the floor, not jitter.
+  const jitter = (q("timer_lag_us", "p99") ?? 0) > 3000 || (q("k_process_us", "p99") ?? 0) > 1000;
+  pairs("lat-est", [
+    ["Estimated live arrival", num(a50) ? `${a50.toFixed(1)} ms typical · ${a95.toFixed(1)} ms p95` : "—"],
+    ["Fill rate at that arrival", f50 ? `${f50.floor ? "≥ " : ""}${pct(f50.v)} typical · ${f95.floor ? "≥ " : ""}${pct(f95.v)} p95` : "—"],
+    ["Paper (150 ms)", paper ? pct(paper.v) : "—"],
+    ["Dedicated CPU", (LT.timer_lag_us || {}).window ? (jitter ? "Tails show — consider a dedicated-CPU plan" : "Not needed: no jitter tails") : "—"],
+  ]);
   $("delays").replaceChildren(table([
     { h: "Delay", v: (r) => r.label }, { h: "Coin", v: (r) => r.asset }, { h: "Decisions", v: (r) => String(r.probes) },
     { h: "Any fill", v: (r) => pct(r.fill_rate) }, { h: "Shares filled", v: (r) => pct(r.share_fill) },
@@ -267,7 +305,7 @@ function render(s) {
     { h: "Net per share", v: (r) => cents(r.net_c) }, { h: "t", v: (r) => fx(r.t, 2) },
   ], s.min_edge || [], "No shadow entries settled yet."));
   const ex = s.exits || {}, pr = ex.primary || {};
-  $("exits-note").textContent = `After each fill the book is fetched 1, 2, 5 and 10 s later and the position walked into the bid (fee on both legs; any unsold remainder is held). Nothing is sold: every position is still held to settlement, so each row is paired with holding the same positions. Pre-registered: the ${fx((pr.delay_ms || 2000) / 1000, 0)} s exit nets more than 0 with t ≥ ${pr.need_t ?? 2} over ${pr.need ?? 300} settled fills — ${pr.have ?? 0} so far, ${pr.verdict || "collecting"}.`;
+  $("exits-note").textContent = `After each fill the book is fetched ${(ex.rows || []).map((r) => r.label).join(", ") || "1, 2, 5, 10, 20 and 30 s"} later and the position walked into the bid (fee on both legs; any unsold remainder is held). Nothing is sold: every position is still held to settlement, so each row is paired with holding the same positions. Pre-registered: the ${fx((pr.delay_ms || 2000) / 1000, 0)} s exit nets more than 0 with t ≥ ${pr.need_t ?? 2} over ${pr.need ?? 300} settled fills — ${pr.have ?? 0} so far, ${pr.verdict || "collecting"}.`;
   $("exits").replaceChildren(table([
     { h: "Exit after", v: (r) => r.label }, { h: "Fills", v: (r) => String(r.probes) },
     { h: "Fully sold", v: (r) => pct(r.full_rate) }, { h: "Shares sold", v: (r) => pct(r.sold_frac) },
