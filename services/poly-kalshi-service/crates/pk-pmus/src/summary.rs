@@ -637,12 +637,19 @@ impl Summary {
         let mut ordered: Vec<&Value> =
             self.settles.iter().filter(|s| s.get("alt").is_some_and(Value::is_object)).collect();
         ordered.sort_by_key(|s| i(s, "t_ns"));
+        // Kelly rows count only positions sized under the current Kelly caps.
+        let cap_now = ordered.iter().rev().find_map(|s| s.get("kelly_cap").filter(|v| v.is_object())).cloned();
+        let same_cap = |s: &Value| match &cap_now {
+            Some(c) => s.get("kelly_cap") == Some(c),
+            None => true,
+        };
         crate::engine::RULES
             .iter()
             .map(|rule| {
                 let (mut cum, mut peak, mut dd, mut risked) = (0.0f64, 0.0f64, 0.0f64, 0.0);
                 let mut rows = Vec::new();
-                for s in &ordered {
+                let kelly = rule.starts_with("kelly");
+                for s in ordered.iter().filter(|s| !kelly || same_cap(s)) {
                     let a = &s["alt"][*rule];
                     let (sh, pnl, cost) = (f(a, "shares"), f(a, "pnl"), f(a, "cost"));
                     if !(sh.is_finite() && pnl.is_finite() && cost.is_finite()) {
@@ -670,6 +677,9 @@ impl Summary {
                 v["ret_pct"] = if risked > 0.0 { round(100.0 * cum / risked, 2) } else { Value::Null };
                 v["max_dd"] = round(dd, 2);
                 v["shares"] = round(rows.iter().map(|r| r.shares).sum(), 1);
+                if kelly {
+                    v["cap"] = cap_now.clone().unwrap_or(Value::Null);
+                }
                 v
             })
             .collect()
@@ -860,6 +870,27 @@ mod tests {
         assert_eq!(g[1]["per_usd_pct"], 0.0); // (0.8 − 0.8) / 1.0
         assert_eq!(g[1]["avg_cost"], 0.5);
         assert_eq!(g[3]["per_usd_pct"], 400.0);
+    }
+
+    #[test]
+    fn kelly_rows_count_only_the_current_cap() {
+        let mut s = Summary { epoch: "7".into(), ..Summary::default() };
+        let alt = json!({"flat": {"shares": 10.0, "cost": 5.0, "pnl": 1.0}, "kelly_q": {"shares": 30.0, "cost": 15.0, "pnl": 3.0}});
+        let mut a = settle(1, "BTC", 0, 1.0, true, NS);
+        a["epoch"] = "7".into();
+        a["alt"] = alt.clone();
+        let mut b = settle(2, "ETH", 900, 1.0, true, 2 * NS);
+        b["epoch"] = "7".into();
+        b["alt"] = alt;
+        b["kelly_cap"] = json!({"trade": 50.0, "window": 100.0});
+        s.ingest(&a);
+        s.ingest(&b);
+        let v = s.snapshot(json!({}), 3 * NS);
+        let rows = v["sizing"].as_array().unwrap();
+        let get = |l: &str| rows.iter().find(|r| r["label"] == l).unwrap().clone();
+        assert_eq!(get("flat")["n"], 2);
+        assert_eq!(get("kelly_q")["n"], 1);
+        assert_eq!(get("kelly_q")["cap"]["trade"], 50.0);
     }
 
     #[test]

@@ -63,6 +63,22 @@ report one. `pu_window.fee_coef` and `pu_decision.fee_theta` record the rate use
 0.11 the fee is about 2.7¢ at p = 0.5, against 1.7¢ before, so fewer gaps clear 5¢.
 Epoch 3 (about 1.5 h at Θ = 0.0695) is superseded.
 
+## Kelly caps raised (2026-11-28, within epoch 7)
+
+The Kelly rules now have their own dollar caps: `PK_PU_KELLY_TRADE_USD` ($50 per trade) and
+`PK_PU_KELLY_WINDOW_USD` ($100 per window across coins). Before this they shared the
+bankroll caps of $20 and $50. The other rules keep 2% and 5% of the bankroll.
+
+A replay of the 326 epoch 6–7 fills against their own books shows what this changes:
+- **At $20 / $50,** quarter Kelly hit the cap on 140 fills and book depth on 114.
+- **At $50 / $100,** the cap binds on 5 and depth on 145.
+- **At $100 / $200,** the results are identical to an uncapped run.
+
+So above about $50, depth at the limit sets the Kelly size. Each fill journals
+`kelly_cap`, and the page's Kelly rows count only positions sized under the current cap.
+Only what-if columns change, so the epoch stays at 7 and its exit pre-registration count
+is unaffected.
+
 ## Epoch 7: quick exit against holding (2026-11-27)
 
 The epoch 6 review (25 h, 321 decisions, 130 fills) found that holding to settlement earns

@@ -60,6 +60,11 @@ pub struct Config {
     pub cal_prior_n: f64,
     /// Conservative Kelly: the edge to Kalshi's near side halves every this many ms of book age.
     pub cons_age_half_ms: f64,
+    /// Kelly rules only: cost per trade ≤ this many USD…
+    pub kelly_trade_usd: f64,
+    /// …and per window across all coins ≤ this many USD (other rules keep the
+    /// bankroll fractions above).
+    pub kelly_window_usd: f64,
     /// Dollar sizing: the stake of `usd_flat`, and the base stake of `usd_tiers`.
     pub stake_usd: f64,
     /// The per-dollar gate (shadow only): fire when (q − c) / c ≥ this.
@@ -201,6 +206,8 @@ impl Config {
             cal_prior_n: e.num("PK_PU_CAL_PRIOR_N", 20.0)?,
             cons_age_half_ms: e.num("PK_PU_CONS_AGE_HALF_MS", 10_000.0)?,
             stake_usd: e.num("PK_PU_STAKE_USD", 5.0)?,
+            kelly_trade_usd: e.num("PK_PU_KELLY_TRADE_USD", 50.0)?,
+            kelly_window_usd: e.num("PK_PU_KELLY_WINDOW_USD", 100.0)?,
             exit_delays_ms: {
                 let raw = e.or("PK_PU_EXIT_DELAYS_MS", "1000,2000,5000,10000");
                 let mut v = Vec::new();
@@ -237,6 +244,10 @@ impl Config {
         anyhow::ensure!(c.cal_prior_n >= 0.0, "PK_PU_CAL_PRIOR_N must be ≥ 0");
         anyhow::ensure!(c.cons_age_half_ms > 0.0, "PK_PU_CONS_AGE_HALF_MS must be positive");
         anyhow::ensure!(c.stake_usd > 0.0, "PK_PU_STAKE_USD must be positive");
+        anyhow::ensure!(
+            c.kelly_trade_usd > 0.0 && c.kelly_window_usd >= c.kelly_trade_usd,
+            "need 0 < PK_PU_KELLY_TRADE_USD <= PK_PU_KELLY_WINDOW_USD"
+        );
         anyhow::ensure!(c.rpd_min > 0.0, "PK_PU_RPD_MIN must be positive");
         anyhow::ensure!(
             0.0 < c.min_px && c.min_px < c.max_px && c.max_px < 1.0,
@@ -301,6 +312,8 @@ pub mod tests {
         assert_eq!((c.min_edge, c.max_edge, c.fee_theta), (0.05, 0.15, 0.11));
         assert!(!c.enforce_halt);
         assert_eq!(c.exit_delays_ms, [1_000, 2_000, 5_000, 10_000]);
+        assert_eq!((c.kelly_trade_usd, c.kelly_window_usd), (50.0, 100.0));
+        assert!(Config::from_vars(vars(&[("PK_PU_KELLY_TRADE_USD", "150")])).is_err());
         assert!(Config::from_vars(vars(&[("PK_PU_EXIT_DELAYS_MS", "off")])).unwrap().exit_delays_ms.is_empty());
         assert_eq!((c.epoch.as_str(), c.cal_epochs.as_slice()), ("7", &["4".to_owned(), "5".to_owned(), "6".to_owned(), "7".to_owned()][..]));
         assert_eq!(c.paper_delays_ms, [25, 50, 100, 150]);

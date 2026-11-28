@@ -80,6 +80,9 @@ pub struct Position {
     /// What each sizing rule would have bought against the same book.
     #[serde(default)]
     pub alt: BTreeMap<String, Alt>,
+    /// The Kelly rules' (per-trade, per-window) USD caps when `alt` was sized.
+    #[serde(default)]
+    pub kelly_cap: Option<(f64, f64)>,
 }
 
 /// A sizing rule's counterfactual fill.
@@ -923,8 +926,14 @@ impl Engine {
             let want = if rule == "flat" {
                 got
             } else {
-                let room = (self.cfg.window_risk_frac * b - used.get(rule).copied().unwrap_or(0.0)).max(0.0);
-                target.min(self.cfg.trade_risk_frac * b / c).min(room / c).min(depth).max(0.0)
+                // Kelly rules have their own dollar caps; the rest keep the bankroll fractions.
+                let (trade, window) = if rule.starts_with("kelly") {
+                    (self.cfg.kelly_trade_usd, self.cfg.kelly_window_usd)
+                } else {
+                    (self.cfg.trade_risk_frac * b, self.cfg.window_risk_frac * b)
+                };
+                let room = (window - used.get(rule).copied().unwrap_or(0.0)).max(0.0);
+                target.min(trade / c).min(room / c).min(depth).max(0.0)
             };
             let (shares, usd, fee) = walk(levels, want, |p| Self::fee(o.theta, p));
             *used.entry(rule).or_default() += usd + fee;
@@ -951,6 +960,7 @@ impl Engine {
             "levels": levels.iter().take(12).map(|(p, q)| json!([r4(*p), r4(*q)])).collect::<Vec<_>>(),
             "cal": {"beta": r4(self.beta()), "n": self.cal.n, "q_side": r4(o.fair), "q_cons": r4(o.q_cons),
                     "q_cal": r4(o.px + o.fee + self.beta() * (o.fair - o.px - o.fee))},
+            "kelly_cap": {"trade": self.cfg.kelly_trade_usd, "window": self.cfg.kelly_window_usd},
             "sizes": alt.iter().map(|(k, a)| (k.clone(), json!({"target": r4(a.target), "shares": r4(a.shares), "usd": r4(a.usd), "fee": r6(a.fee)})))
                 .collect::<serde_json::Map<String, Value>>(),
         });
@@ -971,6 +981,7 @@ impl Engine {
                 pnl: None,
                 epoch: self.cfg.epoch.clone(),
                 alt,
+                kelly_cap: Some((self.cfg.kelly_trade_usd, self.cfg.kelly_window_usd)),
             });
             self.dirty = true;
         } else {
@@ -1215,7 +1226,8 @@ impl Engine {
                 json!({"id": p.id, "asset": p.asset, "open": p.open, "side": if p.up { "up" } else { "down" },
                        "outcome": outcome, "won": p.won(), "shares": r4(p.shares), "usd": r4(p.usd), "fee": r6(p.fee),
                        "pnl": r4(pnl), "per_share": r4(pnl / p.shares.max(1e-9)), "live": false, "epoch": p.epoch,
-                       "entry_day": day, "day_pnl": r4(self.p.realized.get(&day).copied().unwrap_or(0.0)), "alt": alt}),
+                       "entry_day": day, "day_pnl": r4(self.p.realized.get(&day).copied().unwrap_or(0.0)), "alt": alt,
+                       "kelly_cap": p.kelly_cap.map(|(t, w)| json!({"trade": t, "window": w}))}),
             );
         }
         let today = day_of(t_ns / NS);
@@ -1447,11 +1459,12 @@ mod tests {
         let sz = &f["sizes"];
         assert_eq!(sz["flat"]["shares"].as_f64().unwrap(), 10.0);
         assert_eq!(sz["tiers"]["shares"].as_f64().unwrap(), 20.0); // 8–11¢ tier
-        // Quarter Kelly wants ~ 0.25 · 0.193 · 1000 / 0.537 ≈ 90 shares; 2% risk caps it at 20 / 0.537 ≈ 37.2.
+        // Quarter Kelly wants ~ 0.25 · 0.193 · 1000 / 0.537 ≈ 90 shares; its $50 cap allows 93, so the
+        // 40 shares at or under the limit decide it.
         assert!(sz["kelly_q"]["target"].as_f64().unwrap() > 80.0);
-        assert!(
-            (sz["kelly_q"]["shares"].as_f64().unwrap() - 20.0 / (0.52 + 0.0695 * 0.52 * 0.48)).abs() < 0.1
-        );
+        assert_eq!(sz["kelly_q"]["shares"].as_f64().unwrap(), 40.0);
+        assert_eq!(f["kelly_cap"]["trade"].as_f64().unwrap(), 50.0);
+        // Tiers keep the 2%-of-bankroll cap: 20 shares cost ~$10.7, under $20.
         // Shrunk Kelly asks for less than quarter Kelly.
         assert!(sz["kelly_s"]["target"].as_f64().unwrap() < sz["kelly_q"]["target"].as_f64().unwrap());
         // No settled shadows yet: β is its prior (0.5), so calibrated Kelly is shrunk Kelly.
