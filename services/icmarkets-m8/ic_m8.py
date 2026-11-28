@@ -9,6 +9,10 @@ and reverses):
   IC-B1000-M5-TP2   Boom1000 M5, take profit at 2R     magic 709003
   IC-J50-M1-RS      Jump50 M1, reverse + stop          magic 709004
 
+Live exit options (.env): IC_STEP_ATR > 0 turns the break-even into a stair-step stop (entry at +4 ATR, then the
+previous trigger level every further IC_STEP_ATR ATR: +4 at +7, +7 at +10, ... for 3); IC_NO_TP=1 drops every take profit.
+Sizing: IC_RISK_PCT, or the per-strategy win ladder IC_LADDER (see risk_for).
+
 Mode (IC_MODE in .env): shadow = every order goes to order_check only and trades are tracked virtually;
 live = real orders on the account in IC_LOGIN. Kill file data/KILL_IC stops new entries (open positions keep their
 broker SL/TP). Size: IC_LOTS (default 0.1 = the broker minimum).
@@ -49,6 +53,10 @@ BRIDGE = ('127.0.0.1', int(ENV.get('IC_PORT', '18814')))
 TERMINAL = ENV.get('IC_TERMINAL', r'C:\IC Markets Exec\terminal64.exe')
 HIST = int(ENV.get('IC_HIST_MIN', '20000'))
 BE_POLL = float(ENV.get('IC_BE_POLL', '1.0'))       # seconds between tick-level break-even checks (live)
+# Stair-step stop (research/sizing_stair.py): after break-even at +be_atr ATR, every further IC_STEP_ATR ATR in favour moves
+# the stop up to the previous trigger level (entry, +4, +7, ... for be 4 / step 3). 0 = break-even only.
+STEP_ATR = float(ENV.get('IC_STEP_ATR', '0'))
+NO_TP = ENV.get('IC_NO_TP', '0') == '1'             # 1 = no take profit on any strategy (the stair-step stop does the exiting)
 P = dict(lookback=55, min_move=1.5, hold=3, cooldown=30, stop_atr=5.0, be_atr=4.0, atr_n=14)
 STRATS = [
     dict(tag='IC-B1000-M5-RS', symbol='Boom1000', tf=5, mode=0, magic=709001),
@@ -136,7 +144,8 @@ class DB:
 class Runner:
     def __init__(self):
         self.db = DB(); self.conn = None; self.mt5 = None; self.off = {}
-        self.be_seen = {}                            # live ticket -> last tick time_msc checked for break-even
+        self.be_seen = {}                            # live ticket -> last tick time_msc read for the stop management
+        self.best = {}                               # live ticket -> best favourable move (price units) since the fill
 
     def connect(self):
         self.conn = rpyc.classic.connect(*BRIDGE); self.conn._config['sync_request_timeout'] = 120
@@ -295,7 +304,7 @@ class Runner:
                         note=f'stale quote: age {age:.0f}s, bid {tick.bid} vs bar close {last_close}')
             log.warning('%s SKIP stale quote: tick age %.0fs, bid %.3f vs last close %.3f', s['tag'], age, tick.bid, last_close); return
         sl = round(price - side * R, info.digits)
-        tp = round(price + side * R * s['mode'], info.digits) if s['mode'] in (1, 2) else 0.0
+        tp = round(price + side * R * s['mode'], info.digits) if s['mode'] in (1, 2) and not NO_TP else 0.0
         lots, note = self.size(s, R, side, price)
         if lots <= 0:
             self.db.ins('orders', ts=time.time(), mode=MODE, tag=s['tag'], symbol=s['symbol'], kind='open', side=side, lots=0, price=price,
@@ -307,7 +316,7 @@ class Runner:
             time.sleep(0.5)
             for pos in self.positions(s):
                 e = pos.price_open; nsl = round(e - side * R, info.digits)
-                ntp = round(e + side * R * s['mode'], info.digits) if s['mode'] in (1, 2) else 0.0
+                ntp = round(e + side * R * s['mode'], info.digits) if s['mode'] in (1, 2) and not NO_TP else 0.0
                 if abs(nsl - pos.sl) > info.point or abs(ntp - pos.tp) > info.point:
                     self.rcall('order_send', dict(action=mt5.TRADE_ACTION_SLTP, symbol=s['symbol'], position=int(pos.ticket), sl=float(nsl), tp=float(ntp), magic=int(s['magic'])))
                 self.db.c.execute('update orders set ticket=? where id=(select max(id) from orders where tag=? and kind="open")', (pos.ticket, s['tag']))
@@ -354,7 +363,7 @@ class Runner:
                     min(float(ask.min()) if len(ask) else pos.price_open, tick.ask)
                 if side * (best - pos.price_open) >= P['be_atr'] * atr_k:
                     new = round(pos.price_open, info.digits)
-                    r = self.rcall('order_send', dict(action=mt5.TRADE_ACTION_SLTP, symbol=s['symbol'], position=int(pos.ticket), sl=float(new), tp=float(pos.tp), magic=int(s['magic'])))
+                    r = self.rcall('order_send', dict(action=mt5.TRADE_ACTION_SLTP, symbol=s['symbol'], position=int(pos.ticket), sl=float(new), tp=0.0 if NO_TP else float(pos.tp), magic=int(s['magic'])))
                     log.info('%s breakeven %s sl %.3f -> %.3f (%s)', s['tag'], pos.ticket, pos.sl, new, r.retcode if r else mt5.last_error())
         else:
             v = self.db.c.execute('select side, entry, sl, tp, R, be_dist, be_done, open_t, last_ms from vpos2 where tag=?', (s['tag'],)).fetchone()
@@ -375,47 +384,67 @@ class Runner:
             if len(T):
                 self.db.c.execute('update vpos2 set last_ms=? where tag=?', (int(T[-1]), s['tag']))
 
+    @staticmethod
+    def stop_level(best, atr_k):
+        """Stop level (favourable distance from entry, price units) earned by the best move so far, or None before
+        break-even: entry at +be_atr ATR, then each further STEP_ATR ATR lifts it to the previous trigger level."""
+        b = P['be_atr'] * atr_k
+        if best < b:
+            return None
+        if STEP_ATR <= 0:
+            return 0.0
+        j = int((best - b) // (STEP_ATR * atr_k))
+        return 0.0 if j == 0 else b + (j - 1) * STEP_ATR * atr_k
+
     def be_watch(self):
-        """Live only: move the stop to entry on the first tick whose exit-side price is be_atr x ATR in favour.
-        Every tick since the last check is read, so a touch between polls is not missed. If price has already come
-        back through entry, a stop at entry is no longer valid, so the position is closed at market (the result a
-        tick-level break-even stop would have given)."""
+        """Live only: tick-level break-even and stair-step stop. Every tick since the last check is read (so a touch
+        between polls is not missed) and the best favourable move since the fill is kept per ticket. When that move earns
+        a higher stop than the position has, the stop is moved up; if price is already back through the new level, the
+        position is closed at market (the result a tick-level stop would have given)."""
         if MODE != 'live':
             return
-        mt5 = self.mt5
+        mt5 = self.mt5; open_tickets = set()
         for s in [x for x in STRATS if x['enabled']]:
             for pos in self.positions(s):
+                open_tickets.add(pos.ticket)
                 side = 1 if pos.type == mt5.POSITION_TYPE_BUY else -1
-                if (side > 0 and pos.sl >= pos.price_open) or (side < 0 and 0 < pos.sl <= pos.price_open):
-                    self.be_seen.pop(pos.ticket, None); continue          # already at break-even
                 lo = self.db.last_order(s['tag'], pos.ticket); atr_k = lo[1] if lo and lo[1] else None
                 if atr_k is None:
                     continue
+                e = pos.price_open
                 since = self.be_seen.get(pos.ticket, int(pos.time_msc))
                 T, bid, ask = self.ticks_since(s['symbol'], since)
-                if not len(T):
+                if len(T):
+                    px = bid if side > 0 else ask
+                    k = int(np.argmax(side * (px - e)))
+                    if side * (px[k] - e) > self.best.get(pos.ticket, (-math.inf, 0))[0]:
+                        self.best[pos.ticket] = (float(side * (px[k] - e)), int(T[k]))
+                    self.be_seen[pos.ticket] = int(T[-1])
+                best, when = self.best.get(pos.ticket, (-math.inf, 0))
+                want = self.stop_level(best, atr_k)
+                cur = side * (pos.sl - e) if pos.sl else -math.inf
+                info = mt5.symbol_info(s['symbol'])
+                if want is None or want <= cur + info.point:
                     continue
-                px = bid if side > 0 else ask
-                hit = np.flatnonzero(side * (px - pos.price_open) >= P['be_atr'] * atr_k)
-                if not len(hit):
-                    self.be_seen[pos.ticket] = int(T[-1]); continue      # only advance when nothing triggered
-                info = mt5.symbol_info(s['symbol']); tick = mt5.symbol_info_tick(s['symbol'])
-                now_px = tick.bid if side > 0 else tick.ask; new = round(pos.price_open, info.digits)
-                when = int(T[hit[0]])
+                new = round(e + side * want, info.digits)
+                tick = mt5.symbol_info_tick(s['symbol']); now_px = tick.bid if side > 0 else tick.ask
+                what = 'breakeven' if want == 0 else f'stair stop +{want / atr_k:g} ATR'
                 if side * (now_px - new) > info.point * max(info.trade_stops_level, 1):
                     r = self.rcall('order_send', dict(action=mt5.TRADE_ACTION_SLTP, symbol=s['symbol'], position=int(pos.ticket),
-                                                      sl=float(new), tp=float(pos.tp), magic=int(s['magic'])))
+                                                      sl=float(new), tp=0.0 if NO_TP else float(pos.tp), magic=int(s['magic'])))
                     rc = r.retcode if r else None
-                    log.info('%s breakeven (tick %d, %.1fs ago) %s sl %.3f -> %.3f: %s %s', s['tag'], when,
-                             (int(T[-1]) - when) / 1000, pos.ticket, pos.sl, new, rc, r.comment if r else mt5.last_error())
+                    log.info('%s %s (best +%.2f ATR at tick %d) %s sl %.3f -> %.3f: %s %s', s['tag'], what, best / atr_k, when,
+                             pos.ticket, pos.sl, new, rc, r.comment if r else mt5.last_error())
                     if rc == mt5.TRADE_RETCODE_DONE:
-                        self.be_seen.pop(pos.ticket, None); continue
+                        continue
                     tick = mt5.symbol_info_tick(s['symbol']); now_px = tick.bid if side > 0 else tick.ask
                     if side * (now_px - new) > 0:
-                        self.be_seen[pos.ticket] = when - 1; continue    # modification failed, price still in profit: retry next poll
+                        continue                                    # modification failed, price still beyond the level: retry next poll
                 self.deal(s, -side, 'close', position=pos.ticket, volume=pos.volume,
-                          note=f'breakeven: {P["be_atr"]:g} ATR reached at tick {when}, price back through entry before the stop could move')
-                self.be_seen.pop(pos.ticket, None)
+                          note=f'{what}: earned at tick {when}, price back through {new} before the stop could move')
+        for d in (self.be_seen, self.best):
+            for t in [t for t in d if t not in open_tickets]:
+                d.pop(t, None)
 
     # ---- loop ----
     def server_offset(self, sym):
